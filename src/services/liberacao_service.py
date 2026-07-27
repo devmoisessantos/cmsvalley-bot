@@ -15,6 +15,8 @@ async def liberar_avaliacao_click(interaction: discord.Interaction):
             "❌ Você não possui permissão para liberar avaliações.", ephemeral=True
         )
         return
+    
+    await interaction.response.defer(ephemeral=True)
 
     async with async_session() as session:
         resultado = await session.execute(
@@ -26,7 +28,7 @@ async def liberar_avaliacao_click(interaction: discord.Interaction):
         recrutamentos_ativos = resultado.scalars().all()
 
     if not recrutamentos_ativos:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "❌ Você não possui nenhum candidato aguardando liberação de prova no momento.",
             ephemeral=True,
         )
@@ -38,7 +40,7 @@ async def liberar_avaliacao_click(interaction: discord.Interaction):
 
     # Mais de um candidato ativo: mostra um menu pra escolher qual liberar
     view = SelecionarCandidatoLiberacaoView(recrutamentos_ativos, interaction.guild)
-    await interaction.response.send_message(
+    await interaction.followup.send(
         "Você possui mais de um candidato em fase de estudo. Selecione qual deseja liberar para a prova:",
         view=view, ephemeral=True,
     )
@@ -49,7 +51,7 @@ async def _liberar_para_recrutamento(interaction: discord.Interaction, recrutame
     candidato = guild.get_member(recrutamento.discord_id_candidato)
 
     if candidato is None:
-        await interaction.response.send_message("❌ Candidato não encontrado no servidor.", ephemeral=True)
+        await interaction.followup.send("❌ Candidato não encontrado no servidor.", ephemeral=True)
         return
 
     cargo_estudante = guild.get_role(CARGOS["ESTUDANTE"])
@@ -73,10 +75,7 @@ async def _liberar_para_recrutamento(interaction: discord.Interaction, recrutame
     )
 
     mensagem = f"✅ Prova liberada para {candidato.mention}. Ele já pode iniciar a avaliação."
-    if interaction.response.is_done():
-        await interaction.followup.send(mensagem, ephemeral=True)
-    else:
-        await interaction.response.send_message(mensagem, ephemeral=True)
+    await interaction.followup.send(mensagem, ephemeral=True)
 
 
 class SelecionarCandidatoLiberacaoView(LoggingViewMixin, discord.ui.View):
@@ -95,6 +94,7 @@ class SelecionarCandidatoLiberacaoView(LoggingViewMixin, discord.ui.View):
         self.add_item(select)
 
     async def selecionar(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         recrutamento_id = int(interaction.data["values"][0])
         recrutamento = self.recrutamentos_por_id[recrutamento_id]
         await _liberar_para_recrutamento(interaction, recrutamento)
