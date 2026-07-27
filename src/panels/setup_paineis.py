@@ -86,7 +86,7 @@ async def garantir_painel_recrutamento(bot: discord.Client, interaction: discord
 
 
         arquivo = discord.File(LOGO_PATH, filename="logo.png")
-        mensagem = await canal.send(view=PainelRecrutamentoLayout(), file=arquivo)
+        mensagem = await canal.send(view=PainelRecrutamentoLayout(guild), file=arquivo)
 
         novo_registro = PainelPostado(
             nome_painel="recrutamento",
@@ -129,7 +129,7 @@ async def garantir_painel_avaliacao(bot: discord.Client, interaction: discord.In
             return
 
         arquivo = discord.File(LOGO_PATH, filename="logo.png")
-        mensagem = await canal.send(view=PainelAvaliacaoLayout(), file=arquivo)
+        mensagem = await canal.send(view=PainelAvaliacaoLayout(guild), file=arquivo)
 
         # Salva o registro no banco
         novo_registro = PainelPostado(
