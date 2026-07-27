@@ -110,8 +110,8 @@ class CmsValleyBot(commands.Bot):
         # ═══════════════════════════════════════════════════════════════
         if self.painel_recrutamento_view is None:
 
-            self.painel_recrutamento_view = PainelRecrutamentoLayout()
-            self.painel_avaliacao_view = PainelAvaliacaoLayout()
+            self.painel_recrutamento_view = PainelRecrutamentoLayout(guild=guild)
+            self.painel_avaliacao_view = PainelAvaliacaoLayout(guild=guild)
             self.painel_whitelist_view = PainelWhitelistLayout(guild)
             self.painel_gerenciar_cargos_view = PainelGerenciarCargoLayout(guild=guild)
 

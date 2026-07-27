@@ -54,7 +54,7 @@ async def garantir_painel_whitelist(bot: discord.Client, interaction: discord.In
         print(f"✅ Painel de Whitelist postado no canal #{canal.name}.")
 
 
-async def garantir_painel_recrutamento(bot: discord.Client):
+async def garantir_painel_recrutamento(bot: discord.Client, interaction: discord.Interaction = None):
     """
     Garante que o painel de recrutamento está postado no canal.
     Se já existir no banco, não duplica.
@@ -65,14 +65,25 @@ async def garantir_painel_recrutamento(bot: discord.Client):
         )
         registro = resultado.scalar_one_or_none()
 
-        # Já foi postado antes, não duplica
-        if registro is not None:
-            return
-
         canal = bot.get_channel(CANAL_PAINEL_RECRUTAMENTO_ID)
         if canal is None:
             print("❌ Canal do painel de recrutamento não encontrado. Confira CANAL_PAINEL_RECRUTAMENTO_ID.")
             return
+
+        # Caso já tenha sido postado, não duplicar
+        if registro is not None:
+            return
+        
+        # Obtém o guild do bot ou do interaction
+        if interaction and interaction.guild:
+            guild = interaction.guild
+        else:
+            guild = bot.get_guild(int(GUILD_ID))
+            
+        if guild is None:
+            print("❌ Guild não encontrada!")
+            return
+
 
         arquivo = discord.File(LOGO_PATH, filename="logo.png")
         mensagem = await canal.send(view=PainelRecrutamentoLayout(), file=arquivo)
@@ -87,7 +98,7 @@ async def garantir_painel_recrutamento(bot: discord.Client):
         print(f"✅ Painel de Recrutamento postado no canal #{canal.name}.")
 
 
-async def garantir_painel_avaliacao(bot: discord.Client):
+async def garantir_painel_avaliacao(bot: discord.Client, interaction: discord.Interaction = None):
     """
     Garante que o painel de avaliação está postado no canal.
     Se já existir no banco, não duplica.
@@ -98,30 +109,40 @@ async def garantir_painel_avaliacao(bot: discord.Client):
         )
         registro = resultado.scalar_one_or_none()
 
-        # Já foi postado antes, não duplica
-        if registro is not None:
-            return
-
         canal = bot.get_channel(CANAIS["AVALIACAO"])
         if canal is None:
             print("❌ Canal de Avaliação não encontrado. Confira CANAIS['AVALIACAO'].")
+            return
+        
+        # Caso já tenha sido postado, não duplicar
+        if registro is not None:
+            return
+        
+        # Obtém o guild do bot ou do interaction
+        if interaction and interaction.guild:
+            guild = interaction.guild
+        else:
+            guild = bot.get_guild(int(GUILD_ID))
+            
+        if guild is None:
+            print("❌ Guild não encontrada!")
             return
 
         arquivo = discord.File(LOGO_PATH, filename="logo.png")
         mensagem = await canal.send(view=PainelAvaliacaoLayout(), file=arquivo)
 
-        session.add(
-            PainelPostado(
-                nome_painel="avaliacao", 
-                canal_id=canal.id, 
-                message_id=mensagem.id,
-            )
+        # Salva o registro no banco
+        novo_registro = PainelPostado(
+            nome_painel="avaliacao",
+            canal_id=canal.id,
+            message_id=mensagem.id,
         )
+        session.add(novo_registro)        
         await session.commit()
         print(f"✅ Painel de Avaliação postado no canal #{canal.name}.")
 
 
-async def garantir_painel_gerenciar_cargos(bot: discord.Client):
+async def garantir_painel_gerenciar_cargos(bot: discord.Client, interaction: discord.Interaction = None):
     """
     Garante que o painel de gerenciamento de cargos está postado no canal.
     Se já existir no banco, não duplica.
@@ -132,17 +153,24 @@ async def garantir_painel_gerenciar_cargos(bot: discord.Client):
         )
         registro = resultado.scalar_one_or_none()
 
-        # Já foi postado antes, não duplica
-        if registro is not None:
-            return
-
         canal = bot.get_channel(CANAIS["MANAGE_ROLE_CHANNEL_ID"])
         if canal is None:
             print("❌ Canal de Gerenciamento de Cargos não encontrado. Confira CANAIS['MANAGE_ROLE_CHANNEL_ID'].")
             return
-
+        
+        # Caso já tenha sido postado, não duplicar
+        if registro is not None:
+            return
+        
         # Obtém o guild para passar ao layout (necessário para o ícone)
         guild = bot.get_guild(int(GUILD_ID))
+
+        # Obtém o guild do bot ou do interaction
+        if interaction and interaction.guild:
+            guild = interaction.guild
+        else:
+            guild = bot.get_guild(int(GUILD_ID))
+
         if guild is None:
             print("❌ Guild não encontrada!")
             return
@@ -151,12 +179,12 @@ async def garantir_painel_gerenciar_cargos(bot: discord.Client):
         view_do_painel = PainelGerenciarCargoLayout(guild=guild)
         mensagem = await canal.send(view=view_do_painel, file=arquivo_da_logo)
 
-        session.add(
-            PainelPostado(
-                nome_painel="gerenciar_cargos",
-                canal_id=canal.id,
-                message_id=mensagem.id,
-            )
+        # Salva o registro no banco
+        novo_registro = PainelPostado(
+            nome_painel="gerenciar_cargos",
+            canal_id=canal.id,
+            message_id=mensagem.id,
         )
+        session.add(novo_registro)  
         await session.commit()
         print(f"✅ Painel de Gerenciamento de Cargos postado no canal #{canal.name}.")
