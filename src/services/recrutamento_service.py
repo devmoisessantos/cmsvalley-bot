@@ -50,7 +50,7 @@ async def validar_e_iniciar_recrutamento(
 
         # Checa cooldown de 24h após reprovação
         if usuario.data_ultima_reprovacao:
-            tempo_passado = datetime.utcnow() - usuario.data_ultima_reprovacao  # antes: datetime.now(timezone.utc)
+            tempo_passado = datetime.now(timezone.utc) - usuario.data_ultima_reprovacao  # antes: datetime.now(timezone.utc)
             if tempo_passado.total_seconds() < 24 * 3600:
         
                 horas_restantes = 24 - (tempo_passado.total_seconds() / 3600)

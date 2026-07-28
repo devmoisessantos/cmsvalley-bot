@@ -155,7 +155,7 @@ class AprovacaoView(LoggingViewMixin, discord.ui.LayoutView):
             )
             recrutamento = resultado.scalar_one()
             recrutamento.status = "REPROVADO"
-            recrutamento.data_fim = datetime.utcnow()  # antes: datetime.now(timezone.utc)
+            recrutamento.data_fim = datetime.now(timezone.utc)  # antes: datetime.now(timezone.utc)
 
             resultado_usuario = await session.execute(
                 select(Usuario).where(Usuario.discord_id == self.candidato_id)
@@ -163,7 +163,7 @@ class AprovacaoView(LoggingViewMixin, discord.ui.LayoutView):
             usuario = resultado_usuario.scalar_one()
             usuario.status = "VISITANTE"
              
-            usuario.data_ultima_reprovacao = datetime.utcnow()       # antes: datetime.now(timezone.utc)
+            usuario.data_ultima_reprovacao = datetime.now(timezone.utc)    # antes: datetime.now(timezone.utc)
             await session.commit()
 
         await self._travar_botoes(interaction)  # desativa antes de abrir o select
@@ -232,12 +232,12 @@ class EscolherCargoView(LoggingViewMixin, discord.ui.View):
         if cargos_remover:
             await candidato.remove_roles(*cargos_remover, reason=f"Aprovado por {self.aprovador}")
 
-        await candidato.add_roles(cargo_hp, cargo_aprovado, cargo_final, reason=f"Aprovado por {self.aprovador}")
+        await candidato.add_roles(cargo_final, cargo_hp, cargo_aprovado, reason=f"Aprovado por {self.aprovador}")
 
         await log_mudanca_cargo(
             guild, candidato=candidato, executor=self.aprovador,
             cargos_removidos=[c.mention for c in cargos_remover],
-            cargos_adicionados=[cargo_hp.mention, cargo_aprovado.mention, cargo_final.mention],
+            cargos_adicionados=[cargo_final.mention, cargo_hp.mention, cargo_aprovado.mention],
         )
 
         novo_nickname = aplicar_prefixo(candidato.display_name, cargo_escolhido)

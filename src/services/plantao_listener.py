@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import select
 
 from src.config import CANAIS_PLANTAO
@@ -39,7 +39,7 @@ class PlantaoListener(commands.Cog):
 
             if esta_em_call_valida and not estava_em_call_valida:
                 estado.em_call_valida = True
-                estado.call_entrada_em = datetime.utcnow()
+                estado.call_entrada_em = datetime.now(timezone.now)
                 estado.canal_atual_id = after.channel.id
                 await session.commit()
                 return
