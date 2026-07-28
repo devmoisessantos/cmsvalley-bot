@@ -18,14 +18,26 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         row_toggle = discord.ui.ActionRow()
         row_toggle.add_item(self._botao_toggle())
 
+        icon_url = guild.icon.url if guild.icon else None
+
         container = discord.ui.Container(
-            discord.ui.TextDisplay("# 🩺 Painel de Plantão"),
+
+            discord.ui.Section(
+                "# 🛡️ Painel de Plantão | Sistema de Recompensas",
+                (
+                    "Utilize os botões abaixo para iniciar ou encerrar seu plantão.\n"
+                    "**Lembre-se:** você deve estar em uma call de voz para acumular tempo!"
+                ),
+                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
+            ),
             discord.ui.TextDisplay(
-                "Use o botão abaixo para entrar/sair de serviço."
+                "💰 **Recompensa:** 1 Moeda (Valor: $100.000) a cada **30 min**.\n"
+                "⏱️ **Seu tempo atual:** `00:12:34`\n"
+                "📊 **Status: 🔴 Offline\n"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             row_toggle,
-            accent_color=discord.Color.blurple(),
+            accent_color=discord.Color.green(),
         )
         self.add_item(container)
 
