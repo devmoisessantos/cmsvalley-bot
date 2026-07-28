@@ -12,7 +12,7 @@ from src.database.models import PainelPostado
 from src.panels.recrutamento_panel import PainelRecrutamentoLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.whitelist_panel import PainelWhitelistLayout 
-from src.plantao.plantao_panel import PainelPlantaoLayout
+from src.panels.plantao_panel import PainelPlantaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 
 

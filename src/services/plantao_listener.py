@@ -3,17 +3,16 @@ from discord.ext import commands
 from datetime import datetime
 from sqlalchemy import select
 
-from src.config import obter_todos_ids_canais_plantao
+from src.config import CANAIS_PLANTAO
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
-from src.plantao.plantao_service import _finalizar_periodo_em_call
-
+from src.services.plantao_service import _finalizar_periodo_em_call
 
 
 def _canal_e_valido(channel: discord.VoiceChannel | None) -> bool:
     if channel is None:
         return False
-    return channel.id in obter_todos_ids_canais_plantao()
+    return channel.id in set(CANAIS_PLANTAO.values())
 
 
 class PlantaoListener(commands.Cog):
@@ -26,7 +25,6 @@ class PlantaoListener(commands.Cog):
         estava_em_call_valida = _canal_e_valido(before.channel)
         esta_em_call_valida = _canal_e_valido(after.channel)
 
-        # Nada relevante mudou (ex: só mutou o microfone) — ignora sem nem tocar no banco
         if estava_em_call_valida == esta_em_call_valida and before.channel == after.channel:
             return
 
@@ -37,9 +35,8 @@ class PlantaoListener(commands.Cog):
             estado = resultado.scalar_one_or_none()
 
             if estado is None or not estado.toggle_ligado:
-                return  # não está de plantão, eventos de voz não importam pra ele
+                return
 
-            # Caso 1: ENTROU numa call válida (não estava em nenhuma antes)
             if esta_em_call_valida and not estava_em_call_valida:
                 estado.em_call_valida = True
                 estado.call_entrada_em = datetime.utcnow()
@@ -47,13 +44,11 @@ class PlantaoListener(commands.Cog):
                 await session.commit()
                 return
 
-            # Caso 2: SAIU de uma call válida (fechou o app, desconectou, etc.)
             if estava_em_call_valida and not esta_em_call_valida:
                 await _finalizar_periodo_em_call(estado)
                 await session.commit()
                 return
 
-            # Caso 3: TROCOU entre duas calls válidas — continua contando, só atualiza o canal
             if estava_em_call_valida and esta_em_call_valida:
                 estado.canal_atual_id = after.channel.id
                 await session.commit()

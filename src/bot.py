@@ -42,9 +42,9 @@ class CmsValleyBot(commands.Bot):
         # Listar extensões (cogs)
         cogs = [
 
-            "src.cogs.gerenciar_cargos",
+            "src.services.plantao_listener",
             "src.hierarquia.listener",
-            "src.plantao.plantao_listener",
+            "src.cogs.gerenciar_cargos",
             "src.cogs.liberar_prova",
             "src.cogs.recrutar",
             "src.cogs.aprovar",
