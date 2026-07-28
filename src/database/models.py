@@ -116,11 +116,11 @@ class EstadoPlantao(Base):
 
     # Preenchidos apenas enquanto o médico está DENTRO de uma call válida
     em_call_valida: Mapped[bool] = mapped_column(Boolean, default=False)
-    call_entrada_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    canal_atual_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    call_entrada_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=agora)
+    canal_atual_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Contador que "enche" até 1800s e reseta, gerando moeda
     segundos_acumulados: Mapped[int] = mapped_column(Integer, default=0)
     saldo_moedas: Mapped[int] = mapped_column(Integer, default=0)
 
-    ultima_atualizacao: Mapped[datetime] = mapped_column(DateTime, default=agora)    
+    ultima_atualizacao: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)  
