@@ -390,7 +390,7 @@ CANAIS_PLANTAO = {
     ],
 }
 
-SEGUNDOS_PARA_MOEDA = 10  # 30 minutos
+SEGUNDOS_PARA_MOEDA = 10  # 10 segundos pra testar depois mudar
 VALOR_MOEDA_INGAME = 100_000
 TEMPO_LIMITE_TOGGLE_SEM_CALL_MINUTOS = 120  # 2h - desliga toggle sozinho se ninguém entrar em call
 
@@ -430,7 +430,7 @@ def _gerar_nomes_amigaveis() -> dict[int, str]:
             for i, canal_id in enumerate(valor, start=1):
                 nomes[canal_id] = f"{base} {i}"
         else:
-            nomes[canal_id if False else valor] = rotulos_unicos.get(chave, chave.title())
+            nomes[valor] = rotulos_unicos.get(chave, chave.title())
 
     return nomes
 

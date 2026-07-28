@@ -21,10 +21,10 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         grupos = [
             [CANAIS_PLANTAO["CALL_INTERNA"], CANAIS_PLANTAO["CALL_EXTERNA"]],
             [CANAIS_PLANTAO["BATE_PAPO_1"], CANAIS_PLANTAO["BATE_PAPO_2"], CANAIS_PLANTAO["BATE_PAPO_3"]],
-            [CANAIS_PLANTAO["CONSULTORIOS"]],
-            [CANAIS_PLANTAO["SALA_CURSOS"]],
+            CANAIS_PLANTAO["CONSULTORIOS"],           
+            CANAIS_PLANTAO["SALA_CURSOS"],         
             [CANAIS_PLANTAO["DIRETORIA"], CANAIS_PLANTAO["DIRETORIA_GERAL"]],
-            [CANAIS_PLANTAO["RECRUTAMENTO"]],
+            CANAIS_PLANTAO["RECRUTAMENTO"],      
         ]
 
         linha_atual = 1
