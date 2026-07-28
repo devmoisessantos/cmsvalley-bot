@@ -22,6 +22,8 @@ async def iniciar_avaliacao(interaction: discord.Interaction):
     candidato = interaction.user
     guild = interaction.guild
 
+    await interaction.response.defer(ephemeral=True)
+
     async with async_session() as session:
         resultado = await session.execute(
             select(Recrutamento).where(
@@ -29,16 +31,16 @@ async def iniciar_avaliacao(interaction: discord.Interaction):
                 Recrutamento.status == "PROVA_LIBERADA",  # <-- antes era "ESTUDANDO"
             )
         )
-        recrutamento = resultado.scalar_one_or_none()
+        recrutamento = resultado.scalars().all()
 
         if recrutamento is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Você não possui um recrutamento ativo em fase de estudo.", ephemeral=True
             )
             return
 
         if recrutamento.formulario_aberto:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Sua avaliação já foi iniciada anteriormente e não pode ser reaberta. "
                 "Caso tenha ocorrido um erro, procure um recrutador.",
                 ephemeral=True,
@@ -48,7 +50,7 @@ async def iniciar_avaliacao(interaction: discord.Interaction):
         recrutamento.formulario_aberto = True
         recrutamento.status = "EM_PROVA"
         recrutamento.pergunta_atual = 0
-        recrutamento.data_inicio_prova = datetime.utcnow()
+        recrutamento.data_inicio_prova = datetime.now(timezone.utc)
         await session.commit()
 
 
