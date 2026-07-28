@@ -7,7 +7,7 @@ from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.recrutamento_panel import PainelRecrutamentoLayout
 from src.panels.whitelist_panel import PainelWhitelistLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
-from src.plantao.plantao_panel import PainelPlantaoLayout
+from src.panels.plantao_panel import PainelPlantaoLayout
 from src.database.connection import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
 
