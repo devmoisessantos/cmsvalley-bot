@@ -7,6 +7,7 @@ from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.recrutamento_panel import PainelRecrutamentoLayout
 from src.panels.whitelist_panel import PainelWhitelistLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
+from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.database.connection import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
 
@@ -15,7 +16,8 @@ from src.panels.setup_paineis import (
     garantir_painel_recrutamento, 
     garantir_painel_avaliacao, 
     garantir_painel_whitelist, 
-    garantir_painel_gerenciar_cargos
+    garantir_painel_gerenciar_cargos,
+    garantir_painel_plantao
 )
 
 from src.utils.deploy_logger import (
@@ -42,6 +44,7 @@ class CmsValleyBot(commands.Bot):
 
             "src.cogs.gerenciar_cargos",
             "src.hierarquia.listener",
+            "src.plantao.plantao_listener",
             "src.cogs.liberar_prova",
             "src.cogs.recrutar",
             "src.cogs.aprovar",
@@ -114,6 +117,7 @@ class CmsValleyBot(commands.Bot):
             self.painel_avaliacao_view = PainelAvaliacaoLayout(guild=guild)
             self.painel_whitelist_view = PainelWhitelistLayout(guild)
             self.painel_gerenciar_cargos_view = PainelGerenciarCargoLayout(guild=guild)
+            self.painel_plantao_view = PainelPlantaoLayout(guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -125,12 +129,15 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_avaliacao_view)
         self.add_view(self.painel_whitelist_view)
         self.add_view(self.painel_gerenciar_cargos_view)
+        self.add_view(self.painel_plantao_view)
+
 
         # Garante que as mensagens existem nos canais
         await garantir_painel_recrutamento(self)
         await garantir_painel_avaliacao(self)
         await garantir_painel_whitelist(self)
         await garantir_painel_gerenciar_cargos(self)
+        await garantir_painel_plantao(self)
 
         fim_deploy()
 

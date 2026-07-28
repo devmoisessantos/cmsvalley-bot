@@ -145,6 +145,7 @@ TEMPO_LIMITE_PROVA_MINUTOS = 60
 NOTA_MINIMA_APROVACAO = 70
 
 CANAIS = {
+    "CANAL_PAINEL_PLANTAO_ID": 1531543798293856376, 
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
     "WHITELIST_CANAL_ID": 1528299364970266657,
     "HIERARQUIA_SUL": 1487250788391583745,
@@ -363,3 +364,75 @@ ESCOPOS_GERENCIAMENTO = {
 LIMITE_REMOCOES_SUSPEITAS = 5
 # 1,5 minutos — mude só este número se quiser ajustar no futuro
 JANELA_TEMPO_SUSPEITA_SEGUNDOS = 90
+
+CANAIS_PLANTAO = {
+    "CALL_INTERNA": 1486369009153740982,       # preencher com os IDs reais
+    "CALL_EXTERNA": 1486369013624865048,
+    "BATE_PAPO_1": 1486369021250113630,
+    "BATE_PAPO_2": 1486369024878055506,
+    "BATE_PAPO_3": 1486369028682547230,
+    "DIRETORIA": 1486369036488147015,
+    "DIRETORIA_GERAL": 1510825817826132178,
+    "RECRUTAMENTO": [
+        1486368986374606890, 
+        1493444738840526960, 
+        1486368989142581359, 
+        1486368991600705626
+    ],
+    "CONSULTORIOS": [
+        1486369067383259136, 
+        1486369070180995132
+    ],
+    "SALA_CURSOS": [
+        1486369084403876061, 
+        1486369087645946006, 
+        1486369090279837747
+    ],
+}
+
+SEGUNDOS_PARA_MOEDA = 10  # 30 minutos
+VALOR_MOEDA_INGAME = 100_000
+TEMPO_LIMITE_TOGGLE_SEM_CALL_MINUTOS = 120  # 2h - desliga toggle sozinho se ninguém entrar em call
+
+def obter_todos_ids_canais_plantao() -> set[int]:
+    """Achata CANAIS_PLANTAO (que mistura int único e listas) num set de IDs."""
+    ids: set[int] = set()
+    for valor in CANAIS_PLANTAO.values():
+        if isinstance(valor, list):
+            ids.update(valor)
+        else:
+            ids.add(valor)
+    return ids
+
+
+def _gerar_nomes_amigaveis() -> dict[int, str]:
+    """Monta um mapa {channel_id: 'Nome bonito'} — inclusive numerando categorias com lista."""
+    nomes: dict[int, str] = {}
+
+    rotulos_unicos = {
+        "CALL_INTERNA": "Call Interna",
+        "CALL_EXTERNA": "Call Externa",
+        "BATE_PAPO_1": "Bate-papo 1",
+        "BATE_PAPO_2": "Bate-papo 2",
+        "BATE_PAPO_3": "Bate-papo 3",
+        "DIRETORIA": "Diretoria",
+        "DIRETORIA_GERAL": "Diretoria Geral",
+    }
+    rotulos_lista = {
+        "RECRUTAMENTO": "Recrutamento",
+        "CONSULTORIOS": "Consultório",
+        "SALA_CURSOS": "Sala de Cursos",
+    }
+
+    for chave, valor in CANAIS_PLANTAO.items():
+        if isinstance(valor, list):
+            base = rotulos_lista.get(chave, chave.title())
+            for i, canal_id in enumerate(valor, start=1):
+                nomes[canal_id] = f"{base} {i}"
+        else:
+            nomes[canal_id if False else valor] = rotulos_unicos.get(chave, chave.title())
+
+    return nomes
+
+
+NOMES_CANAIS_PLANTAO = _gerar_nomes_amigaveis()

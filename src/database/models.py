@@ -105,3 +105,22 @@ class MensagemHierarquia(Base):
     
     # 🔥 Nova constraint: um cargo não pode ter duas mensagens com a mesma página
     __table_args__ = (UniqueConstraint('cargo_id', 'pagina'),)
+
+
+class EstadoPlantao(Base):
+    __tablename__ = "estado_plantao"
+
+    discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    toggle_ligado: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Preenchidos apenas enquanto o médico está DENTRO de uma call válida
+    em_call_valida: Mapped[bool] = mapped_column(Boolean, default=False)
+    call_entrada_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    canal_atual_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Contador que "enche" até 1800s e reseta, gerando moeda
+    segundos_acumulados: Mapped[int] = mapped_column(Integer, default=0)
+    saldo_moedas: Mapped[int] = mapped_column(Integer, default=0)
+
+    ultima_atualizacao: Mapped[datetime] = mapped_column(DateTime, default=agora)    
