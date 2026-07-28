@@ -22,7 +22,7 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         container = discord.ui.Container(
             discord.ui.TextDisplay(
-                "# 🛡️ Central de Plantão"
+                "# 🛡️ Central de Plantão\n"
                 "> **Gerencie seu status de serviço e acumule recompensas.**"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
