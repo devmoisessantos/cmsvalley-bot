@@ -56,7 +56,7 @@ async def iniciar_avaliacao(interaction: discord.Interaction):
 
     # 👇 NÃO troca mais cargo aqui — já foi trocado na liberação
     view = await montar_view_pergunta(numero=1, guild=guild)
-    await interaction.response.send_message(view=view, ephemeral=True)
+    await interaction.followup.send(view=view, ephemeral=True)
 
 
 
