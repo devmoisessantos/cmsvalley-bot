@@ -31,7 +31,7 @@ class Recrutamento(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    discord_id_candidato: Mapped[int] = mapped_column(ForeignKey("usuarios.discord_id"))
+    discord_id_candidato: Mapped[int] = mapped_column(BigInteger, ForeignKey("usuarios.discord_id"))
     discord_id_recrutador: Mapped[int] = mapped_column(BigInteger)
 
     data_inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
@@ -64,7 +64,7 @@ class RespostaProva(Base):
     __tablename__ = "respostas_prova"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    recrutamento_id: Mapped[int] = mapped_column(ForeignKey("recrutamentos.id"))
+    recrutamento_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("recrutamentos.id"))
     numero_pergunta: Mapped[int] = mapped_column(Integer)
     resposta_escolhida: Mapped[str] = mapped_column(String(200))
     correta: Mapped[bool] = mapped_column(Boolean)
@@ -76,7 +76,7 @@ class HistoricoCargo(Base):
     __tablename__ = "historico_cargos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    discord_id: Mapped[int] = mapped_column(ForeignKey("usuarios.discord_id"))
+    discord_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("usuarios.discord_id"))
     cargo: Mapped[str] = mapped_column(String(50))
     acao: Mapped[str] = mapped_column(String(20))  # ADICIONADO / REMOVIDO
     executor_id: Mapped[int] = mapped_column(BigInteger)  # ID do bot ou do recrutador
@@ -116,7 +116,7 @@ class EstadoPlantao(Base):
 
     # Preenchidos apenas enquanto o médico está DENTRO de uma call válida
     em_call_valida: Mapped[bool] = mapped_column(Boolean, default=False)
-    call_entrada_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=agora)
+    call_entrada_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     canal_atual_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Contador que "enche" até 1800s e reseta, gerando moeda
