@@ -405,6 +405,18 @@ def obter_todos_ids_canais_plantao() -> set[int]:
     return ids
 
 
+def obter_ids_canais_plantao_em_ordem() -> list[int]:
+    """Achata CANAIS_PLANTAO preservando a ordem de inserção do dicionário
+    (Call Interna, Externa, Bate-papo 1-3, Consultórios, Sala de Cursos, Diretoria, Recrutamento...)."""
+    ids: list[int] = []
+    for valor in CANAIS_PLANTAO.values():
+        if isinstance(valor, list):
+            ids.extend(valor)
+        else:
+            ids.append(valor)
+    return ids
+
+
 def _gerar_nomes_amigaveis() -> dict[int, str]:
     """Monta um mapa {channel_id: 'Nome bonito'} — inclusive numerando categorias com lista."""
     nomes: dict[int, str] = {}

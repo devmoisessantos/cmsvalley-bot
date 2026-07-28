@@ -1,6 +1,9 @@
 import discord
 
 from src.services.plantao_service import ligar_servico, desligar_servico
+from src.config import (
+    GUILD_ID, NOMES_CANAIS_PLANTAO, obter_ids_canais_plantao_em_ordem,
+)
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.utils.error_handling import LoggingViewMixin
@@ -53,7 +56,43 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         if ja_ligado:
             resultado_texto = await desligar_servico(interaction.user)
-        else:
-            resultado_texto = await ligar_servico(interaction.user)
+            await interaction.followup.send(resultado_texto, ephemeral=True)
+            return
 
-        await interaction.followup.send(resultado_texto, ephemeral=True)
+        resultado_texto = await ligar_servico(interaction.user)
+
+        if resultado_texto.startswith("✅"):
+            await interaction.followup.send(resultado_texto, view=SelecionarCallView(), ephemeral=True)
+        else:
+            await interaction.followup.send(resultado_texto, ephemeral=True)
+
+
+class SelecionarCallView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(self._select_calls())
+
+    def _select_calls(self) -> discord.ui.Select:
+        opcoes = [
+            discord.SelectOption(label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id))
+            for canal_id in obter_ids_canais_plantao_em_ordem()
+        ]
+        select = discord.ui.Select(placeholder="📞 Escolha uma call para se conectar", options=opcoes)
+        select.callback = self._callback_selecionar_call
+        return select
+
+    async def _callback_selecionar_call(self, interaction: discord.Interaction):
+        canal_id = int(interaction.data["values"][0])
+        nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
+
+        view_link = discord.ui.View(timeout=None)
+        botao_link = discord.ui.Button(
+            label=f"🔗 Conectar em {nome_call}",
+            style=discord.ButtonStyle.link,
+            url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
+        )
+        view_link.add_item(botao_link)
+
+        await interaction.response.edit_message(content=f"Selecionado: **{nome_call}**", view=view_link)
+
+

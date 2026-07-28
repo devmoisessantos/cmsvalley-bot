@@ -123,4 +123,6 @@ class EstadoPlantao(Base):
     segundos_acumulados: Mapped[int] = mapped_column(Integer, default=0)
     saldo_moedas: Mapped[int] = mapped_column(Integer, default=0)
 
-    ultima_atualizacao: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)  
+    ultima_atualizacao: Mapped[datetime] = mapped_column(
+    DateTime(timezone=True), default=agora, onupdate=agora
+)
