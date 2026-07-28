@@ -1,12 +1,27 @@
 import discord
-from discord import app_commands
-from sqlalchemy import select
 
 from src.config import GUILD_ID, CANAIS_PLANTAO, NOMES_CANAIS_PLANTAO
 from src.services.plantao_service import ligar_servico, desligar_servico
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.utils.error_handling import LoggingViewMixin
+from sqlalchemy import select
+
+
+def _todos_os_canais_em_ordem() -> list[int]:
+    """Achata CANAIS_PLANTAO preservando a ordem de exibição desejada."""
+    return [
+        CANAIS_PLANTAO["CALL_INTERNA"],
+        CANAIS_PLANTAO["CALL_EXTERNA"],
+        CANAIS_PLANTAO["BATE_PAPO_1"],
+        CANAIS_PLANTAO["BATE_PAPO_2"],
+        CANAIS_PLANTAO["BATE_PAPO_3"],
+        *CANAIS_PLANTAO["CONSULTORIOS"],
+        *CANAIS_PLANTAO["SALA_CURSOS"],
+        CANAIS_PLANTAO["DIRETORIA"],
+        CANAIS_PLANTAO["DIRETORIA_GERAL"],
+        *CANAIS_PLANTAO["RECRUTAMENTO"],
+    ]
 
 
 class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -14,139 +29,80 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guild = guild
 
-        # Botão toggle na linha 0
-        self.add_item(self._botao_toggle())
+        # Linha 0: toggle
+        row_toggle = discord.ui.ActionRow()
+        row_toggle.add_item(self._botao_toggle())
 
-        # Grupos de botões de link
-        grupos = [
-            [CANAIS_PLANTAO["CALL_INTERNA"], CANAIS_PLANTAO["CALL_EXTERNA"]],
-            [CANAIS_PLANTAO["BATE_PAPO_1"], CANAIS_PLANTAO["BATE_PAPO_2"], CANAIS_PLANTAO["BATE_PAPO_3"]],
-            CANAIS_PLANTAO["CONSULTORIOS"],           
-            CANAIS_PLANTAO["SALA_CURSOS"],         
-            [CANAIS_PLANTAO["DIRETORIA"], CANAIS_PLANTAO["DIRETORIA_GERAL"]],
-            CANAIS_PLANTAO["RECRUTAMENTO"],      
-        ]
+        # Linha 1: select com todas as calls
+        row_select = discord.ui.ActionRow()
+        row_select.add_item(self._select_calls())
 
-        linha_atual = 1
-        for grupo in grupos:
-            # Verifica limite de 5 botões por linha
-            if len(grupo) > 5:
-                # Divide em grupos menores se necessário
-                for i in range(0, len(grupo), 5):
-                    subgrupo = grupo[i:i+5]
-                    for canal_id in subgrupo:
-                        botao = self._botao_link_canal(canal_id)
-                        botao.row = linha_atual
-                        self.add_item(botao)
-                    linha_atual += 1
-            else:
-                for canal_id in grupo:
-                    botao = self._botao_link_canal(canal_id)
-                    botao.row = linha_atual
-                    self.add_item(botao)
-                linha_atual += 1
+        container = discord.ui.Container(
+            discord.ui.TextDisplay("# 🩺 Painel de Plantão"),
+            discord.ui.TextDisplay(
+                "Use o botão abaixo para entrar/sair de serviço.\n"
+                "Depois, selecione uma call para receber o link de acesso."
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            row_toggle,
+            row_select,
+            accent_color=discord.Color.blurple(),
+        )
+        self.add_item(container)
 
     def _botao_toggle(self) -> discord.ui.Button:
-        # Inicialmente com estilo padrão - será atualizado depois
         botao = discord.ui.Button(
-            label="🔄 Carregando...",
-            style=discord.ButtonStyle.secondary,
+            label="🔄 Entrar/Sair de Serviço",
+            style=discord.ButtonStyle.primary,
             custom_id="plantao:toggle",
-            row=0,
-            disabled=True,  # Desabilitado até carregar estado
         )
         botao.callback = self._callback_toggle
         return botao
 
+    def _select_calls(self) -> discord.ui.Select:
+        opcoes = [
+            discord.SelectOption(label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id))
+            for canal_id in _todos_os_canais_em_ordem()
+        ]
+        select = discord.ui.Select(placeholder="📞 Escolha uma call para se conectar", options=opcoes)
+        select.callback = self._callback_selecionar_call
+        return select
+
     async def _callback_toggle(self, interaction: discord.Interaction):
-        # Verifica se é um Member (não User)
         if not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message(
-                "❌ Este comando só pode ser usado em servidores.", 
-                ephemeral=True
+                "❌ Este comando só pode ser usado em servidores.", ephemeral=True
             )
             return
 
-        # Verifica permissões (exemplo: apenas cargos específicos)
-        if not self._tem_permissao(interaction.user):
-            await interaction.response.send_message(
-                "❌ Você não tem permissão para usar este botão.", 
-                ephemeral=True
-            )
-            return
-
-        # Defer a resposta para evitar timeout
         await interaction.response.defer(ephemeral=True)
 
-        try:
-            # Atualiza o estado
-            estado_atual = await self._get_estado_atual(interaction.user.id)
-            resultado = await self._alternar(interaction.user)
-            
-            # Atualiza o botão com o novo estado
-            await self._atualizar_botao(interaction, not estado_atual)
-            
-            await interaction.followup.send(resultado, ephemeral=True)
-            
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Erro ao alternar serviço: {str(e)}", 
-                ephemeral=True
-            )
-
-    async def _alternar(self, membro: discord.Member) -> str:
-        """Alterna o estado do serviço para o membro."""
         async with async_session() as session:
             resultado = await session.execute(
-                select(EstadoPlantao).where(EstadoPlantao.discord_id == membro.id)
+                select(EstadoPlantao).where(EstadoPlantao.discord_id == interaction.user.id)
             )
             estado = resultado.scalar_one_or_none()
             ja_ligado = estado is not None and estado.toggle_ligado
 
-            if ja_ligado:
-                return await desligar_servico(membro)
-            else:
-                return await ligar_servico(membro)
+        if ja_ligado:
+            resultado_texto = await desligar_servico(interaction.user)
+        else:
+            resultado_texto = await ligar_servico(interaction.user)
 
-    async def _get_estado_atual(self, discord_id: int) -> bool:
-        """Retorna True se o serviço está ligado."""
-        async with async_session() as session:
-            resultado = await session.execute(
-                select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
-            )
-            estado = resultado.scalar_one_or_none()
-            return estado is not None and estado.toggle_ligado
+        await interaction.followup.send(resultado_texto, ephemeral=True)
 
-    async def _atualizar_botao(self, interaction: discord.Interaction, novo_estado: bool):
-        """Atualiza o botão toggle com o novo estado."""
-        # Procura o botão na view
-        for item in self.children:
-            if isinstance(item, discord.ui.Button) and item.custom_id == "plantao:toggle":
-                if novo_estado:
-                    item.label = "🔴 Desligar Serviço"
-                    item.style = discord.ButtonStyle.danger
-                else:
-                    item.label = "🟢 Ligar Serviço"
-                    item.style = discord.ButtonStyle.success
-                item.disabled = False
-                await interaction.message.edit(view=self)
-                break
+    async def _callback_selecionar_call(self, interaction: discord.Interaction):
+        canal_id = int(interaction.data["values"][0])
+        nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
 
-    def _tem_permissao(self, membro: discord.Member) -> bool:
-        """Verifica se o membro tem permissão para usar o toggle."""
-        # Exemplo: apenas cargos com administrador ou cargo específico
-        # Ajuste conforme sua necessidade
-        if membro.guild_permissions.administrator:
-            return True
-        
-        # Ou verifica cargo específico
-        cargo_permitido = discord.utils.get(membro.guild.roles, name="Plantão")  # Ajuste
-        return cargo_permitido in membro.roles
-
-    def _botao_link_canal(self, canal_id: int) -> discord.ui.Button:
-        """Cria um botão de link para um canal."""
-        return discord.ui.Button(
-            label=NOMES_CANAIS_PLANTAO.get(canal_id, f"Canal {canal_id}"),
+        view_link = discord.ui.LayoutView(timeout=None)
+        botao_link = discord.ui.Button(
+            label=f"🔗 Conectar em {nome_call}",
             style=discord.ButtonStyle.link,
             url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
         )
+        row = discord.ui.ActionRow()
+        row.add_item(botao_link)
+        view_link.add_item(row)
+
+        await interaction.response.send_message(view=view_link, ephemeral=True)
