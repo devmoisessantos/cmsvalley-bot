@@ -28,12 +28,12 @@ async def iniciar_avaliacao(interaction: discord.Interaction):
         resultado = await session.execute(
             select(Recrutamento).where(
                 Recrutamento.discord_id_candidato == candidato.id,
-                Recrutamento.status == "PROVA_LIBERADA",  # <-- antes era "ESTUDANDO"
+                Recrutamento.status == "PROVA_LIBERADA",
             )
         )
-        recrutamento = resultado.scalars().all()
+        recrutamento = resultado.scalar_one_or_none()  # 👈 troca .scalars().all() por isso
 
-        if recrutamento is None:
+        if recrutamento is None:  # 👈 None, não "is None" numa lista
             await interaction.followup.send(
                 "❌ Você não possui um recrutamento ativo em fase de estudo.", ephemeral=True
             )
