@@ -1,5 +1,5 @@
 import discord
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.config import SEGUNDOS_PARA_MOEDA
 from src.config import obter_todos_ids_canais_plantao
@@ -46,7 +46,7 @@ async def ligar_servico(membro: discord.Member) -> str:
         canal_atual = _membro_esta_em_call_valida(membro)
         if canal_atual is not None:
             estado.em_call_valida = True
-            estado.call_entrada_em = datetime.utcnow()
+            estado.call_entrada_em = datetime.now(timezone.utc)
             estado.canal_atual_id = canal_atual.id
 
         await session.commit()
@@ -78,7 +78,7 @@ async def _finalizar_periodo_em_call(estado: EstadoPlantao):
     if estado.call_entrada_em is None:
         return
 
-    decorrido = (datetime.utcnow() - estado.call_entrada_em).total_seconds()
+    decorrido = (datetime.now(timezone.utc) - estado.call_entrada_em).total_seconds()
     estado.segundos_acumulados += int(decorrido)
 
     while estado.segundos_acumulados >= SEGUNDOS_PARA_MOEDA:
