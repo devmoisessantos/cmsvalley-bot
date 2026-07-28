@@ -3,7 +3,7 @@ from discord.ext import commands
 from datetime import datetime, timezone
 from sqlalchemy import select
 
-from src.config import CANAIS_PLANTAO
+from src.config import obter_todos_ids_canais_plantao 
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.services.plantao_service import _finalizar_periodo_em_call
@@ -12,8 +12,7 @@ from src.services.plantao_service import _finalizar_periodo_em_call
 def _canal_e_valido(channel: discord.VoiceChannel | None) -> bool:
     if channel is None:
         return False
-    return channel.id in set(CANAIS_PLANTAO.values())
-
+    return channel.id in obter_todos_ids_canais_plantao()  # 👈 usa a função em vez de set(CANAIS_PLANTAO.values())
 
 class PlantaoListener(commands.Cog):
     def __init__(self, bot: commands.Bot):
