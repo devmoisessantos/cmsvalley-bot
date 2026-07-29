@@ -45,6 +45,7 @@ class CmsValleyBot(commands.Bot):
             "src.services.plantao_listener",
             "src.hierarquia.listener",
             "src.cogs.gerenciar_cargos",
+            "src.cogs.plantao",
             "src.cogs.liberar_prova",
             "src.cogs.recrutar",
             "src.cogs.aprovar",

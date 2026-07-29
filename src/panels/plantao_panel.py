@@ -2,12 +2,17 @@ import discord
 
 from src.services.plantao_service import ligar_servico, desligar_servico
 from src.config import (
-    GUILD_ID, NOMES_CANAIS_PLANTAO, obter_ids_canais_plantao_em_ordem,
+    GUILD_ID, NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME, obter_ids_canais_plantao_em_ordem,
 )
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.utils.error_handling import LoggingViewMixin
 from sqlalchemy import select
+from datetime import datetime, timezone
+from sqlalchemy import select
+
+from src.services.plantao_service import ligar_servico, desligar_servico, garantir_aware
+from src.utils.formatacao import formatar_hms, formatar_dinheiro
 
 
 class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -15,8 +20,9 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guild = guild
 
-        row_toggle = discord.ui.ActionRow()
-        row_toggle.add_item(self._botao_toggle())
+        row_botoes = discord.ui.ActionRow()
+        row_botoes.add_item(self._botao_toggle())
+        row_botoes.add_item(self._botao_informacoes())
 
         icon_url = guild.icon.url if guild.icon else None
 
@@ -36,11 +42,9 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             ),
             discord.ui.TextDisplay(
                 "💰 **Recompensa:** 1 Moeda (Valor: $100.000) a cada **30 min**.\n"
-                "⏱️ **Seu tempo atual:** `00:12:34`\n"
-                "⚙️ **Status:**  🔴 Offline\n"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            row_toggle,
+            row_botoes,
             accent_color=discord.Color.green(),
         )
         self.add_item(container)
@@ -82,6 +86,42 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         else:
             await interaction.followup.send(resultado_texto, ephemeral=True)
 
+    def _botao_informacoes(self) -> discord.ui.Button:
+        botao = discord.ui.Button(
+            label="📊 Ver Informações",
+            style=discord.ButtonStyle.secondary,
+            custom_id="plantao:ver_info",
+        )
+        botao.callback = self._callback_ver_informacoes
+        return botao
+
+
+    async def _callback_ver_informacoes(self, interaction: discord.Interaction):
+        estado = await _buscar_estado(interaction.user.id)
+        view = InformacoesPlantaoView(interaction.user, estado)
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+    async def _callback_toggle(self, interaction: discord.Interaction):
+        if not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message(
+                "❌ Este comando só pode ser usado em servidores.", ephemeral=True
+            )
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+
+        estado_antes = await _buscar_estado(interaction.user.id)
+        ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
+
+        if ja_ligado:
+            await desligar_servico(interaction.user)
+        else:
+            await ligar_servico(interaction.user)
+
+        novo_estado = await _buscar_estado(interaction.user.id)
+        view = InformacoesPlantaoView(interaction.user, novo_estado)
+        await interaction.followup.send(view=view, ephemeral=True)
+
 
 class SelecionarCallView(discord.ui.View):
     def __init__(self):
@@ -112,3 +152,102 @@ class SelecionarCallView(discord.ui.View):
         await interaction.response.edit_message(content=f"Selecionado: **{nome_call}**", view=view_link)
 
 
+async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        return resultado.scalar_one_or_none()
+
+
+class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
+    def __init__(self, membro: discord.Member, estado: EstadoPlantao | None):
+        super().__init__(timeout=180)
+        self.membro = membro
+
+        online = estado is not None and estado.toggle_ligado
+        saldo = estado.saldo_moedas if estado else 0
+
+        linha_call = None
+        if online and estado.em_call_valida and estado.call_entrada_em:
+            entrada = garantir_aware(estado.call_entrada_em)
+            decorrido = int((datetime.now(timezone.utc) - entrada).total_seconds())
+            status_texto = f"🟢 Em Serviço (Tempo atual: {formatar_hms(decorrido)})"
+            nome_call = NOMES_CANAIS_PLANTAO.get(estado.canal_atual_id, "Desconhecida")
+            linha_call = f"`📍` Call conectada: {nome_call}"
+        elif online:
+            status_texto = "🟢 Em Serviço (aguardando conexão em uma call)"
+            linha_call = "`📍` Nenhuma call conectada — selecione uma abaixo"
+        else:
+            status_texto = '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
+
+        linhas = (
+            f"`💰` Recompensa: Ganhe 1 moeda (Valor: {formatar_dinheiro(VALOR_MOEDA_INGAME)}) a cada 30 minutos.\n"
+            f"`💰` Saldo: {saldo} moedas (Total: {formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
+            f"`⏱️` Seu status: {status_texto}"
+        )
+        if linha_call:
+            linhas += f"\n{linha_call}"
+
+        row_botao = discord.ui.ActionRow()
+        if online:
+            botao = discord.ui.Button(label="🔴 Sair do Serviço", style=discord.ButtonStyle.danger)
+        else:
+            botao = discord.ui.Button(label="🟢 Entrar em Serviço", style=discord.ButtonStyle.success)
+        botao.callback = self._callback_toggle
+        row_botao.add_item(botao)
+
+        componentes = [
+            discord.ui.TextDisplay("# 🛡️ Sistema de Recompensas"),
+            discord.ui.TextDisplay(linhas),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            row_botao,
+        ]
+
+        if online:
+            row_select = discord.ui.ActionRow()
+            row_select.add_item(self._select_calls())
+            componentes.append(row_select)
+
+        self.container = discord.ui.Container(
+            *componentes,
+            accent_color=discord.Color.green() if online else discord.Color.red(),
+        )
+        self.add_item(self.container)
+
+    def _select_calls(self) -> discord.ui.Select:
+        opcoes = [
+            discord.SelectOption(label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id))
+            for canal_id in obter_ids_canais_plantao_em_ordem()
+        ]
+        select_menu = discord.ui.Select(placeholder="📍 Clique aqui para trocar de call", options=opcoes)
+        select_menu.callback = self._callback_selecionar_call
+        return select_menu
+
+    async def _callback_toggle(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        estado_antes = await _buscar_estado(interaction.user.id)
+        ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
+
+        if ja_ligado:
+            await desligar_servico(interaction.user)
+        else:
+            await ligar_servico(interaction.user)
+
+        novo_estado = await _buscar_estado(interaction.user.id)
+        nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+        await interaction.edit_original_response(view=nova_view)
+
+    async def _callback_selecionar_call(self, interaction: discord.Interaction):
+        canal_id = int(interaction.data["values"][0])
+        nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
+
+        view_link = discord.ui.View(timeout=None)
+        botao_link = discord.ui.Button(
+            label=f"🔗 Conectar em {nome_call}",
+            style=discord.ButtonStyle.link,
+            url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
+        )
+        view_link.add_item(botao_link)
+        await interaction.response.send_message(view=view_link, ephemeral=True)

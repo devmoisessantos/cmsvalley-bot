@@ -72,7 +72,7 @@ async def desligar_servico(membro: discord.Member) -> str:
     return "✅ Você saiu de serviço. Cronômetro encerrado."
 
 
-def _garantir_aware(dt: datetime) -> datetime:
+def garantir_aware(dt: datetime) -> datetime:
     """Se o datetime veio sem timezone (naive), assume que já era UTC e anexa isso."""
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
@@ -83,7 +83,7 @@ async def _finalizar_periodo_em_call(estado: EstadoPlantao):
     if estado.call_entrada_em is None:
         return
 
-    entrada = _garantir_aware(estado.call_entrada_em)  # 👈 protege contra dado naive vindo do banco
+    entrada = garantir_aware(estado.call_entrada_em)  # 👈 protege contra dado naive vindo do banco
     decorrido = (datetime.now(timezone.utc) - entrada).total_seconds()
     estado.segundos_acumulados += int(decorrido)
 
