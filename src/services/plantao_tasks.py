@@ -99,7 +99,6 @@ class PlantaoTasks(commands.Cog):
         await self.bot.wait_until_ready()
         logger.info("✅ Bot pronto, loop vai começar a rodar")
 
-
 async def executar_housekeeping_plantao(bot: commands.Bot):
     """Roda uma vez ao iniciar o bot: fecha sessões de plantão abandonadas há mais de 12h."""
     guild = bot.get_guild(GUILD_ID)
