@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = os.getenv("GUILD_ID")
+GUILD_ID = int(os.getenv("GUILD_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 # preencha com o ID do canal onde o painel vai ficar
 CANAL_PAINEL_RECRUTAMENTO_ID = 1486369071590281326
