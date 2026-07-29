@@ -10,31 +10,40 @@ from src.hierarquia.builder import montar_card_cargo, montar_cards_cargo_paginad
 from src.config import CARGOS, CARGOS_HIERARQUIA, CARGOS_EXCLUIR_HIERARQUIA
 
 
-def calcular_membros_por_cargo(guild: discord.Guild) -> dict[int, list[discord.Member]]:
+def obter_cargo_mais_alto(guild: discord.Guild, roles: list[discord.Role]) -> discord.Role | None:
+    """Dado um conjunto de cargos de um membro, retorna o cargo-mais-alto da hierarquia
+    (ou None se o membro estiver excluído ou não tiver nenhum cargo da hierarquia)."""
     cargos_ordenados = [guild.get_role(CARGOS[nome]) for nome in CARGOS_HIERARQUIA]
     cargos_ordenados = [c for c in cargos_ordenados if c is not None]
 
     cargos_excluidos = [guild.get_role(CARGOS[nome]) for nome in CARGOS_EXCLUIR_HIERARQUIA]
     cargos_excluidos = [c for c in cargos_excluidos if c is not None]
 
+    if any(cargo in roles for cargo in cargos_excluidos):
+        return None
+
+    cargos_que_possui = [c for c in cargos_ordenados if c in roles]
+    if not cargos_que_possui:
+        return None
+
+    return min(cargos_que_possui, key=lambda c: cargos_ordenados.index(c))
+
+
+def calcular_membros_por_cargo(guild: discord.Guild) -> dict[int, list[discord.Member]]:
+    cargos_ordenados = [guild.get_role(CARGOS[nome]) for nome in CARGOS_HIERARQUIA]
+    cargos_ordenados = [c for c in cargos_ordenados if c is not None]
+
     resultado: dict[int, list[discord.Member]] = {cargo.id: [] for cargo in cargos_ordenados}
 
     for membro in guild.members:
-        # Se o membro tiver qualquer cargo da lista de exclusão, ele é ignorado por completo
-        if any(cargo in membro.roles for cargo in cargos_excluidos):
-            continue
-
-        cargos_que_possui = [c for c in cargos_ordenados if c in membro.roles]
-        if not cargos_que_possui:
-            continue
-
-        cargo_mais_alto = min(cargos_que_possui, key=lambda c: cargos_ordenados.index(c))
-        resultado[cargo_mais_alto.id].append(membro)
+        cargo_mais_alto = obter_cargo_mais_alto(guild, membro.roles)
+        if cargo_mais_alto is not None:
+            resultado[cargo_mais_alto.id].append(membro)
 
     return resultado
 
 
-async def atualizar_hierarquia(guild: discord.Guild):
+async def atualizar_hierarquia(guild: discord.Guild, somente_cargos: set[int] | None = None):
     canal = guild.get_channel(CANAIS["HIERARQUIA_SUL"])
     if canal is None:
         print("Canal de hierarquia não encontrado. Confira CANAIS['HIERARQUIA_SUL'].")
@@ -45,6 +54,10 @@ async def atualizar_hierarquia(guild: discord.Guild):
     for nome_cargo in CARGOS_HIERARQUIA:
         cargo = guild.get_role(CARGOS[nome_cargo])
         if cargo is None:
+            continue
+
+        # 👇 NOVO — pula cargos que não foram afetados, se o filtro foi passado
+        if somente_cargos is not None and cargo.id not in somente_cargos:
             continue
 
         membros = membros_por_cargo.get(cargo.id, [])

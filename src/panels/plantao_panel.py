@@ -182,9 +182,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             status_texto = '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
 
         linhas = (
-            f"`💰` Recompensa: Ganhe 1 moeda (Valor: {formatar_dinheiro(VALOR_MOEDA_INGAME)}) a cada 30 minutos.\n"
-            f"`💰` Saldo: {saldo} moedas (Total: {formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
-            f"`⏱️` Seu status: {status_texto}"
+            f"`💰` **Recompensa:** Ganhe 1 moeda (Valor: {formatar_dinheiro(VALOR_MOEDA_INGAME)}) a cada **30 minutos**.\n"
+            f"`💰` **Saldo:** {saldo} moedas (Total: {formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
+            f"`⏱️` **Seu status:** {status_texto}"
         )
         if linha_call:
             linhas += f"\n{linha_call}"
