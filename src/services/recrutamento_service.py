@@ -76,6 +76,24 @@ async def validar_e_iniciar_recrutamento(
             )
             return
 
+        # dentro de validar_e_iniciar_recrutamento, antes de criar o novo_recrutamento:
+        resultado_duplicidade = await session.execute(
+            select(Recrutamento).where(
+                Recrutamento.id_fivem == id_fivem,
+                Recrutamento.discord_id_candidato != candidato.id,
+                Recrutamento.status.in_(["ESTUDANDO", "EM_PROVA", "PROVA_LIBERADA", "APROVADO"]),
+            )
+        )
+        conflito = resultado_duplicidade.scalar_one_or_none()
+
+        if conflito is not None:
+            await interaction.followup.send(
+                f"⚠️ O ID FiveM `{id_fivem}` já está associado a <@{conflito.discord_id_candidato}>. "
+                f"Confira se digitou o ID correto antes de continuar.",
+                ephemeral=True,
+            )
+            return
+
         # Tudo certo: cria o recrutamento
         novo_recrutamento = Recrutamento(
             discord_id_candidato=candidato.id,

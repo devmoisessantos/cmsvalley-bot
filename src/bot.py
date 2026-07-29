@@ -10,6 +10,7 @@ from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.panels.plantao_panel import PainelPlantaoLayout
 from src.database.connection import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
+from src.services.plantao_tasks import executar_housekeeping_plantao
 
 from src.config import DISCORD_TOKEN, GUILD_ID, CANAIS
 from src.panels.setup_paineis import (
@@ -43,6 +44,7 @@ class CmsValleyBot(commands.Bot):
         cogs = [
 
             "src.services.plantao_listener",
+            "src.services.plantao_tasks",
             "src.hierarquia.listener",
             "src.cogs.gerenciar_cargos",
             "src.cogs.plantao",
@@ -109,6 +111,9 @@ class CmsValleyBot(commands.Bot):
 
         logger.info(f"✅ Bot conectado como {self.user} (ID: {self.user.id})")
 
+        # no on_ready, uma vez (idempotente — se rodar de novo, não encontra mais nada pra limpar):
+        await executar_housekeeping_plantao(self)
+        
         # ═══════════════════════════════════════════════════════════════
         # CRIA as views (só na primeira vez que o bot liga)
         # ═══════════════════════════════════════════════════════════════
@@ -139,6 +144,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_whitelist(self)
         await garantir_painel_gerenciar_cargos(self)
         await garantir_painel_plantao(self)
+
 
         fim_deploy()
 

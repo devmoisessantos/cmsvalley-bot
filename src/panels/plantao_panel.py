@@ -2,7 +2,7 @@ import discord
 
 from src.services.plantao_service import ligar_servico, desligar_servico
 from src.config import (
-    GUILD_ID, NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME, obter_ids_canais_plantao_em_ordem,
+    GUILD_ID, CARGOS, NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME, obter_ids_canais_plantao_em_ordem,
 )
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
@@ -189,6 +189,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         if linha_call:
             linhas += f"\n{linha_call}"
 
+
         row_botao = discord.ui.ActionRow()
         if online:
             botao = discord.ui.Button(label="🔴 Sair do Serviço", style=discord.ButtonStyle.danger)
@@ -203,6 +204,14 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             row_botao,
         ]
+
+        # dentro de InformacoesPlantaoView.__init__, depois de montar row_botao:
+        cargo_doutor_id = CARGOS.get("🥼・Doutor")
+        if cargo_doutor_id and any(cargo.id == cargo_doutor_id for cargo in membro.roles):
+            modo_texto = "🧭 Desativar Modo Coordenação" if (estado and estado.modo_coordenacao) else "🧭 Ativar Modo Coordenação"
+            botao_modo = discord.ui.Button(label=modo_texto, style=discord.ButtonStyle.secondary)
+            botao_modo.callback = self._callback_alternar_modo_coordenacao
+            row_botao.add_item(botao_modo)
 
         if online:
             row_select = discord.ui.ActionRow()
@@ -251,3 +260,23 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         )
         view_link.add_item(botao_link)
         await interaction.response.send_message(view=view_link, ephemeral=True)
+
+
+    async def _callback_alternar_modo_coordenacao(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        async with async_session() as session:
+            resultado = await session.execute(
+                select(EstadoPlantao).where(EstadoPlantao.discord_id == interaction.user.id)
+            )
+            estado = resultado.scalar_one_or_none()
+            if estado is None:
+                estado = EstadoPlantao(discord_id=interaction.user.id)
+                session.add(estado)
+
+            estado.modo_coordenacao = not estado.modo_coordenacao
+            await session.commit()
+
+        novo_estado = await _buscar_estado(interaction.user.id)
+        nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+        await interaction.edit_original_response(view=nova_view)

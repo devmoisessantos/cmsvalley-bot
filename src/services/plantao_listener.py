@@ -38,10 +38,14 @@ class PlantaoListener(commands.Cog):
 
             if esta_em_call_valida and not estava_em_call_valida:
                 estado.em_call_valida = True
-                estado.call_entrada_em = datetime.now(timezone.now)
+                estado.call_entrada_em = datetime.now(timezone.utc)
                 estado.canal_atual_id = after.channel.id
+                estado.ocioso_desde = None            
+                estado.lembrete_1_enviado = False     
+                estado.lembrete_2_enviado = False     
                 await session.commit()
                 return
+
 
             if estava_em_call_valida and not esta_em_call_valida:
                 await _finalizar_periodo_em_call(estado)

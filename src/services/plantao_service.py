@@ -42,17 +42,21 @@ async def ligar_servico(membro: discord.Member) -> str:
             return "❌ Você já está em serviço."
 
         estado.toggle_ligado = True
+        estado.lembrete_1_enviado = False
+        estado.lembrete_2_enviado = False
 
         canal_atual = _membro_esta_em_call_valida(membro)
         if canal_atual is not None:
             estado.em_call_valida = True
             estado.call_entrada_em = datetime.now(timezone.utc)
             estado.canal_atual_id = canal_atual.id
+            estado.ocioso_desde = None  # já entrou contando, não está ocioso
+        else:
+            estado.ocioso_desde = datetime.now(timezone.utc)  # ligou mas ainda fora de call
 
         await session.commit()
 
     return "✅ Você entrou em serviço! Conecte-se a uma das calls disponíveis para começar a contar tempo."
-
 
 async def desligar_servico(membro: discord.Member) -> str:
     """Desliga o toggle, encerrando qualquer contagem de tempo em andamento."""
@@ -67,6 +71,9 @@ async def desligar_servico(membro: discord.Member) -> str:
             await _finalizar_periodo_em_call(estado)
 
         estado.toggle_ligado = False
+        estado.ocioso_desde = None
+        estado.lembrete_1_enviado = False
+        estado.lembrete_2_enviado = False
         await session.commit()
 
     return "✅ Você saiu de serviço. Cronômetro encerrado."
@@ -83,7 +90,7 @@ async def _finalizar_periodo_em_call(estado: EstadoPlantao):
     if estado.call_entrada_em is None:
         return
 
-    entrada = garantir_aware(estado.call_entrada_em)  # 👈 protege contra dado naive vindo do banco
+    entrada = garantir_aware(estado.call_entrada_em)
     decorrido = (datetime.now(timezone.utc) - entrada).total_seconds()
     estado.segundos_acumulados += int(decorrido)
 
@@ -94,3 +101,8 @@ async def _finalizar_periodo_em_call(estado: EstadoPlantao):
     estado.em_call_valida = False
     estado.call_entrada_em = None
     estado.canal_atual_id = None
+
+    # Ao sair da call, se o toggle continua ligado, começa a contar ociosidade de novo
+    estado.ocioso_desde = datetime.now(timezone.utc)
+    estado.lembrete_1_enviado = False
+    estado.lembrete_2_enviado = False

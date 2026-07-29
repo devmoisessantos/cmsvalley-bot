@@ -124,5 +124,11 @@ class EstadoPlantao(Base):
     saldo_moedas: Mapped[int] = mapped_column(Integer, default=0)
 
     ultima_atualizacao: Mapped[datetime] = mapped_column(
-    DateTime(timezone=True), default=agora, onupdate=agora
-)
+        DateTime(timezone=True), 
+        default=agora, 
+        onupdate=agora
+    )
+    ocioso_desde: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lembrete_1_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
+    lembrete_2_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
+    modo_coordenacao: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -392,7 +392,10 @@ CANAIS_PLANTAO = {
 
 SEGUNDOS_PARA_MOEDA = 10  # 10 segundos pra testar depois mudar
 VALOR_MOEDA_INGAME = 100_000
-TEMPO_LIMITE_TOGGLE_SEM_CALL_MINUTOS = 120  # 2h - desliga toggle sozinho se ninguém entrar em call
+LEMBRETE_1_MINUTOS = 1
+LEMBRETE_2_MINUTOS = 2
+DESLIGAMENTO_AUTOMATICO_MINUTOS = 3
+HOUSEKEEPING_LIMITE_HORAS = 12
 
 def obter_todos_ids_canais_plantao() -> set[int]:
     """Achata CANAIS_PLANTAO (que mistura int único e listas) num set de IDs."""
