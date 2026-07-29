@@ -110,8 +110,8 @@ class MensagemHierarquia(Base):
 class EstadoPlantao(Base):
     __tablename__ = "estado_plantao"
 
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
     discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-
     toggle_ligado: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Preenchidos apenas enquanto o médico está DENTRO de uma call válida
@@ -120,6 +120,7 @@ class EstadoPlantao(Base):
     canal_atual_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Contador que "enche" até 1800s e reseta, gerando moeda
+    segmento_iniciado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     segundos_acumulados: Mapped[int] = mapped_column(Integer, default=0)
     saldo_moedas: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -132,3 +133,15 @@ class EstadoPlantao(Base):
     lembrete_1_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
     lembrete_2_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
     modo_coordenacao: Mapped[bool] = mapped_column(Boolean, default=False)
+
+class LogPlantao(Base):
+    __tablename__ = "log_plantao"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger)
+    evento: Mapped[str] = mapped_column(String(30))
+    canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    duracao_segundos: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    detalhes: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
