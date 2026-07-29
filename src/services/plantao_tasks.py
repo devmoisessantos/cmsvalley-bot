@@ -11,6 +11,7 @@ from src.config import (
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.services.plantao_service import garantir_aware, _finalizar_periodo_em_call
+from src.services.plantao_logger import registrar_evento_plantao
 
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,12 @@ class PlantaoTasks(commands.Cog):
                         f"🔴 Seu plantão foi encerrado automaticamente: mais de "
                         f"`{DESLIGAMENTO_AUTOMATICO_MINUTOS} minutos` sem estar em uma call.",
                     )
+                    await registrar_evento_plantao(
+                        guild, estado.discord_id, 
+                        "DESLIGAMENTO_AUTOMATICO",
+                        estado.id_fivem,
+                        duracao_segundos=int(minutos * 60)
+                    )
 
                 elif minutos >= LEMBRETE_2_MINUTOS and not estado.lembrete_2_enviado:
                     estado.lembrete_2_enviado = True
@@ -77,6 +84,12 @@ class PlantaoTasks(commands.Cog):
                         membro,
                         f"⚠️ Já se passaram `{LEMBRETE_2_MINUTOS} minutos` sem você estar em call. "
                         "Conecte-se logo ou o plantão será encerrado automaticamente.",
+                    )
+                    await registrar_evento_plantao(
+                        guild, 
+                        estado.discord_id, 
+                        "LEMBRETE_15",
+                        estado.id_fivem
                     )
 
                 elif minutos >= LEMBRETE_1_MINUTOS and not estado.lembrete_1_enviado:
@@ -86,6 +99,13 @@ class PlantaoTasks(commands.Cog):
                         f"📌 Já se passaram `{LEMBRETE_1_MINUTOS} minutos` sem você estar em call. "
                         "Não esqueça de se conectar!",
                     )
+                    await registrar_evento_plantao(
+                        guild, 
+                        estado.discord_id, 
+                        "LEMBRETE_10",
+                        estado.id_fivem
+                    )
+
             await session.commit()
 
     @verificar_ociosos.error
@@ -130,6 +150,12 @@ async def executar_housekeeping_plantao(bot: commands.Bot):
                 membro,
                 "🔧 Seu plantão foi encerrado automaticamente pelo sistema "
                 f"(sessão ficou aberta por mais de {HOUSEKEEPING_LIMITE_HORAS}h sem atividade).",
+            )
+            await registrar_evento_plantao(
+                guild, 
+                estado.discord_id, 
+                "HOUSEKEEPING",
+                estado.id_fivem
             )
         await session.commit()
 
