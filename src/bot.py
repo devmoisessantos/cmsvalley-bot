@@ -109,12 +109,12 @@ class CmsValleyBot(commands.Bot):
         if guild is None:
             logger.warning("Servidor ainda não encontrado.")
             return
-
+        
         logger.info(f"✅ Bot conectado como {self.user} (ID: {self.user.id})")
 
         # no on_ready, uma vez (idempotente — se rodar de novo, não encontra mais nada pra limpar):
         await executar_housekeeping_plantao(self)
-
+        
         # ═══════════════════════════════════════════════════════════════
         # CRIA as views (só na primeira vez que o bot liga)
         # ═══════════════════════════════════════════════════════════════

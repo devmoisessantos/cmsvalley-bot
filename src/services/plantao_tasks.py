@@ -39,7 +39,7 @@ class PlantaoTasks(commands.Cog):
     async def verificar_ociosos(self):
         logger.info("🔄 verificar_ociosos TICK")  # 👈 se isso não aparecer no log a cada 1 min, o loop não está rodando
 
-        guild = self.bot.get_guild(GUILD_ID)
+        guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
             logger.error(f"❌ Guild {GUILD_ID} não encontrada")
             return
@@ -100,7 +100,7 @@ class PlantaoTasks(commands.Cog):
 
 async def executar_housekeeping_plantao(bot: commands.Bot):
     """Roda uma vez ao iniciar o bot: fecha sessões de plantão abandonadas há mais de 12h."""
-    guild = bot.get_guild(GUILD_ID)
+    guild = bot.get_guild(int(GUILD_ID))
     if guild is None:
         return
 
