@@ -1,4 +1,5 @@
 import discord
+import logging
 from discord.ext import tasks, commands
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
@@ -12,27 +13,35 @@ from src.database.models import EstadoPlantao
 from src.services.plantao_service import garantir_aware, _finalizar_periodo_em_call
 
 
+logger = logging.getLogger(__name__)
+
 async def _notificar(membro: discord.Member | None, texto: str):
     if membro is None:
+        logger.warning("⚠️ _notificar chamado com membro=None — get_member falhou (cache/intents?)")
         return
     try:
         await membro.send(texto)
+        logger.info(f"✅ DM enviada para {membro} `({membro.id})`")
     except discord.Forbidden:
-        pass  # DM fechada — não quebra o fluxo, só não notifica
-
+        logger.warning(f"⚠️ DM bloqueada para {membro} `({membro.id})` — Forbidden")
 
 class PlantaoTasks(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.verificar_ociosos.start()
+        logger.info("🚀 PlantaoTasks Cog inicializado, loop deve começar após bot.wait_until_ready()")
 
     def cog_unload(self):
         self.verificar_ociosos.cancel()
 
+
     @tasks.loop(minutes=1)
     async def verificar_ociosos(self):
+        logger.info("🔄 verificar_ociosos TICK")  # 👈 se isso não aparecer no log a cada 1 min, o loop não está rodando
+
         guild = self.bot.get_guild(GUILD_ID)
         if guild is None:
+            logger.error(f"❌ Guild {GUILD_ID} não encontrada")
             return
 
         async with async_session() as session:
@@ -43,11 +52,13 @@ class PlantaoTasks(commands.Cog):
                 )
             )
             estados = resultado.scalars().all()
+            logger.info(f"🔎 {len(estados)} estado(s) ocioso(s) encontrados")
 
             for estado in estados:
                 inicio_ocioso = garantir_aware(estado.ocioso_desde)
                 minutos = (datetime.now(timezone.utc) - inicio_ocioso).total_seconds() / 60
                 membro = guild.get_member(estado.discord_id)
+                logger.info(f"👤 {estado.discord_id}: {minutos:.2f} min ocioso, membro={membro}")
 
                 if minutos >= DESLIGAMENTO_AUTOMATICO_MINUTOS:
                     estado.toggle_ligado = False
@@ -78,9 +89,15 @@ class PlantaoTasks(commands.Cog):
 
             await session.commit()
 
+    @verificar_ociosos.error
+    async def verificar_ociosos_error(self, error):
+        logger.error(f"💥 Loop quebrou: {error}", exc_info=True)
+
     @verificar_ociosos.before_loop
     async def antes_de_comecar(self):
+        logger.info("⏳ Aguardando bot.wait_until_ready()...")
         await self.bot.wait_until_ready()
+        logger.info("✅ Bot pronto, loop vai começar a rodar")
 
 
 async def executar_housekeeping_plantao(bot: commands.Bot):
