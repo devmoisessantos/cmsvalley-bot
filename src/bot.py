@@ -28,6 +28,7 @@ from src.utils.deploy_logger import (
 intents = discord.Intents.default()
 intents.members = True  # necessário para ler/restaurar cargos e apelidos de membros
 intents.guilds = True
+intents.messages = True
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("recrutamento-bot")
@@ -113,7 +114,7 @@ class CmsValleyBot(commands.Bot):
 
         # no on_ready, uma vez (idempotente — se rodar de novo, não encontra mais nada pra limpar):
         await executar_housekeeping_plantao(self)
-        
+
         # ═══════════════════════════════════════════════════════════════
         # CRIA as views (só na primeira vez que o bot liga)
         # ═══════════════════════════════════════════════════════════════

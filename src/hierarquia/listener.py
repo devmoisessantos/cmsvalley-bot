@@ -52,7 +52,6 @@ class HierarquiaListener(commands.Cog):
             print("⏸️ Atualização adiada — nova mudança detectada, acumulando")
             pass
 
-
 async def setup(bot: commands.Bot):
     await bot.add_cog(HierarquiaListener(bot))
 

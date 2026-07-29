@@ -86,7 +86,6 @@ class PlantaoTasks(commands.Cog):
                         f"📌 Já se passaram `{LEMBRETE_1_MINUTOS} minutos` sem você estar em call. "
                         "Não esqueça de se conectar!",
                     )
-
             await session.commit()
 
     @verificar_ociosos.error
@@ -132,9 +131,7 @@ async def executar_housekeeping_plantao(bot: commands.Bot):
                 "🔧 Seu plantão foi encerrado automaticamente pelo sistema "
                 f"(sessão ficou aberta por mais de {HOUSEKEEPING_LIMITE_HORAS}h sem atividade).",
             )
-
         await session.commit()
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PlantaoTasks(bot))

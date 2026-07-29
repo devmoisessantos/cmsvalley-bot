@@ -119,7 +119,6 @@ async def atualizar_hierarquia(guild: discord.Guild, somente_cargos: set[int] | 
             
             await session.commit()
 
-
 def _embrulhar_em_view(container: discord.ui.Container) -> discord.ui.LayoutView:
     """Container sozinho não pode ser enviado direto — precisa estar dentro de uma LayoutView."""
     view = discord.ui.LayoutView(timeout=None)
