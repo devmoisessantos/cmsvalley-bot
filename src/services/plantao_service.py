@@ -114,9 +114,9 @@ async def desligar_servico(membro: discord.Member) -> str:
 
         if estado.em_call_valida:
             await _finalizar_periodo_em_call(
-                estado, 
-                membro.guild, 
-                motivo="Encerramento do plantão (saiu do serviço)"
+                estado, membro.guild,
+                evento="CALL_ENCERRADA",
+                motivo="Encerramento do plantão (saiu do serviço)",
             )
 
         estado.toggle_ligado = False
