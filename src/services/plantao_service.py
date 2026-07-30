@@ -113,7 +113,11 @@ async def desligar_servico(membro: discord.Member) -> str:
         estava_ocioso_desde = estado.ocioso_desde
 
         if estado.em_call_valida:
-            await _finalizar_periodo_em_call(estado, membro.guild)
+            await _finalizar_periodo_em_call(
+                estado, 
+                membro.guild, 
+                motivo="Encerramento do plantão (saiu do serviço)"
+            )
 
         estado.toggle_ligado = False
         estado.ocioso_desde = None
@@ -137,7 +141,7 @@ async def desligar_servico(membro: discord.Member) -> str:
     return "✅ Você saiu de serviço. Cronômetro encerrado."
 
 
-async def _finalizar_periodo_em_call(estado: EstadoPlantao, guild: discord.Guild):
+async def _finalizar_periodo_em_call(estado: EstadoPlantao, guild: discord.Guild, motivo: str = "Saiu da call de voz"):
     """Fecha o segmento de call atual: loga a duração, credita moedas se aplicável, e reinicia o estado ocioso."""
     if estado.call_entrada_em is None:
         return
@@ -168,8 +172,16 @@ async def _finalizar_periodo_em_call(estado: EstadoPlantao, guild: discord.Guild
     estado.lembrete_2_enviado = False
 
     # _finalizar_periodo_em_call
-    await registrar_evento_plantao(guild, discord_id, "SAIU_CALL", estado.id_fivem,
-                                canal_id=canal_anterior_id, duracao_segundos=decorrido_segmento)
+    await registrar_evento_plantao(
+        guild, discord_id, 
+        "SAIU_CALL", 
+        estado.id_fivem,
+        canal_id=canal_anterior_id, 
+        duracao_segundos=decorrido_segmento,
+        campos_extra={
+            "Motivo": motivo
+        },
+    )
 
     if moedas_ganhas > 0:
         await registrar_evento_plantao(

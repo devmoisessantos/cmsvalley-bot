@@ -15,6 +15,7 @@ from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.formatacao import formatar_hms, formatar_dinheiro
+
 logger = logging.getLogger(__name__)
 
 MENSAGEM_SEM_PERMISSAO = (
@@ -54,11 +55,61 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
             return
 
         if self.origem == "painel":
-            await interaction.followup.send(resultado_texto, view=SelecionarCallView(), ephemeral=True)
+            card = AcaoServicoView(
+                titulo="✅ Entrou em Serviço",
+                linhas=["Conecte-se a uma das calls disponíveis para começar a contar tempo."],
+                cor=discord.Color.green(),
+                incluir_select_call=True,
+            )
+            await interaction.followup.send(view=card, ephemeral=True)
         else:
             novo_estado = await _buscar_estado(self.membro.id)
             nova_view = InformacoesPlantaoView(self.membro, novo_estado)
             await interaction.followup.send(view=nova_view, ephemeral=True)  # 👈 sem "resultado_texto" no content
+
+class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
+    """Card dinâmico mostrado após ligar/desligar o serviço pelo painel fixo.
+    Foco em orientar a próxima ação — não é o card completo de status (isso é InformacoesPlantaoView)."""
+
+    def __init__(self, titulo: str, linhas: list[str], cor: discord.Color, incluir_select_call: bool = False):
+        super().__init__(timeout=180)
+
+        componentes = [
+            discord.ui.TextDisplay(f"# {titulo}"),
+            discord.ui.TextDisplay("\n".join(f"`•` {linha}" for linha in linhas)),
+        ]
+
+        if incluir_select_call:
+            componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+            row = discord.ui.ActionRow()
+            row.add_item(self._select_calls())
+            componentes.append(row)
+
+        self.container = discord.ui.Container(*componentes, accent_color=cor)
+        self.add_item(self.container)
+
+    def _select_calls(self) -> discord.ui.Select:
+        opcoes = [
+            discord.SelectOption(label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id))
+            for canal_id in obter_ids_canais_plantao_em_ordem()
+        ]
+        select = discord.ui.Select(placeholder="📞 Escolha uma call para se conectar", options=opcoes)
+        select.callback = self._callback_selecionar_call
+        return select
+
+    async def _callback_selecionar_call(self, interaction: discord.Interaction):
+        canal_id = int(interaction.data["values"][0])
+        nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
+
+        view_link = discord.ui.View(timeout=None)
+        botao_link = discord.ui.Button(
+            label=f"🔗 Conectar em {nome_call}",
+            style=discord.ButtonStyle.link,
+            url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
+        )
+        view_link.add_item(botao_link)
+
+        await interaction.response.edit_message(content=f"Selecionado: **{nome_call}**", view=view_link)
 
 
 class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -117,19 +168,22 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         if ja_ligado:
             await interaction.response.defer(ephemeral=True)
             resultado_texto = await desligar_servico(interaction.user)
-            await interaction.followup.send(resultado_texto, ephemeral=True)
+
+            if resultado_texto.startswith("✅"):
+                card = AcaoServicoView(
+                    titulo="🔴 Saiu de Serviço",
+                    linhas=["Seu cronômetro foi encerrado.", "Obrigado pelo plantão!"],
+                    cor=discord.Color.red(),
+                )
+                await interaction.followup.send(view=card, ephemeral=True)
+            else:
+                await interaction.followup.send(resultado_texto, ephemeral=True)
             return
 
         id_fivem = await resolver_id_fivem(interaction.user.id)
-        # ... dentro do callback, logo após resolver_id_fivem:
-        pode_modal = membro_pode_informar_id_manualmente(interaction.user)
-        logger.info(
-            f"🔍 DEBUG plantao toggle | user={interaction.user.id} | "
-            f"id_fivem_resolvido={id_fivem!r} | pode_abrir_modal={pode_modal} | "
-            f"cargos_ids={[c.id for c in interaction.user.roles]}"
-        )
+
         if id_fivem is None:
-            if pode_modal:
+            if membro_pode_informar_id_manualmente(interaction.user):
                 await interaction.response.send_modal(
                     ModalInformarIDFivem(interaction.user, origem="painel")
                 )
@@ -138,11 +192,16 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         await interaction.response.defer(ephemeral=True)
-
         resultado_texto = await ligar_servico(interaction.user, id_fivem)
 
         if resultado_texto.startswith("✅"):
-            await interaction.followup.send(resultado_texto, view=SelecionarCallView(), ephemeral=True)
+            card = AcaoServicoView(
+                titulo="✅ Entrou em Serviço",
+                linhas=["Conecte-se a uma das calls disponíveis para começar a contar tempo."],
+                cor=discord.Color.green(),
+                incluir_select_call=True,
+            )
+            await interaction.followup.send(view=card, ephemeral=True)
         else:
             await interaction.followup.send(resultado_texto, ephemeral=True)
 
@@ -160,35 +219,6 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         estado = await _buscar_estado(interaction.user.id)
         view = InformacoesPlantaoView(interaction.user, estado)
         await interaction.response.send_message(view=view, ephemeral=True)
-
-
-class SelecionarCallView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=120)
-        self.add_item(self._select_calls())
-
-    def _select_calls(self) -> discord.ui.Select:
-        opcoes = [
-            discord.SelectOption(label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id))
-            for canal_id in obter_ids_canais_plantao_em_ordem()
-        ]
-        select = discord.ui.Select(placeholder="📞 Escolha uma call para se conectar", options=opcoes)
-        select.callback = self._callback_selecionar_call
-        return select
-
-    async def _callback_selecionar_call(self, interaction: discord.Interaction):
-        canal_id = int(interaction.data["values"][0])
-        nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
-
-        view_link = discord.ui.View(timeout=None)
-        botao_link = discord.ui.Button(
-            label=f"🔗 Conectar em {nome_call}",
-            style=discord.ButtonStyle.link,
-            url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
-        )
-        view_link.add_item(botao_link)
-
-        await interaction.response.edit_message(content=f"Selecionado: **{nome_call}**", view=view_link)
 
 
 async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
@@ -285,15 +315,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         id_fivem = await resolver_id_fivem(interaction.user.id)
-        # ... dentro do callback, logo após resolver_id_fivem:
-        pode_modal = membro_pode_informar_id_manualmente(interaction.user)
-        logger.info(
-            f"🔍 DEBUG plantao toggle | user={interaction.user.id} | "
-            f"id_fivem_resolvido={id_fivem!r} | pode_abrir_modal={pode_modal} | "
-            f"cargos_ids={[c.id for c in interaction.user.roles]}"
-        )
+
         if id_fivem is None:
-            if pode_modal:
+            if membro_pode_informar_id_manualmente(interaction.user):
                 await interaction.response.send_modal(
                     ModalInformarIDFivem(interaction.user, origem="info")
                 )
