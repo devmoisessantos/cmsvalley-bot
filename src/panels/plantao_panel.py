@@ -1,4 +1,6 @@
 import discord
+import logging
+
 from datetime import datetime, timezone
 from sqlalchemy import select
 
@@ -13,6 +15,7 @@ from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.formatacao import formatar_hms, formatar_dinheiro
+logger = logging.getLogger(__name__)
 
 MENSAGEM_SEM_PERMISSAO = (
     "❌ Você não está registrado como membro aprovado do hospital "
@@ -118,9 +121,15 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         id_fivem = await resolver_id_fivem(interaction.user.id)
-
+        # ... dentro do callback, logo após resolver_id_fivem:
+        pode_modal = membro_pode_informar_id_manualmente(interaction.user)
+        logger.info(
+            f"🔍 DEBUG plantao toggle | user={interaction.user.id} | "
+            f"id_fivem_resolvido={id_fivem!r} | pode_abrir_modal={pode_modal} | "
+            f"cargos_ids={[c.id for c in interaction.user.roles]}"
+        )
         if id_fivem is None:
-            if membro_pode_informar_id_manualmente(interaction.user):
+            if pode_modal:
                 await interaction.response.send_modal(
                     ModalInformarIDFivem(interaction.user, origem="painel")
                 )
@@ -130,7 +139,6 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         await interaction.response.defer(ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
         resultado_texto = await ligar_servico(interaction.user, id_fivem)
 
         if resultado_texto.startswith("✅"):
@@ -277,9 +285,15 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         id_fivem = await resolver_id_fivem(interaction.user.id)
-
+        # ... dentro do callback, logo após resolver_id_fivem:
+        pode_modal = membro_pode_informar_id_manualmente(interaction.user)
+        logger.info(
+            f"🔍 DEBUG plantao toggle | user={interaction.user.id} | "
+            f"id_fivem_resolvido={id_fivem!r} | pode_abrir_modal={pode_modal} | "
+            f"cargos_ids={[c.id for c in interaction.user.roles]}"
+        )
         if id_fivem is None:
-            if membro_pode_informar_id_manualmente(interaction.user):
+            if pode_modal:
                 await interaction.response.send_modal(
                     ModalInformarIDFivem(interaction.user, origem="info")
                 )

@@ -8,14 +8,12 @@ from src.config import (
     CARGOS, 
     CARGOS_HIERARQUIA
 )
+from src.utils.formatacao import formatar_dinheiro
 from src.config import obter_todos_ids_canais_plantao
 from src.services.identidade_service import resolver_id_fivem
 from src.services.plantao_logger import registrar_evento_plantao, obter_id_fivem_de_recrutamento
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
-
-from src.utils.formatacao import formatar_dinheiro
-
 
 def garantir_aware(dt: datetime) -> datetime:
     """Se o datetime veio sem timezone (naive), assume que já era UTC e anexa isso."""
@@ -25,6 +23,8 @@ def garantir_aware(dt: datetime) -> datetime:
 
 def membro_pode_informar_id_manualmente(membro: discord.Member) -> bool:
     """True se o membro tiver algum cargo da hierarquia (Visitante já está fora dessa lista)."""
+    if membro.guild_permissions.administrator:
+        return True
     ids_hierarquia = {CARGOS[nome] for nome in CARGOS_HIERARQUIA if nome in CARGOS}
     return any(cargo.id in ids_hierarquia for cargo in membro.roles)
 
