@@ -101,16 +101,25 @@ class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
         canal_id = int(interaction.data["values"][0])
         nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
 
-        view_link = discord.ui.View(timeout=None)
         botao_link = discord.ui.Button(
             label=f"🔗 Conectar em {nome_call}",
             style=discord.ButtonStyle.link,
             url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
         )
-        view_link.add_item(botao_link)
 
-        await interaction.response.edit_message(content=f"Selecionado: **{nome_call}**", view=view_link)
+        row_link = discord.ui.ActionRow()
+        row_link.add_item(botao_link)
 
+        container_link = discord.ui.Container(
+            discord.ui.TextDisplay(f"Selecionado: **{nome_call}**"),
+            row_link,
+            accent_color=discord.Color.blurple(),
+        )
+
+        view_link = discord.ui.LayoutView(timeout=None)
+        view_link.add_item(container_link)
+
+        await interaction.response.edit_message(view=view_link)
 
 class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, guild: discord.Guild):
