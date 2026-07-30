@@ -58,7 +58,7 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
         else:
             novo_estado = await _buscar_estado(self.membro.id)
             nova_view = InformacoesPlantaoView(self.membro, novo_estado)
-            await interaction.followup.send(resultado_texto, view=nova_view, ephemeral=True)
+            await interaction.followup.send(view=nova_view, ephemeral=True)  # 👈 sem "resultado_texto" no content
 
 
 class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):

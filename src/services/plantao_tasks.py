@@ -56,62 +56,67 @@ class PlantaoTasks(commands.Cog):
             logger.info(f"🔎 {len(estados)} estado(s) ocioso(s) encontrados")
 
             for estado in estados:
-                inicio_ocioso = garantir_aware(estado.ocioso_desde)
-                minutos = (datetime.now(timezone.utc) - inicio_ocioso).total_seconds() / 60
-                membro = guild.get_member(estado.discord_id)
-                logger.info(f"👤 {estado.discord_id}: {minutos:.2f} min ocioso, membro={membro}")
-
-                if minutos >= DESLIGAMENTO_AUTOMATICO_MINUTOS:
-                    saldo_atual = estado.saldo_moedas
+                try:
+                    inicio_ocioso = garantir_aware(estado.ocioso_desde)
+                    minutos = (datetime.now(timezone.utc) - inicio_ocioso).total_seconds() / 60
+                    membro = guild.get_member(estado.discord_id)
                     id_fivem_atual = estado.id_fivem
-                    estado.toggle_ligado = False
-                    estado.ocioso_desde = None
-                    estado.lembrete_1_enviado = False
-                    estado.lembrete_2_enviado = False
-                    await _notificar(
-                        membro,
-                        f"🔴 Seu plantão foi encerrado automaticamente: mais de "
-                        f"`{DESLIGAMENTO_AUTOMATICO_MINUTOS} minutos` sem estar em uma call.",
-                    )
-                    await registrar_evento_plantao(
-                        guild, estado.discord_id, 
-                        "DESLIGAMENTO_AUTOMATICO",
-                        estado.id_fivem,
-                        duracao_segundos=int(minutos * 60),
-                        campos_extra={"Saldo no Momento": f"{saldo_atual} moedas"},
-                    )
+                    logger.info(f"👤 {estado.discord_id}: {minutos:.2f} min ocioso, membro={membro}")
 
-                elif minutos >= LEMBRETE_2_MINUTOS and not estado.lembrete_2_enviado:
-                    estado.lembrete_2_enviado = True
-                    minutos_atuais = round(minutos, 1)
-                    await _notificar(
-                        membro,
-                        f"⚠️ Já se passaram `{LEMBRETE_2_MINUTOS} minutos` sem você estar em call. "
-                        "Conecte-se logo ou o plantão será encerrado automaticamente.",
-                    )
-                    await registrar_evento_plantao(
-                        guild, 
-                        estado.discord_id, 
-                        "LEMBRETE_15",
-                        id_fivem_atual,
-                        campos_extra={"Tempo Ocioso": f"{minutos_atuais} min"},
-                    )
+                    if minutos >= DESLIGAMENTO_AUTOMATICO_MINUTOS:
+                        saldo_atual = estado.saldo_moedas
+                        estado.toggle_ligado = False
+                        estado.ocioso_desde = None
+                        estado.lembrete_1_enviado = False
+                        estado.lembrete_2_enviado = False
+                        await _notificar(
+                            membro,
+                            f"🔴 Seu plantão foi encerrado automaticamente: mais de "
+                            f"`{DESLIGAMENTO_AUTOMATICO_MINUTOS} minutos` sem estar em uma call.",
+                        )
+                        await registrar_evento_plantao(
+                            guild, estado.discord_id, 
+                            "DESLIGAMENTO_AUTOMATICO",
+                            id_fivem_atual,
+                            duracao_segundos=int(minutos * 60),
+                            campos_extra={"Saldo no Momento": f"{saldo_atual} moedas"},
+                        )
 
-                elif minutos >= LEMBRETE_1_MINUTOS and not estado.lembrete_1_enviado:
-                    estado.lembrete_1_enviado = True
-                    minutos_atuais = round(minutos, 1)
-                    await _notificar(
-                        membro,
-                        f"📌 Já se passaram `{LEMBRETE_1_MINUTOS} minutos` sem você estar em call. "
-                        "Não esqueça de se conectar!",
-                    )
-                    await registrar_evento_plantao(
-                        guild, 
-                        estado.discord_id, 
-                        "LEMBRETE_10",
-                        estado.id_fivem,
-                        campos_extra={"Tempo Ocioso": f"{minutos_atuais} min"},
-                    )
+                    elif minutos >= LEMBRETE_2_MINUTOS and not estado.lembrete_2_enviado:
+                        estado.lembrete_2_enviado = True
+                        minutos_atuais = round(minutos, 1)
+                        await _notificar(
+                            membro,
+                            f"⚠️ Já se passaram `{LEMBRETE_2_MINUTOS} minutos` sem você estar em call. "
+                            "Conecte-se logo ou o plantão será encerrado automaticamente.",
+                        )
+                        await registrar_evento_plantao(
+                            guild, 
+                            estado.discord_id, 
+                            "LEMBRETE_15",
+                            id_fivem_atual,
+                            campos_extra={"Tempo Ocioso": f"{minutos_atuais} min"},
+                        )
+
+                    elif minutos >= LEMBRETE_1_MINUTOS and not estado.lembrete_1_enviado:
+                        estado.lembrete_1_enviado = True
+                        minutos_atuais = round(minutos, 1)
+                        await _notificar(
+                            membro,
+                            f"📌 Já se passaram `{LEMBRETE_1_MINUTOS} minutos` sem você estar em call. "
+                            "Não esqueça de se conectar!",
+                        )
+                        await registrar_evento_plantao(
+                            guild, 
+                            estado.discord_id, 
+                            "LEMBRETE_10",
+                            id_fivem_atual,
+                            campos_extra={"Tempo Ocioso": f"{minutos_atuais} min"},
+                        )
+
+                except Exception:
+                    logger.exception(f"💥 Falha ao processar ociosidade de {estado.discord_id}, pulando pra o próximo")
+                    continue
 
             await session.commit()
 
