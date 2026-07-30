@@ -82,9 +82,9 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
         else:
             estado.ocioso_desde = datetime.now(timezone.utc) # ligou mas ainda fora de call
 
-        id_fivem_atual = estado.id_fivem  # guarda antes do commit fechar a sessão
-        saldo_atual = estado.saldo_moedas
         await session.commit()
+        id_fivem_atual = estado.id_fivem  
+        saldo_atual = estado.saldo_moedas
 
     await registrar_evento_plantao(
         membro.guild, membro.id, "TOGGLE_ON", id_fivem_atual,
@@ -123,9 +123,10 @@ async def desligar_servico(membro: discord.Member) -> str:
         estado.ocioso_desde = None
         estado.lembrete_1_enviado = False
         estado.lembrete_2_enviado = False
-        saldo_final = estado.saldo_moedas  # 👈 captura antes do commit
-        id_fivem_atual = estado.id_fivem
+        
         await session.commit()
+        saldo_final = estado.saldo_moedas  
+        id_fivem_atual = estado.id_fivem
 
     if estava_ocioso_desde is not None:
         duracao = int((datetime.now(timezone.utc) - garantir_aware(estava_ocioso_desde)).total_seconds())
