@@ -8,18 +8,18 @@ from src.database.models import LogPlantao, Recrutamento
 from src.utils.formatacao import formatar_hms
 
 EVENTOS_PLANTAO = {
-    "TOGGLE_ON": ("🟢 Entrou em Serviço", discord.Color.green()),
-    "TOGGLE_OFF": ("🔴 Saiu de Serviço", discord.Color.red()),
-    "ENTROU_CALL": ("📞 Entrou em Call", discord.Color.blurple()),
-    "SAIU_CALL": ("📴 Saiu de Call", discord.Color.dark_grey()),
-    "CALL_ENCERRADA": ("⏹️ Call Encerrada (Saiu do Serviço)", discord.Color.orange()),
-    "TROCOU_CALL": ("🔄 Trocou de Call", discord.Color.gold()),
-    "MOEDA_CREDITADA": ("💰 Moeda Creditada", discord.Color.green()),
-    "LEMBRETE_10": ("📌 Lembrete (10min sem call)", discord.Color.orange()),
-    "LEMBRETE_15": ("⚠️ Lembrete (15min sem call)", discord.Color.orange()),
-    "DESLIGAMENTO_AUTOMATICO": ("⏹️ Desligamento Automático", discord.Color.red()),
-    "HOUSEKEEPING": ("🔧 Housekeeping", discord.Color.dark_grey()),
-    "OCIOSO_ENCERRADO": ("▶️ Retomou Atividade", discord.Color.blurple()),
+    "TOGGLE_ON": (" ✅ Entrou em Serviço"  , discord.Color.green()),
+    "TOGGLE_OFF": (" ❌ Saiu de Serviço" , discord.Color.red()),
+    "ENTROU_CALL": (" 📞 Entrou no Canal de Voz" , discord.Color.blurple()),
+    "SAIU_CALL": (" 📴 Saiu do Canal de Voz" , discord.Color.dark_grey()),
+    "CALL_ENCERRADA": (" ⏹️ Saiu de Serviço (permaneceu na call)", discord.Color.orange()),
+    "TROCOU_CALL": (" 🔄 Mudou de Canal de Voz" , discord.Color.gold()),
+    "MOEDA_CREDITADA": (" 💰 Crédito de Moeda Adicionado", discord.Color.green()),
+    "LEMBRETE_10": (" 📌 Lembrete: 10 minutos inativo", discord.Color.orange()),
+    "LEMBRETE_15": (" ⚠️ Atenção: 15 minutos inativo" , discord.Color.orange()),
+    "DESLIGAMENTO_AUTOMATICO": (" ⏹️ Encerramento Automático", discord.Color.red()),
+    "HOUSEKEEPING": (" 🧹 Limpeza de Plantão Ativo", discord.Color.dark_grey()),
+    "OCIOSO_ENCERRADO": (" ▶️ Plantão Reativado", discord.Color.blurple()),
 }
 
 
