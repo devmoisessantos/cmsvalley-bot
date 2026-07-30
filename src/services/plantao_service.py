@@ -63,20 +63,10 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
             await session.commit()
             return "❌ Você já está em serviço."
 
-        # 👇 Trava de validação — antes de qualquer outra coisa
-        id_fivem_resolvido = await resolver_id_fivem(membro.id)
-        if id_fivem_resolvido is None:
-            await session.commit()  # nada mudou, mas fecha a sessão limpa
-            return (
-                "❌ Você não está registrado como membro aprovado do hospital "
-                "(nem na Whitelist, nem em Recrutamento aprovado). "
-                "Não é possível iniciar o plantão."
-            )
-
         # Busca e "congela" o id_fivem no momento em que liga o serviço
         estado.id_fivem = await obter_id_fivem_de_recrutamento(membro.id)
 
-        estado.id_fivem = id_fivem_resolvido
+        estado.id_fivem = id_fivem
         estado.toggle_ligado = True
         estado.lembrete_1_enviado = False
         estado.lembrete_2_enviado = False
@@ -90,22 +80,23 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
             estado.canal_atual_id = canal_atual.id
             estado.ocioso_desde = None  # já entrou contando, não está ocioso
         else:
-            estado.ocioso_desde = datetime.now(timezone.utc)  # ligou mas ainda fora de call
+            estado.ocioso_desde = agora # ligou mas ainda fora de call
 
         id_fivem_atual = estado.id_fivem  # guarda antes do commit fechar a sessão
+        saldo_atual = estado.saldo_moedas
         await session.commit()
 
-    await registrar_evento_plantao(membro.guild, membro.id, "TOGGLE_ON", id_fivem_atual)
+    await registrar_evento_plantao(
+        membro.guild, membro.id, "TOGGLE_ON", id_fivem_atual,
+        campos_extra={
+            "Saldo Atual": f"{saldo_atual} moedas",
+            "Já Conectou em Call": "Sim" if canal_atual is not None else "Não",
+        },
+    )
     if canal_atual is not None:
         await registrar_evento_plantao(
-            membro.guild, 
-            membro.id, 
-            "ENTROU_CALL", 
-            id_fivem_atual,
-            campos_extra={
-                "Saldo Atual": f"{estado.saldo_moedas} moedas",
-                "Já Conectou em Call": "Sim" if canal_atual is not None else "Não",
-            },
+            membro.guild, membro.id, "ENTROU_CALL", id_fivem_atual,
+            canal_id=canal_atual.id,
         )
 
     return "✅ Você entrou em serviço! Conecte-se a uma das calls disponíveis para começar a contar tempo."
