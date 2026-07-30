@@ -62,6 +62,8 @@ class PlantaoTasks(commands.Cog):
                 logger.info(f"👤 {estado.discord_id}: {minutos:.2f} min ocioso, membro={membro}")
 
                 if minutos >= DESLIGAMENTO_AUTOMATICO_MINUTOS:
+                    saldo_atual = estado.saldo_moedas
+                    id_fivem_atual = estado.id_fivem
                     estado.toggle_ligado = False
                     estado.ocioso_desde = None
                     estado.lembrete_1_enviado = False
@@ -75,11 +77,13 @@ class PlantaoTasks(commands.Cog):
                         guild, estado.discord_id, 
                         "DESLIGAMENTO_AUTOMATICO",
                         estado.id_fivem,
-                        duracao_segundos=int(minutos * 60)
+                        duracao_segundos=int(minutos * 60),
+                        campos_extra={"Saldo no Momento": f"{saldo_atual} moedas"},
                     )
 
                 elif minutos >= LEMBRETE_2_MINUTOS and not estado.lembrete_2_enviado:
                     estado.lembrete_2_enviado = True
+                    minutos_atuais = round(minutos, 1)
                     await _notificar(
                         membro,
                         f"⚠️ Já se passaram `{LEMBRETE_2_MINUTOS} minutos` sem você estar em call. "
@@ -89,11 +93,13 @@ class PlantaoTasks(commands.Cog):
                         guild, 
                         estado.discord_id, 
                         "LEMBRETE_15",
-                        estado.id_fivem
+                        id_fivem_atual,
+                        campos_extra={"Tempo Ocioso": f"{minutos_atuais} min"},
                     )
 
                 elif minutos >= LEMBRETE_1_MINUTOS and not estado.lembrete_1_enviado:
                     estado.lembrete_1_enviado = True
+                    minutos_atuais = round(minutos, 1)
                     await _notificar(
                         membro,
                         f"📌 Já se passaram `{LEMBRETE_1_MINUTOS} minutos` sem você estar em call. "
@@ -103,7 +109,8 @@ class PlantaoTasks(commands.Cog):
                         guild, 
                         estado.discord_id, 
                         "LEMBRETE_10",
-                        estado.id_fivem
+                        estado.id_fivem,
+                        campos_extra={"Tempo Ocioso": f"{minutos_atuais} min"},
                     )
 
             await session.commit()

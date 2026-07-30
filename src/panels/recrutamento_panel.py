@@ -1,5 +1,4 @@
 import discord
-from src.config import LOGO_PATH
 from src.panels.selecionar_candidato import SelecionarCandidatoView
 from src.utils.error_handling import LoggingViewMixin
 class PainelRecrutamentoLayout(LoggingViewMixin, discord.ui.LayoutView):

@@ -1,18 +1,61 @@
 import discord
+from datetime import datetime, timezone
+from sqlalchemy import select
 
-from src.services.plantao_service import ligar_servico, desligar_servico
+from src.services.plantao_service import (
+    ligar_servico, desligar_servico, garantir_aware,
+    resolver_id_fivem, membro_pode_informar_id_manualmente,
+)
 from src.config import (
     GUILD_ID, CARGOS, NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME, obter_ids_canais_plantao_em_ordem,
 )
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.utils.error_handling import LoggingViewMixin
-from sqlalchemy import select
-from datetime import datetime, timezone
-from sqlalchemy import select
-
-from src.services.plantao_service import ligar_servico, desligar_servico, garantir_aware
 from src.utils.formatacao import formatar_hms, formatar_dinheiro
+
+MENSAGEM_SEM_PERMISSAO = (
+    "❌ Você não está registrado como membro aprovado do hospital "
+    "(Nemhum Recrutamento aprovado). Não é possível iniciar o plantão."
+)
+
+class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
+    id_fivem_input = discord.ui.TextInput(
+        label="Seu Identificador (ID FiveM)",
+        placeholder="Ex: 54623",
+        max_length=6,
+        min_length=1,
+        required=True,
+    )
+
+    def __init__(self, membro: discord.Member, origem: str):
+        super().__init__()
+        self.membro = membro
+        self.origem = origem  # "painel" ou "info" — decide o que mostrar depois de ligar
+
+    async def on_submit(self, interaction: discord.Interaction):
+        valor = self.id_fivem_input.value.strip()
+
+        if not valor.isdigit() or len(valor) > 6:
+            await interaction.response.send_message(
+                "❌ ID FiveM inválido. Deve conter apenas números, no máximo 6 dígitos.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        resultado_texto = await ligar_servico(self.membro, valor)
+
+        if not resultado_texto.startswith("✅"):
+            await interaction.followup.send(resultado_texto, ephemeral=True)
+            return
+
+        if self.origem == "painel":
+            await interaction.followup.send(resultado_texto, view=SelecionarCallView(), ephemeral=True)
+        else:
+            novo_estado = await _buscar_estado(self.membro.id)
+            nova_view = InformacoesPlantaoView(self.membro, novo_estado)
+            await interaction.followup.send(resultado_texto, view=nova_view, ephemeral=True)
 
 
 class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -64,22 +107,31 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "❌ Este comando só pode ser usado em servidores.", ephemeral=True
             )
             return
-
-        await interaction.response.defer(ephemeral=True)
-
-        async with async_session() as session:
-            resultado = await session.execute(
-                select(EstadoPlantao).where(EstadoPlantao.discord_id == interaction.user.id)
-            )
-            estado = resultado.scalar_one_or_none()
-            ja_ligado = estado is not None and estado.toggle_ligado
+        
+        estado_antes = await _buscar_estado(interaction.user.id)
+        ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
 
         if ja_ligado:
+            await interaction.response.defer(ephemeral=True)
             resultado_texto = await desligar_servico(interaction.user)
             await interaction.followup.send(resultado_texto, ephemeral=True)
             return
 
-        resultado_texto = await ligar_servico(interaction.user)
+        id_fivem = await resolver_id_fivem(interaction.user.id)
+
+        if id_fivem is None:
+            if membro_pode_informar_id_manualmente(interaction.user):
+                await interaction.response.send_modal(
+                    ModalInformarIDFivem(interaction.user, origem="painel")
+                )
+                return
+            await interaction.response.send_message(MENSAGEM_SEM_PERMISSAO, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+        resultado_texto = await ligar_servico(interaction.user, id_fivem)
 
         if resultado_texto.startswith("✅"):
             await interaction.followup.send(resultado_texto, view=SelecionarCallView(), ephemeral=True)
@@ -100,27 +152,6 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         estado = await _buscar_estado(interaction.user.id)
         view = InformacoesPlantaoView(interaction.user, estado)
         await interaction.response.send_message(view=view, ephemeral=True)
-
-    async def _callback_toggle(self, interaction: discord.Interaction):
-        if not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "❌ Este comando só pode ser usado em servidores.", ephemeral=True
-            )
-            return
-        
-        await interaction.response.defer(ephemeral=True)
-
-        estado_antes = await _buscar_estado(interaction.user.id)
-        ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
-
-        if ja_ligado:
-            await desligar_servico(interaction.user)
-        else:
-            await ligar_servico(interaction.user)
-
-        novo_estado = await _buscar_estado(interaction.user.id)
-        view = InformacoesPlantaoView(interaction.user, novo_estado)
-        await interaction.followup.send(view=view, ephemeral=True)
 
 
 class SelecionarCallView(discord.ui.View):
@@ -234,16 +265,30 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         return select_menu
 
     async def _callback_toggle(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
         estado_antes = await _buscar_estado(interaction.user.id)
         ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
 
         if ja_ligado:
+            await interaction.response.defer(ephemeral=True)
             await desligar_servico(interaction.user)
-        else:
-            await ligar_servico(interaction.user)
+            novo_estado = await _buscar_estado(interaction.user.id)
+            nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+            await interaction.edit_original_response(view=nova_view)
+            return
 
+        id_fivem = await resolver_id_fivem(interaction.user.id)
+
+        if id_fivem is None:
+            if membro_pode_informar_id_manualmente(interaction.user):
+                await interaction.response.send_modal(
+                    ModalInformarIDFivem(interaction.user, origem="info")
+                )
+                return
+            await interaction.response.send_message(MENSAGEM_SEM_PERMISSAO, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await ligar_servico(interaction.user, id_fivem)
         novo_estado = await _buscar_estado(interaction.user.id)
         nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
         await interaction.edit_original_response(view=nova_view)

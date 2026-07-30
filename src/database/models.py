@@ -16,6 +16,7 @@ def agora() -> datetime:
 class Usuario(Base):
     __tablename__ = "usuarios"
 
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 👈 novo
     discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     nickname_atual: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="VISITANTE")
@@ -24,7 +25,6 @@ class Usuario(Base):
 
     recrutamentos: Mapped[list["Recrutamento"]] = relationship(back_populates="candidato")
     historico_cargos: Mapped[list["HistoricoCargo"]] = relationship(back_populates="usuario")
-
 
 class Recrutamento(Base):
     __tablename__ = "recrutamentos"

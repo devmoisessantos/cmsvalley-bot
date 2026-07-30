@@ -44,6 +44,7 @@ async def registrar_evento_plantao(
     canal_id: int | None = None,
     duracao_segundos: int | None = None,
     detalhes: str | None = None,
+    campos_extra: dict[str, str] | None = None,     
 ):
 
     async with async_session() as session:
@@ -75,6 +76,10 @@ async def registrar_evento_plantao(
     if duracao_segundos is not None:
         linhas += f"\n- **Duração:** {formatar_hms(duracao_segundos)}"
 
+    if campos_extra:  # 👈 novo
+        for chave, valor in campos_extra.items():
+            linhas += f"\n- **{chave}:** {valor}"
+
     if detalhes:
         linhas += f"\n- **Detalhes:** {detalhes}"
 
@@ -82,3 +87,19 @@ async def registrar_evento_plantao(
     view = LogContainerView(titulo=titulo, linhas=linhas, guild=guild, cor=cor,
                              avatar_url=membro.display_avatar.url if membro else None)
     await canal.send(view=view)
+
+async def resolver_id_fivem_e_validar(discord_id: int) -> str | None:
+    """Retorna o id_fivem se o discord_id tiver um Recrutamento aprovado.
+    Única fonte de verdade: quem o recrutador aprovou de fato."""
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(Recrutamento.id_fivem)
+            .where(
+                Recrutamento.discord_id_candidato == discord_id,
+                Recrutamento.status == "APROVADO",
+                Recrutamento.id_fivem.is_not(None),
+            )
+            .order_by(Recrutamento.id.desc())
+            .limit(1)
+        )
+        return resultado.scalar_one_or_none()

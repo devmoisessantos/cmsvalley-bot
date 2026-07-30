@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from src.config import CARGOS, CANAIS, TOTAL_PERGUNTAS_PROVA, NOTA_MINIMA_APROVACAO
+from src.config import CANAIS, TOTAL_PERGUNTAS_PROVA, NOTA_MINIMA_APROVACAO
 from src.database.connection import async_session
 from src.database.models import Recrutamento, Pergunta, RespostaProva
 from src.utils.logger import log_mudanca_cargo

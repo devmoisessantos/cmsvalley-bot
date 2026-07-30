@@ -1,12 +1,20 @@
 import discord
 from datetime import datetime, timezone
+from sqlalchemy import select
 
-from src.config import SEGUNDOS_PARA_MOEDA
+from src.config import (
+    SEGUNDOS_PARA_MOEDA, 
+    VALOR_MOEDA_INGAME, 
+    CARGOS, 
+    CARGOS_HIERARQUIA
+)
 from src.config import obter_todos_ids_canais_plantao
+from src.services.identidade_service import resolver_id_fivem
 from src.services.plantao_logger import registrar_evento_plantao, obter_id_fivem_de_recrutamento
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
-from sqlalchemy import select
+
+from src.utils.formatacao import formatar_dinheiro
 
 
 def garantir_aware(dt: datetime) -> datetime:
@@ -14,6 +22,11 @@ def garantir_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+def membro_pode_informar_id_manualmente(membro: discord.Member) -> bool:
+    """True se o membro tiver algum cargo da hierarquia (Visitante já está fora dessa lista)."""
+    ids_hierarquia = {CARGOS[nome] for nome in CARGOS_HIERARQUIA if nome in CARGOS}
+    return any(cargo.id in ids_hierarquia for cargo in membro.roles)
 
 
 async def _obter_ou_criar_estado(session, discord_id: int) -> EstadoPlantao:
@@ -40,8 +53,9 @@ def _membro_esta_em_call_valida(membro: discord.Member) -> discord.VoiceChannel 
     return None
 
 
-async def ligar_servico(membro: discord.Member) -> str:
-    """Liga o toggle do médico. Se ele já estiver numa call válida, a contagem já começa."""
+async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
+    """Liga o serviço. id_fivem já deve vir resolvido pelo chamador
+    (via resolver_id_fivem ou digitado no modal) — essa função não valida mais isso."""
     async with async_session() as session:
         estado = await _obter_ou_criar_estado(session, membro.id)
 
@@ -49,9 +63,20 @@ async def ligar_servico(membro: discord.Member) -> str:
             await session.commit()
             return "❌ Você já está em serviço."
 
+        # 👇 Trava de validação — antes de qualquer outra coisa
+        id_fivem_resolvido = await resolver_id_fivem(membro.id)
+        if id_fivem_resolvido is None:
+            await session.commit()  # nada mudou, mas fecha a sessão limpa
+            return (
+                "❌ Você não está registrado como membro aprovado do hospital "
+                "(nem na Whitelist, nem em Recrutamento aprovado). "
+                "Não é possível iniciar o plantão."
+            )
+
         # Busca e "congela" o id_fivem no momento em que liga o serviço
         estado.id_fivem = await obter_id_fivem_de_recrutamento(membro.id)
 
+        estado.id_fivem = id_fivem_resolvido
         estado.toggle_ligado = True
         estado.lembrete_1_enviado = False
         estado.lembrete_2_enviado = False
@@ -77,7 +102,10 @@ async def ligar_servico(membro: discord.Member) -> str:
             membro.id, 
             "ENTROU_CALL", 
             id_fivem_atual,
-            canal_id=canal_atual.id
+            campos_extra={
+                "Saldo Atual": f"{estado.saldo_moedas} moedas",
+                "Já Conectou em Call": "Sim" if canal_atual is not None else "Não",
+            },
         )
 
     return "✅ Você entrou em serviço! Conecte-se a uma das calls disponíveis para começar a contar tempo."
@@ -100,15 +128,20 @@ async def desligar_servico(membro: discord.Member) -> str:
         estado.ocioso_desde = None
         estado.lembrete_1_enviado = False
         estado.lembrete_2_enviado = False
+        saldo_final = estado.saldo_moedas  # 👈 captura antes do commit
+        id_fivem_atual = estado.id_fivem
         await session.commit()
 
     if estava_ocioso_desde is not None:
         duracao = int((datetime.now(timezone.utc) - garantir_aware(estava_ocioso_desde)).total_seconds())
-        await registrar_evento_plantao(membro.guild, membro.id, "OCIOSO_ENCERRADO", duracao_segundos=duracao,
+        await registrar_evento_plantao(membro.guild, membro.id, "OCIOSO_ENCERRADO", id_fivem_atual,
+                                        duracao_segundos=duracao,
                                         detalhes="Encerrado por saída manual do serviço")
 
-    # desligar_servico
-    await registrar_evento_plantao(membro.guild, membro.id, "TOGGLE_OFF", estado.id_fivem)
+    await registrar_evento_plantao(
+        membro.guild, membro.id, "TOGGLE_OFF", id_fivem_atual,
+        campos_extra={"Saldo Final": f"{saldo_final} moedas ({formatar_dinheiro(saldo_final * VALOR_MOEDA_INGAME)})"},
+    )
 
     return "✅ Você saiu de serviço. Cronômetro encerrado."
 
@@ -147,5 +180,11 @@ async def _finalizar_periodo_em_call(estado: EstadoPlantao, guild: discord.Guild
     await registrar_evento_plantao(guild, discord_id, "SAIU_CALL", estado.id_fivem,
                                 canal_id=canal_anterior_id, duracao_segundos=decorrido_segmento)
 
-    for _ in range(moedas_ganhas):
-        await registrar_evento_plantao(guild, discord_id, "MOEDA_CREDITADA", estado.id_fivem)
+    if moedas_ganhas > 0:
+        await registrar_evento_plantao(
+            guild, discord_id, "MOEDA_CREDITADA", estado.id_fivem,
+            campos_extra={
+                "Moedas Ganhas": str(moedas_ganhas),
+                "Saldo Total": f"{estado.saldo_moedas} moedas ({formatar_dinheiro(estado.saldo_moedas * VALOR_MOEDA_INGAME)})",
+            },
+        )

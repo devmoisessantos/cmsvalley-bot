@@ -1,6 +1,5 @@
 import discord
 
-from src.config import LOGO_PATH
 from src.utils.error_handling import LoggingViewMixin, LoggingModalMixin
 from src.whitelist.whitelist_service import processar_whitelist
 
