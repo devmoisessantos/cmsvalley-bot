@@ -80,7 +80,7 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
             estado.canal_atual_id = canal_atual.id
             estado.ocioso_desde = None  # já entrou contando, não está ocioso
         else:
-            estado.ocioso_desde = agora # ligou mas ainda fora de call
+            estado.ocioso_desde = datetime.now(timezone.utc) # ligou mas ainda fora de call
 
         id_fivem_atual = estado.id_fivem  # guarda antes do commit fechar a sessão
         saldo_atual = estado.saldo_moedas
