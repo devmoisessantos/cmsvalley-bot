@@ -391,14 +391,14 @@ CANAIS_PLANTAO = {
     ],
 }
 
-SEGUNDOS_PARA_MOEDA = 10  # 10 segundos pra testar depois mudar
+SEGUNDOS_PARA_MOEDA = 1800  # 10 segundos pra testar depois mudar
 VALOR_MOEDA_INGAME = 100_000
 LEMBRETE_1_MINUTOS = 1
 LEMBRETE_2_MINUTOS = 2
 DESLIGAMENTO_AUTOMATICO_MINUTOS = 3
-HOUSEKEEPING_LIMITE_HORAS = 12
-AFK_AVISO_MINUTOS = 170     # avisa 10 min antes do corte (170 = 2h50)
-AFK_LIMITE_MINUTOS = 180    # 3 horas — desconecta e penaliza
+HOUSEKEEPING_LIMITE_HORAS = 6
+AFK_AVISO_MINUTOS = 1     # avisa 10 min antes do corte (170 = 2h50)
+AFK_LIMITE_MINUTOS = 2    # 3 horas — desconecta e penaliza
 PENALIDADE_AFK_MOEDAS = 3
 
 def obter_todos_ids_canais_plantao() -> set[int]:
