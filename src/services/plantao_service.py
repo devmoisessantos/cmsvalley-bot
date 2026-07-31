@@ -6,7 +6,8 @@ from src.config import (
     SEGUNDOS_PARA_MOEDA, 
     VALOR_MOEDA_INGAME, 
     CARGOS, 
-    CARGOS_HIERARQUIA
+    CARGOS_HIERARQUIA,
+    CARGOS_DOUTOR_OU_ACIMA
 )
 from src.utils.formatacao import formatar_dinheiro
 from src.config import obter_todos_ids_canais_plantao
@@ -20,6 +21,11 @@ def garantir_aware(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def membro_e_doutor_ou_acima(membro: discord.Member) -> bool:
+    ids_permitidos = {CARGOS[nome] for nome in CARGOS_DOUTOR_OU_ACIMA if nome in CARGOS}
+    return any(cargo.id in ids_permitidos for cargo in membro.roles)
 
 
 def _membro_mutado_e_surdo(membro: discord.Member) -> bool:

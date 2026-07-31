@@ -147,3 +147,36 @@ class LogPlantao(Base):
     duracao_segundos: Mapped[int | None] = mapped_column(Integer, nullable=True)
     detalhes: Mapped[str | None] = mapped_column(String(300), nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+
+class ControleChamada(Base):
+    """Tabela singleton (1 linha só, id=1) — controla o cooldown global e o lock de concorrência."""
+    __tablename__ = "controle_chamada"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    ultima_chamada_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    chamada_em_andamento: Mapped[bool] = mapped_column(Boolean, default=False)
+    doutor_em_chamada_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    chamada_iniciada_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Chamada(Base):
+    __tablename__ = "chamadas"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    doutor_id: Mapped[int] = mapped_column(BigInteger)
+    total_medicos_ems: Mapped[int] = mapped_column(Integer, default=0)
+    total_toggle_ligado: Mapped[int] = mapped_column(Integer, default=0)
+    total_presentes: Mapped[int] = mapped_column(Integer, default=0)
+    total_ausentes: Mapped[int] = mapped_column(Integer, default=0)
+    criada_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+
+class FaltaChamada(Base):
+    __tablename__ = "faltas_chamada"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    chamada_id: Mapped[int] = mapped_column(Integer)
+    motivo: Mapped[str] = mapped_column(String(100))
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)

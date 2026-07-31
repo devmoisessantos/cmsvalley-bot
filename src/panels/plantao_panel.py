@@ -15,6 +15,7 @@ from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.formatacao import formatar_hms, formatar_dinheiro
+from src.panels.chamada_panel import PainelCoordenacaoView
 
 logger = logging.getLogger(__name__)
 
@@ -367,8 +368,14 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                 session.add(estado)
 
             estado.modo_coordenacao = not estado.modo_coordenacao
+            ativado = estado.modo_coordenacao
             await session.commit()
 
-        novo_estado = await _buscar_estado(interaction.user.id)
-        nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+        if ativado:
+            
+            nova_view = await PainelCoordenacaoView.construir(interaction.user)
+        else:
+            novo_estado = await _buscar_estado(interaction.user.id)
+            nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+
         await interaction.edit_original_response(view=nova_view)
