@@ -20,6 +20,9 @@ EVENTOS_PLANTAO = {
     "DESLIGAMENTO_AUTOMATICO": (" ⏹️ Encerramento Automático", discord.Color.red()),
     "HOUSEKEEPING": (" 🧹 Limpeza de Plantão Ativo", discord.Color.dark_grey()),
     "OCIOSO_ENCERRADO": (" ▶️ Plantão Reativado", discord.Color.blurple()),
+    "AFK_AVISO": ("🔇 Aviso de AFK (mudo+surdo)", discord.Color.orange()),
+    "CALL_ENCERRADA_POR_AFK": ("⏹️ Call Encerrada (AFK detectado)", discord.Color.dark_orange()),
+    "PENALIDADE_AFK": ("⚠️ Penalidade Aplicada (AFK)", discord.Color.dark_red()),
 }
 
 

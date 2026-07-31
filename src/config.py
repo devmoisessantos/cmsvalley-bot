@@ -397,6 +397,9 @@ LEMBRETE_1_MINUTOS = 1
 LEMBRETE_2_MINUTOS = 2
 DESLIGAMENTO_AUTOMATICO_MINUTOS = 3
 HOUSEKEEPING_LIMITE_HORAS = 12
+AFK_AVISO_MINUTOS = 170     # avisa 10 min antes do corte (170 = 2h50)
+AFK_LIMITE_MINUTOS = 180    # 3 horas — desconecta e penaliza
+PENALIDADE_AFK_MOEDAS = 3
 
 def obter_todos_ids_canais_plantao() -> set[int]:
     """Achata CANAIS_PLANTAO (que mistura int único e listas) num set de IDs."""
@@ -449,6 +452,5 @@ def _gerar_nomes_amigaveis() -> dict[int, str]:
             nomes[valor] = rotulos_unicos.get(chave, chave.title())
 
     return nomes
-
 
 NOMES_CANAIS_PLANTAO = _gerar_nomes_amigaveis()

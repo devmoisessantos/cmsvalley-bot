@@ -133,7 +133,9 @@ class EstadoPlantao(Base):
     lembrete_1_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
     lembrete_2_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
     modo_coordenacao: Mapped[bool] = mapped_column(Boolean, default=False)
-
+    afk_mudo_surdo_desde: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    afk_canal_referencia_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    afk_aviso_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
 class LogPlantao(Base):
     __tablename__ = "log_plantao"
 

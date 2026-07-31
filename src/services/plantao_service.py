@@ -21,6 +21,17 @@ def garantir_aware(dt: datetime) -> datetime:
         return dt.replace(tzinfo=timezone.utc)
     return dt
 
+
+def _membro_mutado_e_surdo(membro: discord.Member) -> bool:
+    """True se o membro estiver mudo E surdo (self ou aplicado pelo servidor)."""
+    voice = membro.voice
+    if voice is None:
+        return False
+    mudo = voice.self_mute or voice.mute
+    surdo = voice.self_deaf or voice.deaf
+    return mudo and surdo
+
+
 def membro_pode_informar_id_manualmente(membro: discord.Member) -> bool:
     """True se o membro tiver algum cargo da hierarquia (Visitante já está fora dessa lista)."""
     if membro.guild_permissions.administrator:
