@@ -146,12 +146,6 @@ class CmsValleyBot(commands.Bot):
 
         fim_deploy()
 
-        logger.info("🔄 Pré-carregando modelo EasyOCR...")
-        try:
-            await aquecer_modelo_easyocr()
-        except Exception:
-            logger.info("💥 Falha ao pré-carregar EasyOCR — chamadas vão tentar de novo na primeira execução")
-
 bot = CmsValleyBot()
 
 def run():
