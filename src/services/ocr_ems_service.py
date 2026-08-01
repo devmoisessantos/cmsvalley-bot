@@ -1,14 +1,17 @@
 import asyncio
-from asyncio.log import logger
+import logging
 import cv2
 import numpy as np
 import easyocr
 import aiohttp
+import torch
+torch.set_num_threads(1)
 
 _easyocr_reader = None
 
 _ALLOWLIST_EMS = "0123456789:.- abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÉÊÍÓÔÕÚÇàáâãéêíóôõúç"
 
+logger = logging.getLogger("cmsvalley-bot")
 
 def _obter_leitor_easyocr():
     global _easyocr_reader

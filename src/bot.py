@@ -33,7 +33,7 @@ intents.messages = True
 intents.message_content = True
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("recrutamento-bot")
+logger = logging.getLogger("cmsvalley-bot")
 
 class CmsValleyBot(commands.Bot):
     def __init__(self):
@@ -144,13 +144,13 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_gerenciar_cargos(self)
         await garantir_painel_plantao(self)
 
+        fim_deploy()
+
         logger.info("🔄 Pré-carregando modelo EasyOCR...")
         try:
             await aquecer_modelo_easyocr()
         except Exception:
-            logger.exception("💥 Falha ao pré-carregar EasyOCR — chamadas vão tentar de novo na primeira execução")
-
-        fim_deploy()
+            logger.info("💥 Falha ao pré-carregar EasyOCR — chamadas vão tentar de novo na primeira execução")
 
 bot = CmsValleyBot()
 

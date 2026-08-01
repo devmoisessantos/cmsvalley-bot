@@ -44,7 +44,6 @@ class PlantaoTasks(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def verificar_ociosos(self):
-        logger.info("🔄 verificar_ociosos TICK")  # 👈 se isso não aparecer no log a cada 1 min, o loop não está rodando
 
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
@@ -59,7 +58,6 @@ class PlantaoTasks(commands.Cog):
                 )
             )
             estados = resultado.scalars().all()
-            logger.info(f"🔎 {len(estados)} estado(s) ocioso(s) encontrados")
 
             for estado in estados:
                 try:
