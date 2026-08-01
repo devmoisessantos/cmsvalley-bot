@@ -10,6 +10,7 @@ from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.panels.plantao_panel import PainelPlantaoLayout
 from src.database.connection import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
+from src.services.ocr_ems_service import aquecer_modelo_easyocr
 from src.services.plantao_tasks import executar_housekeeping_plantao
 
 from src.config import DISCORD_TOKEN, GUILD_ID, CANAIS
@@ -143,6 +144,11 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_gerenciar_cargos(self)
         await garantir_painel_plantao(self)
 
+        logger.info("🔄 Pré-carregando modelo EasyOCR...")
+        try:
+            await aquecer_modelo_easyocr()
+        except Exception:
+            logger.exception("💥 Falha ao pré-carregar EasyOCR — chamadas vão tentar de novo na primeira execução")
 
         fim_deploy()
 

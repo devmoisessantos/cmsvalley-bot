@@ -1,3 +1,5 @@
+import asyncio
+
 import discord
 import logging
 from datetime import datetime, timezone
@@ -172,6 +174,30 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
     guild = interaction.guild
 
     await interaction.followup.send("🔍 Processando imagem, aguarde...", ephemeral=True)
+
+    try:
+        linhas_com_confianca = await asyncio.wait_for(
+            extrair_linhas_do_print_ems(url_imagem), timeout=90
+        )
+    except asyncio.TimeoutError:
+        logger.error("💥 OCR excedeu 90s — abortando chamada")
+        await finalizar_chamada(marcar_ultima_chamada=False)
+        definir_sessao(None)
+        await interaction.followup.send(
+            "❌ O processamento da imagem demorou demais e foi cancelado. "
+            "A chamada foi abortada — tente novamente.",
+            ephemeral=True,
+        )
+        return
+    except Exception:
+        logger.exception("💥 Falha inesperada ao processar imagem do EMS")
+        await finalizar_chamada(marcar_ultima_chamada=False)
+        definir_sessao(None)
+        await interaction.followup.send(
+            "❌ Ocorreu um erro ao processar a imagem. A chamada foi abortada — tente novamente.",
+            ephemeral=True,
+        )
+        return
 
     linhas_com_confianca = await extrair_linhas_do_print_ems(url_imagem)
     resultado_parser = extrair_entradas_do_ems(linhas_com_confianca)

@@ -1,4 +1,5 @@
 import asyncio
+from asyncio.log import logger
 import cv2
 import numpy as np
 import easyocr
@@ -58,3 +59,12 @@ async def extrair_linhas_do_print_ems(url_anexo: str) -> list[tuple[str, float]]
     loop = asyncio.get_event_loop()
     imagem_processada = await loop.run_in_executor(None, _preprocessar_imagem, bytes_imagem)
     return await loop.run_in_executor(None, _rodar_easyocr, imagem_processada)
+
+
+async def aquecer_modelo_easyocr():
+    """Força o download/carregamento do EasyOCR no início do bot, não na primeira
+    chamada real — evita que o primeiro Doutor a usar o sistema fique travado
+    esperando o download dos modelos sem saber o que está acontecendo."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _obter_leitor_easyocr)
+    logger.info("✅ Modelo EasyOCR pré-carregado com sucesso")
