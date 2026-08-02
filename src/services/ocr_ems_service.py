@@ -1,73 +1,70 @@
-import asyncio
+"""
+Serviço de OCR do EMS: delega pra API externa (ems-ocr-service, no Render)
+em vez de rodar qualquer OCR aqui dentro do bot.
+
+Isso substitui a versão anterior, que tentava rodar EasyOCR + OpenCV
+localmente — só que easyocr/opencv/numpy nunca estiveram no
+requirements.txt do bot (e faltavam os imports de easyocr/cv2 no arquivo
+original), então essa versão antiga nunca funcionou de verdade em
+produção: na primeira chamada real ia estourar erro.
+"""
+
+import os
 import logging
-import cv2
-import numpy as np
-import easyocr
+
 import aiohttp
-import torch
-torch.set_num_threads(1)
-
-_easyocr_reader = None
-
-_ALLOWLIST_EMS = "0123456789:.- abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZÀÁÂÃÉÊÍÓÔÕÚÇàáâãéêíóôõúç"
 
 logger = logging.getLogger("cmsvalley-bot")
 
-def _obter_leitor_easyocr():
-    global _easyocr_reader
-    if _easyocr_reader is None:
-        _easyocr_reader = easyocr.Reader(["pt", "en"], gpu=False)
-    return _easyocr_reader
+# IMPORTANTE: precisa terminar em /ocr/ems — é o endpoint real da API,
+# não a raiz do serviço.
+API_URL = os.getenv("EMS_OCR_API_URL", "https://ems-ocr-api-59sa.onrender.com/ocr/ems")
+TIMEOUT_SEGUNDOS = 90  # o motor de OCR externo pode demorar alguns segundos pra responder
+
+
+class OcrEmsError(Exception):
+    """Erro ao consultar a API externa de OCR do EMS (rede, timeout, ou erro devolvido por ela)."""
 
 
 async def _baixar_imagem_bytes(url: str) -> bytes:
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resposta:
+            if resposta.status != 200:
+                raise OcrEmsError(f"Não foi possível baixar o anexo do Discord (HTTP {resposta.status}).")
             return await resposta.read()
 
 
-def _preprocessar_imagem(bytes_imagem: bytes) -> np.ndarray:
-    """Upscale + contraste local apenas — SEM binarização/denoise, que quebravam
-    o texto anti-aliased do jogo e geravam erros de caractere."""
-    array = np.frombuffer(bytes_imagem, dtype=np.uint8)
-    imagem = cv2.imdecode(array, cv2.IMREAD_COLOR)
+async def extrair_medicos_do_print_ems(url_anexo: str) -> dict:
+    """
+    Baixa o print do /ems anexado no Discord e manda pra API de OCR externa.
 
-    imagem = cv2.resize(imagem, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_LANCZOS4)
-    cinza = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
+    Retorna o mesmo formato que a API devolve:
+        {
+          "total_detectado": int,
+          "total_suspeitos": int,
+          "medicos": [{"id": int, "nome": str, "suspeito": bool, "motivo_suspeita": str|None}, ...],
+          "aviso": str | None,
+        }
 
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    contraste = clahe.apply(cinza)
+    A API já faz o parsing 'ID: Nome' e já sinaliza IDs fora do intervalo
+    esperado (suspeito=True) — não precisa de nenhum parser adicional no
+    lado do bot pra isso.
+    """
+    imagem_bytes = await _baixar_imagem_bytes(url_anexo)
 
-    return contraste
+    timeout = aiohttp.ClientTimeout(total=TIMEOUT_SEGUNDOS)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        form = aiohttp.FormData()
+        form.add_field("file", imagem_bytes, filename="print_ems.png", content_type="image/png")
 
-
-def _rodar_easyocr(imagem_processada: np.ndarray) -> list[tuple[str, float]]:
-    """Retorna lista de (texto, confiança) — a confiança é repassada adiante
-    pra sinalizar entradas que merecem checagem visual do Doutor."""
-    leitor = _obter_leitor_easyocr()
-    resultados = leitor.readtext(
-        imagem_processada,
-        detail=1,
-        paragraph=False,
-        allowlist=_ALLOWLIST_EMS,
-        mag_ratio=2.0,
-    )
-    return [(texto, confianca) for _bbox, texto, confianca in resultados]
-
-
-async def extrair_linhas_do_print_ems(url_anexo: str) -> list[tuple[str, float]]:
-    """Baixa a imagem, pré-processa, roda EasyOCR. Retorna lista de (texto_linha, confiança)."""
-    bytes_imagem = await _baixar_imagem_bytes(url_anexo)
-
-    loop = asyncio.get_event_loop()
-    imagem_processada = await loop.run_in_executor(None, _preprocessar_imagem, bytes_imagem)
-    return await loop.run_in_executor(None, _rodar_easyocr, imagem_processada)
-
-
-async def aquecer_modelo_easyocr():
-    """Força o download/carregamento do EasyOCR no início do bot, não na primeira
-    chamada real — evita que o primeiro Doutor a usar o sistema fique travado
-    esperando o download dos modelos sem saber o que está acontecendo."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _obter_leitor_easyocr)
-    logger.info("✅ Modelo EasyOCR pré-carregado com sucesso")
+        try:
+            async with session.post(API_URL, data=form) as resposta:
+                dados = await resposta.json()
+                if resposta.status != 200:
+                    # a API usa HTTPException do FastAPI -> o corpo de erro vem
+                    # como {"detail": "..."}, não {"erro": "..."}
+                    raise OcrEmsError(dados.get("detail", "Erro desconhecido na API de OCR."))
+                return dados
+        except aiohttp.ClientError as exc:
+            logger.error("Falha ao conectar na API de OCR do EMS: %s", exc)
+            raise OcrEmsError(f"Não foi possível conectar na API de OCR ({exc})") from exc

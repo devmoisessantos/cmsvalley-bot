@@ -214,3 +214,7 @@ async def _finalizar_periodo_em_call(
                 "Saldo Total": f"{estado.saldo_moedas} moedas ({formatar_dinheiro(estado.saldo_moedas * VALOR_MOEDA_INGAME)})",
             },
         )
+
+
+
+

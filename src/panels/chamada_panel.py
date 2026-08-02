@@ -7,14 +7,15 @@ from sqlalchemy import select
 
 from src.config import CANAIS, CARGOS
 from src.database.connection import async_session
-from src.database.models import EstadoPlantao, Recrutamento, Chamada
+from src.database.models import EstadoPlantao, Recrutamento, Chamada, Usuario
+
+from src.services.ocr_ems_service import extrair_medicos_do_print_ems, OcrEmsError
+from src.services.validacao_ids import validar_medicos, MembroConhecido
 from src.services.plantao_service import membro_e_doutor_ou_acima, garantir_aware
 from src.services.chamada_service import (
     calcular_proximo_horario_permitido, tentar_iniciar_chamada, finalizar_chamada,
     registrar_falta,
 )
-from src.services.ocr_ems_service import extrair_linhas_do_print_ems
-from src.services.chamada_service import extrair_entradas_do_ems  # parser
 from src.services.chamada_state import SessaoChamada, MedicoNaChamada, definir_sessao, obter_sessao
 from src.utils.log_container import criar_container_log, LogContainerView
 from src.utils.error_handling import LoggingViewMixin
@@ -176,8 +177,8 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
     await interaction.followup.send("🔍 Processando imagem, aguarde...", ephemeral=True)
 
     try:
-        linhas_com_confianca = await asyncio.wait_for(
-            extrair_linhas_do_print_ems(url_imagem), timeout=90
+        resultado = await asyncio.wait_for(
+            extrair_medicos_do_print_ems(url_imagem), timeout=90
         )
     except asyncio.TimeoutError:
         logger.error("💥 OCR excedeu 90s — abortando chamada")
@@ -186,6 +187,15 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
         await interaction.followup.send(
             "❌ O processamento da imagem demorou demais e foi cancelado. "
             "A chamada foi abortada — tente novamente.",
+            ephemeral=True,
+        )
+        return
+    except OcrEmsError as exc:
+        logger.error("💥 API de OCR retornou erro: %s", exc)
+        await finalizar_chamada(marcar_ultima_chamada=False)
+        definir_sessao(None)
+        await interaction.followup.send(
+            f"❌ Não foi possível ler a imagem: {exc}. A chamada foi abortada — tente novamente.",
             ephemeral=True,
         )
         return
@@ -199,45 +209,66 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
         )
         return
 
-    linhas_com_confianca = await extrair_linhas_do_print_ems(url_imagem)
-    resultado_parser = extrair_entradas_do_ems(linhas_com_confianca)
-    todas_entradas = resultado_parser["confiaveis"] + resultado_parser["revisar"]
-
-    sessao.total_medicos_ems = len(todas_entradas)
+    medicos_ems = resultado["medicos"]
+    sessao.total_medicos_ems = len(medicos_ems)
 
     ids_no_ems = set()
     reconhecidos_sul: list[MedicoNaChamada] = []
     nao_reconhecidos: list[dict] = []
+    total_corrigidos = 0
 
     async with async_session() as session:
-        for entrada in todas_entradas:
-            id_fivem = entrada["id_fivem"]
-            ids_no_ems.add(id_fivem)
-
-            resultado = await session.execute(
-                select(Recrutamento.discord_id_candidato)
-                .where(Recrutamento.id_fivem == id_fivem, Recrutamento.status == "APROVADO")
-                .order_by(Recrutamento.id.desc())
-                .limit(1)
+        # Uma query só, trazendo todo Recrutamento aprovado já com o nome
+        # do candidato (join com Usuario), pro fuzzy-match por nome do
+        # validar_medicos funcionar. Igual antes: quando existem várias
+        # linhas aprovadas pro mesmo id_fivem (re-recrutamento), fica a
+        # mais recente (maior id) — por isso ordena ASC e deixa sobrescrever.
+        resultado_db = await session.execute(
+            select(
+                Recrutamento.id,
+                Recrutamento.id_fivem,
+                Recrutamento.discord_id_candidato,
+                Usuario.nickname_atual,
             )
-            discord_id = resultado.scalar_one_or_none()
+            .join(Usuario, Usuario.discord_id == Recrutamento.discord_id_candidato)
+            .where(Recrutamento.status == "APROVADO", Recrutamento.id_fivem.is_not(None))
+            .order_by(Recrutamento.id.asc())
+        )
 
-            if discord_id is not None:
-                membro_db = guild.get_member(discord_id)
-                reconhecidos_sul.append(MedicoNaChamada(
-                    id_fivem=id_fivem, discord_id=discord_id,
-                    nome_ems=entrada["nome_ems"],
-                    nome_discord=membro_db.display_name if membro_db else None,
-                    confianca=entrada["confianca"],
-                ))
-            else:
-                nao_reconhecidos.append(entrada)
+        aprovados_por_id: dict[str, MembroConhecido] = {}
+        for row in resultado_db.all():
+            aprovados_por_id[row.id_fivem] = MembroConhecido(
+                id_fivem=row.id_fivem,
+                nome=row.nickname_atual or "",
+                discord_id=row.discord_id_candidato,
+            )
+        membros_conhecidos = list(aprovados_por_id.values())
 
         # Quem está com toggle ligado no Discord agora
         resultado_toggle = await session.execute(
             select(EstadoPlantao).where(EstadoPlantao.toggle_ligado.is_(True))
         )
         estados_ligados = resultado_toggle.scalars().all()
+
+    validados = validar_medicos(medicos_ems, membros_conhecidos)
+
+    for v in validados:
+        id_final = v.id_corrigido or v.id_lido
+        ids_no_ems.add(id_final)
+
+        if v.status in ("confirmado", "corrigido"):
+            membro_db = guild.get_member(v.membro.discord_id)
+            reconhecidos_sul.append(MedicoNaChamada(
+                id_fivem=v.membro.id_fivem, discord_id=v.membro.discord_id,
+                nome_ems=v.nome_lido,
+                nome_discord=membro_db.display_name if membro_db else None,
+                confianca=1.0 if v.status == "confirmado" else 0.7,
+            ))
+            if v.status == "corrigido":
+                total_corrigidos += 1
+                logger.info("Chamada EMS: correção aplicada — %s", v.motivo)
+        else:
+            nao_reconhecidos.append({"id_fivem": v.id_lido, "nome_ems": v.nome_lido})
 
     sessao.total_toggle_ligado = len(estados_ligados)
     ids_fivem_com_toggle = {e.id_fivem: e.discord_id for e in estados_ligados if e.id_fivem}
@@ -256,6 +287,11 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
     ]
 
     sessao.nao_reconhecidos = nao_reconhecidos
+
+    if total_corrigidos:
+        logger.info("Chamada EMS: %d entrada(s) corrigida(s) automaticamente", total_corrigidos)
+    if resultado.get("aviso"):
+        logger.info("Aviso da API de OCR: %s", resultado["aviso"])
 
     # Resolve automaticamente quem está com toggle ligado mas sumiu do EMS
     await _processar_ausentes_do_ems(interaction, sessao)
