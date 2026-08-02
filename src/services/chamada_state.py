@@ -1,5 +1,8 @@
-from dataclasses import dataclass, field
-
+import discord
+from dataclasses import (
+    dataclass, 
+    field
+)
 
 @dataclass
 class MedicoNaChamada:
@@ -26,12 +29,19 @@ class SessaoChamada:
     presentes_no_ems_toggle_ligado: list[MedicoNaChamada] = field(default_factory=list)
     toggle_ligado_mas_nao_no_ems: list[MedicoNaChamada] = field(default_factory=list)
     nao_reconhecidos: list[dict] = field(default_factory=list)
+    medicos_norte: list[dict] = field(default_factory=list)  # confirmados como Hospital Norte
+
 
     total_medicos_ems: int = 0
     total_toggle_ligado: int = 0
 
-    # NOVO: trava a etapa de confirmação até o Doutor resolver os desconhecidos
-    revisao_concluida: bool = False
+    membros_conhecidos: list = field(default_factory=list)  # cache de MembroConhecido pra busca manual
+
+    faltantes_ids: set[int] = field(default_factory=set)  # marcados na Etapa 3, ajustável até finalizar
+    etapa_atual: int = 1
+
+    # Toda mensagem efêmera enviada durante a chamada — apagadas ao finalizar
+    mensagens_efemeras: list[discord.WebhookMessage] = field(default_factory=list)
 
 
 # Só pode existir 1 sessão ativa por vez (já garantido pelo lock do ControleChamada,

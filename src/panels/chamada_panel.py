@@ -1,5 +1,4 @@
 import asyncio
-
 import discord
 import logging
 from datetime import datetime, timezone
@@ -12,7 +11,7 @@ from src.database.models import EstadoPlantao, Recrutamento, Chamada, Usuario
 from src.services.ocr_ems_service import extrair_medicos_do_print_ems, OcrEmsError
 from src.services.scraping_membros import combinar_membros, construir_membros_via_apelido
 from src.services.validacao_ids import validar_medicos, MembroConhecido
-from src.services.plantao_service import membro_e_doutor_ou_acima, garantir_aware
+from src.services.plantao_service import membro_e_doutor_ou_acima, garantir_aware, desligar_servico
 from src.services.chamada_service import (
     calcular_proximo_horario_permitido, tentar_iniciar_chamada, finalizar_chamada,
     registrar_falta,
@@ -24,9 +23,67 @@ from src.utils.error_handling import LoggingViewMixin
 logger = logging.getLogger(__name__)
 
 
-class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
-    """Painel exibido quando o Doutor+ ativa o Modo Coordenação."""
+# ─────────────────────────────────────────────
+# Helpers genéricos
+# ─────────────────────────────────────────────
 
+def _construir_blocos_texto(linhas: list[str], max_chars: int = 1500) -> list[str]:
+    """Quebra uma lista de linhas em blocos que cabem num TextDisplay sem estourar
+    o limite do Discord — evita o '... e mais N' truncando a lista real."""
+    if not linhas:
+        return ["_(nenhum)_"]
+    blocos, atual, tamanho = [], [], 0
+    for linha in linhas:
+        if tamanho + len(linha) + 1 > max_chars and atual:
+            blocos.append("\n".join(atual))
+            atual, tamanho = [], 0
+        atual.append(linha)
+        tamanho += len(linha) + 1
+    if atual:
+        blocos.append("\n".join(atual))
+    return blocos
+
+
+def _linha_medico(m: MedicoNaChamada) -> str:
+    marcador = {"corrigido": "🔧", "manual": "➕"}.get(m.origem, "•")
+    quem = f"<@{m.discord_id}>" if m.discord_id else (m.nome_discord or m.nome_ems)
+    return f"{marcador} `{m.id_fivem}` — {quem}"
+
+
+def _linha_desconhecido(e: dict) -> str:
+    return f"❓ `{e['id_fivem']}` — {e['nome_ems']}"
+
+
+async def _enviar_container(interaction: discord.Interaction, titulo: str, linhas: str,
+                             cor: discord.Color = discord.Color.blurple(),
+                             extra_componentes: list | None = None,
+                             registrar_na_sessao: bool = True) -> discord.WebhookMessage:
+    layout = discord.ui.LayoutView(timeout=None)
+    componentes = [discord.ui.TextDisplay(f"# {titulo}"), discord.ui.TextDisplay(linhas)]
+    if extra_componentes:
+        componentes.extend(extra_componentes)
+    layout.add_item(discord.ui.Container(*componentes, accent_color=cor))
+    msg = await interaction.followup.send(view=layout, ephemeral=True)
+
+    sessao = obter_sessao()
+    if registrar_na_sessao and sessao is not None:
+        sessao.mensagens_efemeras.append(msg)
+    return msg
+
+
+async def _apagar_mensagens_efemeras(sessao: SessaoChamada):
+    for msg in sessao.mensagens_efemeras:
+        try:
+            await msg.delete()
+        except (discord.NotFound, discord.HTTPException):
+            pass
+
+
+# ─────────────────────────────────────────────
+# Painel de Coordenação (inalterado, exceto imports já corretos)
+# ─────────────────────────────────────────────
+
+class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, membro: discord.Member, proximo_horario, liberado: bool):
         super().__init__(timeout=180)
         self.membro = membro
@@ -51,12 +108,7 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
         ]
 
         row = discord.ui.ActionRow()
-
-        botao_chamada = discord.ui.Button(
-            label="🩺 Realizar Chamada",
-            style=discord.ButtonStyle.success,
-            disabled=not liberado,
-        )
+        botao_chamada = discord.ui.Button(label="🩺 Realizar Chamada", style=discord.ButtonStyle.success, disabled=not liberado)
         botao_chamada.callback = self._callback_realizar_chamada
         row.add_item(botao_chamada)
 
@@ -65,7 +117,6 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
         row.add_item(botao_voltar)
 
         componentes.append(row)
-
         self.container = discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
         self.add_item(self.container)
 
@@ -76,11 +127,8 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _callback_sair(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-
         async with async_session() as session:
-            resultado = await session.execute(
-                select(EstadoPlantao).where(EstadoPlantao.discord_id == interaction.user.id)
-            )
+            resultado = await session.execute(select(EstadoPlantao).where(EstadoPlantao.discord_id == interaction.user.id))
             estado = resultado.scalar_one_or_none()
             if estado:
                 estado.modo_coordenacao = False
@@ -112,81 +160,39 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
             await session.commit()
             chamada_id = registro_chamada.id
 
-        sessao = SessaoChamada(
-            doutor_id=interaction.user.id,
-            chamada_id=chamada_id,
-            canal_id=interaction.channel_id,
-        )
+        sessao = SessaoChamada(doutor_id=interaction.user.id, chamada_id=chamada_id, canal_id=interaction.channel_id)
         definir_sessao(sessao)
 
-        view_aguardando = _construir_view_aguardando_print()
-        mensagem = await interaction.followup.send(view=view_aguardando, ephemeral=True)
+        await _enviar_container(
+            interaction, titulo="📸 Aguardando Print do /ems",
+            linhas=("`•` Envie **neste canal** um print do comando `/ems`, o mais legível possível.\n"
+                    "`•` O sistema vai identificar os IDs FiveM automaticamente.\n"
+                    "`•` Você tem 5 minutos."),
+            cor=discord.Color.gold(),
+        )
 
         bot = interaction.client
 
         def checagem(msg: discord.Message) -> bool:
-            return (
-                msg.author.id == interaction.user.id
-                and msg.channel.id == interaction.channel_id
-                and len(msg.attachments) > 0
-            )
+            return msg.author.id == interaction.user.id and msg.channel.id == interaction.channel_id and len(msg.attachments) > 0
 
         try:
             mensagem_print = await bot.wait_for("message", timeout=300, check=checagem)
         except TimeoutError:
             await finalizar_chamada(marcar_ultima_chamada=False)
+            await _apagar_mensagens_efemeras(sessao)
             definir_sessao(None)
-            await interaction.followup.send(
-                "⏱️ Tempo esgotado esperando o print do `/ems`. Chamada cancelada — tente novamente.",
-                ephemeral=True,
-            )
+            await _enviar_container(interaction, titulo="⏱️ Tempo Esgotado",
+                                     linhas="Nenhum print recebido a tempo. Chamada cancelada.",
+                                     cor=discord.Color.red(), registrar_na_sessao=False)
             return
 
-        anexo = mensagem_print.attachments[0]
-        await _processar_print_ems(interaction, anexo.url)
+        await _processar_print_ems(interaction, mensagem_print.attachments[0].url)
 
 
-def _construir_view_aguardando_print() -> discord.ui.LayoutView:
-    view = discord.ui.LayoutView(timeout=None)
-    container = criar_container_log(
-        titulo="📸 Aguardando Print do /ems",
-        linhas=(
-            "`•` Envie **neste canal** um print do comando `/ems`, o mais legível possível.\n"
-            "`•` O sistema vai identificar os IDs FiveM automaticamente.\n"
-            "`•` Você tem 5 minutos."
-        ),
-        guild=None,  # ajustado abaixo
-        cor=discord.Color.gold(),
-    ) if False else None
-    # criar_container_log exige guild pra rodapé — versão simplificada sem rodapé aqui:
-    componentes = [
-        discord.ui.TextDisplay("# 📸 Aguardando Print do /ems"),
-        discord.ui.TextDisplay(
-            "`•` Envie **neste canal** um print do comando `/ems`, o mais legível possível.\n"
-            "`•` O sistema vai identificar os IDs FiveM automaticamente.\n"
-            "`•` Você tem 5 minutos."
-        ),
-    ]
-    view.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.gold()))
-    return view
-
-
-async def _enviar_container(interaction: discord.Interaction, titulo: str, linhas: str,
-                             cor: discord.Color = discord.Color.blurple(), view: discord.ui.View | None = None):
-    """Substitui followup.send(texto) por um Container V2 padronizado."""
-    layout = discord.ui.LayoutView(timeout=None if view is None else 300)
-    componentes = [
-        discord.ui.TextDisplay(f"# {titulo}"),
-        discord.ui.TextDisplay(linhas),
-    ]
-    if view is not None:
-        for item in view.children:
-            row = discord.ui.ActionRow()
-            row.add_item(item)
-            componentes.append(row)
-    layout.add_item(discord.ui.Container(*componentes, accent_color=cor))
-    await interaction.followup.send(view=layout, ephemeral=True)
-
+# ─────────────────────────────────────────────
+# Processamento do OCR + cruzamento
+# ─────────────────────────────────────────────
 
 async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str):
     sessao = obter_sessao()
@@ -197,75 +203,52 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
                              cor=discord.Color.gold())
 
     try:
-        resultado = await asyncio.wait_for(
-            extrair_medicos_do_print_ems(url_imagem), timeout=90
-        )
+        resultado = await asyncio.wait_for(extrair_medicos_do_print_ems(url_imagem), timeout=90)
     except asyncio.TimeoutError:
-        logger.error("💥 OCR excedeu 90s — abortando chamada")
         await finalizar_chamada(marcar_ultima_chamada=False)
+        await _apagar_mensagens_efemeras(sessao)
         definir_sessao(None)
-        await _enviar_container(interaction, titulo="❌ Chamada Cancelada",
-                                 linhas="O processamento da imagem demorou demais. Tente novamente.",
-                                 cor=discord.Color.red())
+        await _enviar_container(interaction, "❌ Chamada Cancelada", "Processamento excedeu o tempo limite.",
+                                 discord.Color.red(), registrar_na_sessao=False)
         return
     except OcrEmsError as exc:
-        logger.error("💥 API de OCR retornou erro: %s", exc)
         await finalizar_chamada(marcar_ultima_chamada=False)
+        await _apagar_mensagens_efemeras(sessao)
         definir_sessao(None)
-        await _enviar_container(interaction, titulo="❌ Chamada Cancelada",
-                                 linhas=f"Não foi possível ler a imagem: {exc}", cor=discord.Color.red())
+        await _enviar_container(interaction, "❌ Chamada Cancelada", f"Erro ao ler a imagem: {exc}",
+                                 discord.Color.red(), registrar_na_sessao=False)
         return
     except Exception:
-        logger.exception("💥 Falha inesperada ao processar imagem do EMS")
+        logger.exception("💥 Falha inesperada no OCR")
         await finalizar_chamada(marcar_ultima_chamada=False)
+        await _apagar_mensagens_efemeras(sessao)
         definir_sessao(None)
-        await _enviar_container(interaction, titulo="❌ Chamada Cancelada",
-                                 linhas="Ocorreu um erro ao processar a imagem. Tente novamente.",
-                                 cor=discord.Color.red())
+        await _enviar_container(interaction, "❌ Chamada Cancelada", "Erro inesperado ao processar a imagem.",
+                                 discord.Color.red(), registrar_na_sessao=False)
         return
 
     medicos_ems = resultado["medicos"]
     sessao.total_medicos_ems = len(medicos_ems)
 
-    ids_no_ems = set()
-    reconhecidos: list[MedicoNaChamada] = []
-    nao_reconhecidos: list[dict] = []
+    ids_no_ems, reconhecidos, nao_reconhecidos = set(), [], []
 
     async with async_session() as session:
-        # Uma query só, trazendo todo Recrutamento aprovado já com o nome
-        # do candidato (join com Usuario), pro fuzzy-match por nome do
-        # validar_medicos funcionar. Igual antes: quando existem várias
-        # linhas aprovadas pro mesmo id_fivem (re-recrutamento), fica a
-        # mais recente (maior id) — por isso ordena ASC e deixa sobrescrever.
         resultado_db = await session.execute(
-            select(
-                Recrutamento.id_fivem,
-                Recrutamento.discord_id_candidato,
-                Usuario.nickname_atual,
-            )
+            select(Recrutamento.id_fivem, Recrutamento.discord_id_candidato, Usuario.nickname_atual)
             .join(Usuario, Usuario.discord_id == Recrutamento.discord_id_candidato)
             .where(Recrutamento.status == "APROVADO", Recrutamento.id_fivem.is_not(None))
             .order_by(Recrutamento.id.asc())
         )
+        aprovados_por_id = {
+            row.id_fivem: MembroConhecido(id_fivem=row.id_fivem, nome=row.nickname_atual or "", discord_id=row.discord_id_candidato)
+            for row in resultado_db.all()
+        }
 
-        aprovados_por_id: dict[str, MembroConhecido] = {}
-        for row in resultado_db.all():
-            aprovados_por_id[row.id_fivem] = MembroConhecido(
-                id_fivem=row.id_fivem,
-                nome=row.nickname_atual or "",
-                discord_id=row.discord_id_candidato,
-            )
-
-        # Complementa com quem não está no Recrutamento formal, mas já tem
-        # "Nome | idFivem" no próprio apelido do servidor (visitantes, membros
-        # antigos, etc.) — o bot já tem permissão de administrador pra isso.
-        membros_via_apelido = construir_membros_via_apelido(guild)
+        membros_via_apelido = construir_membros_via_apelido(guild)  # já filtrado por prefixo
         membros_conhecidos = combinar_membros(list(aprovados_por_id.values()), membros_via_apelido)
+        sessao.membros_conhecidos = membros_conhecidos
 
-        # Quem está com toggle ligado no Discord agora
-        resultado_toggle = await session.execute(
-            select(EstadoPlantao).where(EstadoPlantao.toggle_ligado.is_(True))
-        )
+        resultado_toggle = await session.execute(select(EstadoPlantao).where(EstadoPlantao.toggle_ligado.is_(True)))
         estados_ligados = resultado_toggle.scalars().all()
 
     validados = validar_medicos(medicos_ems, membros_conhecidos)
@@ -273,320 +256,442 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
     for v in validados:
         id_final = v.id_corrigido or v.id_lido
         ids_no_ems.add(id_final)
-
         if v.status in ("confirmado", "corrigido"):
             membro_db = guild.get_member(v.membro.discord_id)
             reconhecidos.append(MedicoNaChamada(
-                id_fivem=v.membro.id_fivem, discord_id=v.membro.discord_id,
-                nome_ems=v.nome_lido,
+                id_fivem=v.membro.id_fivem, discord_id=v.membro.discord_id, nome_ems=v.nome_lido,
                 nome_discord=membro_db.display_name if membro_db else None,
                 confianca=1.0 if v.status == "confirmado" else 0.7,
-                origem="ocr" if v.status == "confirmado" else "corrigido",
-                motivo=v.motivo,
+                origem="ocr" if v.status == "confirmado" else "corrigido", motivo=v.motivo,
             ))
         else:
             nao_reconhecidos.append({"id_fivem": v.id_lido, "nome_ems": v.nome_lido})
 
-    sessao.reconhecidos = reconhecidos  # 👈 NOVO: guarda TODOS os identificados, sem filtrar por toggle
+    sessao.reconhecidos = reconhecidos
+    sessao.nao_reconhecidos = nao_reconhecidos
     sessao.total_toggle_ligado = len(estados_ligados)
+
     ids_fivem_com_toggle = {e.id_fivem: e.discord_id for e in estados_ligados if e.id_fivem}
-
-    # Cruzamento: reconhecidos no EMS E com toggle ligado → vão pra confirmação de presença
-    ids_reconhecidos_com_toggle = {m.id_fivem for m in reconhecidos} & set(ids_fivem_com_toggle.keys())
-    sessao.presentes_no_ems_toggle_ligado = [m for m in reconhecidos if m.id_fivem in ids_reconhecidos_com_toggle]
-
-    # Toggle ligado mas NÃO apareceu em lugar nenhum no print do EMS
     ids_com_toggle_fora_do_ems = set(ids_fivem_com_toggle.keys()) - ids_no_ems
     sessao.toggle_ligado_mas_nao_no_ems = [
         MedicoNaChamada(id_fivem=id_fivem, discord_id=ids_fivem_com_toggle[id_fivem], nome_ems="—")
         for id_fivem in ids_com_toggle_fora_do_ems
     ]
 
-    sessao.nao_reconhecidos = nao_reconhecidos
-
-    # Resolve automaticamente quem está com toggle ligado mas sumiu do EMS
     await _processar_ausentes_do_ems(interaction, sessao)
-    await _enviar_container_revisao(interaction, sessao, guild)
+    await _enviar_etapa_1(interaction, sessao, guild)
 
 
 async def _processar_ausentes_do_ems(interaction: discord.Interaction, sessao: SessaoChamada):
-    """Quem tem toggle ligado no Discord mas não apareceu no print do /ems: avisa,
-    desliga o serviço automaticamente e loga — não depende de confirmação manual do Doutor."""
-    from src.services.plantao_service import desligar_servico
-
     guild = interaction.guild
     for medico in sessao.toggle_ligado_mas_nao_no_ems:
         membro = guild.get_member(medico.discord_id)
         if membro is None:
             continue
-
         try:
             await membro.send(
                 "⚠️ Durante a chamada de auditoria, você estava com o plantão ativo no Discord "
-                "mas não foi encontrado no `/ems` da cidade. Seu plantão foi encerrado automaticamente. "
-                "Lembre-se de manter o toggle da cidade ativo enquanto estiver de plantão."
+                "mas não foi encontrado no `/ems` da cidade. Seu plantão foi encerrado automaticamente."
             )
         except discord.Forbidden:
             pass
-
         await desligar_servico(membro)
-
-        await registrar_falta(
-            membro.id, sessao.chamada_id,
-            motivo="Toggle ligado no Discord, ausente no /ems da cidade",
-            guild=guild,
-        )
+        await registrar_falta(membro.id, sessao.chamada_id, "Toggle ligado no Discord, ausente no /ems", guild)
 
 
-def _formatar_lista_medicos(medicos: list[MedicoNaChamada], limite: int = 15) -> str:
-    if not medicos:
-        return "_(nenhum)_"
-    linhas = []
-    for m in medicos[:limite]:
-        nome_exibicao = m.nome_discord or m.nome_ems
-        marcador = "🔧" if m.origem == "corrigido" else ("➕" if m.origem == "manual" else "•")
-        linhas.append(f"{marcador} `{m.id_fivem}` — {nome_exibicao}")
-    if len(medicos) > limite:
-        linhas.append(f"_... e mais {len(medicos) - limite}_")
-    return "\n".join(linhas)
+# ─────────────────────────────────────────────
+# ETAPA 1 — Verificação
+# ─────────────────────────────────────────────
 
+async def _enviar_etapa_1(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+    sessao.etapa_atual = 1
+    linhas_ids = [_linha_medico(m) for m in sessao.reconhecidos]
+    blocos = _construir_blocos_texto(linhas_ids)
 
-def _formatar_lista_desconhecidos(entradas: list[dict], limite: int = 15) -> str:
-    if not entradas:
-        return "_(nenhum)_"
-    linhas = [f"❓ `{e['id_fivem']}` — {e['nome_ems']}" for e in entradas[:limite]]
-    if len(entradas) > limite:
-        linhas.append(f"_... e mais {len(entradas) - limite}_")
-    return "\n".join(linhas)
-
-
-async def _enviar_container_revisao(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
     resumo = (
         f"`📋` Total no `/ems`: **{sessao.total_medicos_ems}**\n"
-        f"`✅` Identificados (Hospital Sul): **{len(sessao.reconhecidos)}**\n"
-        f"`🟢` Elegíveis p/ confirmar presença (identificado + toggle ligado): "
-        f"**{len(sessao.presentes_no_ems_toggle_ligado)}**\n"
-        f"`❓` Não identificados (Norte/desconhecido): **{len(sessao.nao_reconhecidos)}**\n"
-        f"`⚠️` Toggle ligado mas ausente do EMS (já processado): **{len(sessao.toggle_ligado_mas_nao_no_ems)}**"
+        f"`✅` Identificados: **{len(sessao.reconhecidos)}**\n"
+        f"`❓` Ainda não identificados: **{len(sessao.nao_reconhecidos)}**\n\n"
+        "Confira a lista abaixo. Se algum médico presente no `/ems` **não** aparece aqui "
+        "(apesar de estar de fato no Discord), adicione manualmente."
     )
-
-    linhas_reconhecidos = _formatar_lista_medicos(sessao.reconhecidos)
-    linhas_desconhecidos = _formatar_lista_desconhecidos(sessao.nao_reconhecidos)
 
     componentes = [
-        discord.ui.TextDisplay("# 🔍 Resultado do Processamento"),
+        discord.ui.TextDisplay("# ⏳ Etapa 1 — Verificação"),
         discord.ui.TextDisplay(resumo),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(f"**✅ Identificados**\n{linhas_reconhecidos}"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(f"**❓ Não identificados — decida o que fazer**\n{linhas_desconhecidos}"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
     ]
+    for bloco in blocos:
+        componentes.append(discord.ui.TextDisplay(bloco))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
-    row1 = discord.ui.ActionRow()
-    if sessao.nao_reconhecidos:
-        botao_manual = discord.ui.Button(label="➕ Adicionar Manualmente", style=discord.ButtonStyle.secondary)
-        botao_manual.callback = _callback_abrir_modal_manual
-        row1.add_item(botao_manual)
+    row_select = discord.ui.ActionRow()
+    user_select = discord.ui.UserSelect(placeholder="🔎 Buscar por menção (selecione o usuário)")
+    user_select.callback = _callback_userselect_adicionar
+    row_select.add_item(user_select)
+    componentes.append(row_select)
 
-        botao_norte = discord.ui.Button(label="🏥 Marcar Restantes como Norte/Ignorar", style=discord.ButtonStyle.secondary)
-        botao_norte.callback = _callback_marcar_restantes_como_norte
-        row1.add_item(botao_norte)
-    componentes.append(row1)
+    row_botoes = discord.ui.ActionRow()
+    botao_discord_id = discord.ui.Button(label="🆔 Buscar por Discord ID", style=discord.ButtonStyle.secondary)
+    botao_discord_id.callback = _callback_abrir_modal_discord_id
+    row_botoes.add_item(botao_discord_id)
 
-    row2 = discord.ui.ActionRow()
-    botao_continuar = discord.ui.Button(
-        label="➡️ Confirmar Presenças",
-        style=discord.ButtonStyle.primary,
-        disabled=bool(sessao.nao_reconhecidos),  # 👈 travado até resolver os desconhecidos
-    )
-    botao_continuar.callback = _callback_ir_para_presenca
-    row2.add_item(botao_continuar)
-    componentes.append(row2)
+    botao_fivem = discord.ui.Button(label="🎮 Buscar por ID FiveM", style=discord.ButtonStyle.secondary)
+    botao_fivem.callback = _callback_abrir_modal_id_fivem
+    row_botoes.add_item(botao_fivem)
 
-    layout = discord.ui.LayoutView(timeout=300)
+    botao_continuar = discord.ui.Button(label="➡️ Continuar", style=discord.ButtonStyle.primary)
+    botao_continuar.callback = _callback_ir_etapa_2
+    row_botoes.add_item(botao_continuar)
+    componentes.append(row_botoes)
+
+    layout = discord.ui.LayoutView(timeout=600)
     layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
-    await interaction.followup.send(view=layout, ephemeral=True)
+    msg = await interaction.followup.send(view=layout, ephemeral=True)
+    sessao.mensagens_efemeras.append(msg)
 
 
-async def _callback_marcar_restantes_como_norte(interaction: discord.Interaction):
-    """Doutor decide explicitamente que quem sobrou é de outro hospital / não precisa de ação —
-    libera o botão de Confirmar Presenças sem precisar resolver item por item."""
+def _resolver_id_fivem_do_membro(sessao: SessaoChamada, discord_id: int, membro: discord.Member) -> str | None:
+    """Tenta achar o id_fivem de um membro específico: primeiro no cache de
+    membros_conhecidos (Recrutamento/apelido), senão tenta extrair do apelido atual."""
+    for m in sessao.membros_conhecidos:
+        if m.discord_id == discord_id:
+            return m.id_fivem
+    from src.services.scraping_membros import extrair_id_do_apelido
+    nome_exibido = membro.nick or membro.display_name or membro.name
+    return extrair_id_do_apelido(nome_exibido)
+
+
+def _adicionar_medico_manual(sessao: SessaoChamada, guild: discord.Guild, discord_id: int, id_fivem: str | None):
+    membro = guild.get_member(discord_id)
+    if id_fivem is None and membro:
+        id_fivem = _resolver_id_fivem_do_membro(sessao, discord_id, membro)
+
+    novo = MedicoNaChamada(
+        id_fivem=id_fivem or "N/A", discord_id=discord_id,
+        nome_ems="(adicionado manualmente)",
+        nome_discord=membro.display_name if membro else None,
+        origem="manual",
+    )
+    sessao.reconhecidos.append(novo)
+
+    if id_fivem:
+        sessao.nao_reconhecidos = [e for e in sessao.nao_reconhecidos if e["id_fivem"] != id_fivem]
+
+
+async def _callback_userselect_adicionar(interaction: discord.Interaction):
     sessao = obter_sessao()
     if sessao is None:
-        await interaction.response.send_message("❌ Sessão de chamada expirada.", ephemeral=True)
+        await interaction.response.send_message("❌ Sessão expirada.", ephemeral=True)
         return
 
-    sessao.nao_reconhecidos = []  # esvazia — Doutor assumiu a decisão
+    membro_selecionado = interaction.data["values"][0]
+    discord_id = int(membro_selecionado)
+
+    _adicionar_medico_manual(sessao, interaction.guild, discord_id, None)
 
     await interaction.response.defer(ephemeral=True)
-    await _enviar_container_revisao(interaction, sessao, interaction.guild)
+    await _enviar_etapa_1(interaction, sessao, interaction.guild)
 
 
-class ModalAdicionarManual(discord.ui.Modal, title="Adicionar Médico Manualmente"):
-    identificador = discord.ui.TextInput(
-        label="ID FiveM, Discord ID ou Menção",
-        placeholder="Ex: 054623 ou @membro ou 859100649366356000",
-        required=True,
-    )
+class ModalBuscarPorDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
+    discord_id_input = discord.ui.TextInput(label="Discord ID", placeholder="Ex: 859100649366356000", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         sessao = obter_sessao()
         if sessao is None:
-            await interaction.response.send_message("❌ Sessão de chamada expirada.", ephemeral=True)
+            await interaction.response.send_message("❌ Sessão expirada.", ephemeral=True)
             return
 
-        valor = self.identificador.value.strip().replace("<@", "").replace(">", "").replace("!", "")
+        valor = self.discord_id_input.value.strip()
+        if not valor.isdigit():
+            await interaction.response.send_message("❌ Discord ID inválido.", ephemeral=True)
+            return
 
-        discord_id = None
-        id_fivem = None
+        discord_id = int(valor)
+        membro = interaction.guild.get_member(discord_id)
+        if membro is None:
+            await interaction.response.send_message("❌ Membro não encontrado neste servidor.", ephemeral=True)
+            return
 
-        if valor.isdigit() and len(valor) >= 15:  # provável Discord ID / menção
-            discord_id = int(valor)
-        elif valor.isdigit():
-            id_fivem = valor
+        _adicionar_medico_manual(sessao, interaction.guild, discord_id, None)
+        await interaction.response.defer(ephemeral=True)
+        await _enviar_etapa_1(interaction, sessao, interaction.guild)
 
-        async with async_session() as session:
-            if id_fivem:
-                resultado = await session.execute(
-                    select(Recrutamento.discord_id_candidato)
-                    .where(Recrutamento.id_fivem == id_fivem, Recrutamento.status == "APROVADO")
-                    .order_by(Recrutamento.id.desc()).limit(1)
-                )
-                discord_id = resultado.scalar_one_or_none()
-            elif discord_id:
-                resultado = await session.execute(
-                    select(Recrutamento.id_fivem)
-                    .where(Recrutamento.discord_id_candidato == discord_id, Recrutamento.status == "APROVADO")
-                    .order_by(Recrutamento.id.desc()).limit(1)
-                )
-                id_fivem = resultado.scalar_one_or_none()
 
-        if discord_id is None or id_fivem is None:
+class ModalBuscarPorIdFivem(discord.ui.Modal, title="Buscar por ID FiveM"):
+    id_fivem_input = discord.ui.TextInput(label="ID FiveM", placeholder="Ex: 054623", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        sessao = obter_sessao()
+        if sessao is None:
+            await interaction.response.send_message("❌ Sessão expirada.", ephemeral=True)
+            return
+
+        id_fivem = self.id_fivem_input.value.strip()
+        membro_conhecido = next((m for m in sessao.membros_conhecidos if m.id_fivem == id_fivem), None)
+
+        if membro_conhecido is None:
             await interaction.response.send_message(
-                "❌ Não foi possível encontrar um Recrutamento aprovado com esse identificador.",
+                "❌ Nenhum membro no servidor com esse ID FiveM (nem no Recrutamento, nem no apelido).",
                 ephemeral=True,
             )
             return
 
-        membro = interaction.guild.get_member(discord_id)
-        novo_medico = MedicoNaChamada(
-            id_fivem=id_fivem, discord_id=discord_id,
-            nome_ems="(adicionado manualmente)",
-            nome_discord=membro.display_name if membro else None,
-            origem="manual",
-        )
-        sessao.reconhecidos.append(novo_medico)
-
-        async with async_session() as session:
-            resultado = await session.execute(
-                select(EstadoPlantao.discord_id).where(
-                    EstadoPlantao.discord_id == discord_id, EstadoPlantao.toggle_ligado.is_(True)
-                )
-            )
-            tem_toggle = resultado.scalar_one_or_none() is not None
-
-        if tem_toggle:
-            sessao.presentes_no_ems_toggle_ligado.append(novo_medico)
-
-        sessao.nao_reconhecidos = [e for e in sessao.nao_reconhecidos if e["id_fivem"] != id_fivem]
-
+        _adicionar_medico_manual(sessao, interaction.guild, membro_conhecido.discord_id, id_fivem)
         await interaction.response.defer(ephemeral=True)
-        await _enviar_container_revisao(interaction, sessao, interaction.guild)  # 👈 reconstrói o painel
-
-async def _callback_abrir_modal_manual(interaction: discord.Interaction):
-    await interaction.response.send_modal(ModalAdicionarManual())
+        await _enviar_etapa_1(interaction, sessao, interaction.guild)
 
 
-async def _callback_ir_para_presenca(interaction: discord.Interaction):
+async def _callback_abrir_modal_discord_id(interaction: discord.Interaction):
+    await interaction.response.send_modal(ModalBuscarPorDiscordId())
+
+
+async def _callback_abrir_modal_id_fivem(interaction: discord.Interaction):
+    await interaction.response.send_modal(ModalBuscarPorIdFivem())
+
+
+async def _callback_ir_etapa_2(interaction: discord.Interaction):
     sessao = obter_sessao()
-    if sessao is None or not sessao.presentes_no_ems_toggle_ligado:
-        await interaction.response.defer(ephemeral=True)
-        await _finalizar_e_logar(interaction, faltantes_ids=set())
+    await interaction.response.defer(ephemeral=True)
+    await _enviar_etapa_2(interaction, sessao, interaction.guild)
+
+
+# ─────────────────────────────────────────────
+# ETAPA 2 — Desconhecidos
+# ─────────────────────────────────────────────
+
+async def _enviar_etapa_2(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+    sessao.etapa_atual = 2
+    linhas = [_linha_desconhecido(e) for e in sessao.nao_reconhecidos]
+    blocos = _construir_blocos_texto(linhas)
+
+    resumo = (
+        f"`❓` Restam **{len(sessao.nao_reconhecidos)}** não identificados.\n"
+        "Se não forem médicos do nosso hospital, marque como Hospital Norte pra liberar a próxima etapa."
+    )
+
+    componentes = [
+        discord.ui.TextDisplay("# ⌛ Etapa 2 — Desconhecidos"),
+        discord.ui.TextDisplay(resumo),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+    ]
+    for bloco in blocos:
+        componentes.append(discord.ui.TextDisplay(bloco))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+    row = discord.ui.ActionRow()
+    botao_voltar = discord.ui.Button(label="⬅️ Voltar", style=discord.ButtonStyle.secondary)
+    botao_voltar.callback = lambda i: _voltar_para_etapa(i, 1)
+    row.add_item(botao_voltar)
+
+    if sessao.nao_reconhecidos:
+        botao_norte = discord.ui.Button(label="🏥 Médico CMN (Hospital Norte)", style=discord.ButtonStyle.secondary)
+        botao_norte.callback = _callback_marcar_como_norte
+        row.add_item(botao_norte)
+
+    botao_continuar = discord.ui.Button(
+        label="➡️ Continuar", style=discord.ButtonStyle.primary,
+        disabled=bool(sessao.nao_reconhecidos),
+    )
+    botao_continuar.callback = _callback_ir_etapa_3
+    row.add_item(botao_continuar)
+    componentes.append(row)
+
+    layout = discord.ui.LayoutView(timeout=600)
+    layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
+    msg = await interaction.followup.send(view=layout, ephemeral=True)
+    sessao.mensagens_efemeras.append(msg)
+
+
+async def _callback_marcar_como_norte(interaction: discord.Interaction):
+    sessao = obter_sessao()
+    sessao.medicos_norte.extend(sessao.nao_reconhecidos)
+    sessao.nao_reconhecidos = []
+    await interaction.response.defer(ephemeral=True)
+    await _enviar_etapa_2(interaction, sessao, interaction.guild)
+
+
+async def _voltar_para_etapa(interaction: discord.Interaction, etapa: int):
+    sessao = obter_sessao()
+    await interaction.response.defer(ephemeral=True)
+    if etapa == 1:
+        await _enviar_etapa_1(interaction, sessao, interaction.guild)
+    elif etapa == 2:
+        await _enviar_etapa_2(interaction, sessao, interaction.guild)
+    elif etapa == 3:
+        await _enviar_etapa_3(interaction, sessao, interaction.guild)
+
+
+async def _callback_ir_etapa_3(interaction: discord.Interaction):
+    sessao = obter_sessao()
+    await interaction.response.defer(ephemeral=True)
+    await _enviar_etapa_3(interaction, sessao, interaction.guild)
+
+
+# ─────────────────────────────────────────────
+# ETAPA 3 — Em Serviço (confirmação de presença)
+# ─────────────────────────────────────────────
+
+async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+    sessao.etapa_atual = 3
+
+    async with async_session() as session:
+        resultado_toggle = await session.execute(select(EstadoPlantao).where(EstadoPlantao.toggle_ligado.is_(True)))
+        estados_ligados = resultado_toggle.scalars().all()
+
+    ids_com_toggle = {e.id_fivem: e.discord_id for e in estados_ligados if e.id_fivem}
+    sessao.presentes_no_ems_toggle_ligado = [m for m in sessao.reconhecidos if m.id_fivem in ids_com_toggle]
+
+    resumo = (
+        f"`🟢` **{len(sessao.presentes_no_ems_toggle_ligado)}** médicos identificados e com toggle ligado.\n"
+        "Verifique call/rádio in-game e **desmarque** quem não responder (ficará com falta)."
+    )
+
+    componentes = [
+        discord.ui.TextDisplay("# ⌛ Etapa 3 — Em Serviço"),
+        discord.ui.TextDisplay(resumo),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+    ]
+
+    row_botoes = discord.ui.ActionRow()
+    botao_voltar = discord.ui.Button(label="⬅️ Voltar", style=discord.ButtonStyle.secondary)
+    botao_voltar.callback = lambda i: _voltar_para_etapa(i, 2)
+    row_botoes.add_item(botao_voltar)
+
+    if not sessao.presentes_no_ems_toggle_ligado:
+        botao_continuar = discord.ui.Button(label="➡️ Continuar", style=discord.ButtonStyle.primary)
+        botao_continuar.callback = _callback_ir_etapa_4
+        row_botoes.add_item(botao_continuar)
+        componentes.append(row_botoes)
+
+        layout = discord.ui.LayoutView(timeout=600)
+        layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
+        msg = await interaction.followup.send(view=layout, ephemeral=True)
+        sessao.mensagens_efemeras.append(msg)
         return
 
-    await interaction.response.defer(ephemeral=True)
-
     opcoes = [
-        discord.SelectOption(label=f"{m.nome_discord or m.nome_ems} | {m.id_fivem}", value=str(m.discord_id))
+        discord.SelectOption(
+            label=f"{m.nome_discord or m.nome_ems} | {m.id_fivem}",
+            value=str(m.discord_id),
+            default=m.discord_id not in sessao.faltantes_ids,
+        )
         for m in sessao.presentes_no_ems_toggle_ligado[:25]
     ]
 
     select = discord.ui.Select(
-        placeholder="Marque quem NÃO respondeu (call e/ou rádio) — faltantes",
+        placeholder="Todos marcados = presentes. Desmarque quem não respondeu.",
         options=opcoes, min_values=0, max_values=len(opcoes),
     )
+    select.callback = _callback_atualizar_faltantes
+    row_select = discord.ui.ActionRow()
+    row_select.add_item(select)
+    componentes.append(row_select)
 
-    async def callback_select(inter: discord.Interaction):
-        faltantes_ids = {int(v) for v in inter.data["values"]}
-        await inter.response.defer(ephemeral=True)
-        await _finalizar_e_logar(inter, faltantes_ids)
+    botao_continuar = discord.ui.Button(label="➡️ Continuar", style=discord.ButtonStyle.primary)
+    botao_continuar.callback = _callback_ir_etapa_4
+    row_botoes.add_item(botao_continuar)
+    componentes.append(row_botoes)
 
-    select.callback = callback_select
+    layout = discord.ui.LayoutView(timeout=600)
+    layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
+    msg = await interaction.followup.send(view=layout, ephemeral=True)
+    sessao.mensagens_efemeras.append(msg)
+
+
+async def _callback_atualizar_faltantes(interaction: discord.Interaction):
+    sessao = obter_sessao()
+    ids_selecionados = {int(v) for v in interaction.data["values"]}  # quem ficou marcado = presente
+    todos_ids = {m.discord_id for m in sessao.presentes_no_ems_toggle_ligado}
+    sessao.faltantes_ids = todos_ids - ids_selecionados  # quem foi desmarcado = falta
+
+    await interaction.response.defer(ephemeral=True)
+    await _enviar_etapa_3(interaction, sessao, interaction.guild)
+
+
+async def _callback_ir_etapa_4(interaction: discord.Interaction):
+    sessao = obter_sessao()
+    await interaction.response.defer(ephemeral=True)
+    await _enviar_etapa_4(interaction, sessao, interaction.guild)
+
+
+# ─────────────────────────────────────────────
+# ETAPA 4 — Conclusão
+# ─────────────────────────────────────────────
+
+async def _enviar_etapa_4(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+    sessao.etapa_atual = 4
+
+    presentes = [m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id not in sessao.faltantes_ids]
+    faltantes = [m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id in sessao.faltantes_ids]
+
+    linhas_presentes = "\n".join(_linha_medico(m) for m in presentes) or "_(nenhum)_"
+    linhas_faltantes = "\n".join(_linha_medico(m) for m in faltantes) or "_(nenhum)_"
+    linhas_norte = "\n".join(_linha_desconhecido(e) for e in sessao.medicos_norte) or "_(nenhum)_"
+
+    resumo = (
+        f"`✅` Presentes: **{len(presentes)}**\n"
+        f"`❌` Faltas: **{len(faltantes)}**\n"
+        f"`🏥` Hospital Norte: **{len(sessao.medicos_norte)}**\n\n"
+        "Revise antes de finalizar — voltar ainda é possível."
+    )
 
     componentes = [
-        discord.ui.TextDisplay("# 🔎 Confirmação de Presença"),
-        discord.ui.TextDisplay("Marque no menu abaixo quem **não respondeu** (rádio ou call). "
-                                "O restante será marcado como presente."),
+        discord.ui.TextDisplay("# ✅ Etapa 4 — Conclusão"),
+        discord.ui.TextDisplay(resumo),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(f"**✅ Presentes**\n{linhas_presentes}"),
+        discord.ui.TextDisplay(f"**❌ Faltas**\n{linhas_faltantes}"),
+        discord.ui.TextDisplay(f"**🏥 Hospital Norte**\n{linhas_norte}"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
     ]
+
     row = discord.ui.ActionRow()
-    row.add_item(select)
+    botao_voltar = discord.ui.Button(label="⬅️ Voltar", style=discord.ButtonStyle.secondary)
+    botao_voltar.callback = lambda i: _voltar_para_etapa(i, 3)
+    row.add_item(botao_voltar)
+
+    botao_finalizar = discord.ui.Button(label="✅ Finalizar Chamada", style=discord.ButtonStyle.success)
+    botao_finalizar.callback = _callback_finalizar_chamada
+    row.add_item(botao_finalizar)
     componentes.append(row)
 
-    layout = discord.ui.LayoutView(timeout=180)
+    layout = discord.ui.LayoutView(timeout=600)
     layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
-    await interaction.followup.send(view=layout, ephemeral=True)
+    msg = await interaction.followup.send(view=layout, ephemeral=True)
+    sessao.mensagens_efemeras.append(msg)
 
 
-async def _finalizar_e_logar(interaction: discord.Interaction, faltantes_ids: set[int]):
+async def _callback_finalizar_chamada(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
     sessao = obter_sessao()
     guild = interaction.guild
-    presentes_ids = []
-    ausentes_ids = []
 
-    for medico in sessao.presentes_no_ems_toggle_ligado:
+    presentes = [m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id not in sessao.faltantes_ids]
+    faltantes = [m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id in sessao.faltantes_ids]
+
+    for medico in faltantes:
         membro = guild.get_member(medico.discord_id)
         if membro is None:
             continue
+        await registrar_falta(membro.id, sessao.chamada_id, "Não respondeu à chamada (call/rádio)", guild)
+        await desligar_servico(membro)
+        try:
+            await membro.send("🔴 Você foi desconectado e seu plantão encerrado por não responder à chamada de auditoria.")
+        except discord.Forbidden:
+            pass
 
-        if medico.discord_id in faltantes_ids:
-            ausentes_ids.append(medico.discord_id)
-            await registrar_falta(membro.id, sessao.chamada_id, "Não respondeu à chamada (call/rádio)", guild)
+    for medico in presentes:
+        async with async_session() as session:
+            resultado = await session.execute(select(EstadoPlantao).where(EstadoPlantao.discord_id == medico.discord_id))
+            estado = resultado.scalar_one_or_none()
+            if estado:
+                estado.saldo_moedas += 1
+            await session.commit()
 
-            async with async_session() as session:
-                resultado = await session.execute(
-                    select(EstadoPlantao).where(EstadoPlantao.discord_id == membro.id)
-                )
-                estado = resultado.scalar_one_or_none()
-                tinha_30min_mais = estado is not None and estado.saldo_moedas > 0  # regra simplificada
-                await session.commit()
-
-            from src.services.plantao_service import desligar_servico
-            await desligar_servico(membro)
-
-            try:
-                await membro.send(
-                    "🔴 Você foi desconectado e seu plantão encerrado por não responder à chamada de auditoria."
-                )
-            except discord.Forbidden:
-                pass
-        else:
-            presentes_ids.append(medico.discord_id)
-            async with async_session() as session:
-                resultado = await session.execute(
-                    select(EstadoPlantao).where(EstadoPlantao.discord_id == membro.id)
-                )
-                estado = resultado.scalar_one_or_none()
-                if estado:
-                    estado.saldo_moedas += 1
-                await session.commit()
-
-    # Recompensa pro Doutor que realizou a chamada
     async with async_session() as session:
-        resultado = await session.execute(
-            select(EstadoPlantao).where(EstadoPlantao.discord_id == sessao.doutor_id)
-        )
+        resultado = await session.execute(select(EstadoPlantao).where(EstadoPlantao.discord_id == sessao.doutor_id))
         estado_doutor = resultado.scalar_one_or_none()
         if estado_doutor:
             estado_doutor.saldo_moedas += 1
@@ -597,33 +702,51 @@ async def _finalizar_e_logar(interaction: discord.Interaction, faltantes_ids: se
         if registro_chamada:
             registro_chamada.total_medicos_ems = sessao.total_medicos_ems
             registro_chamada.total_toggle_ligado = sessao.total_toggle_ligado
-            registro_chamada.total_presentes = len(presentes_ids)
-            registro_chamada.total_ausentes = len(ausentes_ids) + len(sessao.toggle_ligado_mas_nao_no_ems)
+            registro_chamada.total_presentes = len(presentes)
+            registro_chamada.total_ausentes = len(faltantes) + len(sessao.toggle_ligado_mas_nao_no_ems)
             await session.commit()
 
-    canal_log = guild.get_channel(CANAIS.get("LOG_CHAMADAS"))
-    if canal_log:
-        linhas_log = (
-            f"`👨‍⚕️` **Realizada por:** <@{sessao.doutor_id}>\n"
-            f"`📋` **Total no `/ems`:** **{sessao.total_medicos_ems}** médicos\n"
-            f"`🟢` **Toggle ligado (Discord):** **{sessao.total_toggle_ligado}**\n"
-            f"`✅` **Presentes:** **{len(presentes_ids)}**\n"
-            f"`❌` **Ausentes (não respondeu):** **{len(ausentes_ids)}**\n"
-            f"`⚠️` **Ausentes (não estavam no EMS):** **{len(sessao.toggle_ligado_mas_nao_no_ems)}**"
-        )
-        view_log = LogContainerView(
-            titulo="📋 Chamada de Plantão Realizada",
-            linhas=linhas_log, guild=guild, cor=discord.Color.blurple(),
-        )
-        await canal_log.send(view=view_log)
-
+    await _enviar_log_chamada_canal(guild, sessao, presentes, faltantes)
     await finalizar_chamada(marcar_ultima_chamada=True)
+
+    msg_final = await interaction.followup.send(
+        view=_montar_view_simples("✅ Chamada Finalizada", "Registrada com sucesso. Limpando mensagens...", discord.Color.green()),
+        ephemeral=True,
+    )
+
+    await _apagar_mensagens_efemeras(sessao)
     definir_sessao(None)
 
-    resumo_final = (
-        f"`✅` **Presentes:** **{len(presentes_ids)}**\n"
-        f"`❌` **Ausentes:** **{len(ausentes_ids)}**\n"
-        f"`📋` **Registro enviado para o canal de logs.**"
+
+def _montar_view_simples(titulo: str, linhas: str, cor: discord.Color) -> discord.ui.LayoutView:
+    layout = discord.ui.LayoutView(timeout=None)
+    layout.add_item(discord.ui.Container(
+        discord.ui.TextDisplay(f"# {titulo}"), discord.ui.TextDisplay(linhas), accent_color=cor,
+    ))
+    return layout
+
+
+async def _enviar_log_chamada_canal(guild: discord.Guild, sessao: SessaoChamada,
+                                     presentes: list[MedicoNaChamada], faltantes: list[MedicoNaChamada]):
+    canal_log = guild.get_channel(CANAIS.get("LOG_CHAMADAS"))
+    if canal_log is None:
+        return
+
+    linhas_presentes = "\n".join(f"`✅` `{m.id_fivem}` — <@{m.discord_id}>" for m in presentes) or "_(nenhum)_"
+    linhas_faltantes = "\n".join(f"`❌` `{m.id_fivem}` — <@{m.discord_id}>" for m in faltantes) or "_(nenhum)_"
+    linhas_norte = "\n".join(f"`❓` `{e['id_fivem']}` — {e['nome_ems']}" for e in sessao.medicos_norte) or "_(nenhum)_"
+
+    linhas = (
+        f"`📋` Total no `/ems`: {sessao.total_medicos_ems}\n"
+        f"`✅` Identificados (Hospital Sul): {len(sessao.reconhecidos)}\n"
+        f"`🟢` Elegíveis p/ confirmar presença: {len(sessao.presentes_no_ems_toggle_ligado)}\n"
+        f"`❓` Não identificados (Norte/Desconhecido): {len(sessao.medicos_norte)}\n"
+        f"`⚠️` Toggle ligado mas ausente do EMS (já processado): {len(sessao.toggle_ligado_mas_nao_no_ems)}\n"
+        f"👨‍⚕️ Responsável pela chamada: <@{sessao.doutor_id}>\n\n"
+        f"**Médicos presentes:**\n{linhas_presentes}\n\n"
+        f"**Médicos com Falta/Ausência:**\n{linhas_faltantes}\n\n"
+        f"**Identificados — Hospital Norte**\n{linhas_norte}"
     )
-    await _enviar_container(interaction, titulo="✅ Chamada Finalizada", linhas=resumo_final,
-                             cor=discord.Color.green())
+
+    view_log = LogContainerView(titulo="📋 Chamada de Plantão Realizada", linhas=linhas, guild=guild, cor=discord.Color.blurple())
+    await canal_log.send(view=view_log)
