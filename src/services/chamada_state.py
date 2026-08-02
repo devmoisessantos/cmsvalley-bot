@@ -8,7 +8,8 @@ class MedicoNaChamada:
     nome_ems: str
     nome_discord: str | None = None
     confianca: float = 1.0
-    origem: str = "ocr"  # "ocr" ou "manual"
+    origem: str = "ocr"  # "ocr" | "manual" | "corrigido"
+    motivo: str | None = None
 
 
 @dataclass
@@ -18,12 +19,19 @@ class SessaoChamada:
     canal_id: int
     mensagem_id: int | None = None
 
+    # NOVO: TODOS os identificados como Hospital Sul (banco OU apelido),
+    # independente de estar com toggle ligado — é o "identificados no EMS" real.
+    reconhecidos: list[MedicoNaChamada] = field(default_factory=list)
+
     presentes_no_ems_toggle_ligado: list[MedicoNaChamada] = field(default_factory=list)
     toggle_ligado_mas_nao_no_ems: list[MedicoNaChamada] = field(default_factory=list)
-    nao_reconhecidos: list[dict] = field(default_factory=list)  # {"id_fivem", "nome_ems", "confianca"}
+    nao_reconhecidos: list[dict] = field(default_factory=list)
 
     total_medicos_ems: int = 0
     total_toggle_ligado: int = 0
+
+    # NOVO: trava a etapa de confirmação até o Doutor resolver os desconhecidos
+    revisao_concluida: bool = False
 
 
 # Só pode existir 1 sessão ativa por vez (já garantido pelo lock do ControleChamada,

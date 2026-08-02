@@ -10,6 +10,7 @@ from src.database.connection import async_session
 from src.database.models import EstadoPlantao, Recrutamento, Chamada, Usuario
 
 from src.services.ocr_ems_service import extrair_medicos_do_print_ems, OcrEmsError
+from src.services.scraping_membros import combinar_membros, construir_membros_via_apelido
 from src.services.validacao_ids import validar_medicos, MembroConhecido
 from src.services.plantao_service import membro_e_doutor_ou_acima, garantir_aware
 from src.services.chamada_service import (
@@ -170,11 +171,30 @@ def _construir_view_aguardando_print() -> discord.ui.LayoutView:
     return view
 
 
+async def _enviar_container(interaction: discord.Interaction, titulo: str, linhas: str,
+                             cor: discord.Color = discord.Color.blurple(), view: discord.ui.View | None = None):
+    """Substitui followup.send(texto) por um Container V2 padronizado."""
+    layout = discord.ui.LayoutView(timeout=None if view is None else 300)
+    componentes = [
+        discord.ui.TextDisplay(f"# {titulo}"),
+        discord.ui.TextDisplay(linhas),
+    ]
+    if view is not None:
+        for item in view.children:
+            row = discord.ui.ActionRow()
+            row.add_item(item)
+            componentes.append(row)
+    layout.add_item(discord.ui.Container(*componentes, accent_color=cor))
+    await interaction.followup.send(view=layout, ephemeral=True)
+
+
 async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str):
     sessao = obter_sessao()
     guild = interaction.guild
 
-    await interaction.followup.send("🔍 Processando imagem, aguarde...", ephemeral=True)
+    await _enviar_container(interaction, titulo="🔍 Processando Imagem",
+                             linhas="Aguarde enquanto a imagem do `/ems` é analisada...",
+                             cor=discord.Color.gold())
 
     try:
         resultado = await asyncio.wait_for(
@@ -184,38 +204,32 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
         logger.error("💥 OCR excedeu 90s — abortando chamada")
         await finalizar_chamada(marcar_ultima_chamada=False)
         definir_sessao(None)
-        await interaction.followup.send(
-            "❌ O processamento da imagem demorou demais e foi cancelado. "
-            "A chamada foi abortada — tente novamente.",
-            ephemeral=True,
-        )
+        await _enviar_container(interaction, titulo="❌ Chamada Cancelada",
+                                 linhas="O processamento da imagem demorou demais. Tente novamente.",
+                                 cor=discord.Color.red())
         return
     except OcrEmsError as exc:
         logger.error("💥 API de OCR retornou erro: %s", exc)
         await finalizar_chamada(marcar_ultima_chamada=False)
         definir_sessao(None)
-        await interaction.followup.send(
-            f"❌ Não foi possível ler a imagem: {exc}. A chamada foi abortada — tente novamente.",
-            ephemeral=True,
-        )
+        await _enviar_container(interaction, titulo="❌ Chamada Cancelada",
+                                 linhas=f"Não foi possível ler a imagem: {exc}", cor=discord.Color.red())
         return
     except Exception:
         logger.exception("💥 Falha inesperada ao processar imagem do EMS")
         await finalizar_chamada(marcar_ultima_chamada=False)
         definir_sessao(None)
-        await interaction.followup.send(
-            "❌ Ocorreu um erro ao processar a imagem. A chamada foi abortada — tente novamente.",
-            ephemeral=True,
-        )
+        await _enviar_container(interaction, titulo="❌ Chamada Cancelada",
+                                 linhas="Ocorreu um erro ao processar a imagem. Tente novamente.",
+                                 cor=discord.Color.red())
         return
 
     medicos_ems = resultado["medicos"]
     sessao.total_medicos_ems = len(medicos_ems)
 
     ids_no_ems = set()
-    reconhecidos_sul: list[MedicoNaChamada] = []
+    reconhecidos: list[MedicoNaChamada] = []
     nao_reconhecidos: list[dict] = []
-    total_corrigidos = 0
 
     async with async_session() as session:
         # Uma query só, trazendo todo Recrutamento aprovado já com o nome
@@ -225,7 +239,6 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
         # mais recente (maior id) — por isso ordena ASC e deixa sobrescrever.
         resultado_db = await session.execute(
             select(
-                Recrutamento.id,
                 Recrutamento.id_fivem,
                 Recrutamento.discord_id_candidato,
                 Usuario.nickname_atual,
@@ -242,7 +255,12 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
                 nome=row.nickname_atual or "",
                 discord_id=row.discord_id_candidato,
             )
-        membros_conhecidos = list(aprovados_por_id.values())
+
+        # Complementa com quem não está no Recrutamento formal, mas já tem
+        # "Nome | idFivem" no próprio apelido do servidor (visitantes, membros
+        # antigos, etc.) — o bot já tem permissão de administrador pra isso.
+        membros_via_apelido = construir_membros_via_apelido(guild)
+        membros_conhecidos = combinar_membros(list(aprovados_por_id.values()), membros_via_apelido)
 
         # Quem está com toggle ligado no Discord agora
         resultado_toggle = await session.execute(
@@ -258,26 +276,24 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
 
         if v.status in ("confirmado", "corrigido"):
             membro_db = guild.get_member(v.membro.discord_id)
-            reconhecidos_sul.append(MedicoNaChamada(
+            reconhecidos.append(MedicoNaChamada(
                 id_fivem=v.membro.id_fivem, discord_id=v.membro.discord_id,
                 nome_ems=v.nome_lido,
                 nome_discord=membro_db.display_name if membro_db else None,
                 confianca=1.0 if v.status == "confirmado" else 0.7,
+                origem="ocr" if v.status == "confirmado" else "corrigido",
+                motivo=v.motivo,
             ))
-            if v.status == "corrigido":
-                total_corrigidos += 1
-                logger.info("Chamada EMS: correção aplicada — %s", v.motivo)
         else:
             nao_reconhecidos.append({"id_fivem": v.id_lido, "nome_ems": v.nome_lido})
 
+    sessao.reconhecidos = reconhecidos  # 👈 NOVO: guarda TODOS os identificados, sem filtrar por toggle
     sessao.total_toggle_ligado = len(estados_ligados)
     ids_fivem_com_toggle = {e.id_fivem: e.discord_id for e in estados_ligados if e.id_fivem}
 
     # Cruzamento: reconhecidos no EMS E com toggle ligado → vão pra confirmação de presença
-    ids_reconhecidos_com_toggle = {m.id_fivem for m in reconhecidos_sul} & set(ids_fivem_com_toggle.keys())
-    sessao.presentes_no_ems_toggle_ligado = [
-        m for m in reconhecidos_sul if m.id_fivem in ids_reconhecidos_com_toggle
-    ]
+    ids_reconhecidos_com_toggle = {m.id_fivem for m in reconhecidos} & set(ids_fivem_com_toggle.keys())
+    sessao.presentes_no_ems_toggle_ligado = [m for m in reconhecidos if m.id_fivem in ids_reconhecidos_com_toggle]
 
     # Toggle ligado mas NÃO apareceu em lugar nenhum no print do EMS
     ids_com_toggle_fora_do_ems = set(ids_fivem_com_toggle.keys()) - ids_no_ems
@@ -288,15 +304,9 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
 
     sessao.nao_reconhecidos = nao_reconhecidos
 
-    if total_corrigidos:
-        logger.info("Chamada EMS: %d entrada(s) corrigida(s) automaticamente", total_corrigidos)
-    if resultado.get("aviso"):
-        logger.info("Aviso da API de OCR: %s", resultado["aviso"])
-
     # Resolve automaticamente quem está com toggle ligado mas sumiu do EMS
     await _processar_ausentes_do_ems(interaction, sessao)
-
-    await _enviar_view_revisao(interaction, sessao)
+    await _enviar_container_revisao(interaction, sessao, guild)
 
 
 async def _processar_ausentes_do_ems(interaction: discord.Interaction, sessao: SessaoChamada):
@@ -328,38 +338,89 @@ async def _processar_ausentes_do_ems(interaction: discord.Interaction, sessao: S
         )
 
 
-async def _enviar_view_revisao(interaction: discord.Interaction, sessao: SessaoChamada):
-    linhas = (
-        f"`📋` Médicos no `/ems`: **{sessao.total_medicos_ems}**\n"
-        f"`🟢` Toggle ligado no Discord: **{sessao.total_toggle_ligado}**\n"
-        f"`✅` Reconhecidos (SUL) para conferência: **{len(sessao.presentes_no_ems_toggle_ligado)}**\n"
-        f"`❓` Não reconhecidos (Norte/desconhecido): **{len(sessao.nao_reconhecidos)}**\n"
-        f"`⚠️` Já processados automaticamente (toggle ligado, ausente do EMS): "
-        f"**{len(sessao.toggle_ligado_mas_nao_no_ems)}**"
+def _formatar_lista_medicos(medicos: list[MedicoNaChamada], limite: int = 15) -> str:
+    if not medicos:
+        return "_(nenhum)_"
+    linhas = []
+    for m in medicos[:limite]:
+        nome_exibicao = m.nome_discord or m.nome_ems
+        marcador = "🔧" if m.origem == "corrigido" else ("➕" if m.origem == "manual" else "•")
+        linhas.append(f"{marcador} `{m.id_fivem}` — {nome_exibicao}")
+    if len(medicos) > limite:
+        linhas.append(f"_... e mais {len(medicos) - limite}_")
+    return "\n".join(linhas)
+
+
+def _formatar_lista_desconhecidos(entradas: list[dict], limite: int = 15) -> str:
+    if not entradas:
+        return "_(nenhum)_"
+    linhas = [f"❓ `{e['id_fivem']}` — {e['nome_ems']}" for e in entradas[:limite]]
+    if len(entradas) > limite:
+        linhas.append(f"_... e mais {len(entradas) - limite}_")
+    return "\n".join(linhas)
+
+
+async def _enviar_container_revisao(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+    resumo = (
+        f"`📋` Total no `/ems`: **{sessao.total_medicos_ems}**\n"
+        f"`✅` Identificados (Hospital Sul): **{len(sessao.reconhecidos)}**\n"
+        f"`🟢` Elegíveis p/ confirmar presença (identificado + toggle ligado): "
+        f"**{len(sessao.presentes_no_ems_toggle_ligado)}**\n"
+        f"`❓` Não identificados (Norte/desconhecido): **{len(sessao.nao_reconhecidos)}**\n"
+        f"`⚠️` Toggle ligado mas ausente do EMS (já processado): **{len(sessao.toggle_ligado_mas_nao_no_ems)}**"
     )
 
-    view = discord.ui.LayoutView(timeout=300)
+    linhas_reconhecidos = _formatar_lista_medicos(sessao.reconhecidos)
+    linhas_desconhecidos = _formatar_lista_desconhecidos(sessao.nao_reconhecidos)
+
     componentes = [
         discord.ui.TextDisplay("# 🔍 Resultado do Processamento"),
-        discord.ui.TextDisplay(linhas),
+        discord.ui.TextDisplay(resumo),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(f"**✅ Identificados**\n{linhas_reconhecidos}"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(f"**❓ Não identificados — decida o que fazer**\n{linhas_desconhecidos}"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
     ]
 
-    row = discord.ui.ActionRow()
-
+    row1 = discord.ui.ActionRow()
     if sessao.nao_reconhecidos:
         botao_manual = discord.ui.Button(label="➕ Adicionar Manualmente", style=discord.ButtonStyle.secondary)
         botao_manual.callback = _callback_abrir_modal_manual
-        row.add_item(botao_manual)
+        row1.add_item(botao_manual)
 
-    botao_continuar = discord.ui.Button(label="➡️ Confirmar Presenças", style=discord.ButtonStyle.primary)
+        botao_norte = discord.ui.Button(label="🏥 Marcar Restantes como Norte/Ignorar", style=discord.ButtonStyle.secondary)
+        botao_norte.callback = _callback_marcar_restantes_como_norte
+        row1.add_item(botao_norte)
+    componentes.append(row1)
+
+    row2 = discord.ui.ActionRow()
+    botao_continuar = discord.ui.Button(
+        label="➡️ Confirmar Presenças",
+        style=discord.ButtonStyle.primary,
+        disabled=bool(sessao.nao_reconhecidos),  # 👈 travado até resolver os desconhecidos
+    )
     botao_continuar.callback = _callback_ir_para_presenca
-    row.add_item(botao_continuar)
+    row2.add_item(botao_continuar)
+    componentes.append(row2)
 
-    componentes.append(row)
-    view.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
+    layout = discord.ui.LayoutView(timeout=300)
+    layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
+    await interaction.followup.send(view=layout, ephemeral=True)
 
-    await interaction.followup.send(view=view, ephemeral=True)
+
+async def _callback_marcar_restantes_como_norte(interaction: discord.Interaction):
+    """Doutor decide explicitamente que quem sobrou é de outro hospital / não precisa de ação —
+    libera o botão de Confirmar Presenças sem precisar resolver item por item."""
+    sessao = obter_sessao()
+    if sessao is None:
+        await interaction.response.send_message("❌ Sessão de chamada expirada.", ephemeral=True)
+        return
+
+    sessao.nao_reconhecidos = []  # esvazia — Doutor assumiu a decisão
+
+    await interaction.response.defer(ephemeral=True)
+    await _enviar_container_revisao(interaction, sessao, interaction.guild)
 
 
 class ModalAdicionarManual(discord.ui.Modal, title="Adicionar Médico Manualmente"):
@@ -409,16 +470,29 @@ class ModalAdicionarManual(discord.ui.Modal, title="Adicionar Médico Manualment
             return
 
         membro = interaction.guild.get_member(discord_id)
-        sessao.presentes_no_ems_toggle_ligado.append(MedicoNaChamada(
+        novo_medico = MedicoNaChamada(
             id_fivem=id_fivem, discord_id=discord_id,
             nome_ems="(adicionado manualmente)",
             nome_discord=membro.display_name if membro else None,
             origem="manual",
-        ))
+        )
+        sessao.reconhecidos.append(novo_medico)
+
+        async with async_session() as session:
+            resultado = await session.execute(
+                select(EstadoPlantao.discord_id).where(
+                    EstadoPlantao.discord_id == discord_id, EstadoPlantao.toggle_ligado.is_(True)
+                )
+            )
+            tem_toggle = resultado.scalar_one_or_none() is not None
+
+        if tem_toggle:
+            sessao.presentes_no_ems_toggle_ligado.append(novo_medico)
+
         sessao.nao_reconhecidos = [e for e in sessao.nao_reconhecidos if e["id_fivem"] != id_fivem]
 
-        await interaction.response.send_message(f"✅ Adicionado: <@{discord_id}> (`{id_fivem}`)", ephemeral=True)
-
+        await interaction.response.defer(ephemeral=True)
+        await _enviar_container_revisao(interaction, sessao, interaction.guild)  # 👈 reconstrói o painel
 
 async def _callback_abrir_modal_manual(interaction: discord.Interaction):
     await interaction.response.send_modal(ModalAdicionarManual())
@@ -428,18 +502,14 @@ async def _callback_ir_para_presenca(interaction: discord.Interaction):
     sessao = obter_sessao()
     if sessao is None or not sessao.presentes_no_ems_toggle_ligado:
         await interaction.response.defer(ephemeral=True)
-        await interaction.followup.send("ℹ️ Nenhum médico pra confirmar presença — finalizando chamada.", ephemeral=True)
         await _finalizar_e_logar(interaction, faltantes_ids=set())
         return
 
     await interaction.response.defer(ephemeral=True)
 
     opcoes = [
-        discord.SelectOption(
-            label=f"{m.nome_discord or m.nome_ems} | {m.id_fivem}",
-            value=str(m.discord_id),
-        )
-        for m in sessao.presentes_no_ems_toggle_ligado[:25]  # limite do Discord
+        discord.SelectOption(label=f"{m.nome_discord or m.nome_ems} | {m.id_fivem}", value=str(m.discord_id))
+        for m in sessao.presentes_no_ems_toggle_ligado[:25]
     ]
 
     select = discord.ui.Select(
@@ -454,12 +524,19 @@ async def _callback_ir_para_presenca(interaction: discord.Interaction):
 
     select.callback = callback_select
 
-    view = discord.ui.View(timeout=180)
-    view.add_item(select)
-    await interaction.followup.send(
-        "🔎 Confirme no dropdown quem **não respondeu** (rádio ou call) — o resto será marcado como presente.",
-        view=view, ephemeral=True,
-    )
+    componentes = [
+        discord.ui.TextDisplay("# 🔎 Confirmação de Presença"),
+        discord.ui.TextDisplay("Marque no menu abaixo quem **não respondeu** (rádio ou call). "
+                                "O restante será marcado como presente."),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+    ]
+    row = discord.ui.ActionRow()
+    row.add_item(select)
+    componentes.append(row)
+
+    layout = discord.ui.LayoutView(timeout=180)
+    layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
+    await interaction.followup.send(view=layout, ephemeral=True)
 
 
 async def _finalizar_e_logar(interaction: discord.Interaction, faltantes_ids: set[int]):
@@ -527,12 +604,12 @@ async def _finalizar_e_logar(interaction: discord.Interaction, faltantes_ids: se
     canal_log = guild.get_channel(CANAIS.get("LOG_CHAMADAS"))
     if canal_log:
         linhas_log = (
-            f"`👨‍⚕️` Realizada por: <@{sessao.doutor_id}>\n"
-            f"`📋` Total no `/ems`: **{sessao.total_medicos_ems}**\n"
-            f"`🟢` Toggle ligado (Discord): **{sessao.total_toggle_ligado}**\n"
-            f"`✅` Presentes: **{len(presentes_ids)}**\n"
-            f"`❌` Ausentes (não respondeu): **{len(ausentes_ids)}**\n"
-            f"`⚠️` Ausentes (não estavam no EMS): **{len(sessao.toggle_ligado_mas_nao_no_ems)}**"
+            f"`👨‍⚕️` **Realizada por:** <@{sessao.doutor_id}>\n"
+            f"`📋` **Total no `/ems`:** **{sessao.total_medicos_ems}** médicos\n"
+            f"`🟢` **Toggle ligado (Discord):** **{sessao.total_toggle_ligado}**\n"
+            f"`✅` **Presentes:** **{len(presentes_ids)}**\n"
+            f"`❌` **Ausentes (não respondeu):** **{len(ausentes_ids)}**\n"
+            f"`⚠️` **Ausentes (não estavam no EMS):** **{len(sessao.toggle_ligado_mas_nao_no_ems)}**"
         )
         view_log = LogContainerView(
             titulo="📋 Chamada de Plantão Realizada",
@@ -543,4 +620,10 @@ async def _finalizar_e_logar(interaction: discord.Interaction, faltantes_ids: se
     await finalizar_chamada(marcar_ultima_chamada=True)
     definir_sessao(None)
 
-    await interaction.followup.send("✅ Chamada finalizada e registrada.", ephemeral=True)
+    resumo_final = (
+        f"`✅` **Presentes:** **{len(presentes_ids)}**\n"
+        f"`❌` **Ausentes:** **{len(ausentes_ids)}**\n"
+        f"`📋` **Registro enviado para o canal de logs.**"
+    )
+    await _enviar_container(interaction, titulo="✅ Chamada Finalizada", linhas=resumo_final,
+                             cor=discord.Color.green())
