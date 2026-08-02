@@ -10,7 +10,6 @@ from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.panels.plantao_panel import PainelPlantaoLayout
 from src.database.connection import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
-from src.services.ocr_ems_service import aquecer_modelo_easyocr
 from src.services.plantao_tasks import executar_housekeeping_plantao
 
 from src.config import DISCORD_TOKEN, GUILD_ID, CANAIS
