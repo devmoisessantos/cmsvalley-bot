@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 # Helpers genéricos
 # ─────────────────────────────────────────────
 
+def _remover_medico(sessao: SessaoChamada, discord_id: int) -> bool:
+    tamanho_antes = len(sessao.reconhecidos)
+    sessao.reconhecidos = [m for m in sessao.reconhecidos if m.discord_id != discord_id]
+    return len(sessao.reconhecidos) < tamanho_antes
+
+
 def _construir_blocos_texto(linhas: list[str], max_chars: int = 1500) -> list[str]:
     """Quebra uma lista de linhas em blocos que cabem num TextDisplay sem estourar
     o limite do Discord — evita o '... e mais N' truncando a lista real."""
@@ -299,21 +305,37 @@ async def _processar_ausentes_do_ems(interaction: discord.Interaction, sessao: S
         await registrar_falta(membro.id, sessao.chamada_id, "Toggle ligado no Discord, ausente no /ems", guild)
 
 
+def _deduplicar_reconhecidos(sessao: SessaoChamada):
+    vistos = set()
+    unicos = []
+    for m in sessao.reconhecidos:
+        chave = m.discord_id if m.discord_id else m.id_fivem
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        unicos.append(m)
+    sessao.reconhecidos = unicos
+
+
 # ─────────────────────────────────────────────
 # ETAPA 1 — Verificação
 # ─────────────────────────────────────────────
 
 async def _enviar_etapa_1(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
     sessao.etapa_atual = 1
-    linhas_ids = [_linha_medico(m) for m in sessao.reconhecidos]
-    blocos = _construir_blocos_texto(linhas_ids)
+    _deduplicar_reconhecidos(sessao)
+
+    corrigidos = [m for m in sessao.reconhecidos if m.origem == "corrigido"]
+    demais = [m for m in sessao.reconhecidos if m.origem != "corrigido"]
+
+    blocos_demais = _construir_blocos_texto([_linha_medico(m) for m in demais])
 
     resumo = (
         f"`📋` Total no `/ems`: **{sessao.total_medicos_ems}**\n"
         f"`✅` Identificados: **{len(sessao.reconhecidos)}**\n"
         f"`❓` Ainda não identificados: **{len(sessao.nao_reconhecidos)}**\n\n"
-        "Confira a lista abaixo. Se algum médico presente no `/ems` **não** aparece aqui "
-        "(apesar de estar de fato no Discord), adicione manualmente."
+        "Confira a lista. Faltando alguém que está no `/ems`? Adicione manualmente.\n"
+        "Alguém errado na lista? Remova pelo botão ou pelo bloco de correções abaixo."
     )
 
     componentes = [
@@ -321,12 +343,42 @@ async def _enviar_etapa_1(interaction: discord.Interaction, sessao: SessaoChamad
         discord.ui.TextDisplay(resumo),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
     ]
-    for bloco in blocos:
+
+    # Bloco de destaque: correções automáticas, maior risco de falso positivo
+    if corrigidos:
+        linhas_corrigidos = "\n".join(
+            f"🔧 `{m.id_fivem}` — <@{m.discord_id}>\n> _{m.motivo or 'correção automática'}_"
+            for m in corrigidos
+        )
+        componentes.append(discord.ui.TextDisplay(
+            f"**⚠️ Correções automáticas — confira com atenção**\n{linhas_corrigidos}"
+        ))
+
+        if len(corrigidos) <= 25:
+            select_remover_corrigidos = discord.ui.Select(
+                placeholder="Selecione quem está ERRADO aqui pra remover",
+                options=[
+                    discord.SelectOption(label=f"{m.nome_discord or m.nome_ems} | {m.id_fivem}", value=str(m.discord_id))
+                    for m in corrigidos
+                ],
+                min_values=0, max_values=len(corrigidos),
+            )
+            select_remover_corrigidos.callback = _callback_remover_corrigidos
+            row_corrigidos = discord.ui.ActionRow()
+            row_corrigidos.add_item(select_remover_corrigidos)
+            componentes.append(row_corrigidos)
+
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+    # Lista completa dos demais (confirmados direto + manuais)
+    componentes.append(discord.ui.TextDisplay("**✅ Confirmados / Adicionados**"))
+    for bloco in blocos_demais:
         componentes.append(discord.ui.TextDisplay(bloco))
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
+    # Busca pra adicionar
     row_select = discord.ui.ActionRow()
-    user_select = discord.ui.UserSelect(placeholder="🔎 Buscar por menção (selecione o usuário)")
+    user_select = discord.ui.UserSelect(placeholder="🔎 Adicionar por menção (selecione o usuário)")
     user_select.callback = _callback_userselect_adicionar
     row_select.add_item(user_select)
     componentes.append(row_select)
@@ -340,10 +392,16 @@ async def _enviar_etapa_1(interaction: discord.Interaction, sessao: SessaoChamad
     botao_fivem.callback = _callback_abrir_modal_id_fivem
     row_botoes.add_item(botao_fivem)
 
+    botao_remover = discord.ui.Button(label="❌ Remover", style=discord.ButtonStyle.danger)
+    botao_remover.callback = _callback_abrir_modal_remover
+    row_botoes.add_item(botao_remover)
+    componentes.append(row_botoes)
+
+    row_continuar = discord.ui.ActionRow()
     botao_continuar = discord.ui.Button(label="➡️ Continuar", style=discord.ButtonStyle.primary)
     botao_continuar.callback = _callback_ir_etapa_2
-    row_botoes.add_item(botao_continuar)
-    componentes.append(row_botoes)
+    row_continuar.add_item(botao_continuar)
+    componentes.append(row_continuar)
 
     layout = discord.ui.LayoutView(timeout=600)
     layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
@@ -362,7 +420,12 @@ def _resolver_id_fivem_do_membro(sessao: SessaoChamada, discord_id: int, membro:
     return extrair_id_do_apelido(nome_exibido)
 
 
-def _adicionar_medico_manual(sessao: SessaoChamada, guild: discord.Guild, discord_id: int, id_fivem: str | None):
+def _adicionar_medico_manual(sessao: SessaoChamada, guild: discord.Guild, discord_id: int, id_fivem: str | None) -> bool:
+    """Retorna True se adicionou de fato, False se a pessoa já estava na lista (evita duplicata)."""
+    ja_existe = any(m.discord_id == discord_id for m in sessao.reconhecidos)
+    if ja_existe:
+        return False
+
     membro = guild.get_member(discord_id)
     if id_fivem is None and membro:
         id_fivem = _resolver_id_fivem_do_membro(sessao, discord_id, membro)
@@ -377,6 +440,8 @@ def _adicionar_medico_manual(sessao: SessaoChamada, guild: discord.Guild, discor
 
     if id_fivem:
         sessao.nao_reconhecidos = [e for e in sessao.nao_reconhecidos if e["id_fivem"] != id_fivem]
+
+    return True
 
 
 async def _callback_userselect_adicionar(interaction: discord.Interaction):
@@ -455,6 +520,53 @@ async def _callback_ir_etapa_2(interaction: discord.Interaction):
     sessao = obter_sessao()
     await interaction.response.defer(ephemeral=True)
     await _enviar_etapa_2(interaction, sessao, interaction.guild)
+
+
+class ModalRemoverMedico(discord.ui.Modal, title="Remover da Lista"):
+    identificador = discord.ui.TextInput(
+        label="ID FiveM, Discord ID ou Menção",
+        placeholder="Ex: 054623 ou @membro ou 859100649366356000",
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        sessao = obter_sessao()
+        if sessao is None:
+            await interaction.response.send_message("❌ Sessão expirada.", ephemeral=True)
+            return
+
+        valor = self.identificador.value.strip().replace("<@", "").replace(">", "").replace("!", "")
+
+        alvo = None
+        if valor.isdigit() and len(valor) >= 15:
+            alvo = next((m for m in sessao.reconhecidos if m.discord_id == int(valor)), None)
+        elif valor.isdigit():
+            alvo = next((m for m in sessao.reconhecidos if m.id_fivem == valor), None)
+
+        if alvo is None:
+            await interaction.response.send_message(
+                "❌ Ninguém na lista atual bate com esse identificador.", ephemeral=True,
+            )
+            return
+
+        _remover_medico(sessao, alvo.discord_id)
+        await interaction.response.defer(ephemeral=True)
+        await _enviar_etapa_1(interaction, sessao, interaction.guild)
+
+
+async def _callback_abrir_modal_remover(interaction: discord.Interaction):
+    await interaction.response.send_modal(ModalRemoverMedico())
+
+
+async def _callback_remover_corrigidos(interaction: discord.Interaction):
+    ids_selecionados = {int(v) for v in interaction.data["values"]}
+    sessao = obter_sessao()
+
+    for discord_id in ids_selecionados:
+        _remover_medico(sessao, discord_id)
+
+    await interaction.response.defer(ephemeral=True)
+    await _enviar_etapa_1(interaction, sessao, interaction.guild)
 
 
 # ─────────────────────────────────────────────
@@ -580,13 +692,13 @@ async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamad
         for m in sessao.presentes_no_ems_toggle_ligado[:25]
     ]
 
-    select = discord.ui.Select(
+    select_presenca = discord.ui.Select(
         placeholder="Todos marcados = presentes. Desmarque quem não respondeu.",
         options=opcoes, min_values=0, max_values=len(opcoes),
     )
-    select.callback = _callback_atualizar_faltantes
+    select_presenca.callback = _callback_atualizar_faltantes
     row_select = discord.ui.ActionRow()
-    row_select.add_item(select)
+    row_select.add_item(select_presenca)
     componentes.append(row_select)
 
     botao_continuar = discord.ui.Button(label="➡️ Continuar", style=discord.ButtonStyle.primary)
