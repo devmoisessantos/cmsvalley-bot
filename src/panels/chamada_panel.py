@@ -294,7 +294,7 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
 
     await _processar_ausentes_do_ems(interaction, sessao)
 
-    view_etapa_1 = _construir_etapa_1(sessao, guild)
+    view_etapa_1 = await _construir_etapa_1(sessao, guild)
     await interaction.edit_original_response(view=view_etapa_1) 
 
 async def _processar_ausentes_do_ems(interaction: discord.Interaction, sessao: SessaoChamada):
@@ -464,7 +464,7 @@ async def _callback_userselect_adicionar(interaction: discord.Interaction):
     _adicionar_medico_manual(sessao, interaction.guild, discord_id, None)
 
     await interaction.response.defer(ephemeral=True)
-    await interaction.edit_original_response(view=_construir_etapa_1(sessao, interaction.guild))
+    await interaction.edit_original_response(view= await _construir_etapa_1(sessao, interaction.guild))
 
 
 class ModalBuscarPorDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
