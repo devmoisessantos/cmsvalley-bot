@@ -21,6 +21,7 @@ class SessaoChamada:
     chamada_id: int
     canal_id: int
     mensagem_id: int | None = None
+    print_ems_url: str | None = None  # 👈 novo — prova anexada ao log final
 
     # NOVO: TODOS os identificados como Hospital Sul (banco OU apelido),
     # independente de estar com toggle ligado — é o "identificados no EMS" real.

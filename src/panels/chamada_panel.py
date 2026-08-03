@@ -193,7 +193,9 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
                                      cor=discord.Color.red(), registrar_na_sessao=False)
             return
 
-        await _processar_print_ems(interaction, mensagem_print.attachments[0].url)
+        anexo = mensagem_print.attachments[0]
+        sessao.print_ems_url = anexo.url  # 👈 nova linha
+        await _processar_print_ems(interaction, anexo.url)
 
 
 # ─────────────────────────────────────────────
@@ -648,16 +650,14 @@ async def _callback_ir_etapa_3(interaction: discord.Interaction):
 async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
     sessao.etapa_atual = 3
 
-    async with async_session() as session:
-        resultado_toggle = await session.execute(select(EstadoPlantao).where(EstadoPlantao.toggle_ligado.is_(True)))
-        estados_ligados = resultado_toggle.scalars().all()
-
-    ids_com_toggle = {e.id_fivem: e.discord_id for e in estados_ligados if e.id_fivem}
-    sessao.presentes_no_ems_toggle_ligado = [m for m in sessao.reconhecidos if m.id_fivem in ids_com_toggle]
+    # 👇 MUDANÇA: usa TODOS os identificados na Etapa 1 (já excluindo quem foi
+    # movido pra Hospital Norte, já que esses nunca entraram em `reconhecidos`)
+    sessao.presentes_no_ems_toggle_ligado = list(sessao.reconhecidos)
 
     resumo = (
-        f"`🟢` **{len(sessao.presentes_no_ems_toggle_ligado)}** médicos identificados e com toggle ligado.\n"
-        "Verifique call/rádio in-game e **desmarque** quem não responder (ficará com falta)."
+        f"`🟢` **{len(sessao.presentes_no_ems_toggle_ligado)}** médicos identificados para confirmação.\n"
+        "Todos começam marcados como **presentes**. Verifique call, rádio in-game ou chame na interna "
+        "do hospital — **desmarque** quem não responder (ficará com falta)."
     )
 
     componentes = [
@@ -683,13 +683,22 @@ async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamad
         sessao.mensagens_efemeras.append(msg)
         return
 
+    # Se passar de 25, precisa paginar — por ora, mostra até 25 no select e
+    # avisa no texto que o restante fica marcado como presente por padrão
+    lista_para_select = sessao.presentes_no_ems_toggle_ligado[:25]
+    if len(sessao.presentes_no_ems_toggle_ligado) > 25:
+        componentes.append(discord.ui.TextDisplay(
+            f"⚠️ **Atenção:** {len(sessao.presentes_no_ems_toggle_ligado)} médicos identificados, "
+            f"mas o menu só mostra os primeiros 25. Os demais permanecem como presentes por padrão."
+        ))
+
     opcoes = [
         discord.SelectOption(
             label=f"{m.nome_discord or m.nome_ems} | {m.id_fivem}",
             value=str(m.discord_id),
             default=m.discord_id not in sessao.faltantes_ids,
         )
-        for m in sessao.presentes_no_ems_toggle_ligado[:25]
+        for m in lista_para_select
     ]
 
     select_presenca = discord.ui.Select(
@@ -851,7 +860,6 @@ async def _enviar_log_chamada_canal(guild: discord.Guild, sessao: SessaoChamada,
     linhas = (
         f"`📋` Total no `/ems`: {sessao.total_medicos_ems}\n"
         f"`✅` Identificados (Hospital Sul): {len(sessao.reconhecidos)}\n"
-        f"`🟢` Elegíveis p/ confirmar presença: {len(sessao.presentes_no_ems_toggle_ligado)}\n"
         f"`❓` Não identificados (Norte/Desconhecido): {len(sessao.medicos_norte)}\n"
         f"`⚠️` Toggle ligado mas ausente do EMS (já processado): {len(sessao.toggle_ligado_mas_nao_no_ems)}\n"
         f"👨‍⚕️ Responsável pela chamada: <@{sessao.doutor_id}>\n\n"
@@ -860,5 +868,8 @@ async def _enviar_log_chamada_canal(guild: discord.Guild, sessao: SessaoChamada,
         f"**Identificados — Hospital Norte**\n{linhas_norte}"
     )
 
-    view_log = LogContainerView(titulo="📋 Chamada de Plantão Realizada", linhas=linhas, guild=guild, cor=discord.Color.blurple())
+    view_log = LogContainerView(
+        titulo="📋 Chamada de Plantão Realizada", linhas=linhas, guild=guild, cor=discord.Color.blurple(),
+        midia_urls=[sessao.print_ems_url] if sessao.print_ems_url else None,  # 👈 nova linha
+    )
     await canal_log.send(view=view_log)
