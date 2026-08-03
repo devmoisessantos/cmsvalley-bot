@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 from sqlalchemy import select
 
-from src.utils.mensagens import excluir_mensagem
+from src.utils.mensagens import excluir_mensagem, destruir_print_com_aviso
 from src.config import CANAIS, CARGOS, CARGOS_BYPASS_PRESENCA_CHAMADA
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao, Recrutamento, Chamada, Usuario
@@ -34,6 +34,15 @@ def _remover_medico(sessao: SessaoChamada, discord_id: int) -> bool:
     return len(sessao.reconhecidos) < tamanho_antes
 
 
+def _construir_view_simples(titulo: str, linhas: str, cor: discord.Color) -> discord.ui.LayoutView:
+    layout = discord.ui.LayoutView(timeout=None)
+    layout.add_item(discord.ui.Container(
+        discord.ui.TextDisplay(f"# {titulo}"), 
+        discord.ui.TextDisplay(linhas), accent_color=cor,
+    ))
+    return layout
+
+
 def _construir_blocos_texto(linhas: list[str], max_chars: int = 1500) -> list[str]:
     """Quebra uma lista de linhas em blocos que cabem num TextDisplay sem estourar
     o limite do Discord — evita o '... e mais N' truncando a lista real."""
@@ -51,6 +60,29 @@ def _construir_blocos_texto(linhas: list[str], max_chars: int = 1500) -> list[st
     return blocos
 
 
+def _construir_view_aguardando_print() -> discord.ui.LayoutView:
+    return _construir_view_simples(
+        "📸 Aguardando Print do /ems",
+        "`•` Envie **neste canal** um print do comando `/ems`, o mais legível possível.\n"
+        "`•` O sistema vai identificar os IDs FiveM automaticamente.\n"
+        "`•` Você tem 5 minutos.",
+        discord.Color.gold(),
+    )
+
+def _tem_cargo_bypass(discord_id: int, guild: discord.Guild) -> bool:
+    membro = guild.get_member(discord_id)
+    if membro is None:
+        return False
+    ids_bypass = {CARGOS[nome] for nome in CARGOS_BYPASS_PRESENCA_CHAMADA if nome in CARGOS}
+    return any(cargo.id in ids_bypass for cargo in membro.roles)
+
+
+def _construir_view_processando() -> discord.ui.LayoutView:
+    return _construir_view_simples(
+        "🔍 Processando Imagem", "Aguarde enquanto a imagem do `/ems` é analisada...", discord.Color.gold(),
+    )
+
+
 def _linha_medico(m: MedicoNaChamada) -> str:
     marcador = {"corrigido": "🔧", "manual": "➕"}.get(m.origem, "•")
     quem = f"<@{m.discord_id}>" if m.discord_id else (m.nome_discord or m.nome_ems)
@@ -59,32 +91,6 @@ def _linha_medico(m: MedicoNaChamada) -> str:
 
 def _linha_desconhecido(e: dict) -> str:
     return f"❓ `{e['id_fivem']}` — {e['nome_ems']}"
-
-
-async def _enviar_container(interaction: discord.Interaction, titulo: str, linhas: str,
-                             cor: discord.Color = discord.Color.blurple(),
-                             extra_componentes: list | None = None,
-                             registrar_na_sessao: bool = True) -> discord.WebhookMessage:
-    layout = discord.ui.LayoutView(timeout=None)
-    componentes = [discord.ui.TextDisplay(f"# {titulo}"), discord.ui.TextDisplay(linhas)]
-    if extra_componentes:
-        componentes.extend(extra_componentes)
-    layout.add_item(discord.ui.Container(*componentes, accent_color=cor))
-    msg = await interaction.followup.send(view=layout, ephemeral=True)
-
-    sessao = obter_sessao()
-    if registrar_na_sessao and sessao is not None:
-        sessao.mensagens_efemeras.append(msg)
-    return msg
-
-
-async def _apagar_mensagens_efemeras(sessao: SessaoChamada):
-    for msg in sessao.mensagens_efemeras:
-        try:
-            await msg.delete()
-        except (discord.NotFound, discord.HTTPException):
-            pass
-
 
 # ─────────────────────────────────────────────
 # Painel de Coordenação (inalterado, exceto imports já corretos)
@@ -170,13 +176,7 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
         sessao = SessaoChamada(doutor_id=interaction.user.id, chamada_id=chamada_id, canal_id=interaction.channel_id)
         definir_sessao(sessao)
 
-        await _enviar_container(
-            interaction, titulo="📸 Aguardando Print do /ems",
-            linhas=("`•` Envie **neste canal** um print do comando `/ems`, o mais legível possível.\n"
-                    "`•` O sistema vai identificar os IDs FiveM automaticamente.\n"
-                    "`•` Você tem 5 minutos."),
-            cor=discord.Color.gold(),
-        )
+        await interaction.edit_original_response(view=_construir_view_aguardando_print())  # 👈 edita, não envia novo
 
         bot = interaction.client
 
@@ -187,11 +187,13 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
             mensagem_print = await bot.wait_for("message", timeout=300, check=checagem)
         except TimeoutError:
             await finalizar_chamada(marcar_ultima_chamada=False)
-            await _apagar_mensagens_efemeras(sessao)
             definir_sessao(None)
-            await _enviar_container(interaction, titulo="⏱️ Tempo Esgotado",
-                                     linhas="Nenhum print recebido a tempo. Chamada cancelada.",
-                                     cor=discord.Color.red(), registrar_na_sessao=False)
+            await interaction.edit_original_response(
+                view=_construir_view_simples(
+                    "⏱️ Tempo Esgotado", 
+                    "Nenhum print recebido a tempo. Chamada cancelada.", 
+                    discord.Color.red())
+            )
             return
 
         # dentro de _callback_realizar_chamada, remove o asyncio.create_task daqui:
@@ -209,33 +211,34 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
     sessao = obter_sessao()
     guild = interaction.guild
 
-    await _enviar_container(interaction, titulo="🔍 Processando Imagem",
-                             linhas="Aguarde enquanto a imagem do `/ems` é analisada...",
-                             cor=discord.Color.gold())
+    await interaction.edit_original_response(view=_construir_view_processando())  # 👈 edita
 
     try:
         resultado = await asyncio.wait_for(extrair_medicos_do_print_ems(url_imagem), timeout=90)
     except asyncio.TimeoutError:
         await finalizar_chamada(marcar_ultima_chamada=False)
-        await _apagar_mensagens_efemeras(sessao)
+        await destruir_print_com_aviso(sessao.print_ems_mensagem, delay=10)
         definir_sessao(None)
-        await _enviar_container(interaction, "❌ Chamada Cancelada", "Processamento excedeu o tempo limite.",
-                                 discord.Color.red(), registrar_na_sessao=False)
+        await interaction.edit_original_response(
+            view=_construir_view_simples("❌ Chamada Cancelada", "Processamento excedeu o tempo limite.", discord.Color.red())
+        )
         return
     except OcrEmsError as exc:
         await finalizar_chamada(marcar_ultima_chamada=False)
-        await _apagar_mensagens_efemeras(sessao)
+        await destruir_print_com_aviso(sessao.print_ems_mensagem, delay=10)
         definir_sessao(None)
-        await _enviar_container(interaction, "❌ Chamada Cancelada", f"Erro ao ler a imagem: {exc}",
-                                 discord.Color.red(), registrar_na_sessao=False)
+        await interaction.edit_original_response(
+            view=_construir_view_simples("❌ Chamada Cancelada", f"Erro ao ler a imagem: {exc}", discord.Color.red())
+        )
         return
     except Exception:
         logger.exception("💥 Falha inesperada no OCR")
         await finalizar_chamada(marcar_ultima_chamada=False)
-        await _apagar_mensagens_efemeras(sessao)
+        await destruir_print_com_aviso(sessao.print_ems_mensagem, delay=10)
         definir_sessao(None)
-        await _enviar_container(interaction, "❌ Chamada Cancelada", "Erro inesperado ao processar a imagem.",
-                                 discord.Color.red(), registrar_na_sessao=False)
+        await interaction.edit_original_response(
+            view=_construir_view_simples("❌ Chamada Cancelada", "Erro inesperado ao processar a imagem.", discord.Color.red())
+        )
         return
 
     medicos_ems = resultado["medicos"]
@@ -290,7 +293,9 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
     ]
 
     await _processar_ausentes_do_ems(interaction, sessao)
-    await _enviar_etapa_1(interaction, sessao, guild)
+
+    view_etapa_1 = await _construir_etapa_1(interaction, sessao, guild)
+    await interaction.edit_original_response(view=view_etapa_1)
 
 
 async def _processar_ausentes_do_ems(interaction: discord.Interaction, sessao: SessaoChamada):
@@ -326,7 +331,7 @@ def _deduplicar_reconhecidos(sessao: SessaoChamada):
 # ETAPA 1 — Verificação
 # ─────────────────────────────────────────────
 
-async def _enviar_etapa_1(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+async def _construir_etapa_1(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
     sessao.etapa_atual = 1
     _deduplicar_reconhecidos(sessao)
 
@@ -346,7 +351,7 @@ async def _enviar_etapa_1(interaction: discord.Interaction, sessao: SessaoChamad
     componentes = [
         discord.ui.TextDisplay("# ⏳ Etapa 1 — Verificação"),
         discord.ui.TextDisplay(resumo),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
     ]
 
     # Bloco de destaque: correções automáticas, maior risco de falso positivo
@@ -373,13 +378,13 @@ async def _enviar_etapa_1(interaction: discord.Interaction, sessao: SessaoChamad
             row_corrigidos.add_item(select_remover_corrigidos)
             componentes.append(row_corrigidos)
 
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
     # Lista completa dos demais (confirmados direto + manuais)
     componentes.append(discord.ui.TextDisplay("**✅ Confirmados / Adicionados**"))
     for bloco in blocos_demais:
         componentes.append(discord.ui.TextDisplay(bloco))
-    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
     # Busca pra adicionar
     row_select = discord.ui.ActionRow()
@@ -461,7 +466,7 @@ async def _callback_userselect_adicionar(interaction: discord.Interaction):
     _adicionar_medico_manual(sessao, interaction.guild, discord_id, None)
 
     await interaction.response.defer(ephemeral=True)
-    await _enviar_etapa_1(interaction, sessao, interaction.guild)
+    await interaction.edit_original_response(view=_construir_etapa_1(sessao, interaction.guild))
 
 
 class ModalBuscarPorDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
@@ -486,7 +491,7 @@ class ModalBuscarPorDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
 
         _adicionar_medico_manual(sessao, interaction.guild, discord_id, None)
         await interaction.response.defer(ephemeral=True)
-        await _enviar_etapa_1(interaction, sessao, interaction.guild)
+        await interaction.edit_original_response(view=_construir_etapa_1(sessao, interaction.guild))
 
 
 class ModalBuscarPorIdFivem(discord.ui.Modal, title="Buscar por ID FiveM"):
@@ -510,21 +515,7 @@ class ModalBuscarPorIdFivem(discord.ui.Modal, title="Buscar por ID FiveM"):
 
         _adicionar_medico_manual(sessao, interaction.guild, membro_conhecido.discord_id, id_fivem)
         await interaction.response.defer(ephemeral=True)
-        await _enviar_etapa_1(interaction, sessao, interaction.guild)
-
-
-async def _callback_abrir_modal_discord_id(interaction: discord.Interaction):
-    await interaction.response.send_modal(ModalBuscarPorDiscordId())
-
-
-async def _callback_abrir_modal_id_fivem(interaction: discord.Interaction):
-    await interaction.response.send_modal(ModalBuscarPorIdFivem())
-
-
-async def _callback_ir_etapa_2(interaction: discord.Interaction):
-    sessao = obter_sessao()
-    await interaction.response.defer(ephemeral=True)
-    await _enviar_etapa_2(interaction, sessao, interaction.guild)
+        await interaction.edit_original_response(view=_construir_etapa_1(sessao, interaction.guild))
 
 
 class ModalRemoverMedico(discord.ui.Modal, title="Remover da Lista"):
@@ -556,12 +547,21 @@ class ModalRemoverMedico(discord.ui.Modal, title="Remover da Lista"):
 
         _remover_medico(sessao, alvo.discord_id)
         await interaction.response.defer(ephemeral=True)
-        await _enviar_etapa_1(interaction, sessao, interaction.guild)
-
+        await interaction.edit_original_response(view=_construir_etapa_1(sessao, interaction.guild))
 
 async def _callback_abrir_modal_remover(interaction: discord.Interaction):
     await interaction.response.send_modal(ModalRemoverMedico())
 
+async def _callback_abrir_modal_discord_id(interaction: discord.Interaction):
+    await interaction.response.send_modal(ModalBuscarPorDiscordId())
+
+async def _callback_abrir_modal_id_fivem(interaction: discord.Interaction):
+    await interaction.response.send_modal(ModalBuscarPorIdFivem())
+
+async def _callback_ir_etapa_2(interaction: discord.Interaction):
+    sessao = obter_sessao()
+    await interaction.response.defer(ephemeral=True)
+    await interaction.edit_original_response(view=_construir_etapa_2(sessao, interaction.guild))
 
 async def _callback_remover_corrigidos(interaction: discord.Interaction):
     ids_selecionados = {int(v) for v in interaction.data["values"]}
@@ -571,14 +571,14 @@ async def _callback_remover_corrigidos(interaction: discord.Interaction):
         _remover_medico(sessao, discord_id)
 
     await interaction.response.defer(ephemeral=True)
-    await _enviar_etapa_1(interaction, sessao, interaction.guild)
+    await interaction.edit_original_response(view=_construir_etapa_1(sessao, interaction.guild))
 
 
 # ─────────────────────────────────────────────
 # ETAPA 2 — Desconhecidos
 # ─────────────────────────────────────────────
 
-async def _enviar_etapa_2(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+def _construir_etapa_2(sessao: SessaoChamada, guild: discord.Guild) -> discord.ui.LayoutView:
     sessao.etapa_atual = 2
     linhas = [_linha_desconhecido(e) for e in sessao.nao_reconhecidos]
     blocos = _construir_blocos_texto(linhas)
@@ -591,11 +591,11 @@ async def _enviar_etapa_2(interaction: discord.Interaction, sessao: SessaoChamad
     componentes = [
         discord.ui.TextDisplay("# ⌛ Etapa 2 — Desconhecidos"),
         discord.ui.TextDisplay(resumo),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
     ]
     for bloco in blocos:
         componentes.append(discord.ui.TextDisplay(bloco))
-    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
     row = discord.ui.ActionRow()
     botao_voltar = discord.ui.Button(label="⬅️ Voltar", style=discord.ButtonStyle.secondary)
@@ -617,8 +617,7 @@ async def _enviar_etapa_2(interaction: discord.Interaction, sessao: SessaoChamad
 
     layout = discord.ui.LayoutView(timeout=600)
     layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
-    msg = await interaction.followup.send(view=layout, ephemeral=True)
-    sessao.mensagens_efemeras.append(msg)
+    return layout
 
 
 async def _callback_marcar_como_norte(interaction: discord.Interaction):
@@ -626,39 +625,27 @@ async def _callback_marcar_como_norte(interaction: discord.Interaction):
     sessao.medicos_norte.extend(sessao.nao_reconhecidos)
     sessao.nao_reconhecidos = []
     await interaction.response.defer(ephemeral=True)
-    await _enviar_etapa_2(interaction, sessao, interaction.guild)
+    await interaction.edit_original_response(view=_construir_etapa_2(sessao, interaction.guild))
 
 
 async def _voltar_para_etapa(interaction: discord.Interaction, etapa: int):
     sessao = obter_sessao()
     await interaction.response.defer(ephemeral=True)
-    if etapa == 1:
-        await _enviar_etapa_1(interaction, sessao, interaction.guild)
-    elif etapa == 2:
-        await _enviar_etapa_2(interaction, sessao, interaction.guild)
-    elif etapa == 3:
-        await _enviar_etapa_3(interaction, sessao, interaction.guild)
+    construtor = {1: _construir_etapa_1, 2: _construir_etapa_2, 3: _construir_etapa_3}[etapa]
+    await interaction.edit_original_response(view=construtor(sessao, interaction.guild))
 
 
 async def _callback_ir_etapa_3(interaction: discord.Interaction):
     sessao = obter_sessao()
     await interaction.response.defer(ephemeral=True)
-    await _enviar_etapa_3(interaction, sessao, interaction.guild)
+    await interaction.edit_original_response(view=_construir_etapa_3(sessao, interaction.guild))
 
 
 # ─────────────────────────────────────────────
 # ETAPA 3 — Em Serviço (confirmação de presença)
 # ─────────────────────────────────────────────
 
-def _tem_cargo_bypass(discord_id: int, guild: discord.Guild) -> bool:
-    membro = guild.get_member(discord_id)
-    if membro is None:
-        return False
-    ids_bypass = {CARGOS[nome] for nome in CARGOS_BYPASS_PRESENCA_CHAMADA if nome in CARGOS}
-    return any(cargo.id in ids_bypass for cargo in membro.roles)
-
-
-async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+def _construir_etapa_3(sessao: SessaoChamada, guild: discord.Guild) -> discord.ui.LayoutView:
     sessao.etapa_atual = 3
 
     sessao.bypass_presenca = [m for m in sessao.reconhecidos if _tem_cargo_bypass(m.discord_id, guild)]
@@ -699,9 +686,7 @@ async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamad
 
         layout = discord.ui.LayoutView(timeout=600)
         layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
-        msg = await interaction.followup.send(view=layout, ephemeral=True)
-        sessao.mensagens_efemeras.append(msg)
-        return
+        return layout
 
     # Se passar de 25, precisa paginar — por ora, mostra até 25 no select e
     # avisa no texto que o restante fica marcado como presente por padrão
@@ -737,8 +722,7 @@ async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamad
 
     layout = discord.ui.LayoutView(timeout=600)
     layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
-    msg = await interaction.followup.send(view=layout, ephemeral=True)
-    sessao.mensagens_efemeras.append(msg)
+    return layout
 
 
 async def _callback_atualizar_faltantes(interaction: discord.Interaction):
@@ -748,20 +732,20 @@ async def _callback_atualizar_faltantes(interaction: discord.Interaction):
     sessao.faltantes_ids = todos_ids - ids_selecionados  # quem foi desmarcado = falta
 
     await interaction.response.defer(ephemeral=True)
-    await _enviar_etapa_3(interaction, sessao, interaction.guild)
+    await interaction.edit_original_response(view=_construir_etapa_3(sessao, interaction.guild))
 
 
 async def _callback_ir_etapa_4(interaction: discord.Interaction):
     sessao = obter_sessao()
     await interaction.response.defer(ephemeral=True)
-    await _enviar_etapa_4(interaction, sessao, interaction.guild)
+    await interaction.edit_original_response(view=_construir_etapa_4(sessao, interaction.guild))
 
 
 # ─────────────────────────────────────────────
 # ETAPA 4 — Conclusão
 # ─────────────────────────────────────────────
 
-async def _enviar_etapa_4(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+def _construir_etapa_4(sessao: SessaoChamada, guild: discord.Guild) -> discord.ui.LayoutView:
     sessao.etapa_atual = 4
 
     presentes = sessao.bypass_presenca + [
@@ -802,8 +786,7 @@ async def _enviar_etapa_4(interaction: discord.Interaction, sessao: SessaoChamad
 
     layout = discord.ui.LayoutView(timeout=600)
     layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
-    msg = await interaction.followup.send(view=layout, ephemeral=True)
-    sessao.mensagens_efemeras.append(msg)
+    return layout
 
 
 async def _callback_finalizar_chamada(interaction: discord.Interaction):
@@ -851,28 +834,18 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
             registro_chamada.total_ausentes = len(faltantes) + len(sessao.toggle_ligado_mas_nao_no_ems)
             await session.commit()
 
-    await _enviar_log_chamada_canal(guild, sessao, presentes, faltantes)  # já enviado pro canal de log
+    await _enviar_log_chamada_canal(guild, sessao, presentes, faltantes)
 
     if sessao.print_ems_mensagem is not None:
-        asyncio.create_task(excluir_mensagem(sessao.print_ems_mensagem, delay=60))  # 👈 só agora
+        asyncio.create_task(excluir_mensagem(sessao.print_ems_mensagem, delay=60))  # limpeza silenciosa, sucesso
 
     await finalizar_chamada(marcar_ultima_chamada=True)
 
-    msg_final = await interaction.followup.send(
-        view=_montar_view_simples("✅ Chamada Finalizada", "Registrada com sucesso. Limpando mensagens...", discord.Color.green()),
-        ephemeral=True,
+    await interaction.edit_original_response(
+        view=_construir_view_simples("✅ Chamada Finalizada", "Registrada com sucesso no canal de logs.", discord.Color.green())
     )
 
-    await _apagar_mensagens_efemeras(sessao)
     definir_sessao(None)
-
-
-def _montar_view_simples(titulo: str, linhas: str, cor: discord.Color) -> discord.ui.LayoutView:
-    layout = discord.ui.LayoutView(timeout=None)
-    layout.add_item(discord.ui.Container(
-        discord.ui.TextDisplay(f"# {titulo}"), discord.ui.TextDisplay(linhas), accent_color=cor,
-    ))
-    return layout
 
 
 async def _enviar_log_chamada_canal(guild: discord.Guild, sessao: SessaoChamada,

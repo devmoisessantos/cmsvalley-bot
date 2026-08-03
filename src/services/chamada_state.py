@@ -23,7 +23,6 @@ class SessaoChamada:
     mensagem_id: int | None = None
     print_ems_url: str | None = None    # URL do print do EMS enviado pelo doutor, guardado pra referência
     print_ems_mensagem: object | None = None  # discord.Message — guardado pra apagar só no final
-    bypass_presenca: list[MedicoNaChamada] = field(default_factory=list)
     
     # NOVO: TODOS os identificados como Hospital Sul (banco OU apelido),
     # independente de estar com toggle ligado — é o "identificados no EMS" real.
@@ -33,6 +32,7 @@ class SessaoChamada:
     toggle_ligado_mas_nao_no_ems: list[MedicoNaChamada] = field(default_factory=list)
     nao_reconhecidos: list[dict] = field(default_factory=list)
     medicos_norte: list[dict] = field(default_factory=list)  # confirmados como Hospital Norte
+    bypass_presenca: list[MedicoNaChamada] = field(default_factory=list)
 
 
     total_medicos_ems: int = 0
@@ -42,9 +42,6 @@ class SessaoChamada:
 
     faltantes_ids: set[int] = field(default_factory=set)  # marcados na Etapa 3, ajustável até finalizar
     etapa_atual: int = 1
-
-    # Toda mensagem efêmera enviada durante a chamada — apagadas ao finalizar
-    mensagens_efemeras: list[discord.WebhookMessage] = field(default_factory=list)
 
 
 # Só pode existir 1 sessão ativa por vez (já garantido pelo lock do ControleChamada,
