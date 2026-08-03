@@ -415,8 +415,7 @@ async def _construir_etapa_1(interaction: discord.Interaction, sessao: SessaoCha
 
     layout = discord.ui.LayoutView(timeout=600)
     layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
-    msg = await interaction.followup.send(view=layout, ephemeral=True)
-    sessao.mensagens_efemeras.append(msg)
+    return layout
 
 
 def _resolver_id_fivem_do_membro(sessao: SessaoChamada, discord_id: int, membro: discord.Member) -> str | None:
