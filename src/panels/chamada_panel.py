@@ -331,7 +331,7 @@ def _deduplicar_reconhecidos(sessao: SessaoChamada):
 # ETAPA 1 — Verificação
 # ─────────────────────────────────────────────
 
-async def _construir_etapa_1(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
+async def _construir_etapa_1(sessao: SessaoChamada, guild: discord.Guild) -> discord.ui.LayoutView:
     sessao.etapa_atual = 1
     _deduplicar_reconhecidos(sessao)
 
