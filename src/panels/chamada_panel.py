@@ -194,9 +194,10 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
                                      cor=discord.Color.red(), registrar_na_sessao=False)
             return
 
+        # dentro de _callback_realizar_chamada, remove o asyncio.create_task daqui:
         anexo = mensagem_print.attachments[0]
         sessao.print_ems_url = anexo.url
-        asyncio.create_task(excluir_mensagem(mensagem_print, delay=60))  # 👈 novo — some em 2min
+        sessao.print_ems_mensagem = mensagem_print  # 👈 só guarda, não agenda exclusão ainda
         await _processar_print_ems(interaction, anexo.url)
 
 
@@ -850,7 +851,11 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
             registro_chamada.total_ausentes = len(faltantes) + len(sessao.toggle_ligado_mas_nao_no_ems)
             await session.commit()
 
-    await _enviar_log_chamada_canal(guild, sessao, presentes, faltantes)
+    await _enviar_log_chamada_canal(guild, sessao, presentes, faltantes)  # já enviado pro canal de log
+
+    if sessao.print_ems_mensagem is not None:
+        asyncio.create_task(excluir_mensagem(sessao.print_ems_mensagem, delay=60))  # 👈 só agora
+
     await finalizar_chamada(marcar_ultima_chamada=True)
 
     msg_final = await interaction.followup.send(
@@ -880,22 +885,39 @@ async def _enviar_log_chamada_canal(guild: discord.Guild, sessao: SessaoChamada,
     linhas_faltantes = "\n".join(f"`❌` `{m.id_fivem}` — <@{m.discord_id}>" for m in faltantes) or "_(nenhum)_"
     linhas_norte = "\n".join(f"`❓` `{e['id_fivem']}` — {e['nome_ems']}" for e in sessao.medicos_norte) or "_(nenhum)_"
 
-    linhas = (
-        f"`📋` Total no `/ems`: {sessao.total_medicos_ems}\n"
-        f"`✅` Identificados (Hospital Sul): {len(sessao.reconhecidos)}\n"
-        f"`❓` Não identificados (Norte/Desconhecido): {len(sessao.medicos_norte)}\n"
-        f"`⚠️` Toggle ligado mas ausente do EMS (já processado): {len(sessao.toggle_ligado_mas_nao_no_ems)}\n"
-        f"👨‍⚕️ Responsável pela chamada: <@{sessao.doutor_id}>\n\n"
-        f"**Médicos presentes:**\n{linhas_presentes}\n\n"
-        f"**Médicos com Falta/Ausência:**\n{linhas_faltantes}\n\n"
-        f"**Identificados — Hospital Norte**\n{linhas_norte}"
+    cabecalho_stats = (
+        f"`📋` **Total no** `/ems`: {sessao.total_medicos_ems}\n"
+        f"`✅` **Identificados (Hospital Sul):** {len(sessao.reconhecidos)}\n"
+        f"`🟢` **Elegíveis p/ confirmar presença:** {len(sessao.presentes_no_ems_toggle_ligado) + len(sessao.bypass_presenca)}\n"
+        f"`❓` **Não identificados (Norte/Desconhecido):** {len(sessao.medicos_norte)}\n"
+        f"`⚠️` **Toggle ligado mas ausente do EMS (já processado):** {len(sessao.toggle_ligado_mas_nao_no_ems)}\n"
+        f"`👨‍⚕️` **Responsável pela chamada:** <@{sessao.doutor_id}>"
     )
 
     icon_url = guild.icon.url if guild.icon else None
+    agora = int(datetime.now(timezone.utc).timestamp())
 
-    view_log = LogContainerView(
-        titulo="📋 Chamada de Plantão Realizada", linhas=linhas, guild=guild, cor=discord.Color.blurple(),
-        avatar_url=icon_url, 
-        midia_urls=[sessao.print_ems_url] if sessao.print_ems_url else None,
-    )
-    await canal_log.send(view=view_log)
+    componentes = []
+
+    texto_titulo_stats = f"# 📋 Chamada de Plantão Realizada\n{cabecalho_stats}"
+    if icon_url:
+        componentes.append(discord.ui.Section(texto_titulo_stats, accessory=discord.ui.Thumbnail(icon_url)))
+    else:
+        componentes.append(discord.ui.TextDisplay(texto_titulo_stats))
+
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+    componentes.append(discord.ui.TextDisplay(f"**Médicos presentes:**\n{linhas_presentes}"))
+    componentes.append(discord.ui.TextDisplay(f"**Médicos com Falta/Ausência:**\n{linhas_faltantes}"))
+    componentes.append(discord.ui.TextDisplay(f"**Identificados — Hospital Norte**\n{linhas_norte}"))
+
+    if sessao.print_ems_url:
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(discord.ui.MediaGallery(discord.MediaGalleryItem(sessao.print_ems_url)))
+
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+    componentes.append(discord.ui.TextDisplay(f"-# {guild.name} • <t:{agora}:f>"))
+
+    layout = discord.ui.LayoutView(timeout=None)
+    layout.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.blurple()))
+    await canal_log.send(view=layout)

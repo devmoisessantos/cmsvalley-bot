@@ -21,7 +21,8 @@ class SessaoChamada:
     chamada_id: int
     canal_id: int
     mensagem_id: int | None = None
-    print_ems_url: str | None = None  # 👈 novo — prova anexada ao log final
+    print_ems_url: str | None = None    # URL do print do EMS enviado pelo doutor, guardado pra referência
+    print_ems_mensagem: object | None = None  # discord.Message — guardado pra apagar só no final
     bypass_presenca: list[MedicoNaChamada] = field(default_factory=list)
     
     # NOVO: TODOS os identificados como Hospital Sul (banco OU apelido),
