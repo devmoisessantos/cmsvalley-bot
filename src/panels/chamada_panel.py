@@ -12,13 +12,12 @@ from src.database.models import EstadoPlantao, Recrutamento, Chamada, Usuario
 from src.services.ocr_ems_service import extrair_medicos_do_print_ems, OcrEmsError
 from src.services.scraping_membros import combinar_membros, construir_membros_via_apelido
 from src.services.validacao_ids import validar_medicos, MembroConhecido
-from src.services.plantao_service import membro_e_doutor_ou_acima, garantir_aware, desligar_servico
+from src.services.plantao_service import membro_e_doutor_ou_acima, desligar_servico
 from src.services.chamada_service import (
     calcular_proximo_horario_permitido, tentar_iniciar_chamada, finalizar_chamada,
     registrar_falta,
 )
 from src.services.chamada_state import SessaoChamada, MedicoNaChamada, definir_sessao, obter_sessao
-from src.utils.log_container import criar_container_log, LogContainerView
 from src.utils.error_handling import LoggingViewMixin
 
 logger = logging.getLogger(__name__)
@@ -294,7 +293,7 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
 
     await _processar_ausentes_do_ems(interaction, sessao)
 
-    view_etapa_1 = await _construir_etapa_1(sessao, guild)
+    view_etapa_1 = _construir_etapa_1(sessao, guild)  # retirado await pois nao é mais async def
     await interaction.edit_original_response(view=view_etapa_1) 
 
 async def _processar_ausentes_do_ems(interaction: discord.Interaction, sessao: SessaoChamada):
@@ -330,7 +329,7 @@ def _deduplicar_reconhecidos(sessao: SessaoChamada):
 # ETAPA 1 — Verificação
 # ─────────────────────────────────────────────
 
-async def _construir_etapa_1(sessao: SessaoChamada, guild: discord.Guild) -> discord.ui.LayoutView:
+def _construir_etapa_1(sessao: SessaoChamada, guild: discord.Guild) -> discord.ui.LayoutView:
     sessao.etapa_atual = 1
     _deduplicar_reconhecidos(sessao)
 
@@ -464,7 +463,7 @@ async def _callback_userselect_adicionar(interaction: discord.Interaction):
     _adicionar_medico_manual(sessao, interaction.guild, discord_id, None)
 
     await interaction.response.defer(ephemeral=True)
-    await interaction.edit_original_response(view= await _construir_etapa_1(sessao, interaction.guild))
+    await interaction.edit_original_response(view=_construir_etapa_1(sessao, interaction.guild))
 
 
 class ModalBuscarPorDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
@@ -629,7 +628,12 @@ async def _callback_marcar_como_norte(interaction: discord.Interaction):
 async def _voltar_para_etapa(interaction: discord.Interaction, etapa: int):
     sessao = obter_sessao()
     await interaction.response.defer(ephemeral=True)
-    construtor = {1: _construir_etapa_1, 2: _construir_etapa_2, 3: _construir_etapa_3}[etapa]
+    construtor = {
+        1: _construir_etapa_1, 
+        2: _construir_etapa_2, 
+        3: _construir_etapa_3}[
+            etapa
+    ]
     await interaction.edit_original_response(view=construtor(sessao, interaction.guild))
 
 
