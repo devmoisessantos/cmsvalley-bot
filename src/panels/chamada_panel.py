@@ -4,7 +4,8 @@ import logging
 from datetime import datetime, timezone
 from sqlalchemy import select
 
-from src.config import CANAIS, CARGOS
+from src.utils.mensagens import excluir_mensagem
+from src.config import CANAIS, CARGOS, CARGOS_BYPASS_PRESENCA_CHAMADA
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao, Recrutamento, Chamada, Usuario
 
@@ -194,7 +195,8 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         anexo = mensagem_print.attachments[0]
-        sessao.print_ems_url = anexo.url  # 👈 nova linha
+        sessao.print_ems_url = anexo.url
+        asyncio.create_task(excluir_mensagem(mensagem_print, delay=60))  # 👈 novo — some em 2min
         await _processar_print_ems(interaction, anexo.url)
 
 
@@ -647,15 +649,32 @@ async def _callback_ir_etapa_3(interaction: discord.Interaction):
 # ETAPA 3 — Em Serviço (confirmação de presença)
 # ─────────────────────────────────────────────
 
+def _tem_cargo_bypass(discord_id: int, guild: discord.Guild) -> bool:
+    membro = guild.get_member(discord_id)
+    if membro is None:
+        return False
+    ids_bypass = {CARGOS[nome] for nome in CARGOS_BYPASS_PRESENCA_CHAMADA if nome in CARGOS}
+    return any(cargo.id in ids_bypass for cargo in membro.roles)
+
+
 async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
     sessao.etapa_atual = 3
 
+    sessao.bypass_presenca = [m for m in sessao.reconhecidos if _tem_cargo_bypass(m.discord_id, guild)]
     # 👇 MUDANÇA: usa TODOS os identificados na Etapa 1 (já excluindo quem foi
     # movido pra Hospital Norte, já que esses nunca entraram em `reconhecidos`)
-    sessao.presentes_no_ems_toggle_ligado = list(sessao.reconhecidos)
+    sessao.presentes_no_ems_toggle_ligado = [
+        m for m in sessao.reconhecidos if m.discord_id not in {b.discord_id for b in sessao.bypass_presenca}
+    ]
+
+    linha_bypass = (
+        f"`🛡️` **{len(sessao.bypass_presenca)}** já contam como presentes automaticamente (cargo com dispensa).\n"
+        if sessao.bypass_presenca else ""
+    )
 
     resumo = (
-        f"`🟢` **{len(sessao.presentes_no_ems_toggle_ligado)}** médicos identificados para confirmação.\n"
+        f"{linha_bypass}"
+        f"`🟢` **{len(sessao.presentes_no_ems_toggle_ligado)}** aguardando confirmação de presença.\n"
         "Todos começam marcados como **presentes**. Verifique call, rádio in-game ou chame na interna "
         "do hospital — **desmarque** quem não responder (ficará com falta)."
     )
@@ -663,7 +682,7 @@ async def _enviar_etapa_3(interaction: discord.Interaction, sessao: SessaoChamad
     componentes = [
         discord.ui.TextDisplay("# ⌛ Etapa 3 — Em Serviço"),
         discord.ui.TextDisplay(resumo),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
     ]
 
     row_botoes = discord.ui.ActionRow()
@@ -744,7 +763,9 @@ async def _callback_ir_etapa_4(interaction: discord.Interaction):
 async def _enviar_etapa_4(interaction: discord.Interaction, sessao: SessaoChamada, guild: discord.Guild):
     sessao.etapa_atual = 4
 
-    presentes = [m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id not in sessao.faltantes_ids]
+    presentes = sessao.bypass_presenca + [
+        m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id not in sessao.faltantes_ids
+    ]
     faltantes = [m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id in sessao.faltantes_ids]
 
     linhas_presentes = "\n".join(_linha_medico(m) for m in presentes) or "_(nenhum)_"
@@ -761,11 +782,11 @@ async def _enviar_etapa_4(interaction: discord.Interaction, sessao: SessaoChamad
     componentes = [
         discord.ui.TextDisplay("# ✅ Etapa 4 — Conclusão"),
         discord.ui.TextDisplay(resumo),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
         discord.ui.TextDisplay(f"**✅ Presentes**\n{linhas_presentes}"),
         discord.ui.TextDisplay(f"**❌ Faltas**\n{linhas_faltantes}"),
         discord.ui.TextDisplay(f"**🏥 Hospital Norte**\n{linhas_norte}"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
     ]
 
     row = discord.ui.ActionRow()
@@ -789,7 +810,9 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
     sessao = obter_sessao()
     guild = interaction.guild
 
-    presentes = [m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id not in sessao.faltantes_ids]
+    presentes = sessao.bypass_presenca + [
+        m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id not in sessao.faltantes_ids
+    ]
     faltantes = [m for m in sessao.presentes_no_ems_toggle_ligado if m.discord_id in sessao.faltantes_ids]
 
     for medico in faltantes:
@@ -868,8 +891,11 @@ async def _enviar_log_chamada_canal(guild: discord.Guild, sessao: SessaoChamada,
         f"**Identificados — Hospital Norte**\n{linhas_norte}"
     )
 
+    icon_url = guild.icon.url if guild.icon else None
+
     view_log = LogContainerView(
         titulo="📋 Chamada de Plantão Realizada", linhas=linhas, guild=guild, cor=discord.Color.blurple(),
-        midia_urls=[sessao.print_ems_url] if sessao.print_ems_url else None,  # 👈 nova linha
+        avatar_url=icon_url, 
+        midia_urls=[sessao.print_ems_url] if sessao.print_ems_url else None,
     )
     await canal_log.send(view=view_log)

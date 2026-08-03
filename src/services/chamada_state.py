@@ -22,7 +22,8 @@ class SessaoChamada:
     canal_id: int
     mensagem_id: int | None = None
     print_ems_url: str | None = None  # 👈 novo — prova anexada ao log final
-
+    bypass_presenca: list[MedicoNaChamada] = field(default_factory=list)
+    
     # NOVO: TODOS os identificados como Hospital Sul (banco OU apelido),
     # independente de estar com toggle ligado — é o "identificados no EMS" real.
     reconhecidos: list[MedicoNaChamada] = field(default_factory=list)
