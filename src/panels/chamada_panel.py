@@ -294,9 +294,8 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
 
     await _processar_ausentes_do_ems(interaction, sessao)
 
-    view_etapa_1 = await _construir_etapa_1(interaction, sessao, guild)
-    await interaction.edit_original_response(view=view_etapa_1)
-
+    view_etapa_1 = _construir_etapa_1(sessao, guild)
+    await interaction.edit_original_response(view=view_etapa_1) 
 
 async def _processar_ausentes_do_ems(interaction: discord.Interaction, sessao: SessaoChamada):
     guild = interaction.guild
