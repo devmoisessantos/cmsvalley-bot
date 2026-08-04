@@ -3,7 +3,7 @@ import traceback
 import logging
 from discord.ext import commands
 
-from src.gate.evento_gate_services import buscar_evento_aberto
+from src.gate.evento_gate_services import listar_eventos_abertos
 from src.gate.list_evento_panel import _montar_container
 from src.gate.evento_gate_panel import PainelEventosGate
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
@@ -143,6 +143,15 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_plantao_view)
         self.add_view(self.painel_eventos_gate_view)
 
+        # painéis de presença têm custom_id dinâmico por evento — sempre
+        # precisa reconstruir e re-registrar, um por evento aberto
+        eventos_abertos = await listar_eventos_abertos()
+        for evento in eventos_abertos:
+            if evento.message_id:
+                view_presenca = discord.ui.LayoutView(timeout=None)
+                container = await _montar_container(self, evento)
+                view_presenca.add_item(container)
+                self.add_view(view_presenca, message_id=evento.message_id)
 
         # Garante que as mensagens existem nos canais
         await garantir_painel_recrutamento(self)
