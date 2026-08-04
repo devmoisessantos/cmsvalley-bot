@@ -6,7 +6,7 @@ from asyncio import create_task
 
 from src.gate.list_evento_panel import enviar_painel_presenca
 from src.gate.log_gate_panel import enviar_log_evento
-from src.utils.mensagens import excluir_mensagem
+from src.utils.mensagens import excluir_mensagem, responder_card
 from src.gate.evento_gate_services import criar_evento, encerrar_evento
 from src.config import CARGOS_CRIACAO_EVENTO_GATE
 from src.utils.error_handling import LoggingViewMixin, LoggingModalMixin
@@ -52,9 +52,11 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
             responsavel_id=interaction.user.id,
         )
 
-        await interaction.response.send_message(
+        await responder_card(
+            interaction, "Novo Evento Criado",            
             f"✅ Evento **{self.title}** criado para {self.dia.value} às {self.horario.value}.",
-            ephemeral=True,
+            delay=10,
+            cor=discord.Color.green(),
         )
 
         # publica o painel de presença no canal correspondente
@@ -95,14 +97,13 @@ class PainelEventosGate(LoggingViewMixin, discord.ui.LayoutView):
         row = discord.ui.ActionRow()
         container = discord.ui.Container(
             discord.ui.TextDisplay(
-                "# 🛡️ Criar Evento GATE"
+                "# 🛡️ Criar Evento GATE\n"
                 "**> Painel dedicato à criação de eventos.**"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.Section(
-                "Agendamento de eventos da GATE",  # ← título
+                "## Agendamento de eventos da GATE",  # ← título
                 (
-                    "Painel dedicado à criação de eventos do GATE.\n\n"
                     "Utilize os botões abaixo para iniciar ou encerrar algum evento.\n"
                     "**Lembre-se:** você deve ser um membro autorizado!\n\n"
                 ),  # ← descrição
@@ -112,16 +113,32 @@ class PainelEventosGate(LoggingViewMixin, discord.ui.LayoutView):
         container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
         row.add_item(
-            discord.ui.Button(label="🚩 Treinamento", style=discord.ButtonStyle.success, custom_id="gate:treino")
+            discord.ui.Button(
+                label="🚩 Treinamento", 
+                style=discord.ButtonStyle.secondary, 
+                custom_id="gate:treino"
+            )
         )
         row.add_item(
-            discord.ui.Button(label="☠️ FAC x FAC", style=discord.ButtonStyle.secondary, custom_id="gate:facxfac")
+            discord.ui.Button(
+                label="☠️ FAC x FAC", 
+                style=discord.ButtonStyle.success, 
+                custom_id="gate:facxfac"
+            )
         )
         row.add_item(
-            discord.ui.Button(label="⚔️ Dominas", style=discord.ButtonStyle.green, custom_id="gate:dominas")
+            discord.ui.Button(
+                label="⚔️ Dominas", 
+                style=discord.ButtonStyle.green, 
+                custom_id="gate:dominas"
+            )
         )
         row.add_item(
-            discord.ui.Button(label="❌ Encerrar", style=discord.ButtonStyle.danger, custom_id="gate:encerrar")
+            discord.ui.Button(
+                label="❌ Encerrar", 
+                style=discord.ButtonStyle.danger, 
+                custom_id="gate:encerrar"
+            )
         )
         container.add_item(row)
         self.add_item(container)
@@ -141,11 +158,12 @@ async def registrar_listener_gate(bot: discord.Client):
             return
 
         if not _tem_permissao_gate(interaction.user):
-            mensagem = await interaction.response.send_message(
-                "❌ Você não tem permissão para gerenciar eventos do GATE.",
-                ephemeral=True,
+            await responder_card(
+                interaction, 
+                "❌ Sem Permissão",
+                ["Você não tem permissão para gerenciar eventos do GATE."],
+                cor=discord.Color.red(),
             )
-            create_task(excluir_mensagem(mensagem, 10))
             return
 
         acao = custom_id.split(":", 1)[1]

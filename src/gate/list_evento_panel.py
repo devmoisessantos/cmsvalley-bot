@@ -11,6 +11,7 @@ from src.gate.evento_gate_services import (
     cancelar_presenca,
     listar_presencas,
 )
+from src.utils.mensagens import responder_card
 
 
 class ModalConfirmarPresenca(discord.ui.Modal, title="Confirmar Presença"):
@@ -24,11 +25,19 @@ class ModalConfirmarPresenca(discord.ui.Modal, title="Confirmar Presença"):
         try:
             id_fivem_int = int(self.id_fivem.value)
         except ValueError:
-            await interaction.response.send_message("ID FiveM inválido.", ephemeral=True)
+            await responder_card(
+                interaction, "❌ ID FiveM Inválido",
+                ["O ID FiveM fornecido é inválido."],
+                cor=discord.Color.red(),
+            )
             return
 
         await confirmar_presenca(self.evento_id, interaction.user.id, id_fivem_int)
-        await interaction.response.send_message("✅ Presença confirmada!", ephemeral=True)
+        await responder_card(
+            interaction, "✅ Presença Confirmada",
+            [f"ID FiveM registrado: `{id_fivem_int}`"],
+            cor=discord.Color.green(),
+        )
         await atualizar_painel_presenca(interaction.client, self.evento_id)
 
 

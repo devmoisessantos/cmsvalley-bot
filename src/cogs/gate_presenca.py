@@ -4,6 +4,7 @@ from discord.ext import commands
 
 from src.gate.list_evento_panel import ModalConfirmarPresenca, atualizar_painel_presenca
 from src.gate.evento_gate_services import listar_presencas, cancelar_presenca
+from src.utils.mensagens import responder_card
 
 
 class GatePresencaCog(commands.Cog):
@@ -24,7 +25,11 @@ class GatePresencaCog(commands.Cog):
 
         if ja_confirmou:
             await cancelar_presenca(evento_id, interaction.user.id)
-            await interaction.response.send_message("↩️ Presença cancelada.", ephemeral=True)
+            await responder_card(
+                interaction, "↩️ Presença Cancelada",
+                ["Sua presença foi cancelada."],
+                cor=discord.Color.orange(),
+            )
             await atualizar_painel_presenca(interaction.client, evento_id)
         else:
             await interaction.response.send_modal(ModalConfirmarPresenca(evento_id))

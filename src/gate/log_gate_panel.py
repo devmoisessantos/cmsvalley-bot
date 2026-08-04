@@ -1,10 +1,13 @@
 # src/gate/log_gate_panel.py
+import asyncio
+
 import discord
 
 from src.config import CANAIS, MESES_ABREV
 
 from src.gate.evento_gate_services import salvar_log_message_id, encerrar_evento
-from src.utils.log_container import LogContainerView 
+from src.utils.log_container import LogContainerView
+from src.utils.mensagens import CardView, excluir_mensagem 
 
 
 def _formatar_data_hora(dt) -> str:
@@ -62,16 +65,29 @@ class SelectEncerrarEvento(discord.ui.Select):
         ]
         super().__init__(placeholder="Selecione o evento para encerrar", options=options)
 
+
     async def callback(self, interaction: discord.Interaction):
         evento = await encerrar_evento(int(self.values[0]))
-        if not evento:
-            await interaction.response.edit_message(content="Evento não encontrado.", view=None)
-            return
 
-        await atualizar_log_evento(interaction.client, evento)
-        await interaction.response.edit_message(
-            content=f"✅ Evento **{evento.titulo}** encerrado.", view=None
-        )
+        if not evento:
+            view = CardView(
+                "Evento Não Encontrado", 
+                ["O evento selecionado não existe mais."], 
+                cor=discord.Color.red(), timeout=None
+            )
+        else:
+            await atualizar_log_evento(interaction.client, evento, interaction.guild)
+            view = CardView(
+                "✅ Evento Encerrado", 
+                [f"**{evento.titulo}** foi encerrado."], 
+                cor=discord.Color.green(), 
+                timeout=None
+            )
+
+        await interaction.response.edit_message(content=None, view=view)
+
+        msg = await interaction.original_response()
+        asyncio.create_task(excluir_mensagem(msg, delay=10))
 
 
 class ViewEncerrarEvento(discord.ui.View):
