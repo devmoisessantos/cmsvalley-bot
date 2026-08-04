@@ -6,7 +6,7 @@ from asyncio import create_task
 
 from src.gate.list_evento_panel import enviar_painel_presenca
 from src.gate.log_gate_panel import enviar_log_evento
-from src.utils.mensagens import excluir_mensagem, responder_card
+from src.utils.mensagens import responder_card
 from src.gate.evento_gate_services import criar_evento, encerrar_evento
 from src.config import CARGOS_CRIACAO_EVENTO_GATE
 from src.utils.error_handling import LoggingViewMixin, LoggingModalMixin
@@ -102,7 +102,7 @@ class PainelEventosGate(LoggingViewMixin, discord.ui.LayoutView):
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.Section(
-                "## Agendamento de eventos da GATE",  # ← título
+                "## Agendamento de eventos",  # ← título
                 (
                     "Utilize os botões abaixo para iniciar ou encerrar algum evento.\n"
                     "**Lembre-se:** você deve ser um membro autorizado!\n\n"
