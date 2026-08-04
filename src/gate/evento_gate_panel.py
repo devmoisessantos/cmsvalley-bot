@@ -7,7 +7,7 @@ from datetime import datetime
 
 from src.gate.list_evento_panel import enviar_painel_presenca
 from src.utils.mensagens import excluir_mensagem
-from evento_gate_services import criar_evento, encerrar_evento_ativo
+from src.gate.evento_gate_services import criar_evento, encerrar_evento_ativo
 from src.config import CANAIS, HIERARQUIA_GATE, CARGOS_CRIACAO_EVENTO_GATE
 from src.utils.error_handling import LoggingViewMixin, LoggingModalMixin
 
