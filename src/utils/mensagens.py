@@ -38,3 +38,19 @@ async def destruir_print_com_aviso(mensagem_print: discord.Message, delay: int =
                 pass
 
     asyncio.create_task(_destruir())
+
+
+async def responder_ephemera(
+    interaction: discord.Interaction,
+    content: str,
+    view: discord.ui.View | None = None,
+    delay: int = 10,
+):
+    kwargs = {"content": content, "ephemeral": True}
+    if view is not None:
+        kwargs["view"] = view
+    await interaction.response.send_message(**kwargs)
+
+    msg = await interaction.original_response()
+    
+    asyncio.create_task(excluir_mensagem(msg, delay=delay))

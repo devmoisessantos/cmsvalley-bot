@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import select, desc
 
 from src.database.connection import async_session
-from src.database.models import EventosGate, Presenca
+from src.database.models import EventosGate, Presenca, agora
 
 
 async def criar_evento(
@@ -35,28 +35,33 @@ async def criar_evento(
         return evento
 
 
-async def buscar_evento_aberto() -> EventosGate | None:
+async def listar_eventos_abertos() -> list[EventosGate]:
     async with async_session() as session:
         result = await session.execute(
             select(EventosGate)
             .where(EventosGate.status == "aberto")
-            .order_by(desc(EventosGate.created_at))
-            .limit(1)
+            .order_by(EventosGate.created_at)
         )
-        return result.scalar_one_or_none()
+        return list(result.scalars().all())
 
 
-async def encerrar_evento_ativo(executor_id: int) -> bool:
-    evento = await buscar_evento_aberto()
-    if not evento:
-        return False
-
+async def encerrar_evento(evento_id: int) -> EventosGate | None:
     async with async_session() as session:
-        evento_db = await session.get(EventosGate, evento.id)
+        evento_db = await session.get(EventosGate, evento_id)
+        if not evento_db or evento_db.status == "encerrado":
+            return None
         evento_db.status = "encerrado"
-        evento_db.closed_at = datetime.utcnow()
+        evento_db.closed_at = agora()
         await session.commit()
-    return True
+        await session.refresh(evento_db)
+        return evento_db
+
+
+async def salvar_log_message_id(evento_id: int, message_id: int):
+    async with async_session() as session:
+        evento_db = await session.get(EventosGate, evento_id)
+        evento_db.log_message_id = message_id
+        await session.commit()
 
 
 async def confirmar_presenca(evento_id: int, discord_id: int, id_fivem: int) -> Presenca:

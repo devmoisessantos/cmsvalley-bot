@@ -1,3 +1,5 @@
+from src.config import MESES_ABREV
+
 def formatar_hms(segundos: int) -> str:
     horas, resto = divmod(segundos, 3600)
     minutos, segs = divmod(resto, 60)
@@ -7,3 +9,7 @@ def formatar_hms(segundos: int) -> str:
 def formatar_dinheiro(valor: int) -> str:
     """Formata no padrão brasileiro: $1.000.000 em vez de $1,000,000"""
     return f"${valor:,}".replace(",", ".")
+
+
+def _formatar_data_hora(dt) -> str:
+    return f"{dt.day} de {MESES_ABREV[dt.month]} às {dt.strftime('%H:%M')}"

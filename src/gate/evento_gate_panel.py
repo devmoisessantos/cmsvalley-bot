@@ -5,6 +5,7 @@ from datetime import datetime
 from asyncio import create_task
 
 from src.gate.list_evento_panel import enviar_painel_presenca
+from src.gate.log_gate_panel import enviar_log_evento
 from src.utils.mensagens import excluir_mensagem
 from src.gate.evento_gate_services import criar_evento, encerrar_evento_ativo
 from src.config import CARGOS_CRIACAO_EVENTO_GATE
@@ -58,7 +59,7 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
 
         # publica o painel de presença no canal correspondente
         await enviar_painel_presenca(interaction.client, evento)
-
+        await enviar_log_evento(interaction.client, evento)
 
 # ✅ CORRIGIDO: Apenas herda de ModalEventoBase
 class ModalFacXFac(ModalEventoBase):

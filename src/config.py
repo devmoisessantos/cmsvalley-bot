@@ -26,6 +26,10 @@ if not DISCORD_TOKEN:
         "DISCORD_TOKEN não definido. Crie um arquivo .env baseado em .env.example."
     )
 
+MESES_ABREV = {
+    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
+}
 
 # IDs dos cargos
 CARGOS = {

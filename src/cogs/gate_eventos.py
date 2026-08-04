@@ -4,8 +4,9 @@ from discord.ext import commands
 
 from src.config import CARGOS_CRIACAO_EVENTO_GATE
 from src.gate.evento_gate_panel import ModalTreino, ModalFacXFac, ModalDominas
-from src.gate.evento_gate_services import encerrar_evento_ativo
-
+from src.gate.evento_gate_services import listar_eventos_abertos
+from src.gate.log_gate_panel import ViewEncerrarEvento
+from src.utils.mensagens import responder_ephemera
 
 def _tem_permissao_gate(member: discord.Member) -> bool:
     return any(role.name in CARGOS_CRIACAO_EVENTO_GATE for role in member.roles)
@@ -24,9 +25,9 @@ class GateEventosCog(commands.Cog):
             return
 
         if not _tem_permissao_gate(interaction.user):
-            await interaction.response.send_message(
-                "❌ Você não tem permissão para gerenciar eventos do GATE.",
-                ephemeral=True,
+            await responder_ephemera(
+                interaction,
+                "❌ Você não tem permissão para gerenciar eventos do GATE."
             )
             return
 
@@ -38,9 +39,18 @@ class GateEventosCog(commands.Cog):
         elif acao == "dominas":
             await interaction.response.send_modal(ModalDominas())
         elif acao == "encerrar":
-            ok = await encerrar_evento_ativo(interaction.user.id)
-            msg = "✅ Evento encerrado." if ok else "Nenhum evento em aberto encontrado."
-            await interaction.response.send_message(msg, ephemeral=True)
+            eventos = await listar_eventos_abertos()
+            
+            if not eventos:
+                await responder_ephemera(
+                    interaction, 
+                    "Nenhum evento em aberto encontrado.")
+                return
+            await interaction.response.send_message(
+                "Selecione qual evento deseja encerrar:",
+                view=ViewEncerrarEvento(eventos),
+                ephemeral=True,
+            )
 
 
 async def setup(bot: commands.Bot):
