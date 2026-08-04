@@ -92,42 +92,38 @@ class PainelEventosGate(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guild = guild
 
-        container = discord.ui.Container(accent_colour=discord.Colour.dark_red())
-
-        container.add_item(discord.ui.TextDisplay("# 🛡️ Criar Evento"))
-        container.add_item(
-            discord.ui.TextDisplay(
-                "**> Painel dedicato à criação de eventos.**"
-            )
-        )
-        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-        container.add_item(discord.ui.TextDisplay("## Sistema de Recompensas"))
-        container.add_item(
-            discord.ui.TextDisplay(
-                "Serviço criado pra facilitar a vida de quem organiza eventos da GATE.\n"
-                "Agradeça ao **GRINGO** kkkkk\n\n"
-                "Utilize os botões abaixo para iniciar ou encerrar algum evento.\n"
-                "**Lembre-se:** você deve ser um membro autorizado!\n\n"
-                
-            )
-        )
-        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-
         row = discord.ui.ActionRow()
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(
+                "# 🛡️ Criar Evento GATE"
+                "**> Painel dedicato à criação de eventos.**"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.Section(
+                "Agendamento de eventos da GATE",  # ← título
+                (
+                    "Painel dedicado à criação de eventos do GATE.\n\n"
+                    "Utilize os botões abaixo para iniciar ou encerrar algum evento.\n"
+                    "**Lembre-se:** você deve ser um membro autorizado!\n\n"
+                ),  # ← descrição
+                accessory=discord.ui.Thumbnail(guild.icon.url) if guild and guild.icon else None,
+            ),
+        )
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
         row.add_item(
-            discord.ui.Button(label="Treino", style=discord.ButtonStyle.primary, custom_id="gate:treino")
+            discord.ui.Button(label="🚩 Treinamento", style=discord.ButtonStyle.success, custom_id="gate:treino")
         )
         row.add_item(
-            discord.ui.Button(label="FacXFac", style=discord.ButtonStyle.primary, custom_id="gate:facxfac")
+            discord.ui.Button(label="☠️ FAC x FAC", style=discord.ButtonStyle.secondary, custom_id="gate:facxfac")
         )
         row.add_item(
-            discord.ui.Button(label="Dominas", style=discord.ButtonStyle.primary, custom_id="gate:dominas")
+            discord.ui.Button(label="⚔️ Dominas", style=discord.ButtonStyle.green, custom_id="gate:dominas")
         )
         row.add_item(
-            discord.ui.Button(label="Encerrar", style=discord.ButtonStyle.danger, custom_id="gate:encerrar")
+            discord.ui.Button(label="❌ Encerrar", style=discord.ButtonStyle.danger, custom_id="gate:encerrar")
         )
         container.add_item(row)
-
         self.add_item(container)
 
 

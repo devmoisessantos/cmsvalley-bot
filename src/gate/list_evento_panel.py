@@ -1,11 +1,12 @@
 # src/gate/list_evento_panel.py
 import discord
+from datetime import datetime, timezone
 
 from src.database.connection import async_session
 from src.database.models import EventosGate
 from src.config import CANAIS, HIERARQUIA_GATE
 from src.gate.evento_gate_services import (
-    buscar_evento_aberto,
+    buscar_evento_por_id,
     confirmar_presenca,
     cancelar_presenca,
     listar_presencas,
@@ -44,7 +45,9 @@ async def _montar_container(bot: discord.Client, evento) -> discord.ui.Container
 
     nao_confirmados = [m for m in membros_gate if m.id not in confirmados_ids]
 
+    icon_url = guild.icon.url if guild.icon else None
     container = discord.ui.Container(accent_colour=discord.Colour.green())
+    container.add_item(discord.ui.Thumbnail(icon_url) if icon_url else None)
     container.add_item(discord.ui.TextDisplay("# 📋 Lista de Presença"))
     container.add_item(discord.ui.TextDisplay(f"`✅` **Total de confirmados:** {len(confirmados_ids)}"))
     container.add_item(
@@ -77,7 +80,10 @@ async def _montar_container(bot: discord.Client, evento) -> discord.ui.Container
     )
     container.add_item(row)
     container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-    container.add_item(discord.ui.TextDisplay("-# GATE | CENTRO MÉDICO SUL VALLEY •"))
+
+    agora = int(datetime.now(timezone.utc).timestamp())
+    rodape = f"-# {guild.name} • <t:{agora}:f>"
+    container.add_item(discord.ui.TextDisplay(rodape))
 
     return container
 
@@ -90,7 +96,6 @@ async def enviar_painel_presenca(bot: discord.Client, evento):
 
     msg = await canal.send(view=view)
 
-
     async with async_session() as session:
         evento_db = await session.get(EventosGate, evento.id)
         evento_db.message_id = msg.id
@@ -99,8 +104,8 @@ async def enviar_painel_presenca(bot: discord.Client, evento):
 
 
 async def atualizar_painel_presenca(bot: discord.Client, evento_id: int):
-    evento = await buscar_evento_aberto()
-    if not evento or evento.id != evento_id:
+    evento = await buscar_evento_por_id(evento_id)
+    if not evento:
         return
 
     canal = bot.get_channel(evento.channel_id)
