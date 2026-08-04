@@ -60,25 +60,28 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
         await enviar_painel_presenca(interaction.client, evento)
 
 
-class ModalFacXFac(LoggingModalMixin, discord.ui.Modal,ModalEventoBase):
+# ✅ CORRIGIDO: Apenas herda de ModalEventoBase
+class ModalFacXFac(ModalEventoBase):
     adversario = discord.ui.TextInput(label="Adversário", placeholder="Nome da facção", max_length=80)
 
     def __init__(self):
         super().__init__(tipo="facxfac", titulo="FacXFac")
 
 
-class ModalTreino(LoggingModalMixin, ModalEventoBase, discord.ui.Modal):
+# ✅ CORRIGIDO: Apenas herda de ModalEventoBase
+class ModalTreino(ModalEventoBase):
     def __init__(self):
         super().__init__(tipo="treino", titulo="Treino")
 
 
-class ModalDominas(LoggingModalMixin, ModalEventoBase, discord.ui.Modal):
+# ✅ CORRIGIDO: Apenas herda de ModalEventoBase
+class ModalDominas(ModalEventoBase):
     def __init__(self):
         super().__init__(tipo="dominas", titulo="Dominas")
 
 
 # ---------------------------------------------------------------------------
-# PAINEL FIXO — Central de Plantão
+# PAINEL FIXO — EVENTOS GATE
 # ---------------------------------------------------------------------------
 
 class PainelEventosGate(LoggingViewMixin, discord.ui.LayoutView):
@@ -125,10 +128,6 @@ class PainelEventosGate(LoggingViewMixin, discord.ui.LayoutView):
 
         self.add_item(container)
 
-    # --- callbacks dos botões, ligados via custom_id no listener do bot ---
-    # (Como é LayoutView persistente, o roteamento fica no on_interaction do bot,
-    #  ver client.py mais abaixo, em vez de @ui.button decorators)
-
 
 def _tem_permissao_gate(member: discord.Member) -> bool:
     return any(role.name in CARGOS_CRIACAO_EVENTO_GATE for role in member.roles)
@@ -144,7 +143,6 @@ async def registrar_listener_gate(bot: discord.Client):
             return
 
         if not _tem_permissao_gate(interaction.user):
-
             mensagem = await interaction.response.send_message(
                 "❌ Você não tem permissão para gerenciar eventos do GATE.",
                 ephemeral=True,
