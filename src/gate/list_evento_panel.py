@@ -3,7 +3,7 @@ import discord
 
 from src.database.connection import async_session
 from src.database.models import EventosGate
-from config import CANAIS, HIERARQUIA_GATE
+from src.config import CANAIS, HIERARQUIA_GATE
 from src.gate.evento_gate_services import (
     buscar_evento_aberto,
     confirmar_presenca,
