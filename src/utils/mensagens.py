@@ -30,8 +30,14 @@ class CardView(discord.ui.LayoutView):
         self.add_item(self.container)
 
 
-async def excluir_mensagem(mensagem: discord.Message, delay: int = 120):
-    """Aguarda o tempo especificado e exclui a mensagem."""
+async def excluir_mensagem(mensagem: discord.Message, delay: int | None = 120):
+    """Aguarda o tempo especificado e exclui a mensagem.
+    Se delay for None, a mensagem NUNCA é excluída automaticamente —
+    usado por cards com componentes interativos de vida longa (ex: Selects
+    que aguardam o Doutor escolher, como o de Encerrar Evento)."""
+    if delay is None:
+        return  # nada a fazer — mensagem permanece até ser removida manualmente
+
     await asyncio.sleep(delay)
     try:
         await mensagem.delete()
