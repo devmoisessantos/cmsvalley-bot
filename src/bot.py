@@ -3,6 +3,9 @@ import traceback
 import logging
 from discord.ext import commands
 
+from src.gate.evento_gate_services import buscar_evento_aberto
+from src.gate.list_evento_panel import _montar_container
+from src.gate.evento_gate_panel import PainelEventosGate
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.recrutamento_panel import PainelRecrutamentoLayout
 from src.panels.whitelist_panel import PainelWhitelistLayout
@@ -14,10 +17,11 @@ from src.services.plantao_tasks import executar_housekeeping_plantao
 
 from src.config import DISCORD_TOKEN, GUILD_ID, CANAIS
 from src.panels.setup_paineis import (
+    garantir_painel_gerenciar_cargos,
+    garantir_painel_eventos_gate,
     garantir_painel_recrutamento, 
     garantir_painel_avaliacao, 
     garantir_painel_whitelist, 
-    garantir_painel_gerenciar_cargos,
     garantir_painel_plantao
 )
 
@@ -56,6 +60,8 @@ class CmsValleyBot(commands.Bot):
             "src.cogs.restore",
             "src.cogs.diff",
             "src.cogs.status",
+            "src.cogs.gate_eventos",   
+            "src.cogs.gate_presenca",   
         ]
 
         total = len(cogs)
@@ -84,8 +90,8 @@ class CmsValleyBot(commands.Bot):
         self.painel_recrutamento_view = None
         self.painel_avaliacao_view = None
         self.painel_whitelist_view = None
-        self.painel_gerenciar_cargos_view = None 
-
+        self.painel_gerenciar_cargos_view = None
+        self.painel_eventos_gate_view = None
 
         @self.tree.error
         async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
@@ -122,6 +128,7 @@ class CmsValleyBot(commands.Bot):
             self.painel_whitelist_view = PainelWhitelistLayout(guild)
             self.painel_gerenciar_cargos_view = PainelGerenciarCargoLayout(guild=guild)
             self.painel_plantao_view = PainelPlantaoLayout(guild)
+            self.painel_eventos_gate_view = PainelEventosGate(guild=guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -134,6 +141,7 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_whitelist_view)
         self.add_view(self.painel_gerenciar_cargos_view)
         self.add_view(self.painel_plantao_view)
+        self.add_view(self.painel_eventos_gate_view)
 
 
         # Garante que as mensagens existem nos canais
@@ -142,6 +150,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_whitelist(self)
         await garantir_painel_gerenciar_cargos(self)
         await garantir_painel_plantao(self)
+        await garantir_painel_eventos_gate(self)
 
         fim_deploy()
 

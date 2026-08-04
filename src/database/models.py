@@ -180,3 +180,46 @@ class FaltaChamada(Base):
     chamada_id: Mapped[int] = mapped_column(Integer)
     motivo: Mapped[str] = mapped_column(String(100))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+
+class EventosGate(Base):
+    __tablename__ = "eventos_gate"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    
+    tipo: Mapped[str] = mapped_column(String(20))          # "treino" | "facxfac" | "dominas"
+    titulo: Mapped[str] = mapped_column(String(120))
+    
+    # Dados do formulário
+    data_evento: Mapped[str] = mapped_column(String(20))   # "15/06/2026"
+    horario: Mapped[str] = mapped_column(String(20))       # "20:00"
+    limite_participantes: Mapped[int] = mapped_column(Integer, default=0)  # 0 = sem limite
+    adversario: Mapped[str | None] = mapped_column(String(80), nullable=True)  # só FacxFac
+    
+    # Controle
+    status: Mapped[str] = mapped_column(String(20), default="aberto")  # aberto | encerrado
+    criado_por: Mapped[int] = mapped_column(BigInteger)    # discord_id do staff
+    responsavel_id: Mapped[int] = mapped_column(BigInteger) # quem aparece como responsável
+    
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=agora)
+
+    presencas: Mapped[list["Presenca"]] = relationship(back_populates="evento", cascade="all, delete-orphan")
+
+
+class Presenca(Base):
+    __tablename__ = "presencas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    evento_id: Mapped[int] = mapped_column(ForeignKey("eventos_gate.id"))
+    
+    discord_id: Mapped[int] = mapped_column(BigInteger)
+    id_fivem: Mapped[int] = mapped_column(Integer)
+    
+    confirmado: Mapped[bool] = mapped_column(Boolean, default=True)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+    evento: Mapped["EventosGate"] = relationship(back_populates="presencas")

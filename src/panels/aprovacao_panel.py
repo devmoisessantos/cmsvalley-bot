@@ -6,7 +6,6 @@ from sqlalchemy import select
 from src.config import CARGOS, CANAIS
 from src.database.connection import async_session
 from src.database.models import Usuario, Recrutamento
-from src.utils.logger import log_cargo
 from src.utils.logger import log_mudanca_cargo
 from src.utils.nickname import aplicar_prefixo
 from src.utils.error_handling import LoggingViewMixin

@@ -9,6 +9,7 @@ from src.config import (
 )
 from src.database.connection import async_session
 from src.database.models import PainelPostado
+from src.gate.evento_gate_panel import PainelEventosGate
 from src.panels.recrutamento_panel import PainelRecrutamentoLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.whitelist_panel import PainelWhitelistLayout 
@@ -234,3 +235,43 @@ async def garantir_painel_plantao(bot: discord.Client, interaction: discord.Inte
         session.add(novo_registro)        
         await session.commit()
         print(f"✅ Painel de Plantão Médico postado no canal #{canal.name}.")
+
+
+async def garantir_painel_eventos_gate(bot: discord.Client, interaction: discord.Interaction = None):
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(PainelPostado).where(PainelPostado.nome_painel == "eventos_gate")
+        )
+        registro = resultado.scalar_one_or_none()
+
+        canal = bot.get_channel(CANAIS["CRIAR_EVENTO_GATE"])
+        if canal is None:
+            print("Canal do painel de eventos não encontrado.")
+            return
+
+        # Caso já tenha sido postado, não duplicar
+        if registro is not None:
+            return
+        
+        # Obtém o guild para passar ao layout (necessário para o ícone)
+        if interaction and interaction.guild:
+            guild = interaction.guild
+        else:
+            guild = bot.get_guild(int(GUILD_ID))
+
+        if guild is None:
+            print("❌ Guild não encontrada!")
+            return
+
+        arquivo = discord.File(LOGO_PATH, filename="logo.png")
+        mensagem = await canal.send(view=PainelEventosGate(guild=guild), file=arquivo)
+
+        # Salva o registro no banco
+        novo_registro = PainelPostado(
+            nome_painel="eventos_gate",
+            canal_id=canal.id,
+            message_id=mensagem.id,
+        )
+        session.add(novo_registro)        
+        await session.commit()
+        print(f"✅ Painel de Eventos Gate postado no canal #{canal.name}.")
