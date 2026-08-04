@@ -5,8 +5,8 @@ from discord.ext import commands
 from src.config import CARGOS_CRIACAO_EVENTO_GATE
 from src.gate.evento_gate_panel import ModalTreino, ModalFacXFac, ModalDominas
 from src.gate.evento_gate_services import listar_eventos_abertos
-from src.gate.log_gate_panel import ViewEncerrarEvento
-from src.utils.mensagens import responder_card, responder_ephemera
+from src.gate.log_gate_panel import SelectEncerrarEvento, ViewEncerrarEvento
+from src.utils.mensagens import responder_card
 
 def _tem_permissao_gate(member: discord.Member) -> bool:
     return any(role.name in CARGOS_CRIACAO_EVENTO_GATE for role in member.roles)
@@ -50,11 +50,15 @@ class GateEventosCog(commands.Cog):
                     cor=discord.Color.orange(),
                 )
                 return
+
+            row = discord.ui.ActionRow()
+            row.add_item(SelectEncerrarEvento(eventos))
+
             await responder_card(
                 interaction, "Encerrar Evento",
                 ["Selecione qual evento deseja encerrar:"],
-                view=ViewEncerrarEvento(eventos),
                 cor=discord.Color.orange(),
+                extra_row=row,  # 👈 agora usando o parâmetro certo, que já existe
                 delay=None,
             )
 
