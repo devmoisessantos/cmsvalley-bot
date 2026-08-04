@@ -123,7 +123,7 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
 
         await responder_card(
             interaction, "Novo Evento Criado",            
-            f"✅ Evento **{self.title}** criado para {self.dia.value} às {self.horario.value}.",
+            [f"✅ Evento **{self.title}** criado para {self.dia.value} às {self.horario.value}."],
             delay=10,
             cor=discord.Color.green(),
         )
