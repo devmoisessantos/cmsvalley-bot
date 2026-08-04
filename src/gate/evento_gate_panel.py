@@ -7,7 +7,7 @@ from asyncio import create_task
 from src.gate.list_evento_panel import enviar_painel_presenca
 from src.gate.log_gate_panel import enviar_log_evento
 from src.utils.mensagens import excluir_mensagem
-from src.gate.evento_gate_services import criar_evento, encerrar_evento_ativo
+from src.gate.evento_gate_services import criar_evento, encerrar_evento
 from src.config import CARGOS_CRIACAO_EVENTO_GATE
 from src.utils.error_handling import LoggingViewMixin, LoggingModalMixin
 
@@ -157,6 +157,6 @@ async def registrar_listener_gate(bot: discord.Client):
         elif acao == "dominas":
             await interaction.response.send_modal(ModalDominas())
         elif acao == "encerrar":
-            ok = await encerrar_evento_ativo(interaction.user.id)
+            ok = await encerrar_evento(interaction.user.id)
             msg = "✅ Listagem para evento encerrado." if ok else "Nenhum evento em aberto encontrado."
             await interaction.response.send_message(msg, ephemeral=True)
