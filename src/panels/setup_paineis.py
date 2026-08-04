@@ -263,8 +263,7 @@ async def garantir_painel_eventos_gate(bot: discord.Client, interaction: discord
             print("❌ Guild não encontrada!")
             return
 
-        arquivo = discord.File(LOGO_PATH, filename="logo.png")
-        mensagem = await canal.send(view=PainelEventosGate(guild=guild), file=arquivo)
+        mensagem = await canal.send(view=PainelEventosGate(guild=guild))
 
         # Salva o registro no banco
         novo_registro = PainelPostado(
