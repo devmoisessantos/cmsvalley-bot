@@ -7,6 +7,12 @@ from src.database.connection import async_session
 from src.database.models import EventosGate, Presenca, agora
 
 
+# adicionar em src/gate/evento_gate_services.py
+async def buscar_evento_por_id(evento_id: int) -> EventosGate | None:
+    async with async_session() as session:
+        return await session.get(EventosGate, evento_id)
+
+    
 async def criar_evento(
     tipo: str,
     titulo: str,
