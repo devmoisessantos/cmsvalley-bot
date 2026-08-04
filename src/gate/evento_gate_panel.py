@@ -84,11 +84,12 @@ class ModalDominas(ModalEventoBase):
 # PAINEL FIXO — EVENTOS GATE
 # ---------------------------------------------------------------------------
 
+
 class PainelEventosGate(LoggingViewMixin, discord.ui.LayoutView):
     """View persistente (timeout=None) renderizada com Container (Components V2)."""
-
-    def __init__(self):
+    def __init__(self, guild: discord.Guild = None):
         super().__init__(timeout=None)
+        self.guild = guild
 
         container = discord.ui.Container(accent_colour=discord.Colour.dark_red())
 
