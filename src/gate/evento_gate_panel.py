@@ -12,6 +12,59 @@ from src.config import CARGOS_CRIACAO_EVENTO_GATE
 from src.utils.error_handling import LoggingViewMixin, LoggingModalMixin
 
 # ---------------------------------------------------------------------------
+# VALIDAÇÃO DOS CAMPOS DO MODAL
+# ---------------------------------------------------------------------------
+
+def _validar_data(valor: str) -> tuple[bool, str]:
+    """Aceita apenas DD/MM/AAAA, com data real (rejeita 32/13/2026, 29/02 em ano não bissexto, etc).
+    Retorna (valido, mensagem_de_erro)."""
+    valor = valor.strip()
+    try:
+        data = datetime.strptime(valor, "%d/%m/%Y")
+    except ValueError:
+        return False, "❌ Data inválida. Use o formato `DD/MM/AAAA` (ex: `15/06/2026`)."
+
+    hoje = datetime.now().date()
+    if data.date() < hoje:
+        return False, f"❌ A data `{valor}` já passou. Informe uma data futura."
+
+    return True, ""
+
+
+def _validar_horario(valor: str) -> tuple[bool, str]:
+    """Aceita apenas HH:MM em formato 24h (rejeita 25:99, 9h30, etc)."""
+    valor = valor.strip()
+    try:
+        datetime.strptime(valor, "%H:%M")
+    except ValueError:
+        return False, "❌ Horário inválido. Use o formato `HH:MM`, 24h (ex: `20:00`)."
+
+    return True, ""
+
+
+def _validar_limite(valor: str) -> tuple[bool, str, int]:
+    """0 = sem limite. Retorna (valido, mensagem_de_erro, valor_convertido)."""
+    valor = (valor or "0").strip()
+    if not valor.isdigit():
+        return False, "❌ Limite precisa ser um número inteiro (0 = sem limite).", 0
+
+    limite_int = int(valor)
+    if limite_int < 0:
+        return False, "❌ Limite não pode ser negativo.", 0
+    if limite_int > 25:
+        return False, "❌ Limite muito alto (máximo 25). Use `0` para sem limite.", 0
+
+    return True, "", limite_int
+
+
+def _validar_adversario(valor: str | None) -> tuple[bool, str]:
+    """Só chamado pro ModalFacXFac — garante que não veio só espaços em branco."""
+    if valor is None or not valor.strip():
+        return False, "❌ O nome do adversário não pode ficar em branco."
+    return True, ""
+
+
+# ---------------------------------------------------------------------------
 # MODAIS DE CRIAÇÃO
 # ---------------------------------------------------------------------------
 
@@ -33,21 +86,37 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
         self.tipo = tipo
 
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            limite_int = int(self.limite.value or "0")
-        except ValueError:
-            await interaction.response.send_message(
-                "Limite precisa ser um número.", ephemeral=True
-            )
+        # 👇 Validações em ordem — para na primeira que falhar, avisa o motivo específico
+        valido, erro = _validar_data(self.dia.value)
+        if not valido:
+            await interaction.response.send_message(erro, ephemeral=True)
             return
+
+        valido, erro = _validar_horario(self.horario.value)
+        if not valido:
+            await interaction.response.send_message(erro, ephemeral=True)
+            return
+
+        valido, erro, limite_int = _validar_limite(self.limite.value)
+        if not valido:
+            await interaction.response.send_message(erro, ephemeral=True)
+            return
+
+        # Campo extra só existe no ModalFacXFac — valida só quando presente
+        adversario_valor = getattr(self, "adversario", None) and self.adversario.value
+        if hasattr(self, "adversario"):
+            valido, erro = _validar_adversario(adversario_valor)
+            if not valido:
+                await interaction.response.send_message(erro, ephemeral=True)
+                return
 
         evento = await criar_evento(
             tipo=self.tipo,
             titulo=self.title,
-            data_evento=self.dia.value,
-            horario=self.horario.value,
+            data_evento=self.dia.value.strip(),
+            horario=self.horario.value.strip(),
             limite_participantes=limite_int,
-            adversario=getattr(self, "adversario", None) and self.adversario.value,
+            adversario=adversario_valor,
             criado_por=interaction.user.id,
             responsavel_id=interaction.user.id,
         )
@@ -61,7 +130,7 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
 
         # publica o painel de presença no canal correspondente
         await enviar_painel_presenca(interaction.client, evento)
-        await enviar_log_evento(interaction.client, evento)
+        await enviar_log_evento(interaction.client, evento, interaction.guild)
 
 # ✅ CORRIGIDO: Apenas herda de ModalEventoBase
 class ModalFacXFac(ModalEventoBase):
@@ -86,7 +155,6 @@ class ModalDominas(ModalEventoBase):
 # ---------------------------------------------------------------------------
 # PAINEL FIXO — EVENTOS GATE
 # ---------------------------------------------------------------------------
-
 
 class PainelEventosGate(LoggingViewMixin, discord.ui.LayoutView):
     """View persistente (timeout=None) renderizada com Container (Components V2)."""

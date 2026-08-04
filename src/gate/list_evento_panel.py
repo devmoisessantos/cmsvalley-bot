@@ -55,13 +55,23 @@ async def _montar_container(bot: discord.Client, evento) -> discord.ui.Container
     nao_confirmados = [m for m in membros_gate if m.id not in confirmados_ids]
 
     icon_url = guild.icon.url if guild.icon else None
-    container = discord.ui.Container(accent_colour=discord.Colour.green())
-    container.add_item(discord.ui.Thumbnail(icon_url) if icon_url else None)
-    container.add_item(discord.ui.TextDisplay("# 📋 Lista de Presença"))
-    container.add_item(discord.ui.TextDisplay(f"`✅` **Total de confirmados:** {len(confirmados_ids)}"))
-    container.add_item(
-        discord.ui.TextDisplay(f"`👨‍⚕️` **Responsável pela lista:** <@{evento.responsavel_id}>")
+
+    # 👇 CORREÇÃO: Thumbnail não pode ser item solto de Container — só existe como
+    # accessory de uma Section. Junta o título + stats no texto da Section, e o ícone
+    # vira o "acessório" visual ao lado. Se não tiver ícone, cai num TextDisplay normal.
+    texto_cabecalho = (
+        "# 📋 Lista de Presença\n"
+        f"`✅` **Total de confirmados:** {len(confirmados_ids)}\n"
+        f"`👨‍⚕️` **Responsável pela lista:** <@{evento.responsavel_id}>"
     )
+
+    container = discord.ui.Container(accent_colour=discord.Colour.green())
+
+    if icon_url:
+        container.add_item(discord.ui.Section(texto_cabecalho, accessory=discord.ui.Thumbnail(icon_url)))
+    else:
+        container.add_item(discord.ui.TextDisplay(texto_cabecalho))
+
     container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
     linhas_confirmados = "\n".join(
@@ -82,7 +92,7 @@ async def _montar_container(bot: discord.Client, evento) -> discord.ui.Container
     row = discord.ui.ActionRow()
     row.add_item(
         discord.ui.Button(
-            label="Confirmar Presença",
+            label="✅ Confirmar Presença",
             style=discord.ButtonStyle.success,
             custom_id=f"presenca:{evento.id}",
         )
