@@ -39,7 +39,7 @@ class GateEventosCog(commands.Cog):
             await interaction.response.send_modal(ModalDominas())
         elif acao == "encerrar":
             ok = await encerrar_evento_ativo(interaction.user.id)
-            msg = "✅ Plantão/evento encerrado." if ok else "Nenhum evento em aberto encontrado."
+            msg = "✅ Evento encerrado." if ok else "Nenhum evento em aberto encontrado."
             await interaction.response.send_message(msg, ephemeral=True)
 
 

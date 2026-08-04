@@ -1,14 +1,13 @@
 # src/gate/evento_gate_panel.py
-from asyncio import create_task
 
 import discord
-from discord import ui
 from datetime import datetime
+from asyncio import create_task
 
 from src.gate.list_evento_panel import enviar_painel_presenca
 from src.utils.mensagens import excluir_mensagem
 from src.gate.evento_gate_services import criar_evento, encerrar_evento_ativo
-from src.config import CANAIS, HIERARQUIA_GATE, CARGOS_CRIACAO_EVENTO_GATE
+from src.config import CARGOS_CRIACAO_EVENTO_GATE
 from src.utils.error_handling import LoggingViewMixin, LoggingModalMixin
 
 # ---------------------------------------------------------------------------
