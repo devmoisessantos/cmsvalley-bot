@@ -1,10 +1,17 @@
 # src/gate/list_evento_panel.py
-import discord
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 
+import discord
+
+from src.config import (
+    CANAIS,
+    HIERARQUIA_GATE,
+)
 from src.database.connection import async_session
 from src.database.models import EventosGate
-from src.config import CANAIS, HIERARQUIA_GATE
 from src.gate.evento_gate_services import (
     buscar_evento_por_id,
     cancelar_presenca,
@@ -14,10 +21,13 @@ from src.gate.gate_class import ModalConfirmarPresenca
 
 
 async def _montar_container(bot: discord.Client, evento) -> discord.ui.Container:
-    guild = bot.get_guild(evento.guild_id) if hasattr(evento, "guild_id") else bot.guilds[0]
+    guild = (
+        bot.get_guild(evento.guild_id) if hasattr(evento, "guild_id") else bot.guilds[0]
+    )
 
     membros_gate = [
-        m for m in guild.members
+        m
+        for m in guild.members
         if any(role.name in HIERARQUIA_GATE for role in m.roles)
     ]
 
@@ -40,24 +50,35 @@ async def _montar_container(bot: discord.Client, evento) -> discord.ui.Container
     container = discord.ui.Container(accent_colour=discord.Colour.green())
 
     if icon_url:
-        container.add_item(discord.ui.Section(texto_cabecalho, accessory=discord.ui.Thumbnail(icon_url)))
+        container.add_item(
+            discord.ui.Section(
+                texto_cabecalho, accessory=discord.ui.Thumbnail(icon_url)
+            )
+        )
     else:
         container.add_item(discord.ui.TextDisplay(texto_cabecalho))
 
     container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
-    linhas_confirmados = "\n".join(
-        f"`✅` `{p.id_fivem}` — <@{discord_id}>"
-        for discord_id, p in confirmados_ids.items()
-    ) or "_ninguém confirmou ainda_"
-    container.add_item(discord.ui.TextDisplay(f"**Marcou presença:**\n{linhas_confirmados}"))
+    linhas_confirmados = (
+        "\n".join(
+            f"`✅` `{p.id_fivem}` — <@{discord_id}>"
+            for discord_id, p in confirmados_ids.items()
+        )
+        or "_ninguém confirmou ainda_"
+    )
+    container.add_item(
+        discord.ui.TextDisplay(f"**Marcou presença:**\n{linhas_confirmados}")
+    )
 
     container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
-    linhas_nao_confirmados = "\n".join(
-        f"`❓` — <@{m.id}>" for m in nao_confirmados
-    ) or "_todos confirmaram_"
-    container.add_item(discord.ui.TextDisplay(f"**Não confirmado:**\n{linhas_nao_confirmados}"))
+    linhas_nao_confirmados = (
+        "\n".join(f"`❓` — <@{m.id}>" for m in nao_confirmados) or "_todos confirmaram_"
+    )
+    container.add_item(
+        discord.ui.TextDisplay(f"**Não confirmado:**\n{linhas_nao_confirmados}")
+    )
 
     container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
@@ -124,7 +145,9 @@ async def registrar_listener_presenca(bot: discord.Client):
 
         if ja_confirmou:
             await cancelar_presenca(evento_id, interaction.user.id)
-            await interaction.response.send_message("↩️ Presença cancelada.", ephemeral=True)
+            await interaction.response.send_message(
+                "↩️ Presença cancelada.", ephemeral=True
+            )
             await atualizar_painel_presenca(interaction.client, evento_id)
         else:
             await interaction.response.send_modal(ModalConfirmarPresenca(evento_id))

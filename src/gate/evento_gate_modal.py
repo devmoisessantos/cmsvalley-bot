@@ -1,16 +1,15 @@
 import discord
 
-from src.gate.evento_gate_lista import enviar_painel_presenca
 from src.gate.evento_gate_services import (
-    validar_adversario, 
-    validar_data, 
-    validar_horario, 
-    validar_limite, 
-    criar_evento
+    criar_evento,
+    validar_adversario,
+    validar_data,
+    validar_horario,
+    validar_limite,
 )
-from src.utils.mensagens import responder_card
 from src.gate.gate_logs import enviar_log_evento
 from src.utils.error_handling import LoggingModalMixin
+from src.utils.mensagens import responder_card
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +33,8 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
         self.tipo = tipo
 
     async def on_submit(self, interaction: discord.Interaction):
+        from src.gate.evento_gate_lista import enviar_painel_presenca
+
         # 👇 Validações em ordem — para na primeira que falhar, avisa o motivo específico
         valido, erro = validar_data(self.dia.value)
         if not valido:
@@ -70,8 +71,11 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
         )
 
         await responder_card(
-            interaction, "Novo Evento Criado",            
-            [f"✅ Evento **{self.title}** criado para {self.dia.value} às {self.horario.value}."],
+            interaction,
+            "Novo Evento Criado",
+            [
+                f"✅ Evento **{self.title}** criado para {self.dia.value} às {self.horario.value}."
+            ],
             delay=10,
             cor=discord.Color.green(),
         )
@@ -80,9 +84,12 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
         await enviar_painel_presenca(interaction.client, evento)
         await enviar_log_evento(interaction.client, evento, interaction.guild)
 
+
 # ✅ CORRIGIDO: Apenas herda de ModalEventoBase
 class ModalFacXFac(ModalEventoBase):
-    adversario = discord.ui.TextInput(label="Adversário", placeholder="Nome da facção", max_length=80)
+    adversario = discord.ui.TextInput(
+        label="Adversário", placeholder="Nome da facção", max_length=80
+    )
 
     def __init__(self):
         super().__init__(tipo="facxfac", titulo="FacXFac")
@@ -98,4 +105,3 @@ class ModalTreino(ModalEventoBase):
 class ModalDominas(ModalEventoBase):
     def __init__(self):
         super().__init__(tipo="dominas", titulo="Dominas")
-
