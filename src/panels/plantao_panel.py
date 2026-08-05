@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 from sqlalchemy import select
 
-from src.services.plantao_service import (
+from src.plantao.plantao_service import (
     ligar_servico, desligar_servico, garantir_aware,
     resolver_id_fivem, membro_pode_informar_id_manualmente,
 )

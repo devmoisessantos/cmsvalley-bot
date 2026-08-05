@@ -1,16 +1,18 @@
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 
-from src.services.gerenciar_cargos_service import determinar_escopos
 from src.panels.gerenciar_cargos_panel import GerenciarCargosView
+from src.services.gerenciar_cargos_service import determinar_escopos
 
 
 class GerenciarCargos(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="gerenciar_cargos", description="Adiciona ou remove cargos de um membro")
+    @app_commands.command(
+        name="gerenciar_cargos", description="Adiciona ou remove cargos de um membro"
+    )
     async def gerenciar_cargos(self, interaction: discord.Interaction):
         escopos = determinar_escopos(interaction.user)
 

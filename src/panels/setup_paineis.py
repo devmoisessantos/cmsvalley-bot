@@ -10,9 +10,9 @@ from src.config import (
 from src.database.connection import async_session
 from src.database.models import PainelPostado
 from src.gate.evento_gate_panel import PainelEventosGate
-from src.panels.recrutamento_panel import PainelRecrutamentoLayout
+from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
-from src.panels.whitelist_panel import PainelWhitelistLayout 
+from src.whitelist.whitelist_panel import PainelWhitelistLayout 
 from src.panels.plantao_panel import PainelPlantaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 

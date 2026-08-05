@@ -1,16 +1,26 @@
-import discord
 import datetime
-from discord import app_commands
-from discord.ext import commands, tasks
 
-from src.config import LOG_CHANNEL_NAME, AUTO_BACKUP_INTERVAL_HOURS, BACKUP_DIR
+import discord
+from discord import app_commands
+from discord.ext import (
+    commands,
+    tasks,
+)
+
+from src.config import (
+    AUTO_BACKUP_INTERVAL_HOURS,
+    BACKUP_DIR,
+    LOG_CHANNEL_NAME,
+)
 from src.core.backup_manager import BackupManager
 from src.core.logger import BackupLogger
 from src.utils.permissions import is_authorized
 
 
 class BackupCog(commands.Cog):
-    backup_group = app_commands.Group(name="backup", description="Gerenciar backups do servidor")
+    backup_group = app_commands.Group(
+        name="backup", description="Gerenciar backups do servidor"
+    )
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -42,11 +52,15 @@ class BackupCog(commands.Cog):
     async def before_auto_backup(self):
         await self.bot.wait_until_ready()
 
-    @backup_group.command(name="criar", description="Cria um backup manual do servidor agora")
+    @backup_group.command(
+        name="criar", description="Cria um backup manual do servidor agora"
+    )
     @is_authorized()
     async def criar(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True)
-        backup = self.bm.create_backup(interaction.guild, created_by=str(interaction.user))
+        backup = self.bm.create_backup(
+            interaction.guild, created_by=str(interaction.user)
+        )
         path = self.bm.save_backup(backup)
 
         embed = discord.Embed(
@@ -74,19 +88,30 @@ class BackupCog(commands.Cog):
     async def listar(self, interaction: discord.Interaction):
         files = self.bm.list_backups(interaction.guild.id)
         if not files:
-            await interaction.response.send_message("Nenhum backup encontrado para este servidor.", ephemeral=True)
+            await interaction.response.send_message(
+                "Nenhum backup encontrado para este servidor.", ephemeral=True
+            )
             return
 
         description = "\n".join(f"`{i + 1}.` {f}" for i, f in enumerate(files[:20]))
-        embed = discord.Embed(title="📂 Backups disponíveis", description=description, color=discord.Color.blurple())
+        embed = discord.Embed(
+            title="📂 Backups disponíveis",
+            description=description,
+            color=discord.Color.blurple(),
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @backup_group.command(name="exportar", description="Baixa o backup mais recente (ou um específico) como arquivo")
+    @backup_group.command(
+        name="exportar",
+        description="Baixa o backup mais recente (ou um específico) como arquivo",
+    )
     @is_authorized()
     async def exportar(self, interaction: discord.Interaction, arquivo: str = None):
         filename = arquivo or self.bm.latest_backup_filename(interaction.guild.id)
         if not filename:
-            await interaction.response.send_message("Nenhum backup encontrado.", ephemeral=True)
+            await interaction.response.send_message(
+                "Nenhum backup encontrado.", ephemeral=True
+            )
             return
         path = f"{BACKUP_DIR}/{interaction.guild.id}/{filename}"
         try:
@@ -96,16 +121,24 @@ class BackupCog(commands.Cog):
                 ephemeral=True,
             )
         except FileNotFoundError:
-            await interaction.response.send_message("Arquivo não encontrado.", ephemeral=True)
+            await interaction.response.send_message(
+                "Arquivo não encontrado.", ephemeral=True
+            )
 
-    @backup_group.command(name="deletar", description="Deleta um backup específico pelo nome do arquivo")
+    @backup_group.command(
+        name="deletar", description="Deleta um backup específico pelo nome do arquivo"
+    )
     @is_authorized()
     async def deletar(self, interaction: discord.Interaction, arquivo: str):
         success = self.bm.delete_backup(interaction.guild.id, arquivo)
         if success:
-            await interaction.response.send_message(f"🗑️ Backup `{arquivo}` deletado.", ephemeral=True)
+            await interaction.response.send_message(
+                f"🗑️ Backup `{arquivo}` deletado.", ephemeral=True
+            )
         else:
-            await interaction.response.send_message("Arquivo não encontrado.", ephemeral=True)
+            await interaction.response.send_message(
+                "Arquivo não encontrado.", ephemeral=True
+            )
 
 
 async def setup(bot: commands.Bot):

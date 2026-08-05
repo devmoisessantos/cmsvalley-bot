@@ -9,15 +9,15 @@ from src.config import CANAIS, CARGOS, CARGOS_BYPASS_PRESENCA_CHAMADA
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao, Recrutamento, Chamada, Usuario
 
-from src.services.ocr_ems_service import extrair_medicos_do_print_ems, OcrEmsError
-from src.services.scraping_membros import combinar_membros, construir_membros_via_apelido
+from src.plantao.ocr.ocr_ems_service import extrair_medicos_do_print_ems, OcrEmsError
+from src.plantao.ocr.scraping_membros import combinar_membros, construir_membros_via_apelido
 from src.services.validacao_ids import validar_medicos, MembroConhecido
-from src.services.plantao_service import membro_e_doutor_ou_acima, desligar_servico
-from src.services.chamada_service import (
+from src.plantao.plantao_service import membro_e_doutor_ou_acima, desligar_servico
+from src.plantao.chamada.chamada_service import (
     calcular_proximo_horario_permitido, tentar_iniciar_chamada, finalizar_chamada,
     registrar_falta,
 )
-from src.services.chamada_state import SessaoChamada, MedicoNaChamada, definir_sessao, obter_sessao
+from src.plantao.chamada.chamada_state import SessaoChamada, MedicoNaChamada, definir_sessao, obter_sessao
 from src.utils.error_handling import LoggingViewMixin
 
 logger = logging.getLogger(__name__)
@@ -422,7 +422,7 @@ def _resolver_id_fivem_do_membro(sessao: SessaoChamada, discord_id: int, membro:
     for m in sessao.membros_conhecidos:
         if m.discord_id == discord_id:
             return m.id_fivem
-    from src.services.scraping_membros import extrair_id_do_apelido
+    from src.plantao.ocr.scraping_membros import extrair_id_do_apelido
     nome_exibido = membro.nick or membro.display_name or membro.name
     return extrair_id_do_apelido(nome_exibido)
 

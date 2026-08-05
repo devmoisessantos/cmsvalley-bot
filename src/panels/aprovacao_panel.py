@@ -9,7 +9,7 @@ from src.database.models import Usuario, Recrutamento
 from src.utils.logger import log_mudanca_cargo
 from src.utils.nickname import aplicar_prefixo
 from src.utils.error_handling import LoggingViewMixin
-from src.panels.log_recrutamento import NovoRecrutamento, NovoRecrutamentoLog
+from src.recrutamento.recrutamento_logs import NovoRecrutamento, NovoRecrutamentoLog
 from src.utils.logger import log_decisao
 
 def possui_cargo_recrutador_ou_superior(membro: discord.Member) -> bool:

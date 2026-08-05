@@ -1,6 +1,8 @@
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord import app_commands
+from discord import app_commands
+from discord.ext import commands
 
 from src.panels.plantao_panel import InformacoesPlantaoView, _buscar_estado
 
@@ -9,7 +11,10 @@ class Plantao(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="informacoes_plantao", description="Veja seu status atual de plantão")
+    @app_commands.command(
+        name="informacoes_plantao",
+        description="Veja seu status atual de plantão"
+    )
     async def informacoes_plantao(self, interaction: discord.Interaction):
         estado = await _buscar_estado(interaction.user.id)
         view = InformacoesPlantaoView(interaction.user, estado)
