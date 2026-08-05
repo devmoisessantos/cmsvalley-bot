@@ -2,7 +2,6 @@ import logging
 import traceback
 
 import discord
-from connection import init_db
 from discord.ext import commands
 from seed_perguntas import seed_perguntas_se_vazio
 
@@ -12,6 +11,7 @@ from src.config import (
     DISCORD_TOKEN,
     GUILD_ID,
 )
+from src.database.connection import init_db
 from src.gate.evento_gate_lista import _montar_container
 from src.gate.evento_gate_panel import PainelEventosGate
 from src.gate.evento_gate_services import listar_eventos_abertos
