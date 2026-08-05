@@ -68,8 +68,8 @@ class CmsValleyBot(commands.Bot):
             "src.plantao.plantao_tasks",
             "src.hierarquia.hierarquia",
             "src.hierarquia.hierarquia_class",
+            "src.gate.gate_class",
             "src.gate.gate_eventos",
-            "src.gate.gate_presenca",
         ]
 
         total = len(cogs)
