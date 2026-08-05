@@ -1,7 +1,6 @@
 import os
-from dotenv import load_dotenv
 
-from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -17,7 +16,9 @@ MAX_BACKUPS_PER_GUILD = int(os.getenv("MAX_BACKUPS_PER_GUILD", 10))
 AUTO_BACKUP_INTERVAL_HOURS = int(os.getenv("AUTO_BACKUP_INTERVAL_HOURS", 24))
 LOG_CHANNEL_NAME = os.getenv("LOG_CHANNEL_NAME", "backup-logs")
 ADMIN_ROLE_NAMES = [
-    r.strip() for r in os.getenv("ADMIN_ROLE_NAMES", "Admin,Fundador").split(",") if r.strip()
+    r.strip()
+    for r in os.getenv("ADMIN_ROLE_NAMES", "Admin,Fundador").split(",")
+    if r.strip()
 ]
 CONFIRMATION_TIMEOUT = int(os.getenv("CONFIRMATION_TIMEOUT", 30))
 
@@ -27,13 +28,22 @@ if not DISCORD_TOKEN:
     )
 
 MESES_ABREV = {
-    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez",
+    1: "Jan",
+    2: "Fev",
+    3: "Mar",
+    4: "Abr",
+    5: "Mai",
+    6: "Jun",
+    7: "Jul",
+    8: "Ago",
+    9: "Set",
+    10: "Out",
+    11: "Nov",
+    12: "Dez",
 }
 
 # IDs dos cargos
 CARGOS = {
-
     "Visitantes": 1486368796758507590,
     "ESTUDANTE": 1486368795739291690,
     "PROVA": 1486368794795573308,
@@ -66,12 +76,10 @@ CARGOS = {
     "👑 |  DIRETOR GERAL": 1486368744195227780,
     "👑 | RESPONSÁVEL GERAL": 1425163342611349574,
     "Responsavel HP": 1325206480541978643,
-    "Supervisor NW": 1325206480558882829
-
+    "Supervisor NW": 1325206480558882829,
 }
 # src/config.py
 CARGOS_HIERARQUIA = [
-
     "Responsavel HP",
     "👑 | RESPONSÁVEL GERAL",
     "👑 |  DIRETOR GERAL",
@@ -110,14 +118,13 @@ CARGOS_DOUTOR_OU_ACIMA = CARGOS_HIERARQUIA[: CARGOS_HIERARQUIA.index("🥼・Dou
 
 
 HIERARQUIA_GATE = [
-
     "👑・【 GATE 】COMANDANTE・TÁTICO",
     "👑・【 GATE 】SUBCOMANDANTE・TÁTICO",
     "🛡️・【 GATE 】COORDENADOR・TÁTICO",
     "🛡️・【 GATE 】CAPITÃO",
     "⚔️・【 GATE 】OPERADOR",
     "⚔️・【 GATE 】GUARDIÃO",
-    "🛡️・【 GATE 】CMS  ·  Valley"
+    "🛡️・【 GATE 】CMS  ·  Valley",
 ]
 
 CARGOS_CRIACAO_EVENTO_GATE = [
@@ -134,12 +141,11 @@ CARGOS_PUNICOES = {
     "🚫┇Adv 01": 1486368786646044683,
     "🚫┇Adv 02": 1486368785786077236,
     "🚫┇Adv 03": 1486368784804483252,
-    "🚫┇Exonerado": 1486368788956971139
+    "🚫┇Exonerado": 1486368788956971139,
 }
 
 # Hierarquia: define quem pode conceder cargos a algum usuário.
 HIERARQUIA_CONCESSAO = {
-
     "Visitantes": None,
     "ESTUDANTE": "✈️・Recrutador",
     "PROVA": "✈️・Recrutador",
@@ -170,8 +176,7 @@ HIERARQUIA_CONCESSAO = {
     "👑 |  VICE DIRETOR GERAL": "👑 |  DIRETOR GERAL",
     "👑 |  DIRETOR GERAL": "👑 | RESPONSÁVEL GERAL",
     "👑 | RESPONSÁVEL GERAL": "Responsavel HP",
-    "Responsavel HP": "Supervisor NW"
-
+    "Responsavel HP": "Supervisor NW",
 }
 
 TOTAL_PERGUNTAS_PROVA = 11
@@ -179,12 +184,19 @@ COOLDOWN_REPROVACAO_HORAS = 24
 TEMPO_LIMITE_PROVA_MINUTOS = 60
 NOTA_MINIMA_APROVACAO = 70
 
+# Ranking semanal de recrutadores
+VALOR_POR_RECRUTAMENTO = 100_000  # R$ 100.000 por recrutamento aprovado
+RANKING_HORA_POST = 11  # sábado 11h — postagem do ranking
+RANKING_HORA_INICIO_CICLO = 12  # sábado 12h — início do novo ciclo
+RANKING_DIA_POST_MENSAL = 1
+
 CANAIS = {
-    "CRIAR_EVENTO_GATE": 1533993716635799643,
     "CANAL_MARCAR_PRESENCA_GATE": 1533997231475261571,
-    "CANAL_PAINEL_PLANTAO_ID": 1531543798293856376, 
+    "CANAL_PAINEL_PLANTAO_ID": 1531543798293856376,
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
-    "CANAL_ADVERTENCIAS": 1486369099062837341, 
+    "RANKING_RECRUTADORES": 1486369056574406736,  # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
+    "CRIAR_EVENTO_GATE": 1533993716635799643,
+    "CANAL_ADVERTENCIAS": 1486369099062837341,
     "WHITELIST_CANAL_ID": 1528299364970266657,
     "HIERARQUIA_SUL": 1487250788391583745,
     "MATERIAL_ESTUDO": 1486369061507043348,
@@ -194,12 +206,12 @@ CANAIS = {
     "LOG_RECRUTAMENTOS": 1486369287139754014,
     "LOG_APROVACOES": 1526596056274567299,
     "LOG_REPROVACOES": 1526596314744492134,
-    "LOG_CHAMADAS": 1532859432344752149,        
+    "LOG_CHAMADAS": 1532859432344752149,
     "LOG_WHITELIST": 1528352488028246137,
     "LOG_PLANTAO": 1532147151176601670,
     "LOG_CARGOS": 1526596799509561404,
     "LOG_ERROS": 1526596982066380990,
-    "LOG_GATE": 1533997859790127345
+    "LOG_GATE": 1533997859790127345,
 }
 
 
@@ -214,7 +226,7 @@ PREFIXOS_NICKNAME = {
     "🔍・COORDENADOR": "[ COR ]",
     "👑 |  VICE DIRETOR GERAL": "[V.DIR.G]",
     "👑 |  DIRETOR GERAL": "⟦DIR · G⟧",
-    "👑 | RESPONSÁVEL GERAL": "⟦RESP · G⟧"
+    "👑 | RESPONSÁVEL GERAL": "⟦RESP · G⟧",
 }
 
 ESCOPOS_GERENCIAMENTO = {
@@ -232,7 +244,7 @@ ESCOPOS_GERENCIAMENTO = {
             "🛡️・【 GATE 】CAPITÃO",
             "⚔️・【 GATE 】OPERADOR",
             "⚔️・【 GATE 】GUARDIÃO",
-            "🛡️・【 GATE 】CMS  ·  Valley",            
+            "🛡️・【 GATE 】CMS  ·  Valley",
             "🔍・COORDENADOR",
             "👑・Responsável Instrutor・🎓",
             "👑・Responsável Recrutamento・🎯",
@@ -268,7 +280,7 @@ ESCOPOS_GERENCIAMENTO = {
             "🔍・COORDENADOR",
             "👑・DIRETOR",
             "👑・VICE DIRETOR",
-            "👑・SUPERVISOR"
+            "👑・SUPERVISOR",
         ],
         "cargos_gerenciaveis": {
             "🔍・COORDENADOR": [
@@ -281,7 +293,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
-                "🔰・Enfermeiro (a)"
+                "🔰・Enfermeiro (a)",
             ],
             "👑・DIRETOR": [
                 "👑・VICE DIRETOR",
@@ -292,7 +304,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
-                "🔰・Enfermeiro (a)"
+                "🔰・Enfermeiro (a)",
             ],
             "👑・VICE DIRETOR": [
                 "👑・SUPERVISOR",
@@ -302,7 +314,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
-                "🔰・Enfermeiro (a)"
+                "🔰・Enfermeiro (a)",
             ],
             "👑・SUPERVISOR": [
                 "🥼・Instrutor",
@@ -311,15 +323,15 @@ ESCOPOS_GERENCIAMENTO = {
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
-                "🔰・Enfermeiro (a)"
-            ]
+                "🔰・Enfermeiro (a)",
+            ],
         },
     },
     "geral": {
         "cargos_autorizados": [
             "👑 | RESPONSÁVEL GERAL",
             "👑 |  DIRETOR GERAL",
-            "👑 |  VICE DIRETOR GERAL"
+            "👑 |  VICE DIRETOR GERAL",
         ],
         "cargos_gerenciaveis": {
             "👑 | RESPONSÁVEL GERAL": [
@@ -331,7 +343,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🛡️・【 GATE 】CAPITÃO",
                 "⚔️・【 GATE 】OPERADOR",
                 "⚔️・【 GATE 】GUARDIÃO",
-                "🛡️・【 GATE 】CMS  ·  Valley",            
+                "🛡️・【 GATE 】CMS  ·  Valley",
                 "🔍・COORDENADOR",
                 "👑・Responsável Instrutor・🎓",
                 "👑・Responsável Recrutamento・🎯",
@@ -346,8 +358,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
-                "🔰・Enfermeiro (a)"
-
+                "🔰・Enfermeiro (a)",
             ],
             "👑 |  DIRETOR GERAL": [
                 "👑 |  VICE DIRETOR GERAL",
@@ -357,7 +368,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🛡️・【 GATE 】CAPITÃO",
                 "⚔️・【 GATE 】OPERADOR",
                 "⚔️・【 GATE 】GUARDIÃO",
-                "🛡️・【 GATE 】CMS  ·  Valley",            
+                "🛡️・【 GATE 】CMS  ·  Valley",
                 "🔍・COORDENADOR",
                 "👑・Responsável Instrutor・🎓",
                 "👑・Responsável Recrutamento・🎯",
@@ -372,7 +383,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
-                "🔰・Enfermeiro (a)"
+                "🔰・Enfermeiro (a)",
             ],
             "👑 |  VICE DIRETOR GERAL": [
                 "👑・【 GATE 】COMANDANTE・TÁTICO",
@@ -381,7 +392,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🛡️・【 GATE 】CAPITÃO",
                 "⚔️・【 GATE 】OPERADOR",
                 "⚔️・【 GATE 】GUARDIÃO",
-                "🛡️・【 GATE 】CMS  ·  Valley",            
+                "🛡️・【 GATE 】CMS  ·  Valley",
                 "🔍・COORDENADOR",
                 "👑・Responsável Instrutor・🎓",
                 "👑・Responsável Recrutamento・🎯",
@@ -396,7 +407,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
-                "🔰・Enfermeiro (a)"
+                "🔰・Enfermeiro (a)",
             ],
         },
     },
@@ -408,7 +419,7 @@ LIMITE_REMOCOES_SUSPEITAS = 5
 JANELA_TEMPO_SUSPEITA_SEGUNDOS = 90
 
 CANAIS_PLANTAO = {
-    "CALL_INTERNA": 1486369009153740982,       # preencher com os IDs reais
+    "CALL_INTERNA": 1486369009153740982,  # preencher com os IDs reais
     "CALL_EXTERNA": 1486369013624865048,
     "BATE_PAPO_1": 1486369021250113630,
     "BATE_PAPO_2": 1486369024878055506,
@@ -416,20 +427,13 @@ CANAIS_PLANTAO = {
     "DIRETORIA": 1486369036488147015,
     "DIRETORIA_GERAL": 1510825817826132178,
     "RECRUTAMENTO": [
-        1486368986374606890, 
-        1493444738840526960, 
-        1486368989142581359, 
-        1486368991600705626
+        1486368986374606890,
+        1493444738840526960,
+        1486368989142581359,
+        1486368991600705626,
     ],
-    "CONSULTORIOS": [
-        1486369067383259136, 
-        1486369070180995132
-    ],
-    "SALA_CURSOS": [
-        1486369084403876061, 
-        1486369087645946006, 
-        1486369090279837747
-    ],
+    "CONSULTORIOS": [1486369067383259136, 1486369070180995132],
+    "SALA_CURSOS": [1486369084403876061, 1486369087645946006, 1486369090279837747],
 }
 
 SEGUNDOS_PARA_MOEDA = 1800  # 10 segundos pra testar depois mudar
@@ -438,9 +442,10 @@ LEMBRETE_1_MINUTOS = 1
 LEMBRETE_2_MINUTOS = 2
 DESLIGAMENTO_AUTOMATICO_MINUTOS = 3
 HOUSEKEEPING_LIMITE_HORAS = 6
-AFK_AVISO_MINUTOS = 170     # avisa 10 min antes do corte (170 = 2h50)
-AFK_LIMITE_MINUTOS = 180    # 3 horas — desconecta e penaliza
+AFK_AVISO_MINUTOS = 170  # avisa 10 min antes do corte (170 = 2h50)
+AFK_LIMITE_MINUTOS = 180  # 3 horas — desconecta e penaliza
 PENALIDADE_AFK_MOEDAS = 3
+
 
 def obter_todos_ids_canais_plantao() -> set[int]:
     """Achata CANAIS_PLANTAO (que mistura int único e listas) num set de IDs."""
@@ -494,17 +499,14 @@ def _gerar_nomes_amigaveis() -> dict[int, str]:
 
     return nomes
 
+
 NOMES_CANAIS_PLANTAO = _gerar_nomes_amigaveis()
 
 
 TIMEZONE_LOCAL = "America/Sao_Paulo"  # ajuste se o fuso do servidor/cidade for outro
-RR_HORARIOS = ["11:00", "17:00"]      # horários diários de RR (restart) da cidade
+RR_HORARIOS = ["11:00", "17:00"]  # horários diários de RR (restart) da cidade
 INTERVALO_CHAMADA_MINUTOS = 120
 LIMITE_FALTAS_PARA_ADVERTENCIA = 3
 PENALIDADE_FALTA_MOEDAS = 1
 BONUS_PRESENCA_CHAMADA = 1
 BONUS_REALIZAR_CHAMADA = 1
-
-   
-
-CARGO_ADVERTENCIA_ID = 0  # preencher com o ID do cargo de advertência aplicado automaticamente

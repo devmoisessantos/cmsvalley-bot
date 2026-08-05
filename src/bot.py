@@ -71,6 +71,7 @@ class CmsValleyBot(commands.Bot):
             "src.hierarquia.hierarquia",
             "src.hierarquia.hierarquia_class",
             "src.recrutamento.recrutamento_cogs",
+            "src.recrutamento.ranking_tasks",
         ]
 
         total = len(cogs)
