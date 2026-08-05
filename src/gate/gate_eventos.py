@@ -1,12 +1,17 @@
-# src/cogs/gate_eventos.py
+# src\gate\gate_eventos.py
 import discord
 from discord.ext import commands
 
 from src.config import CARGOS_CRIACAO_EVENTO_GATE
-from src.gate.evento_gate_panel import ModalTreino, ModalFacXFac, ModalDominas
+from src.gate.evento_gate_modal import (
+    ModalDominas,
+    ModalFacXFac,
+    ModalTreino,
+)
 from src.gate.evento_gate_services import listar_eventos_abertos
 from src.gate.gate_class import SelectEncerrarEvento
 from src.utils.mensagens import responder_card
+
 
 def _tem_permissao_gate(member: discord.Member) -> bool:
     return any(role.name in CARGOS_CRIACAO_EVENTO_GATE for role in member.roles)
@@ -26,7 +31,7 @@ class GateEventosCog(commands.Cog):
 
         if not _tem_permissao_gate(interaction.user):
             await responder_card(
-                interaction, 
+                interaction,
                 "❌ Sem Permissão",
                 ["Você não tem permissão para gerenciar eventos do GATE."],
                 cor=discord.Color.red(),
@@ -45,7 +50,8 @@ class GateEventosCog(commands.Cog):
             eventos = await listar_eventos_abertos()
             if not eventos:
                 await responder_card(
-                    interaction, "Nenhum Evento Aberto",
+                    interaction,
+                    "Nenhum Evento Aberto",
                     ["Não há eventos em aberto no momento."],
                     cor=discord.Color.orange(),
                 )
@@ -55,7 +61,8 @@ class GateEventosCog(commands.Cog):
             row.add_item(SelectEncerrarEvento(eventos))
 
             await responder_card(
-                interaction, "Encerrar Evento",
+                interaction,
+                "Encerrar Evento",
                 ["Selecione qual evento deseja encerrar:"],
                 cor=discord.Color.orange(),
                 extra_row=row,  # 👈 agora usando o parâmetro certo, que já existe

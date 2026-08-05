@@ -1,4 +1,4 @@
-# src/gate/list_evento_panel.py
+# src/evento_gate_lista.py
 from datetime import (
     datetime,
     timezone,

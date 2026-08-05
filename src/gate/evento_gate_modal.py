@@ -1,3 +1,4 @@
+# src\gate\evento_gate_modal.py
 import discord
 
 from src.utils.error_handling import LoggingModalMixin

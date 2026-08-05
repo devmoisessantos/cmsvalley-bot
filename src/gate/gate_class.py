@@ -1,16 +1,22 @@
+# src\gate\gate_class.py
+import asyncio
 
 import discord
-import asyncio
 from discord.ext import commands
 
-from src.gate.evento_gate_services import confirmar_presenca, encerrar_evento
-from src.gate.gate_logs import atualizar_log_evento
-from src.utils.mensagens import CardView, excluir_mensagem
-
-
 from src.gate.evento_gate_lista import atualizar_painel_presenca
-from src.gate.evento_gate_services import listar_presencas, cancelar_presenca
-from src.utils.mensagens import responder_card
+from src.gate.evento_gate_services import (
+    cancelar_presenca,
+    confirmar_presenca,
+    encerrar_evento,
+    listar_presencas,
+)
+from src.gate.gate_logs import atualizar_log_evento
+from src.utils.mensagens import (
+    CardView,
+    excluir_mensagem,
+    responder_card,
+)
 
 
 class GatePresencaCog(commands.Cog):
@@ -32,7 +38,8 @@ class GatePresencaCog(commands.Cog):
         if ja_confirmou:
             await cancelar_presenca(evento_id, interaction.user.id)
             await responder_card(
-                interaction, "↩️ Presença Cancelada",
+                interaction,
+                "↩️ Presença Cancelada",
                 ["Sua presença foi cancelada."],
                 cor=discord.Color.orange(),
             )
@@ -50,25 +57,27 @@ class SelectEncerrarEvento(discord.ui.Select):
             )
             for ev in eventos
         ]
-        super().__init__(placeholder="Selecione o evento para encerrar", options=options)
-
+        super().__init__(
+            placeholder="Selecione o evento para encerrar", options=options
+        )
 
     async def callback(self, interaction: discord.Interaction):
         evento = await encerrar_evento(int(self.values[0]))
 
         if not evento:
             view = CardView(
-                "Evento Não Encontrado", 
-                ["O evento selecionado não existe mais."], 
-                cor=discord.Color.red(), timeout=None
+                "Evento Não Encontrado",
+                ["O evento selecionado não existe mais."],
+                cor=discord.Color.red(),
+                timeout=None,
             )
         else:
             await atualizar_log_evento(interaction.client, evento, interaction.guild)
             view = CardView(
-                "✅ Evento Encerrado", 
-                [f"**{evento.titulo}** foi encerrado."], 
-                cor=discord.Color.green(), 
-                timeout=None
+                "✅ Evento Encerrado",
+                [f"**{evento.titulo}** foi encerrado."],
+                cor=discord.Color.green(),
+                timeout=None,
             )
 
         await interaction.response.edit_message(content=None, view=view)
@@ -78,7 +87,9 @@ class SelectEncerrarEvento(discord.ui.Select):
 
 
 class ModalConfirmarPresenca(discord.ui.Modal, title="Confirmar Presença"):
-    id_fivem = discord.ui.TextInput(label="Seu ID FiveM", placeholder="1186", max_length=10)
+    id_fivem = discord.ui.TextInput(
+        label="Seu ID FiveM", placeholder="1186", max_length=10
+    )
 
     def __init__(self, evento_id: int):
         super().__init__()
@@ -89,7 +100,8 @@ class ModalConfirmarPresenca(discord.ui.Modal, title="Confirmar Presença"):
             id_fivem_int = int(self.id_fivem.value)
         except ValueError:
             await responder_card(
-                interaction, "❌ ID FiveM Inválido",
+                interaction,
+                "❌ ID FiveM Inválido",
                 ["O ID FiveM fornecido é inválido."],
                 cor=discord.Color.red(),
             )
@@ -97,7 +109,8 @@ class ModalConfirmarPresenca(discord.ui.Modal, title="Confirmar Presença"):
 
         await confirmar_presenca(self.evento_id, interaction.user.id, id_fivem_int)
         await responder_card(
-            interaction, "✅ Presença Confirmada",
+            interaction,
+            "✅ Presença Confirmada",
             [f"ID FiveM registrado: `{id_fivem_int}`"],
             cor=discord.Color.green(),
         )
