@@ -2,21 +2,20 @@ import logging
 import traceback
 
 import discord
+from connection import init_db
 from discord.ext import commands
+from seed_perguntas import seed_perguntas_se_vazio
 
+from backup.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.config import (
     CANAIS,
     DISCORD_TOKEN,
     GUILD_ID,
 )
-from src.database.connection import init_db
-from src.database.seed_perguntas import seed_perguntas_se_vazio
 from src.gate.evento_gate_lista import _montar_container
 from src.gate.evento_gate_panel import PainelEventosGate
 from src.gate.evento_gate_services import listar_eventos_abertos
-from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
-from src.panels.plantao_panel import PainelPlantaoLayout
 from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
     garantir_painel_eventos_gate,
@@ -25,13 +24,13 @@ from src.panels.setup_paineis import (
     garantir_painel_recrutamento,
     garantir_painel_whitelist,
 )
+from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.plantao.plantao_tasks import executar_housekeeping_plantao
 from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
 from src.utils.deploy_logger import (
     erro,
     etapa,
     fim_deploy,
-    info,
     inicio_deploy,
     separador,
     sucesso,
@@ -84,13 +83,13 @@ class CmsValleyBot(commands.Bot):
 
         separador()
 
-        info("Sincronizando comandos de barra...")
+        logging.info("Sincronizando comandos de barra...")
         guild_object = discord.Object(id=GUILD_ID)
         self.tree.copy_global_to(guild=guild_object)
         await self.tree.sync(guild=guild_object)
         sucesso(f"Comandos sincronizados (ID: {GUILD_ID})")
 
-        info("Conectando ao banco de dados...")
+        logging.info("Conectando ao banco de dados...")
         await init_db()
         await seed_perguntas_se_vazio()
         sucesso("Banco de dados pronto")

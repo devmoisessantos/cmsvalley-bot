@@ -1,20 +1,27 @@
+from datetime import (
+    datetime,
+    timezone,
+)
+
 import discord
-from datetime import datetime, timezone
 from sqlalchemy import select
 
 from src.config import (
-    SEGUNDOS_PARA_MOEDA, 
-    VALOR_MOEDA_INGAME, 
-    CARGOS, 
+    CARGOS,
+    CARGOS_DOUTOR_OU_ACIMA,
     CARGOS_HIERARQUIA,
-    CARGOS_DOUTOR_OU_ACIMA
+    SEGUNDOS_PARA_MOEDA,
+    VALOR_MOEDA_INGAME,
+    obter_todos_ids_canais_plantao,
 )
-from src.utils.formatacao import formatar_dinheiro
-from src.config import obter_todos_ids_canais_plantao
-from src.recrutamento.recrutamento_identidade_service import resolver_id_fivem
-from src.plantao.plantao_logger import registrar_evento_plantao, obter_id_fivem_de_recrutamento
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
+from src.plantao.plantao_logger import (
+    obter_id_fivem_de_recrutamento,
+    registrar_evento_plantao,
+)
+from src.utils.formatacao import formatar_dinheiro
+
 
 def garantir_aware(dt: datetime) -> datetime:
     """Se o datetime veio sem timezone (naive), assume que já era UTC e anexa isso."""
@@ -97,14 +104,19 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
             estado.canal_atual_id = canal_atual.id
             estado.ocioso_desde = None  # já entrou contando, não está ocioso
         else:
-            estado.ocioso_desde = datetime.now(timezone.utc) # ligou mas ainda fora de call
+            estado.ocioso_desde = datetime.now(
+                timezone.utc
+            )  # ligou mas ainda fora de call
 
         await session.commit()
-        id_fivem_atual = estado.id_fivem  
+        id_fivem_atual = estado.id_fivem
         saldo_atual = estado.saldo_moedas
 
     await registrar_evento_plantao(
-        membro.guild, membro.id, "TOGGLE_ON", id_fivem_atual,
+        membro.guild,
+        membro.id,
+        "TOGGLE_ON",
+        id_fivem_atual,
         campos_extra={
             "Saldo Atual": f"{saldo_atual} moedas",
             "Já Conectou em Call": "Sim" if canal_atual is not None else "Não",
@@ -112,7 +124,10 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
     )
     if canal_atual is not None:
         await registrar_evento_plantao(
-            membro.guild, membro.id, "ENTROU_CALL", id_fivem_atual,
+            membro.guild,
+            membro.id,
+            "ENTROU_CALL",
+            id_fivem_atual,
             canal_id=canal_atual.id,
         )
 
@@ -131,7 +146,8 @@ async def desligar_servico(membro: discord.Member) -> str:
 
         if estado.em_call_valida:
             await _finalizar_periodo_em_call(
-                estado, membro.guild,
+                estado,
+                membro.guild,
                 evento="CALL_ENCERRADA",
                 motivo="Encerramento do plantão (saiu do serviço)",
             )
@@ -140,29 +156,45 @@ async def desligar_servico(membro: discord.Member) -> str:
         estado.ocioso_desde = None
         estado.lembrete_1_enviado = False
         estado.lembrete_2_enviado = False
-        
+
         await session.commit()
-        saldo_final = estado.saldo_moedas  
+        saldo_final = estado.saldo_moedas
         id_fivem_atual = estado.id_fivem
 
     if estava_ocioso_desde is not None:
-        duracao = int((datetime.now(timezone.utc) - garantir_aware(estava_ocioso_desde)).total_seconds())
-        await registrar_evento_plantao(membro.guild, membro.id, "OCIOSO_ENCERRADO", id_fivem_atual,
-                                        duracao_segundos=duracao,
-                                        detalhes="Encerrado por saída manual do serviço")
+        duracao = int(
+            (
+                datetime.now(timezone.utc) - garantir_aware(estava_ocioso_desde)
+            ).total_seconds()
+        )
+        await registrar_evento_plantao(
+            membro.guild,
+            membro.id,
+            "OCIOSO_ENCERRADO",
+            id_fivem_atual,
+            duracao_segundos=duracao,
+            detalhes="Encerrado por saída manual do serviço",
+        )
 
     await registrar_evento_plantao(
-        membro.guild, membro.id, "TOGGLE_OFF", id_fivem_atual,
-        campos_extra={"Saldo Final": f"{saldo_final} moedas ({formatar_dinheiro(saldo_final * VALOR_MOEDA_INGAME)})"},
+        membro.guild,
+        membro.id,
+        "TOGGLE_OFF",
+        id_fivem_atual,
+        campos_extra={
+            "Saldo Final": f"{saldo_final} moedas ({formatar_dinheiro(saldo_final * VALOR_MOEDA_INGAME)})"
+        },
     )
 
     return "✅ Você saiu de serviço. Cronômetro encerrado."
 
 
 async def _finalizar_periodo_em_call(
-    estado: EstadoPlantao, guild: discord.Guild,
-    evento: str = "SAIU_CALL", motivo: str = "Saiu da call de voz"
-):    
+    estado: EstadoPlantao,
+    guild: discord.Guild,
+    evento: str = "SAIU_CALL",
+    motivo: str = "Saiu da call de voz",
+):
     """Fecha o segmento de call atual: loga a duração, credita moedas se aplicável, e reinicia o estado ocioso."""
     if estado.call_entrada_em is None:
         return
@@ -170,8 +202,14 @@ async def _finalizar_periodo_em_call(
     entrada_total = garantir_aware(estado.call_entrada_em)
     decorrido_total = (datetime.now(timezone.utc) - entrada_total).total_seconds()
 
-    inicio_segmento = garantir_aware(estado.segmento_iniciado_em) if estado.segmento_iniciado_em else entrada_total
-    decorrido_segmento = int((datetime.now(timezone.utc) - inicio_segmento).total_seconds())
+    inicio_segmento = (
+        garantir_aware(estado.segmento_iniciado_em)
+        if estado.segmento_iniciado_em
+        else entrada_total
+    )
+    decorrido_segmento = int(
+        (datetime.now(timezone.utc) - inicio_segmento).total_seconds()
+    )
 
     canal_anterior_id = estado.canal_atual_id
     discord_id = estado.discord_id
@@ -195,26 +233,23 @@ async def _finalizar_periodo_em_call(
 
     # _finalizar_periodo_em_call
     await registrar_evento_plantao(
-        guild, 
+        guild,
         discord_id,
-        evento, 
+        evento,
         id_fivem_atual,
-        canal_id=canal_anterior_id, 
+        canal_id=canal_anterior_id,
         duracao_segundos=decorrido_segmento,
-        campos_extra={
-            "Motivo": motivo
-        },
+        campos_extra={"Motivo": motivo},
     )
 
     if moedas_ganhas > 0:
         await registrar_evento_plantao(
-            guild, discord_id, "MOEDA_CREDITADA", estado.id_fivem,
+            guild,
+            discord_id,
+            "MOEDA_CREDITADA",
+            estado.id_fivem,
             campos_extra={
                 "Moedas Ganhas": str(moedas_ganhas),
                 "Saldo Total": f"{estado.saldo_moedas} moedas ({formatar_dinheiro(estado.saldo_moedas * VALOR_MOEDA_INGAME)})",
             },
         )
-
-
-
-

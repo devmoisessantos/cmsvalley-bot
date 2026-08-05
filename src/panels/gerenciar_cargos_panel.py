@@ -1,9 +1,9 @@
 import discord
 
 from src.services.gerenciar_cargos_service import (
+    adicionar_cargo,
     determinar_escopos,
     listar_cargos_do_escopo,
-    adicionar_cargo,
     remover_cargo,
 )
 from src.utils.error_handling import LoggingViewMixin
@@ -28,8 +28,7 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
 
         for escopo in escopos_do_executor:
             # Agora passamos o membro_executor para filtrar corretamente
-            cargos_deste_escopo = listar_cargos_do_escopo(
-                escopo, membro_executor)
+            cargos_deste_escopo = listar_cargos_do_escopo(escopo, membro_executor)
 
             for nome_do_cargo in cargos_deste_escopo:
                 # Evita duplicatas (um mesmo cargo pode aparecer em mais de um escopo)
@@ -50,8 +49,7 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         para atualizar o resumo exibido.
         """
         # Select para escolher o membro
-        select_membro = discord.ui.UserSelect(
-            placeholder="1. Selecione o membro")
+        select_membro = discord.ui.UserSelect(placeholder="1. Selecione o membro")
         select_membro.callback = self._ao_selecionar_membro
 
         # Select para escolher o cargo (apenas os permitidos)
@@ -66,12 +64,14 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
 
         # Botão de adicionar
         botao_adicionar = discord.ui.Button(
-            label="Adicionar Cargo", style=discord.ButtonStyle.success)
+            label="Adicionar Cargo", style=discord.ButtonStyle.success
+        )
         botao_adicionar.callback = self._ao_clicar_adicionar
 
         # Botão de remover
         botao_remover = discord.ui.Button(
-            label="Remover Cargo", style=discord.ButtonStyle.danger)
+            label="Remover Cargo", style=discord.ButtonStyle.danger
+        )
         botao_remover.callback = self._ao_clicar_remover
 
         # Monta as linhas de componentes
@@ -86,7 +86,11 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         linha_dos_botoes.add_item(botao_remover)
 
         # Texto do resumo (mostra o que está selecionado no momento)
-        resumo_membro = self.candidato_selecionado.mention if self.candidato_selecionado else "*nenhum*"
+        resumo_membro = (
+            self.candidato_selecionado.mention
+            if self.candidato_selecionado
+            else "*nenhum*"
+        )
         resumo_cargo = self.cargo_selecionado if self.cargo_selecionado else "*nenhum*"
 
         # Container que agrupa tudo visualmente
@@ -115,7 +119,8 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         # O valor vem como string, precisamos converter para int e buscar o membro
         id_do_membro_selecionado = interaction.data["values"][0]
         self.candidato_selecionado = interaction.guild.get_member(
-            int(id_do_membro_selecionado))
+            int(id_do_membro_selecionado)
+        )
 
         # Reconstroi o painel para atualizar o resumo
         self._montar_componentes()
@@ -149,7 +154,9 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         # Defer precisar ser feito ANTES de chamar o service,
         # pois o service usa followup.send
         await interaction.response.defer(ephemeral=True)
-        await adicionar_cargo(interaction, self.candidato_selecionado, self.cargo_selecionado)
+        await adicionar_cargo(
+            interaction, self.candidato_selecionado, self.cargo_selecionado
+        )
 
     async def _ao_clicar_remover(self, interaction: discord.Interaction):
         """Callback do botão Remover Cargo."""
@@ -159,7 +166,9 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         # Defer precisar ser feito ANTES de chamar o service,
         # pois o service usa followup.send
         await interaction.response.defer(ephemeral=True)
-        await remover_cargo(interaction, self.candidato_selecionado, self.cargo_selecionado)
+        await remover_cargo(
+            interaction, self.candidato_selecionado, self.cargo_selecionado
+        )
 
 
 class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -191,13 +200,9 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         self.container = discord.ui.Container(
             # Título
-            discord.ui.TextDisplay(
-                "# ⚙️ Painel de Gerenciamento de Cargos"
-            ),
-
+            discord.ui.TextDisplay("# ⚙️ Painel de Gerenciamento de Cargos"),
             # Separador
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-
             # Seção com descrição e thumbnail
             discord.ui.Section(
                 "> **Sistema para Gerenciar Cargos do Servidor**\n",
@@ -210,13 +215,10 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 ),
                 accessory=discord.ui.Thumbnail(url_do_icone) if url_do_icone else None,
             ),
-
             # Separador
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-
             # Botão — CORRIGIDO: nome da variável
             self.linha_do_botao,
-
             accent_color=discord.Color.blurple(),
         )
 

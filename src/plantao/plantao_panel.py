@@ -1,21 +1,34 @@
-import discord
 import logging
+from datetime import (
+    datetime,
+    timezone,
+)
 
-from datetime import datetime, timezone
+import discord
 from sqlalchemy import select
 
-from src.plantao.plantao_service import (
-    ligar_servico, desligar_servico, garantir_aware,
-    resolver_id_fivem, membro_pode_informar_id_manualmente,
-)
 from src.config import (
-    GUILD_ID, CARGOS, NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME, obter_ids_canais_plantao_em_ordem,
+    CARGOS,
+    GUILD_ID,
+    NOMES_CANAIS_PLANTAO,
+    VALOR_MOEDA_INGAME,
+    obter_ids_canais_plantao_em_ordem,
 )
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
-from src.utils.error_handling import LoggingViewMixin
-from src.utils.formatacao import formatar_hms, formatar_dinheiro
 from src.panels.chamada_panel import PainelCoordenacaoView
+from src.plantao.plantao_service import (
+    desligar_servico,
+    garantir_aware,
+    ligar_servico,
+    membro_pode_informar_id_manualmente,
+)
+from src.recrutamento.recrutamento_service import resolver_id_fivem
+from src.utils.error_handling import LoggingViewMixin
+from src.utils.formatacao import (
+    formatar_dinheiro,
+    formatar_hms,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +36,7 @@ MENSAGEM_SEM_PERMISSAO = (
     "❌ Você não está registrado como membro aprovado do hospital "
     "(Nemhum Recrutamento aprovado). Não é possível iniciar o plantão."
 )
+
 
 class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
     id_fivem_input = discord.ui.TextInput(
@@ -36,7 +50,9 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
     def __init__(self, membro: discord.Member, origem: str):
         super().__init__()
         self.membro = membro
-        self.origem = origem  # "painel" ou "info" — decide o que mostrar depois de ligar
+        self.origem = (
+            origem  # "painel" ou "info" — decide o que mostrar depois de ligar
+        )
 
     async def on_submit(self, interaction: discord.Interaction):
         valor = self.id_fivem_input.value.strip()
@@ -58,7 +74,9 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
         if self.origem == "painel":
             card = AcaoServicoView(
                 titulo="✅ Entrou em Serviço",
-                linhas=["Conecte-se a uma das calls disponíveis para começar a contar tempo."],
+                linhas=[
+                    "Conecte-se a uma das calls disponíveis para começar a contar tempo."
+                ],
                 cor=discord.Color.green(),
                 incluir_select_call=True,
             )
@@ -66,13 +84,22 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
         else:
             novo_estado = await _buscar_estado(self.membro.id)
             nova_view = InformacoesPlantaoView(self.membro, novo_estado)
-            await interaction.followup.send(view=nova_view, ephemeral=True)  # 👈 sem "resultado_texto" no content
+            await interaction.followup.send(
+                view=nova_view, ephemeral=True
+            )  # 👈 sem "resultado_texto" no content
+
 
 class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
     """Card dinâmico mostrado após ligar/desligar o serviço pelo painel fixo.
     Foco em orientar a próxima ação — não é o card completo de status (isso é InformacoesPlantaoView)."""
 
-    def __init__(self, titulo: str, linhas: list[str], cor: discord.Color, incluir_select_call: bool = False):
+    def __init__(
+        self,
+        titulo: str,
+        linhas: list[str],
+        cor: discord.Color,
+        incluir_select_call: bool = False,
+    ):
         super().__init__(timeout=180)
 
         componentes = [
@@ -81,7 +108,9 @@ class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
         ]
 
         if incluir_select_call:
-            componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+            componentes.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+            )
             row = discord.ui.ActionRow()
             row.add_item(self._select_calls())
             componentes.append(row)
@@ -91,10 +120,14 @@ class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
 
     def _select_calls(self) -> discord.ui.Select:
         opcoes = [
-            discord.SelectOption(label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id))
+            discord.SelectOption(
+                label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id)
+            )
             for canal_id in obter_ids_canais_plantao_em_ordem()
         ]
-        select = discord.ui.Select(placeholder="📞 Escolha uma call para se conectar", options=opcoes)
+        select = discord.ui.Select(
+            placeholder="📞 Escolha uma call para se conectar", options=opcoes
+        )
         select.callback = self._callback_selecionar_call
         return select
 
@@ -121,6 +154,7 @@ class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
         view_link.add_item(container_link)
 
         await interaction.response.edit_message(view=view_link)
+
 
 class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, guild: discord.Guild):
@@ -171,7 +205,7 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "❌ Este comando só pode ser usado em servidores.", ephemeral=True
             )
             return
-        
+
         estado_antes = await _buscar_estado(interaction.user.id)
         ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
 
@@ -198,7 +232,9 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                     ModalInformarIDFivem(interaction.user, origem="painel")
                 )
                 return
-            await interaction.response.send_message(MENSAGEM_SEM_PERMISSAO, ephemeral=True)
+            await interaction.response.send_message(
+                MENSAGEM_SEM_PERMISSAO, ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -207,7 +243,9 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         if resultado_texto.startswith("✅"):
             card = AcaoServicoView(
                 titulo="✅ Entrou em Serviço",
-                linhas=["Conecte-se a uma das calls disponíveis para começar a contar tempo."],
+                linhas=[
+                    "Conecte-se a uma das calls disponíveis para começar a contar tempo."
+                ],
                 cor=discord.Color.green(),
                 incluir_select_call=True,
             )
@@ -223,7 +261,6 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
         botao.callback = self._callback_ver_informacoes
         return botao
-
 
     async def _callback_ver_informacoes(self, interaction: discord.Interaction):
         estado = await _buscar_estado(interaction.user.id)
@@ -258,7 +295,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             status_texto = "🟢 Em Serviço (aguardando conexão em uma call)"
             linha_call = "`📍` Nenhuma call conectada — selecione uma abaixo"
         else:
-            status_texto = '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
+            status_texto = (
+                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
+            )
 
         linhas = (
             f"`💰` **Recompensa:** Ganhe 1 moeda (Valor: {formatar_dinheiro(VALOR_MOEDA_INGAME)}) a cada **30 minutos**.\n"
@@ -268,12 +307,15 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         if linha_call:
             linhas += f"\n{linha_call}"
 
-
         row_botao = discord.ui.ActionRow()
         if online:
-            botao = discord.ui.Button(label="🔴 Sair do Serviço", style=discord.ButtonStyle.danger)
+            botao = discord.ui.Button(
+                label="🔴 Sair do Serviço", style=discord.ButtonStyle.danger
+            )
         else:
-            botao = discord.ui.Button(label="🟢 Entrar em Serviço", style=discord.ButtonStyle.success)
+            botao = discord.ui.Button(
+                label="🟢 Entrar em Serviço", style=discord.ButtonStyle.success
+            )
         botao.callback = self._callback_toggle
         row_botao.add_item(botao)
 
@@ -286,9 +328,17 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
 
         # dentro de InformacoesPlantaoView.__init__, depois de montar row_botao:
         cargo_doutor_id = CARGOS.get("🥼・Doutor")
-        if cargo_doutor_id and any(cargo.id == cargo_doutor_id for cargo in membro.roles):
-            modo_texto = "🧭 Desativar Modo Coordenação" if (estado and estado.modo_coordenacao) else "🧭 Ativar Modo Coordenação"
-            botao_modo = discord.ui.Button(label=modo_texto, style=discord.ButtonStyle.secondary)
+        if cargo_doutor_id and any(
+            cargo.id == cargo_doutor_id for cargo in membro.roles
+        ):
+            modo_texto = (
+                "🧭 Desativar Modo Coordenação"
+                if (estado and estado.modo_coordenacao)
+                else "🧭 Ativar Modo Coordenação"
+            )
+            botao_modo = discord.ui.Button(
+                label=modo_texto, style=discord.ButtonStyle.secondary
+            )
             botao_modo.callback = self._callback_alternar_modo_coordenacao
             row_botao.add_item(botao_modo)
 
@@ -305,10 +355,14 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
 
     def _select_calls(self) -> discord.ui.Select:
         opcoes = [
-            discord.SelectOption(label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id))
+            discord.SelectOption(
+                label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id)
+            )
             for canal_id in obter_ids_canais_plantao_em_ordem()
         ]
-        select_menu = discord.ui.Select(placeholder="📍 Clique aqui para trocar de call", options=opcoes)
+        select_menu = discord.ui.Select(
+            placeholder="📍 Clique aqui para trocar de call", options=opcoes
+        )
         select_menu.callback = self._callback_selecionar_call
         return select_menu
 
@@ -332,7 +386,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                     ModalInformarIDFivem(interaction.user, origem="info")
                 )
                 return
-            await interaction.response.send_message(MENSAGEM_SEM_PERMISSAO, ephemeral=True)
+            await interaction.response.send_message(
+                MENSAGEM_SEM_PERMISSAO, ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -354,13 +410,16 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         view_link.add_item(botao_link)
         await interaction.response.send_message(view=view_link, ephemeral=True)
 
-
-    async def _callback_alternar_modo_coordenacao(self, interaction: discord.Interaction):
+    async def _callback_alternar_modo_coordenacao(
+        self, interaction: discord.Interaction
+    ):
         await interaction.response.defer(ephemeral=True)
 
         async with async_session() as session:
             resultado = await session.execute(
-                select(EstadoPlantao).where(EstadoPlantao.discord_id == interaction.user.id)
+                select(EstadoPlantao).where(
+                    EstadoPlantao.discord_id == interaction.user.id
+                )
             )
             estado = resultado.scalar_one_or_none()
             if estado is None:
@@ -372,7 +431,6 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             await session.commit()
 
         if ativado:
-            
             nova_view = await PainelCoordenacaoView.construir(interaction.user)
         else:
             novo_estado = await _buscar_estado(interaction.user.id)

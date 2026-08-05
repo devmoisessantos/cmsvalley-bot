@@ -27,7 +27,6 @@ class PainelAvaliacaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                     "Clique no botão abaixo para iniciar sua avaliação.\n\n"
                     "Você terá **11 perguntas de múltipla escolha** e **1 hora** para concluir.\n"
                     "⚠️ A avaliação só pode ser iniciada **uma única vez**."
-
                 ),
                 accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
             ),
@@ -39,6 +38,5 @@ class PainelAvaliacaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
     async def iniciar_avaliacao(self, interaction: discord.Interaction):
         from src.services.avaliacao_service import iniciar_avaliacao
+
         await iniciar_avaliacao(interaction)
-
-

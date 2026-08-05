@@ -10,15 +10,19 @@ processo formal), e a varredura de apelido preenche as lacunas.
 """
 
 import re
-from typing import Dict, List, Optional
+from typing import (
+    Dict,
+    List,
+    Optional,
+)
 
 import discord
-from src.services.validacao_ids import MembroConhecido
 
 # Os prefixos de cargo que aparecem no início do apelido — usados só pra
 # identificar visualmente, não são obrigatórios pro parsing do ID funcionar
 # (o regex do ID não depende de reconhecer o prefixo certo).
 from src.config import PREFIXOS_NICKNAME
+from src.services.validacao_ids import MembroConhecido
 
 # Pega o primeiro número depois de um "|" — não ancora no fim da string
 # porque apelidos reais têm lixo depois do ID às vezes (ex: "| 1763 [VL]").
@@ -35,7 +39,7 @@ def _extrair_nome(nome_exibido: str) -> str:
     nome_sem_id = nome_exibido.split("|")[0].strip()
     for tag in PREFIXOS_NICKNAME.values():
         if nome_sem_id.startswith(tag):
-            nome_sem_id = nome_sem_id[len(tag):].strip()
+            nome_sem_id = nome_sem_id[len(tag) :].strip()
             break
     return nome_sem_id
 
@@ -48,11 +52,13 @@ def construir_membros_via_apelido(guild: discord.Guild) -> List[MembroConhecido]
         id_fivem = extrair_id_do_apelido(nome_exibido)
         if id_fivem is None:
             continue
-        membros.append(MembroConhecido(
-            id_fivem=id_fivem,
-            nome=_extrair_nome(nome_exibido),
-            discord_id=membro.id,
-        ))
+        membros.append(
+            MembroConhecido(
+                id_fivem=id_fivem,
+                nome=_extrair_nome(nome_exibido),
+                discord_id=membro.id,
+            )
+        )
     return membros
 
 
@@ -85,9 +91,11 @@ def construir_membros_via_apelido(guild: discord.Guild) -> List[MembroConhecido]
         id_fivem = extrair_id_do_apelido(nome_exibido)
         if id_fivem is None:
             continue
-        membros.append(MembroConhecido(
-            id_fivem=id_fivem,
-            nome=_extrair_nome(nome_exibido),
-            discord_id=membro.id,
-        ))
+        membros.append(
+            MembroConhecido(
+                id_fivem=id_fivem,
+                nome=_extrair_nome(nome_exibido),
+                discord_id=membro.id,
+            )
+        )
     return membros

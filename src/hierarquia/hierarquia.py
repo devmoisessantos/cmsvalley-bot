@@ -10,8 +10,9 @@ class Hierarquia(commands.Cog):
         self.bot = bot
 
     @app_commands.command(
-            name="atualizar-hierarquia", 
-            description="Força a atualização do painel de hierarquia")
+        name="atualizar-hierarquia",
+        description="Força a atualização do painel de hierarquia",
+    )
     async def atualizar(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await atualizar_hierarquia(interaction.guild)
