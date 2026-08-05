@@ -201,7 +201,7 @@ CANAIS = {
     "HIERARQUIA_SUL": 1487250788391583745,
     "MATERIAL_ESTUDO": 1486369061507043348,
     # Guia do Estagiário — painel de boas-vindas (categoria 1)
-    "PAINEL_BOAS_VINDAS": 0,  # ← canal onde o painel fica fixo
+    "PAINEL_BOAS_VINDAS": 1486369046357082163,  # ← canal onde o painel fica fixo
     "GUIA_UNIFORME": 1486369237944635484,
     "GUIA_REGRAS_HP": 1486369111872372746,
     "GUIA_REGRAS_BAU": 1486369113243648072,
