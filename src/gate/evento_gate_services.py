@@ -6,17 +6,18 @@ from sqlalchemy import select
 
 from src.config import CARGOS_CRIACAO_EVENTO_GATE
 from src.database.connection import async_session
-from src.database.models import EventosGate, Presenca, agora
-from src.gate.evento_gate_modal import ModalDominas, ModalFacXFac, ModalTreino
-from src.utils.mensagens import responder_card
+from src.database.models import (
+    EventosGate,
+    Presenca,
+    agora,
+)
 
 
-# adicionar em src/gate/evento_gate_services.py
 async def buscar_evento_por_id(evento_id: int) -> EventosGate | None:
     async with async_session() as session:
         return await session.get(EventosGate, evento_id)
 
-    
+
 async def criar_evento(
     tipo: str,
     titulo: str,
@@ -74,7 +75,9 @@ async def salvar_log_message_id(evento_id: int, message_id: int):
         await session.commit()
 
 
-async def confirmar_presenca(evento_id: int, discord_id: int, id_fivem: int) -> Presenca:
+async def confirmar_presenca(
+    evento_id: int, discord_id: int, id_fivem: int
+) -> Presenca:
     async with async_session() as session:
         presenca = Presenca(
             evento_id=evento_id,
@@ -115,8 +118,10 @@ async def listar_presencas(evento_id: int) -> list[Presenca]:
 # VALIDAÇÃO DOS CAMPOS DO MODAL
 # ---------------------------------------------------------------------------
 
+
 def validar_data(valor: str) -> tuple[bool, str]:
-    """Aceita apenas DD/MM/AAAA, com data real (rejeita 32/13/2026, 29/02 em ano não bissexto, etc).
+    """Aceita apenas DD/MM/AAAA, com data real
+    (rejeita 32/13/2026, 29/02 em ano não bissexto, etc).
     Retorna (valido, mensagem_de_erro)."""
     valor = valor.strip()
     try:
@@ -166,35 +171,3 @@ def validar_adversario(valor: str | None) -> tuple[bool, str]:
 
 def tem_permissao_gate(member: discord.Member) -> bool:
     return any(role.name in CARGOS_CRIACAO_EVENTO_GATE for role in member.roles)
-
-
-async def registrar_listener_gate(bot: discord.Client):
-    @bot.listen("on_interaction")
-    async def _on_gate_interaction(interaction: discord.Interaction):
-        if interaction.type != discord.InteractionType.component:
-            return
-        custom_id = interaction.data.get("custom_id", "")
-        if not custom_id.startswith("gate:"):
-            return
-
-        if not tem_permissao_gate(interaction.user):
-            await responder_card(
-                interaction, 
-                "❌ Sem Permissão",
-                ["Você não tem permissão para gerenciar eventos do GATE."],
-                cor=discord.Color.red(),
-            )
-            return
-
-        acao = custom_id.split(":", 1)[1]
-
-        if acao == "treino":
-            await interaction.response.send_modal(ModalTreino())
-        elif acao == "facxfac":
-            await interaction.response.send_modal(ModalFacXFac())
-        elif acao == "dominas":
-            await interaction.response.send_modal(ModalDominas())
-        elif acao == "encerrar":
-            ok = await encerrar_evento(interaction.user.id)
-            msg = "✅ Listagem para evento encerrado." if ok else "Nenhum evento em aberto encontrado."
-            await interaction.response.send_message(msg, ephemeral=True)

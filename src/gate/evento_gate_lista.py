@@ -1,4 +1,3 @@
-# src/evento_gate_lista.py
 from datetime import (
     datetime,
     timezone,
@@ -14,10 +13,8 @@ from src.database.connection import async_session
 from src.database.models import EventosGate
 from src.gate.evento_gate_services import (
     buscar_evento_por_id,
-    cancelar_presenca,
     listar_presencas,
 )
-from src.gate.gate_class import ModalConfirmarPresenca
 
 
 async def _montar_container(bot: discord.Client, evento) -> discord.ui.Container:
@@ -38,9 +35,6 @@ async def _montar_container(bot: discord.Client, evento) -> discord.ui.Container
 
     icon_url = guild.icon.url if guild.icon else None
 
-    # 👇 CORREÇÃO: Thumbnail não pode ser item solto de Container — só existe como
-    # accessory de uma Section. Junta o título + stats no texto da Section, e o ícone
-    # vira o "acessório" visual ao lado. Se não tiver ícone, cai num TextDisplay normal.
     texto_cabecalho = (
         "# 📋 Lista de Presença\n"
         f"`✅` **Total de confirmados:** {len(confirmados_ids)}\n"
@@ -128,26 +122,3 @@ async def atualizar_painel_presenca(bot: discord.Client, evento_id: int):
     view.add_item(container)
 
     await msg.edit(view=view)
-
-
-async def registrar_listener_presenca(bot: discord.Client):
-    @bot.listen("on_interaction")
-    async def _on_presenca_interaction(interaction: discord.Interaction):
-        if interaction.type != discord.InteractionType.component:
-            return
-        custom_id = interaction.data.get("custom_id", "")
-        if not custom_id.startswith("presenca:"):
-            return
-
-        evento_id = int(custom_id.split(":", 1)[1])
-        presencas = await listar_presencas(evento_id)
-        ja_confirmou = any(p.discord_id == interaction.user.id for p in presencas)
-
-        if ja_confirmou:
-            await cancelar_presenca(evento_id, interaction.user.id)
-            await interaction.response.send_message(
-                "↩️ Presença cancelada.", ephemeral=True
-            )
-            await atualizar_painel_presenca(interaction.client, evento_id)
-        else:
-            await interaction.response.send_modal(ModalConfirmarPresenca(evento_id))
