@@ -6,12 +6,6 @@ from datetime import (
 )
 
 import discord
-from models import (
-    Chamada,
-    EstadoPlantao,
-    Recrutamento,
-    Usuario,
-)
 from sqlalchemy import select
 
 from src.config import (
@@ -20,6 +14,12 @@ from src.config import (
     CARGOS_BYPASS_PRESENCA_CHAMADA,
 )
 from src.database.connection import async_session
+from src.database.models import (
+    Chamada,
+    EstadoPlantao,
+    Recrutamento,
+    Usuario,
+)
 from src.plantao.chamada.chamada_service import (
     calcular_proximo_horario_permitido,
     finalizar_chamada,

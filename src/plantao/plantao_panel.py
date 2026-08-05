@@ -16,7 +16,7 @@ from src.config import (
 )
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
-from src.panels.chamada_panel import PainelCoordenacaoView
+from src.plantao.chamada.chamada_panel import PainelCoordenacaoView
 from src.plantao.plantao_service import (
     desligar_servico,
     garantir_aware,
