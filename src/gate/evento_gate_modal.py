@@ -1,12 +1,5 @@
 import discord
 
-from src.gate.evento_gate_services import (
-    criar_evento,
-    validar_adversario,
-    validar_data,
-    validar_horario,
-    validar_limite,
-)
 from src.gate.gate_logs import enviar_log_evento
 from src.utils.error_handling import LoggingModalMixin
 from src.utils.mensagens import responder_card
@@ -33,7 +26,16 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
         self.tipo = tipo
 
     async def on_submit(self, interaction: discord.Interaction):
+        # import lazy — os dois módulos (services e modal) dependem um do outro,
+        # então nenhum dos dois pode importar o outro no topo do arquivo
         from src.gate.evento_gate_lista import enviar_painel_presenca
+        from src.gate.evento_gate_services import (
+            criar_evento,
+            validar_adversario,
+            validar_data,
+            validar_horario,
+            validar_limite,
+        )
 
         # 👇 Validações em ordem — para na primeira que falhar, avisa o motivo específico
         valido, erro = validar_data(self.dia.value)
