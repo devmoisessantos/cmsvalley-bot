@@ -1,6 +1,5 @@
 import discord
 
-from src.gate.gate_logs import enviar_log_evento
 from src.utils.error_handling import LoggingModalMixin
 from src.utils.mensagens import responder_card
 
@@ -36,6 +35,7 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
             validar_horario,
             validar_limite,
         )
+        from src.gate.gate_logs import enviar_log_evento
 
         # 👇 Validações em ordem — para na primeira que falhar, avisa o motivo específico
         valido, erro = validar_data(self.dia.value)
