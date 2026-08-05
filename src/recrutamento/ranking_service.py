@@ -267,9 +267,12 @@ def montar_view_ranking(
         if guild
         else f"-# Ranking • <t:{agora_ts}:f>"
     )
+    icon_url = guild.icon.url if guild.icon else None
 
     container = discord.ui.Container(
-        discord.ui.TextDisplay(cabecalho),
+        discord.ui.Section(
+            cabecalho, accessory=discord.ui.Thumbnail(icon_url) if icon_url else None
+        ),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
         discord.ui.TextDisplay(corpo),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
