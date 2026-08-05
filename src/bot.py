@@ -14,10 +14,12 @@ from src.database.seed_perguntas import seed_perguntas_se_vazio
 from src.gate.evento_gate_lista import _montar_container
 from src.gate.evento_gate_panel import PainelEventosGate
 from src.gate.evento_gate_services import listar_eventos_abertos
+from src.guia.boas_vindas_panel import PainelBoasVindasLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
+    garantir_painel_boas_vindas,
     garantir_painel_eventos_gate,
     garantir_painel_gerenciar_cargos,
     garantir_painel_plantao,
@@ -102,6 +104,7 @@ class CmsValleyBot(commands.Bot):
         self.painel_whitelist_view = None
         self.painel_gerenciar_cargos_view = None
         self.painel_eventos_gate_view = None
+        self.painel_boas_vindas_view = None
 
         @self.tree.error
         async def on_app_command_error(
@@ -143,6 +146,7 @@ class CmsValleyBot(commands.Bot):
             self.painel_gerenciar_cargos_view = PainelGerenciarCargoLayout(guild=guild)
             self.painel_plantao_view = PainelPlantaoLayout(guild)
             self.painel_eventos_gate_view = PainelEventosGate(guild=guild)
+            self.painel_boas_vindas_view = PainelBoasVindasLayout(guild=guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -156,6 +160,7 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_gerenciar_cargos_view)
         self.add_view(self.painel_plantao_view)
         self.add_view(self.painel_eventos_gate_view)
+        self.add_view(self.painel_boas_vindas_view)
 
         # painéis de presença têm custom_id dinâmico por evento — sempre
         # precisa reconstruir e re-registrar, um por evento aberto
@@ -174,6 +179,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_gerenciar_cargos(self)
         await garantir_painel_plantao(self)
         await garantir_painel_eventos_gate(self)
+        await garantir_painel_boas_vindas(self)
 
         fim_deploy()
 
