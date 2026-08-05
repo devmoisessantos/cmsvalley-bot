@@ -3,18 +3,18 @@ import traceback
 
 import discord
 from discord.ext import commands
-from seed_perguntas import seed_perguntas_se_vazio
 
-from backup.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.config import (
     CANAIS,
     DISCORD_TOKEN,
     GUILD_ID,
 )
 from src.database.connection import init_db
+from src.database.seed_perguntas import seed_perguntas_se_vazio
 from src.gate.evento_gate_lista import _montar_container
 from src.gate.evento_gate_panel import PainelEventosGate
 from src.gate.evento_gate_services import listar_eventos_abertos
+from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
