@@ -57,19 +57,19 @@ class CmsValleyBot(commands.Bot):
 
         # Listar extensões (cogs)
         cogs = [
-            "src.services.plantao_listener",
-            "src.services.plantao_tasks",
-            "src.hierarquia.listener",
-            "src.cogs.gerenciar_cargos",
-            "src.cogs.plantao",
-            "src.cogs.whitelist",
-            "src.cogs.hierarquia",
             "src.cogs.backup",
             "src.cogs.restore",
             "src.cogs.diff",
             "src.cogs.status",
-            "src.cogs.gate_eventos",
-            "src.cogs.gate_presenca",
+            "src.cogs.gerenciar_cargos",
+            "src.whitelist.whitelist_cogs",
+            "src.plantao.plantao_cogs",
+            "src.plantao.plantao_listener",
+            "src.plantao.plantao_tasks",
+            "src.hierarquia.hierarquia",
+            "src.hierarquia.hierarquia_class",
+            "src.gate.gate_eventos",
+            "src.gate.gate_presenca",
         ]
 
         total = len(cogs)
