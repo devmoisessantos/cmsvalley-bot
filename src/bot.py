@@ -32,6 +32,8 @@ from src.plantao.chamada.painel_chamada_persistente import PainelFazerChamadaLay
 from src.plantao.gerenciar_membros_panel import PainelGerenciarMembrosLayout
 from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.plantao.plantao_tasks import executar_housekeeping_plantao
+from src.punicoes.cogs import garantir_painel_punicoes
+from src.punicoes.panel import PainelPunicoesLayout
 from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
 from src.utils.deploy_logger import (
     erro,
@@ -68,6 +70,7 @@ class CmsValleyBot(commands.Bot):
             "src.cogs.diff",
             "src.cogs.status",
             "src.cogs.gerenciar_cargos",
+            "src.punicoes.cogs",
             "src.gate.gate_class",
             "src.gate.gate_eventos",
             "src.whitelist.whitelist_cogs",
@@ -112,6 +115,7 @@ class CmsValleyBot(commands.Bot):
         self.painel_boas_vindas_view = None
         self.painel_fazer_chamada_view = None
         self.painel_gerenciar_membros_view = None
+        self.painel_punicoes_view = None
 
         @self.tree.error
         async def on_app_command_error(
@@ -158,6 +162,7 @@ class CmsValleyBot(commands.Bot):
             self.painel_gerenciar_membros_view = PainelGerenciarMembrosLayout(
                 guild=guild
             )
+            self.painel_punicoes_view = PainelPunicoesLayout(guild=guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -174,6 +179,7 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_boas_vindas_view)
         self.add_view(self.painel_fazer_chamada_view)
         self.add_view(self.painel_gerenciar_membros_view)
+        self.add_view(self.painel_punicoes_view)
 
         # painéis de presença têm custom_id dinâmico por evento — sempre
         # precisa reconstruir e re-registrar, um por evento aberto
@@ -195,6 +201,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_boas_vindas(self)
         await garantir_painel_fazer_chamada(self)
         await garantir_painel_gerenciar_membros(self)
+        await garantir_painel_punicoes(self)
 
         fim_deploy()
 
