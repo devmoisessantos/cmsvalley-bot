@@ -1,6 +1,9 @@
-"""Log de punição em Components V2 + tópico restrito de provas."""
+"""Log de punição em Components V2 + tópico de provas + DM ao advertido."""
 
 from __future__ import annotations
+
+import asyncio
+from datetime import datetime
 
 import discord
 
@@ -51,26 +54,88 @@ async def registrar_log_punicao(
     try:
         thread = await msg.create_thread(
             name="📁 Provas anexadas",
-            auto_archive_duration=10080,
+            auto_archive_duration=60,
         )
-        # Aviso no tópico
-        await thread.send(
-            "📁 **Provas anexadas**\n"
-            "_Tópico restrito — apenas staff com permissão de moderação deve escrever aqui._"
-        )
-
-        # Links FORA de container para preview automático do Discord
+        # Provas no tópico (links soltos para preview do Discord)
         if links:
-            bloco_links = "🔗 **Links**\n" + "\n".join(links)
+            bloco_links = "\n\n🔗 **Provas / Links**\n" + "\n".join(links)
             await thread.send(bloco_links)
+        else:
+            await thread.send(
+                "📁 **Provas anexadas**\n_Nenhum link de prova foi informado._"
+            )
 
-        # Tenta travar envio de membros comuns (moderadores ainda escrevem)
+        # Abre o tópico, aguarda 2s e fecha/trava
+        await asyncio.sleep(2)
         try:
-            await thread.edit(locked=True)
+            await thread.edit(locked=True, archived=True)
         except discord.HTTPException:
-            pass
+            try:
+                await thread.edit(locked=True)
+            except discord.HTTPException:
+                pass
 
     except discord.HTTPException:
         thread = None
 
+    # Notifica o advertido em DM com botão link para o registro
+    await notificar_dm_advertencia(
+        alvo=alvo,
+        executor=executor,
+        id_fivem=id_fivem,
+        cargo_nome=cargo_role.name,
+        motivo=motivo,
+        msg_log=msg,
+    )
+
     return msg, thread
+
+
+async def notificar_dm_advertencia(
+    *,
+    alvo: discord.Member,
+    executor: discord.Member,
+    id_fivem: str,
+    cargo_nome: str,
+    motivo: str,
+    msg_log: discord.Message | None,
+) -> None:
+    """Envia DM ao usuário advertido com resumo + botão link para o registro."""
+    data_str = datetime.now().strftime("%d/%m/%Y, %H:%M")
+
+    items: list = [
+        discord.ui.TextDisplay("# Você recebeu uma advertência!"),
+        discord.ui.TextDisplay(f"> **ID FiveM:** `{id_fivem}`"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+        discord.ui.TextDisplay(f"### > **🧾 Punição:**\n`{cargo_nome.strip()}`"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay("### > **⏳ Duração:**\n`Até o Pagamento via Ticket`"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(f"### > **📝 Motivo:**\n`{motivo[:500]}`"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(
+            f"### > **👮 Aplicado por:**\n{executor.mention} (`{executor.id}`)"
+        ),
+        discord.ui.TextDisplay(f"### > **📅 Data da Punição:**\n`{data_str}`"),
+    ]
+
+    if msg_log is not None:
+        row = discord.ui.ActionRow()
+        row.add_item(
+            discord.ui.Button(
+                label="🔗 Acessar a Advertência",
+                style=discord.ButtonStyle.link,
+                url=msg_log.jump_url,
+            )
+        )
+        items.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        items.append(row)
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*items, accent_color=discord.Color.dark_red()))
+
+    try:
+        await alvo.send(view=view)
+    except (discord.Forbidden, discord.HTTPException):
+        # DM fechada ou bloqueada — ignora
+        pass

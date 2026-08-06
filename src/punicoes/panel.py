@@ -67,14 +67,14 @@ class PainelPunicoesLayout(LoggingViewMixin, discord.ui.LayoutView):
         icon_url = guild.icon.url if guild.icon else None
 
         self.container = discord.ui.Container(
-            discord.ui.Section( 
-            "# 🔨 Painel de Advertência",
-                (
-                    "-# Use as opções abaixo para aplicar advertência em algum membro!\n"
-                    "-# Cada advertência é registrada em log portanto evite abusar!\n"
-                    "-# Caso tenha dúvidas entre em contato com os Gerais!"
-                ),
+            discord.ui.Section(
+                "# 🔨 Painel de Advertência",
                 accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
+            ),
+            discord.ui.TextDisplay(
+                "-# Use as opções abaixo para aplicar advertência em algum membro!\n"
+                "-# Cada advertência é registrada em log portanto evite abusar!\n"
+                "-# Caso tenha dúvidas entre em contato com os Gerais!"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(
@@ -449,18 +449,49 @@ def _fmt_membro_info(membro: discord.Member) -> str:
     )
 
 
+async def _montar_view_escolher_adv(
+    membro: discord.Member,
+) -> discord.ui.LayoutView | None:
+    """View com Select das advertências ativas. Retorna None se não houver ativas."""
+    ativas = await listar_punicoes_membro(membro.id, apenas_ativas=True)
+    if not ativas:
+        return None
+
+    opcoes = []
+    for p in ativas[:25]:
+        ts = f"<t:{int(p.criada_em.timestamp())}:d>" if p.criada_em else "—"
+        label = f"#{p.id} · {p.cargo_nome.strip()}"[:100]
+        desc = f"{ts} · {(p.motivo or '')[:80]}"[:100]
+        opcoes.append(
+            discord.SelectOption(
+                label=label,
+                value=str(p.id),
+                description=desc,
+                emoji="⚠️",
+            )
+        )
+
+    view = EscolherAdvertenciaRemoverView(membro=membro, opcoes=opcoes, ativas=ativas)
+    return view
+
+
 class FluxoRemoverPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
-    """Seleciona usuário (UserSelect ou modal por ID) → confirma → motivo → remove."""
+    """
+    UserSelect → se achar, abre select de advs ativas + motivo.
+    Buscar por ID → edita ephemeral com encontrado + Confirmar → select de advs.
+    """
 
     def __init__(
         self,
         membro_id: int | None = None,
         *,
         membro: discord.Member | None = None,
+        exigir_confirmacao: bool = False,
     ):
         super().__init__(timeout=300)
         self.membro_id = membro.id if membro else membro_id
-        self._membro_cache = membro  # dados frescos p/ Nome atual / Conta
+        self._membro_cache = membro
+        self.exigir_confirmacao = exigir_confirmacao
         self._rebuild()
 
     def _rebuild(self):
@@ -501,7 +532,8 @@ class FluxoRemoverPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
             row_btn,
         ]
 
-        if self.membro_id:
+        # Só mostra "encontrado + confirmar" no caminho do modal de ID
+        if self.membro_id and self.exigir_confirmacao:
             info = (
                 _fmt_membro_info(self._membro_cache)
                 if self._membro_cache is not None
@@ -531,6 +563,15 @@ class FluxoRemoverPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.Container(*items, accent_color=discord.Color.dark_grey())
         )
 
+    async def _abrir_escolha_adv(
+        self, interaction: discord.Interaction, membro: discord.Member
+    ):
+        view = await _montar_view_escolher_adv(membro)
+        if view is None:
+            await interaction.response.edit_message(view=_view_sem_adv_ativas(membro))
+            return
+        await interaction.response.edit_message(view=view)
+
     async def _on_user_select(self, interaction: discord.Interaction):
         uid = int(interaction.data["values"][0])
         membro = interaction.guild.get_member(uid) if interaction.guild else None
@@ -539,9 +580,8 @@ class FluxoRemoverPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
                 "❌ Membro não encontrado no servidor.", ephemeral=True
             )
             return
-        await interaction.response.edit_message(
-            view=FluxoRemoverPunicaoView(membro=membro)
-        )
+        # Select direto → vai para escolha das advertências ativas
+        await self._abrir_escolha_adv(interaction, membro)
 
     async def _on_buscar_id(self, interaction: discord.Interaction):
         await interaction.response.send_modal(ModalDiscordIdRemover())
@@ -560,7 +600,78 @@ class FluxoRemoverPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
                 "❌ Membro não está no servidor.", ephemeral=True
             )
             return
-        await interaction.response.send_modal(ModalMotivoRemocao(membro))
+        await self._abrir_escolha_adv(interaction, membro)
+
+
+def _view_sem_adv_ativas(membro: discord.Member) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=120)
+    view.add_item(
+        discord.ui.Container(
+            discord.ui.TextDisplay(
+                f"# 🧹 Remover Punições\n"
+                f"{membro.mention} (`{membro.id}`)\n\n"
+                "❌ Este membro **não possui advertências ativas** no banco."
+            ),
+            accent_color=discord.Color.red(),
+        )
+    )
+    return view
+
+
+class EscolherAdvertenciaRemoverView(LoggingViewMixin, discord.ui.LayoutView):
+    """Select das advertências ativas → modal de motivo → remove."""
+
+    def __init__(
+        self,
+        *,
+        membro: discord.Member,
+        opcoes: list[discord.SelectOption],
+        ativas: list,
+    ):
+        super().__init__(timeout=300)
+        self.membro = membro
+        self.ativas = ativas
+
+        row = discord.ui.ActionRow()
+        sel = discord.ui.Select(
+            placeholder="Escolha a advertência ativa para remover…",
+            options=opcoes,
+            min_values=1,
+            max_values=1,
+        )
+        sel.callback = self._on_select_adv
+        row.add_item(sel)
+
+        lista_txt = "\n".join(
+            f"• `#{p.id}` **{p.cargo_nome.strip()}** — {(p.motivo or '')[:80]}"
+            for p in ativas[:10]
+        )
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# 🧹 Remover Punições"),
+                discord.ui.TextDisplay(
+                    f"**Usuário:** {membro.mention} (`{membro.id}`)\n"
+                    f"{_fmt_membro_info(membro)}"
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.TextDisplay(
+                    f"### ⚠️ Advertências ativas ({len(ativas)})\n{lista_txt}"
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.TextDisplay(
+                    "Selecione abaixo qual advertência deseja remover:"
+                ),
+                row,
+                accent_color=discord.Color.dark_grey(),
+            )
+        )
+
+    async def _on_select_adv(self, interaction: discord.Interaction):
+        punicao_id = int(interaction.data["values"][0])
+        await interaction.response.send_modal(
+            ModalMotivoRemocao(alvo=self.membro, punicao_id=punicao_id)
+        )
 
 
 class ModalDiscordIdRemover(
@@ -585,9 +696,9 @@ class ModalDiscordIdRemover(
                 "❌ Membro não está no servidor.", ephemeral=True
             )
             return
-        # Edita a ephemeral original com usuário encontrado + botão confirmar
+        # Edita a ephemeral com usuário encontrado + botão Confirmar
         await interaction.response.edit_message(
-            view=FluxoRemoverPunicaoView(membro=membro)
+            view=FluxoRemoverPunicaoView(membro=membro, exigir_confirmacao=True)
         )
 
 
@@ -596,11 +707,13 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
         label="Motivo da remoção (opcional)",
         required=False,
         max_length=500,
+        placeholder="Ex: Pagamento via Ticket",
     )
 
-    def __init__(self, alvo: discord.Member):
+    def __init__(self, alvo: discord.Member, punicao_id: int | None = None):
         super().__init__()
         self.alvo = alvo
+        self.punicao_id = punicao_id
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -608,23 +721,37 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
             guild=interaction.guild,
             alvo=self.alvo,
             executor=interaction.user,
+            punicao_id=self.punicao_id,
             motivo_remocao=self.motivo.value.strip() if self.motivo.value else None,
         )
-        await interaction.followup.send(msg, ephemeral=True)
+        cor = discord.Color.green() if ok else discord.Color.red()
+        view = discord.ui.LayoutView(timeout=120)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"# {'✅' if ok else '❌'} Resultado\n{msg}"),
+                accent_color=cor,
+            )
+        )
+        await interaction.followup.send(view=view, ephemeral=True)
 
 
 class FluxoConsultarPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
-    """Seleciona usuário (UserSelect ou modal por ID) → confirma → histórico."""
+    """
+    UserSelect → se achar, pode ir ao histórico (ou remove via botão no histórico).
+    Buscar por ID → edita ephemeral com encontrado + Confirmar → histórico.
+    """
 
     def __init__(
         self,
         membro_id: int | None = None,
         *,
         membro: discord.Member | None = None,
+        exigir_confirmacao: bool = False,
     ):
         super().__init__(timeout=300)
         self.membro_id = membro.id if membro else membro_id
         self._membro_cache = membro
+        self.exigir_confirmacao = exigir_confirmacao
         self._rebuild()
 
     def _rebuild(self):
@@ -665,7 +792,7 @@ class FluxoConsultarPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
             row_btn,
         ]
 
-        if self.membro_id:
+        if self.membro_id and self.exigir_confirmacao:
             info = (
                 _fmt_membro_info(self._membro_cache)
                 if self._membro_cache is not None
@@ -703,9 +830,8 @@ class FluxoConsultarPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
                 "❌ Membro não encontrado no servidor.", ephemeral=True
             )
             return
-        await interaction.response.edit_message(
-            view=FluxoConsultarPunicaoView(membro=membro)
-        )
+        # Select direto → histórico
+        await _exibir_historico_punicoes(interaction, membro)
 
     async def _on_buscar_id(self, interaction: discord.Interaction):
         await interaction.response.send_modal(ModalDiscordIdConsultar())
@@ -750,14 +876,14 @@ class ModalDiscordIdConsultar(
             )
             return
         await interaction.response.edit_message(
-            view=FluxoConsultarPunicaoView(membro=membro)
+            view=FluxoConsultarPunicaoView(membro=membro, exigir_confirmacao=True)
         )
 
 
 async def _exibir_historico_punicoes(
     interaction: discord.Interaction, membro: discord.Member
 ):
-    """Monta o painel de histórico no estilo do mockup e edita a ephemeral."""
+    """Monta o painel de histórico e edita a ephemeral."""
     regs = await listar_punicoes_membro(membro.id)
     ativas = [p for p in regs if p.ativa]
     total = len(regs)
@@ -806,7 +932,12 @@ async def _exibir_historico_punicoes(
                 "❌ Membro não está no servidor.", ephemeral=True
             )
             return
-        await inter.response.edit_message(view=FluxoRemoverPunicaoView(membro=m))
+        # Vai direto para o select de advertências ativas
+        view = await _montar_view_escolher_adv(m)
+        if view is None:
+            await inter.response.edit_message(view=_view_sem_adv_ativas(m))
+            return
+        await inter.response.edit_message(view=view)
 
     b_rm.callback = _cb_ir_remover
     row_rm.add_item(b_rm)
