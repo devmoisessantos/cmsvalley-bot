@@ -146,7 +146,7 @@ class CmsValleyBot(commands.Bot):
             self.painel_gerenciar_cargos_view = PainelGerenciarCargoLayout(guild=guild)
             self.painel_plantao_view = PainelPlantaoLayout(guild)
             self.painel_eventos_gate_view = PainelEventosGate(guild=guild)
-            self.painel_boas_vindas_view = PainelBoasVindasLayout(guild=guild)
+            self.painel_boas_vindas_view = PainelBoasVindasLayout(guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)

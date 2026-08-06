@@ -326,7 +326,7 @@ async def garantir_painel_boas_vindas(
             print("❌ Guild não encontrada!")
             return
 
-        mensagem = await canal.send(view=PainelBoasVindasLayout(guild=guild))
+        mensagem = await canal.send(view=PainelBoasVindasLayout(interaction.guild))
 
         session.add(
             PainelPostado(

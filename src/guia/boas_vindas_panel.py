@@ -14,7 +14,6 @@ from src.config import (
 )
 from src.utils.error_handling import LoggingViewMixin
 
-
 # ── Conteúdo de cada opção do select ─────────────────────────────────────
 
 _OPCOES_GUIA: dict[str, dict] = {
@@ -206,13 +205,14 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             componentes.append(
                 discord.ui.MediaGallery(
-                    *[discord.MediaGalleryItem(url) for url in gallery_urls[:10]]
+                    *[
+                        discord.MediaGalleryItem(GUIA_BOAS_VINDAS_GALLERY)
+                        for url in gallery_urls[:10]
+                    ]
                 )
             )
 
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(row_select)
 
         self.container = discord.ui.Container(
