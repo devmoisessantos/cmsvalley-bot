@@ -310,7 +310,7 @@ class RankingHistorico(Base):
     __tablename__ = "ranking_historico"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    tipo: Mapped[str] = mapped_column(String(20))  # "semanal" | "mensal"
+    tipo: Mapped[str] = mapped_column(String(40))  # "semanal" | "mensal"
     periodo_inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     periodo_fim: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     total_recrutamentos: Mapped[int] = mapped_column(Integer, default=0)
