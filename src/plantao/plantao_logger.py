@@ -1,5 +1,4 @@
 import discord
-from datetime import datetime, timezone
 from sqlalchemy import select
 
 from src.config import CANAIS
@@ -8,20 +7,26 @@ from src.database.models import LogPlantao, Recrutamento
 from src.utils.formatacao import formatar_hms
 
 EVENTOS_PLANTAO = {
-    "TOGGLE_ON": (" ✅ Entrou em Serviço"  , discord.Color.green()),
-    "TOGGLE_OFF": (" ❌ Saiu de Serviço" , discord.Color.red()),
-    "ENTROU_CALL": (" 📞 Entrou no Canal de Voz" , discord.Color.blurple()),
-    "SAIU_CALL": (" 📴 Saiu do Canal de Voz" , discord.Color.dark_grey()),
-    "CALL_ENCERRADA": (" ⏹️ Saiu de Serviço (permaneceu na call)", discord.Color.orange()),
-    "TROCOU_CALL": (" 🔄 Mudou de Canal de Voz" , discord.Color.gold()),
+    "TOGGLE_ON": (" ✅ Entrou em Serviço", discord.Color.green()),
+    "TOGGLE_OFF": (" ❌ Saiu de Serviço", discord.Color.red()),
+    "ENTROU_CALL": (" 📞 Entrou no Canal de Voz", discord.Color.blurple()),
+    "SAIU_CALL": (" 📴 Saiu do Canal de Voz", discord.Color.dark_grey()),
+    "CALL_ENCERRADA": (
+        " ⏹️ Saiu de Serviço (permaneceu na call)",
+        discord.Color.orange(),
+    ),
+    "TROCOU_CALL": (" 🔄 Mudou de Canal de Voz", discord.Color.gold()),
     "MOEDA_CREDITADA": (" 💰 Crédito de Moeda Adicionado", discord.Color.green()),
     "LEMBRETE_10": (" 📌 Lembrete: 10 minutos inativo", discord.Color.orange()),
-    "LEMBRETE_15": (" ⚠️ Atenção: 15 minutos inativo" , discord.Color.orange()),
+    "LEMBRETE_15": (" ⚠️ Atenção: 15 minutos inativo", discord.Color.orange()),
     "DESLIGAMENTO_AUTOMATICO": (" ⏹️ Encerramento Automático", discord.Color.red()),
     "HOUSEKEEPING": (" 🧹 Limpeza de Plantão Ativo", discord.Color.dark_grey()),
     "OCIOSO_ENCERRADO": (" ▶️ Plantão Reativado", discord.Color.blurple()),
     "AFK_AVISO": ("🔇 Aviso de AFK (mudo+surdo)", discord.Color.orange()),
-    "CALL_ENCERRADA_POR_AFK": ("⏹️ Call Encerrada (AFK detectado)", discord.Color.dark_orange()),
+    "CALL_ENCERRADA_POR_AFK": (
+        "⏹️ Call Encerrada (AFK detectado)",
+        discord.Color.dark_orange(),
+    ),
     "PENALIDADE_AFK": ("⚠️ Penalidade Aplicada (AFK)", discord.Color.dark_red()),
 }
 
@@ -32,7 +37,10 @@ async def obter_id_fivem_de_recrutamento(discord_id: int) -> str | None:
     async with async_session() as session:
         resultado = await session.execute(
             select(Recrutamento)
-            .where(Recrutamento.discord_id_candidato == discord_id, Recrutamento.status == "APROVADO")
+            .where(
+                Recrutamento.discord_id_candidato == discord_id,
+                Recrutamento.status == "APROVADO",
+            )
             .order_by(Recrutamento.data_fim.desc())
         )
         recrutamento = resultado.scalars().first()
@@ -48,18 +56,20 @@ async def registrar_evento_plantao(
     canal_id: int | None = None,
     duracao_segundos: int | None = None,
     detalhes: str | None = None,
-    campos_extra: dict[str, str] | None = None,     
+    campos_extra: dict[str, str] | None = None,
 ):
 
     async with async_session() as session:
-        session.add(LogPlantao(
-            id_fivem=id_fivem,
-            discord_id=discord_id,
-            evento=evento,
-            canal_id=canal_id,
-            duracao_segundos=duracao_segundos,
-            detalhes=detalhes,
-        ))
+        session.add(
+            LogPlantao(
+                id_fivem=id_fivem,
+                discord_id=discord_id,
+                evento=evento,
+                canal_id=canal_id,
+                duracao_segundos=duracao_segundos,
+                detalhes=detalhes,
+            )
+        )
         await session.commit()
 
     canal = guild.get_channel(CANAIS["LOG_PLANTAO"])
@@ -88,9 +98,16 @@ async def registrar_evento_plantao(
         linhas += f"\n- **Detalhes:** {detalhes}"
 
     from src.utils.log_container import LogContainerView
-    view = LogContainerView(titulo=titulo, linhas=linhas, guild=guild, cor=cor,
-                             avatar_url=membro.display_avatar.url if membro else None)
+
+    view = LogContainerView(
+        titulo=titulo,
+        linhas=linhas,
+        guild=guild,
+        cor=cor,
+        avatar_url=membro.display_avatar.url if membro else None,
+    )
     await canal.send(view=view)
+
 
 async def resolver_id_fivem_e_validar(discord_id: int) -> str | None:
     """Retorna o id_fivem se o discord_id tiver um Recrutamento aprovado.

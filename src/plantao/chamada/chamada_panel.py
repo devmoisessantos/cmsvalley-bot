@@ -207,14 +207,18 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
                 estado.modo_coordenacao = False
                 await session.commit()
 
-        from src.plantao.plantao_panel import (
-            InformacoesPlantaoView,
-            _buscar_estado,
+        # Coordenação saiu do painel de plantão — encerra o card ephemeral
+        view = discord.ui.LayoutView(timeout=30)
+        view.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# ↩️ Modo coordenação encerrado\n"
+                    "Use **#fazer-chamada** para iniciar uma nova chamada."
+                ),
+                accent_color=discord.Color.dark_grey(),
+            )
         )
-
-        novo_estado = await _buscar_estado(interaction.user.id)
-        nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
-        await interaction.edit_original_response(view=nova_view)
+        await interaction.edit_original_response(view=view)
 
     async def _callback_realizar_chamada(self, interaction: discord.Interaction):
         if not membro_e_doutor_ou_acima(interaction.user):

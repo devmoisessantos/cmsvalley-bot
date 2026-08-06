@@ -21,11 +21,15 @@ from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
     garantir_painel_boas_vindas,
     garantir_painel_eventos_gate,
+    garantir_painel_fazer_chamada,
     garantir_painel_gerenciar_cargos,
+    garantir_painel_gerenciar_membros,
     garantir_painel_plantao,
     garantir_painel_recrutamento,
     garantir_painel_whitelist,
 )
+from src.plantao.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
+from src.plantao.gerenciar_membros_panel import PainelGerenciarMembrosLayout
 from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.plantao.plantao_tasks import executar_housekeeping_plantao
 from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
@@ -105,6 +109,8 @@ class CmsValleyBot(commands.Bot):
         self.painel_gerenciar_cargos_view = None
         self.painel_eventos_gate_view = None
         self.painel_boas_vindas_view = None
+        self.painel_fazer_chamada_view = None
+        self.painel_gerenciar_membros_view = None
 
         @self.tree.error
         async def on_app_command_error(
@@ -147,6 +153,10 @@ class CmsValleyBot(commands.Bot):
             self.painel_plantao_view = PainelPlantaoLayout(guild)
             self.painel_eventos_gate_view = PainelEventosGate(guild=guild)
             self.painel_boas_vindas_view = PainelBoasVindasLayout(guild)
+            self.painel_fazer_chamada_view = PainelFazerChamadaLayout(guild=guild)
+            self.painel_gerenciar_membros_view = PainelGerenciarMembrosLayout(
+                guild=guild
+            )
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -161,6 +171,8 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_plantao_view)
         self.add_view(self.painel_eventos_gate_view)
         self.add_view(self.painel_boas_vindas_view)
+        self.add_view(self.painel_fazer_chamada_view)
+        self.add_view(self.painel_gerenciar_membros_view)
 
         # painéis de presença têm custom_id dinâmico por evento — sempre
         # precisa reconstruir e re-registrar, um por evento aberto
@@ -180,6 +192,8 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_plantao(self)
         await garantir_painel_eventos_gate(self)
         await garantir_painel_boas_vindas(self)
+        await garantir_painel_fazer_chamada(self)
+        await garantir_painel_gerenciar_membros(self)
 
         fim_deploy()
 

@@ -8,7 +8,6 @@ import discord
 from sqlalchemy import select
 
 from src.config import (
-    CARGOS,
     GUILD_ID,
     NOMES_CANAIS_PLANTAO,
     VALOR_MOEDA_INGAME,
@@ -16,7 +15,6 @@ from src.config import (
 )
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
-from src.plantao.chamada.chamada_panel import PainelCoordenacaoView
 from src.plantao.plantao_service import (
     desligar_servico,
     garantir_aware,
@@ -263,8 +261,20 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         return botao
 
     async def _callback_ver_informacoes(self, interaction: discord.Interaction):
+        from sqlalchemy import func
+
+        from src.database.models import LogPlantao
+
         estado = await _buscar_estado(interaction.user.id)
-        view = InformacoesPlantaoView(interaction.user, estado)
+        async with async_session() as session:
+            r = await session.execute(
+                select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
+                    LogPlantao.discord_id == interaction.user.id,
+                    LogPlantao.duracao_segundos.is_not(None),
+                )
+            )
+            tempo_total = int(r.scalar_one() or 0)
+        view = InformacoesPlantaoView(interaction.user, estado, tempo_total)
         await interaction.response.send_message(view=view, ephemeral=True)
 
 
@@ -277,20 +287,29 @@ async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
 
 
 class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
-    def __init__(self, membro: discord.Member, estado: EstadoPlantao | None):
+    """Status pessoal do plantão — sem coordenação/chamada (isso vive em outros canais)."""
+
+    def __init__(
+        self,
+        membro: discord.Member,
+        estado: EstadoPlantao | None,
+        tempo_total_segundos: int = 0,
+    ):
         super().__init__(timeout=180)
         self.membro = membro
 
         online = estado is not None and estado.toggle_ligado
         saldo = estado.saldo_moedas if estado else 0
+        segundos_ciclo = estado.segundos_acumulados if estado else 0
 
         linha_call = None
+        tempo_call = 0
         if online and estado.em_call_valida and estado.call_entrada_em:
             entrada = garantir_aware(estado.call_entrada_em)
-            decorrido = int((datetime.now(timezone.utc) - entrada).total_seconds())
-            status_texto = f"🟢 Em Serviço (Tempo atual: {formatar_hms(decorrido)})"
+            tempo_call = int((datetime.now(timezone.utc) - entrada).total_seconds())
+            status_texto = f"🟢 Em Serviço (nesta call: {formatar_hms(tempo_call)})"
             nome_call = NOMES_CANAIS_PLANTAO.get(estado.canal_atual_id, "Desconhecida")
-            linha_call = f"`📍` Call conectada: {nome_call}"
+            linha_call = f"`📍` Você está em call de plantão: **{nome_call}**"
         elif online:
             status_texto = "🟢 Em Serviço (aguardando conexão em uma call)"
             linha_call = "`📍` Nenhuma call conectada — selecione uma abaixo"
@@ -300,9 +319,12 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             )
 
         linhas = (
-            f"`💰` **Recompensa:** Ganhe 1 moeda (Valor: {formatar_dinheiro(VALOR_MOEDA_INGAME)}) a cada **30 minutos**.\n"
-            f"`💰` **Saldo:** {saldo} moedas (Total: {formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
-            f"`⏱️` **Seu status:** {status_texto}"
+            f"`⏱️` **Status:** {status_texto}\n"
+            f"`⏳` **Tempo do ciclo:** `{formatar_hms(segundos_ciclo + tempo_call)}`\n"
+            f"`🗓️` **Tempo total (histórico):** `{formatar_hms(tempo_total_segundos)}`\n"
+            f"`💰` **Moedas (saldo):** **{saldo}** "
+            f"({formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
+            f"`💵` **Valor por moeda:** {formatar_dinheiro(VALOR_MOEDA_INGAME)} / 30 min"
         )
         if linha_call:
             linhas += f"\n{linha_call}"
@@ -319,28 +341,15 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         botao.callback = self._callback_toggle
         row_botao.add_item(botao)
 
+        avatar_url = membro.display_avatar.url
         componentes = [
-            discord.ui.TextDisplay("# 🛡️ Sistema de Recompensas"),
-            discord.ui.TextDisplay(linhas),
+            discord.ui.Section(
+                f"# 🛡️ Plantão — {membro.display_name}\n{linhas}",
+                accessory=discord.ui.Thumbnail(avatar_url),
+            ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             row_botao,
         ]
-
-        # dentro de InformacoesPlantaoView.__init__, depois de montar row_botao:
-        cargo_doutor_id = CARGOS.get("🥼・Doutor")
-        if cargo_doutor_id and any(
-            cargo.id == cargo_doutor_id for cargo in membro.roles
-        ):
-            modo_texto = (
-                "🧭 Desativar Modo Coordenação"
-                if (estado and estado.modo_coordenacao)
-                else "🧭 Ativar Modo Coordenação"
-            )
-            botao_modo = discord.ui.Button(
-                label=modo_texto, style=discord.ButtonStyle.secondary
-            )
-            botao_modo.callback = self._callback_alternar_modo_coordenacao
-            row_botao.add_item(botao_modo)
 
         if online:
             row_select = discord.ui.ActionRow()
@@ -401,39 +410,23 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         canal_id = int(interaction.data["values"][0])
         nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
 
-        view_link = discord.ui.View(timeout=None)
-        botao_link = discord.ui.Button(
-            label=f"🔗 Conectar em {nome_call}",
-            style=discord.ButtonStyle.link,
-            url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
-        )
-        view_link.add_item(botao_link)
-        await interaction.response.send_message(view=view_link, ephemeral=True)
-
-    async def _callback_alternar_modo_coordenacao(
-        self, interaction: discord.Interaction
-    ):
-        await interaction.response.defer(ephemeral=True)
-
-        async with async_session() as session:
-            resultado = await session.execute(
-                select(EstadoPlantao).where(
-                    EstadoPlantao.discord_id == interaction.user.id
-                )
+        row_link = discord.ui.ActionRow()
+        row_link.add_item(
+            discord.ui.Button(
+                label=f"🔗 Conectar em {nome_call}",
+                style=discord.ButtonStyle.link,
+                url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
             )
-            estado = resultado.scalar_one_or_none()
-            if estado is None:
-                estado = EstadoPlantao(discord_id=interaction.user.id)
-                session.add(estado)
-
-            estado.modo_coordenacao = not estado.modo_coordenacao
-            ativado = estado.modo_coordenacao
-            await session.commit()
-
-        if ativado:
-            nova_view = await PainelCoordenacaoView.construir(interaction.user)
-        else:
-            novo_estado = await _buscar_estado(interaction.user.id)
-            nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
-
-        await interaction.edit_original_response(view=nova_view)
+        )
+        view_link = discord.ui.LayoutView(timeout=120)
+        view_link.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    f"`📍` Call selecionada: **{nome_call}**\n"
+                    "Entre na call pelo botão abaixo para começar a contar tempo."
+                ),
+                row_link,
+                accent_color=discord.Color.blurple(),
+            )
+        )
+        await interaction.response.send_message(view=view_link, ephemeral=True)

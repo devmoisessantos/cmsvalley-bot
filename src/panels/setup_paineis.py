@@ -13,6 +13,8 @@ from src.gate.evento_gate_panel import PainelEventosGate
 from src.guia.boas_vindas_panel import PainelBoasVindasLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
+from src.plantao.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
+from src.plantao.gerenciar_membros_panel import PainelGerenciarMembrosLayout
 from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
 from src.whitelist.whitelist_panel import PainelWhitelistLayout
@@ -337,3 +339,77 @@ async def garantir_painel_boas_vindas(
         )
         await session.commit()
         print(f"✅ Painel de Boas-Vindas postado no canal #{canal.name}.")
+
+
+async def garantir_painel_fazer_chamada(
+    bot: discord.Client, interaction: discord.Interaction = None
+):
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(PainelPostado).where(PainelPostado.nome_painel == "fazer_chamada")
+        )
+        if resultado.scalar_one_or_none() is not None:
+            return
+
+        canal_id = CANAIS.get("CANAL_FAZER_CHAMADA") or 0
+        canal = bot.get_channel(canal_id) if canal_id else None
+        if canal is None:
+            print("⚠️ Canal #fazer-chamada não configurado/encontrado.")
+            return
+
+        guild = (
+            interaction.guild
+            if interaction and interaction.guild
+            else bot.get_guild(int(GUILD_ID))
+        )
+        if guild is None:
+            return
+
+        mensagem = await canal.send(view=PainelFazerChamadaLayout(guild=guild))
+        session.add(
+            PainelPostado(
+                nome_painel="fazer_chamada",
+                canal_id=canal.id,
+                message_id=mensagem.id,
+            )
+        )
+        await session.commit()
+        print(f"✅ Painel Fazer Chamada postado em #{canal.name}.")
+
+
+async def garantir_painel_gerenciar_membros(
+    bot: discord.Client, interaction: discord.Interaction = None
+):
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(PainelPostado).where(
+                PainelPostado.nome_painel == "gerenciar_membros"
+            )
+        )
+        if resultado.scalar_one_or_none() is not None:
+            return
+
+        canal_id = CANAIS.get("CANAL_GERENCIAR_MEMBROS") or 0
+        canal = bot.get_channel(canal_id) if canal_id else None
+        if canal is None:
+            print("⚠️ Canal #gerenciar-membros não configurado/encontrado.")
+            return
+
+        guild = (
+            interaction.guild
+            if interaction and interaction.guild
+            else bot.get_guild(int(GUILD_ID))
+        )
+        if guild is None:
+            return
+
+        mensagem = await canal.send(view=PainelGerenciarMembrosLayout(guild=guild))
+        session.add(
+            PainelPostado(
+                nome_painel="gerenciar_membros",
+                canal_id=canal.id,
+                message_id=mensagem.id,
+            )
+        )
+        await session.commit()
+        print(f"✅ Painel Gerenciar Membros postado em #{canal.name}.")

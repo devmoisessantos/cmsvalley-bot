@@ -116,6 +116,20 @@ CARGOS_BYPASS_PRESENCA_CHAMADA = [
 
 CARGOS_DOUTOR_OU_ACIMA = CARGOS_HIERARQUIA[: CARGOS_HIERARQUIA.index("🥼・Doutor") + 1]
 
+# Diretoria++ — painel #gerenciar-membros e ações admin de plantão
+CARGOS_DIRETORIA = [
+    "Responsavel HP",
+    "👑 | RESPONSÁVEL GERAL",
+    "👑 |  DIRETOR GERAL",
+    "👑 |  VICE DIRETOR GERAL",
+    "🔍・COORDENADOR",
+    "👑・Responsável Instrutor・🎓",
+    "👑・Responsável Recrutamento・🎯",
+    "👑・Responsável Psicólogo・🧠",
+    "👑・Responsável Doutor・🥼",
+    "👑・DIRETOR",
+    "👑・VICE DIRETOR",
+]
 
 HIERARQUIA_GATE = [
     "👑・【 GATE 】COMANDANTE・TÁTICO",
@@ -196,6 +210,9 @@ CANAIS = {
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
     "RANKING_RECRUTADORES": 1486369056574406736,  # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
     "CRIAR_EVENTO_GATE": 1533993716635799643,
+    "CANAL_PAINEL_PLANTAO_ID": 1531543798293856376,  # #iniciar-plantao
+    "CANAL_FAZER_CHAMADA": 1486369151952879848,  # #fazer-chamada
+    "CANAL_GERENCIAR_MEMBROS": 1534803293396795522,  # #gerenciar-membros
     "CANAL_ADVERTENCIAS": 1486369099062837341,
     "WHITELIST_CANAL_ID": 1528299364970266657,
     "HIERARQUIA_SUL": 1487250788391583745,
