@@ -205,10 +205,7 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             componentes.append(
                 discord.ui.MediaGallery(
-                    *[
-                        discord.MediaGalleryItem(GUIA_BOAS_VINDAS_GALLERY)
-                        for url in gallery_urls[:10]
-                    ]
+                    *[discord.MediaGalleryItem(url) for url in gallery_urls[:10]]
                 )
             )
 

@@ -225,7 +225,7 @@ CANAIS = {
 # URLs de imagens da MediaGallery do painel de boas-vindas (até 10).
 # Deixe vazio [] se ainda não tiver as imagens; o painel funciona sem galeria.
 GUIA_BOAS_VINDAS_GALLERY: list[str] = [
-    "assets\\CENTRO_MÉDICO_SUL.gif",
+    "https://cdn.discordapp.com/attachments/1443642763470962759/1534719249845715196/CENTRO_MEDICO_SUL.gif?ex=6a75262e&is=6a73d4ae&hm=eaf00b8359cf6cbb18569926dde0a7a85f0d253ffee9701ec080206d4ec96f26&",
 ]
 
 
