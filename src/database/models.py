@@ -319,3 +319,30 @@ class RankingHistorico(Base):
     channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+
+class Punicao(Base):
+    """Registro de advertência / punição aplicada a um membro."""
+
+    __tablename__ = "punicoes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cargo_id: Mapped[int] = mapped_column(BigInteger)  # role de punição aplicada
+    cargo_nome: Mapped[str] = mapped_column(String(80))
+    motivo: Mapped[str] = mapped_column(String(1500))
+    links: Mapped[str | None] = mapped_column(
+        String(2000), nullable=True
+    )  # um link por linha
+    executor_id: Mapped[int] = mapped_column(BigInteger)
+    ativa: Mapped[bool] = mapped_column(Boolean, default=True)
+    channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    criada_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    removida_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    removida_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    motivo_remocao: Mapped[str | None] = mapped_column(String(500), nullable=True)
