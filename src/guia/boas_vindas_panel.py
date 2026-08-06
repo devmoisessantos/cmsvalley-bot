@@ -184,15 +184,16 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
         # Corpo do painel
         componentes: list = [
             discord.ui.Section(
-                "# Centro Médico Sul | CMS Valley",
-                ("> Aqui estão os **primeiros passos** Enfermeiro(a)."),
+                "# 🏥 Centro Médico Sul | CMS Valley",
+                ("> 📚 Guia do Estagiário – **primeiros passos** Enfermeiro(a)."),
                 accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(
                 "Obrigado por querer se juntar ao **CMS Valley**.\n\n"
-                "Este painel é o seu **ponto de partida**: aqui você encontra "
-                "tudo o que precisa fazer **antes de começar** a atuar no hospital.\n\n"
+                "Para que você se sinta seguro(a) e preparado(a) desde o primeiro minuto, \n"
+                "criamos este painel com tudo o que você precisa saber antes de colocar o uniforme.\n "
+                "Não pule as etapas! Cada item aqui foi pensado para garantir a sua melhor experiência em sua integração.\n\n"
             ),
         ]
 
@@ -210,7 +211,7 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(
-            discord.ui.TextDisplay("**Antes de começar, comece por aqui ↓**")
+            discord.ui.TextDisplay("**👉 Comece sua jornada pelos tópicos abaixo: ↓**")
         )
         componentes.append(row_select)
 
