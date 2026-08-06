@@ -67,14 +67,14 @@ class PainelPunicoesLayout(LoggingViewMixin, discord.ui.LayoutView):
         icon_url = guild.icon.url if guild.icon else None
 
         self.container = discord.ui.Container(
-            discord.ui.Section(
-                "# 🔨 Painel de Advertência",
+            discord.ui.Section( 
+            "# 🔨 Painel de Advertência",
+                (
+                    "-# Use as opções abaixo para aplicar advertência em algum membro!\n"
+                    "-# Cada advertência é registrada em log portanto evite abusar!\n"
+                    "-# Caso tenha dúvidas entre em contato com os Gerais!"
+                ),
                 accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
-            ),
-            discord.ui.TextDisplay(
-                "-# Use as opções abaixo para aplicar advertência em algum membro!\n"
-                "-# Cada advertência é registrada em log portanto evite abusar!\n"
-                "-# Caso tenha dúvidas entre em contato com os Gerais!"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(
