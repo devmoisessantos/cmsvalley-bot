@@ -5,7 +5,7 @@ from datetime import (
 )
 
 import discord
-from models import (
+from src.database.models import (
     Recrutamento,
     Usuario,
 )
