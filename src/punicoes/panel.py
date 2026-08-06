@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import discord
 
-from src.config import CARGOS_PUNICOES
-from src.punicoes.classes import limpar_sessao, obter_sessao
+from src.punicoes.classes import (
+    limpar_sessao,
+    obter_sessao,
+)
 from src.punicoes.helpers import (
-    cargo_punicao_atual,
     e_staff_punicao,
     lista_cargos_punicao_ordenada,
     mensagem_sem_permissao,
@@ -19,12 +20,15 @@ from src.punicoes.services import (
     listar_punicoes_membro,
     remover_punicao,
 )
-from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
-
+from src.utils.error_handling import (
+    LoggingModalMixin,
+    LoggingViewMixin,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PAINEL PRINCIPAL (persistente)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class PainelPunicoesLayout(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, guild: discord.Guild):
@@ -60,8 +64,13 @@ class PainelPunicoesLayout(LoggingViewMixin, discord.ui.LayoutView):
         b_consultar.callback = self._cb_consultar
         row2.add_item(b_consultar)
 
+        icon_url = guild.icon.url if guild.icon else None
+
         self.container = discord.ui.Container(
-            discord.ui.TextDisplay("# 🔨 Painel de Advertência"),
+            discord.ui.Section(
+                "# 🔨 Painel de Advertência",
+                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
+            ),
             discord.ui.TextDisplay(
                 "-# Use as opções abaixo para aplicar advertência em algum membro!\n"
                 "-# Cada advertência é registrada em log portanto evite abusar!\n"
@@ -80,8 +89,12 @@ class PainelPunicoesLayout(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(self.container)
 
     async def _cb_aplicar(self, interaction: discord.Interaction):
-        if not isinstance(interaction.user, discord.Member) or not e_staff_punicao(interaction.user):
-            await interaction.response.send_message(mensagem_sem_permissao(), ephemeral=True)
+        if not isinstance(interaction.user, discord.Member) or not e_staff_punicao(
+            interaction.user
+        ):
+            await interaction.response.send_message(
+                mensagem_sem_permissao(), ephemeral=True
+            )
             return
         limpar_sessao(interaction.user.id)
         obter_sessao(interaction.user.id)
@@ -91,8 +104,12 @@ class PainelPunicoesLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
     async def _cb_remover(self, interaction: discord.Interaction):
-        if not isinstance(interaction.user, discord.Member) or not e_staff_punicao(interaction.user):
-            await interaction.response.send_message(mensagem_sem_permissao(), ephemeral=True)
+        if not isinstance(interaction.user, discord.Member) or not e_staff_punicao(
+            interaction.user
+        ):
+            await interaction.response.send_message(
+                mensagem_sem_permissao(), ephemeral=True
+            )
             return
         await interaction.response.send_message(
             view=FluxoRemoverPunicaoView(),
@@ -100,8 +117,12 @@ class PainelPunicoesLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
     async def _cb_consultar(self, interaction: discord.Interaction):
-        if not isinstance(interaction.user, discord.Member) or not e_staff_punicao(interaction.user):
-            await interaction.response.send_message(mensagem_sem_permissao(), ephemeral=True)
+        if not isinstance(interaction.user, discord.Member) or not e_staff_punicao(
+            interaction.user
+        ):
+            await interaction.response.send_message(
+                mensagem_sem_permissao(), ephemeral=True
+            )
             return
         await interaction.response.send_message(
             view=FluxoConsultarPunicaoView(),
@@ -112,6 +133,7 @@ class PainelPunicoesLayout(LoggingViewMixin, discord.ui.LayoutView):
 # ═══════════════════════════════════════════════════════════════════════════
 # FLUXO APLICAR (ephemeral, timeout=None nos botões via view 600s)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class FluxoAplicarAdvertenciaView(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, executor_id: int):
@@ -278,7 +300,9 @@ class FluxoAplicarAdvertenciaView(LoggingViewMixin, discord.ui.LayoutView):
         )
 
 
-class ModalDiscordIdAdvertencia(LoggingModalMixin, discord.ui.Modal, title="Buscar Discord ID"):
+class ModalDiscordIdAdvertencia(
+    LoggingModalMixin, discord.ui.Modal, title="Buscar Discord ID"
+):
     discord_id_input = discord.ui.TextInput(
         label="Discord ID",
         placeholder="Ex: 1045831331294220309",
@@ -315,7 +339,9 @@ class ModalDiscordIdAdvertencia(LoggingModalMixin, discord.ui.Modal, title="Busc
         await interaction.response.edit_message(view=self.parent)
 
 
-class ModalIdFivemAdvertencia(LoggingModalMixin, discord.ui.Modal, title="Vincular ID FiveM"):
+class ModalIdFivemAdvertencia(
+    LoggingModalMixin, discord.ui.Modal, title="Vincular ID FiveM"
+):
     id_fivem = discord.ui.TextInput(
         label="ID FiveM",
         placeholder="Ex: 107891",
@@ -338,7 +364,9 @@ class ModalIdFivemAdvertencia(LoggingModalMixin, discord.ui.Modal, title="Vincul
         await interaction.response.edit_message(view=self.parent)
 
 
-class ModalMotivoAdvertencia(LoggingModalMixin, discord.ui.Modal, title="⚖️ Aplicar Advertência"):
+class ModalMotivoAdvertencia(
+    LoggingModalMixin, discord.ui.Modal, title="⚖️ Aplicar Advertência"
+):
     motivo = discord.ui.TextInput(
         label="📄 Motivos — Descreva o motivo",
         style=discord.TextStyle.paragraph,
@@ -372,9 +400,13 @@ class ModalMotivoAdvertencia(LoggingModalMixin, discord.ui.Modal, title="⚖️ 
 
     async def on_submit(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message("❌ Erro de contexto.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Erro de contexto.", ephemeral=True
+            )
             return
-        alvo = interaction.guild.get_member(self.membro_id) if interaction.guild else None
+        alvo = (
+            interaction.guild.get_member(self.membro_id) if interaction.guild else None
+        )
         if alvo is None:
             await interaction.response.send_message(
                 "❌ Membro não encontrado no servidor.", ephemeral=True
@@ -408,31 +440,155 @@ class ModalMotivoAdvertencia(LoggingModalMixin, discord.ui.Modal, title="⚖️ 
 # REMOVER / CONSULTAR
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+def _fmt_membro_info(membro: discord.Member) -> str:
+    return (
+        f"- **Discord:** {membro.mention} (`{membro.id}`)\n"
+        f"- **Nome atual:** `{membro.display_name}`\n"
+        f"- **Conta:** `{membro.name}`"
+    )
+
+
 class FluxoRemoverPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
-    def __init__(self):
+    """Seleciona usuário (UserSelect ou modal por ID) → confirma → motivo → remove."""
+
+    def __init__(
+        self,
+        membro_id: int | None = None,
+        *,
+        membro: discord.Member | None = None,
+    ):
         super().__init__(timeout=300)
-        row = discord.ui.ActionRow()
-        sel = discord.ui.UserSelect(placeholder="Membro para remover punição…")
-        sel.callback = self._on_select
-        row.add_item(sel)
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# 🧹 Remover Punição\nSelecione o membro que terá as punições removidas."
-                ),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-                row,
-                accent_color=discord.Color.dark_grey(),
-            )
+        self.membro_id = membro.id if membro else membro_id
+        self._membro_cache = membro  # dados frescos p/ Nome atual / Conta
+        self._rebuild()
+
+    def _rebuild(self):
+        self.clear_items()
+
+        row_sel = discord.ui.ActionRow()
+        sel = discord.ui.UserSelect(
+            placeholder="Selecione o usuário…",
+            min_values=1,
+            max_values=1,
+        )
+        sel.callback = self._on_user_select
+        row_sel.add_item(sel)
+
+        row_btn = discord.ui.ActionRow()
+        b_id = discord.ui.Button(
+            label="Buscar usuário pelo Discord ID",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔍",
+        )
+        b_id.callback = self._on_buscar_id
+        row_btn.add_item(b_id)
+
+        user_txt = (
+            f"<@{self.membro_id}> (`{self.membro_id}`)"
+            if self.membro_id
+            else "*Nenhum selecionado*"
         )
 
-    async def _on_select(self, interaction: discord.Interaction):
+        items: list = [
+            discord.ui.TextDisplay("# 🧹 Remover Punições"),
+            discord.ui.TextDisplay(
+                "Selecione o usuário no menu abaixo ou busque pelo Discord ID.\n"
+                f"**Usuário atual:** {user_txt}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            row_sel,
+            row_btn,
+        ]
+
+        if self.membro_id:
+            info = (
+                _fmt_membro_info(self._membro_cache)
+                if self._membro_cache is not None
+                else f"- **Discord:** <@{self.membro_id}> (`{self.membro_id}`)"
+            )
+            row_ok = discord.ui.ActionRow()
+            b_ok = discord.ui.Button(
+                label="Confirmar usuário",
+                style=discord.ButtonStyle.success,
+                emoji="✅",
+            )
+            b_ok.callback = self._on_confirmar
+            row_ok.add_item(b_ok)
+            items.extend(
+                [
+                    discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                    discord.ui.TextDisplay(
+                        "### ✅ Usuário encontrado\n"
+                        f"{info}\n"
+                        "Confirme para seguir para a remoção de punições."
+                    ),
+                    row_ok,
+                ]
+            )
+
+        self.add_item(
+            discord.ui.Container(*items, accent_color=discord.Color.dark_grey())
+        )
+
+    async def _on_user_select(self, interaction: discord.Interaction):
         uid = int(interaction.data["values"][0])
         membro = interaction.guild.get_member(uid) if interaction.guild else None
         if membro is None:
-            await interaction.response.send_message("❌ Membro não encontrado.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Membro não encontrado no servidor.", ephemeral=True
+            )
+            return
+        await interaction.response.edit_message(
+            view=FluxoRemoverPunicaoView(membro=membro)
+        )
+
+    async def _on_buscar_id(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ModalDiscordIdRemover())
+
+    async def _on_confirmar(self, interaction: discord.Interaction):
+        if not self.membro_id:
+            await interaction.response.send_message(
+                "❌ Nenhum usuário selecionado.", ephemeral=True
+            )
+            return
+        membro = (
+            interaction.guild.get_member(self.membro_id) if interaction.guild else None
+        )
+        if membro is None:
+            await interaction.response.send_message(
+                "❌ Membro não está no servidor.", ephemeral=True
+            )
             return
         await interaction.response.send_modal(ModalMotivoRemocao(membro))
+
+
+class ModalDiscordIdRemover(
+    LoggingModalMixin, discord.ui.Modal, title="Buscar Discord ID"
+):
+    discord_id_input = discord.ui.TextInput(
+        label="Discord ID",
+        placeholder="Ex: 1045831331294220309",
+        required=True,
+        max_length=20,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.discord_id_input.value.strip()
+        if not raw.isdigit():
+            await interaction.response.send_message("❌ ID inválido.", ephemeral=True)
+            return
+        uid = int(raw)
+        membro = interaction.guild.get_member(uid) if interaction.guild else None
+        if membro is None:
+            await interaction.response.send_message(
+                "❌ Membro não está no servidor.", ephemeral=True
+            )
+            return
+        # Edita a ephemeral original com usuário encontrado + botão confirmar
+        await interaction.response.edit_message(
+            view=FluxoRemoverPunicaoView(membro=membro)
+        )
 
 
 class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover punição"):
@@ -458,59 +614,221 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
 
 
 class FluxoConsultarPunicaoView(LoggingViewMixin, discord.ui.LayoutView):
-    def __init__(self):
+    """Seleciona usuário (UserSelect ou modal por ID) → confirma → histórico."""
+
+    def __init__(
+        self,
+        membro_id: int | None = None,
+        *,
+        membro: discord.Member | None = None,
+    ):
         super().__init__(timeout=300)
-        row = discord.ui.ActionRow()
-        sel = discord.ui.UserSelect(placeholder="Membro para consultar…")
-        sel.callback = self._on_select
-        row.add_item(sel)
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# 📋 Consultar Punição\nSelecione o membro para ver o histórico."
-                ),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-                row,
-                accent_color=discord.Color.blurple(),
-            )
+        self.membro_id = membro.id if membro else membro_id
+        self._membro_cache = membro
+        self._rebuild()
+
+    def _rebuild(self):
+        self.clear_items()
+
+        row_sel = discord.ui.ActionRow()
+        sel = discord.ui.UserSelect(
+            placeholder="Selecione o usuário…",
+            min_values=1,
+            max_values=1,
+        )
+        sel.callback = self._on_user_select
+        row_sel.add_item(sel)
+
+        row_btn = discord.ui.ActionRow()
+        b_id = discord.ui.Button(
+            label="Buscar usuário pelo Discord ID",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔍",
+        )
+        b_id.callback = self._on_buscar_id
+        row_btn.add_item(b_id)
+
+        user_txt = (
+            f"<@{self.membro_id}> (`{self.membro_id}`)"
+            if self.membro_id
+            else "*Nenhum selecionado*"
         )
 
-    async def _on_select(self, interaction: discord.Interaction):
+        items: list = [
+            discord.ui.TextDisplay("# ⚖️ Consultar Punições"),
+            discord.ui.TextDisplay(
+                "Selecione o usuário no menu abaixo ou busque pelo Discord ID.\n"
+                f"**Usuário atual:** {user_txt}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            row_sel,
+            row_btn,
+        ]
+
+        if self.membro_id:
+            info = (
+                _fmt_membro_info(self._membro_cache)
+                if self._membro_cache is not None
+                else f"- **Discord:** <@{self.membro_id}> (`{self.membro_id}`)"
+            )
+            row_ok = discord.ui.ActionRow()
+            b_ok = discord.ui.Button(
+                label="Confirmar usuário",
+                style=discord.ButtonStyle.success,
+                emoji="✅",
+            )
+            b_ok.callback = self._on_confirmar
+            row_ok.add_item(b_ok)
+            items.extend(
+                [
+                    discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                    discord.ui.TextDisplay(
+                        "### ✅ Usuário encontrado\n"
+                        f"{info}\n"
+                        "Confirme para ver o histórico de punições."
+                    ),
+                    row_ok,
+                ]
+            )
+
+        self.add_item(
+            discord.ui.Container(*items, accent_color=discord.Color.blurple())
+        )
+
+    async def _on_user_select(self, interaction: discord.Interaction):
         uid = int(interaction.data["values"][0])
         membro = interaction.guild.get_member(uid) if interaction.guild else None
         if membro is None:
-            await interaction.response.send_message("❌ Membro não encontrado.", ephemeral=True)
-            return
-
-        regs = await listar_punicoes_membro(uid)
-        atual = cargo_punicao_atual(membro)
-
-        if not regs:
-            corpo = "_Nenhuma punição registrada no banco._"
-        else:
-            linhas = []
-            for p in regs[:15]:
-                st = "🟢 ativa" if p.ativa else "⚫ removida"
-                ts = f"<t:{int(p.criada_em.timestamp())}:d>" if p.criada_em else "—"
-                linhas.append(
-                    f"`#{p.id}` **{p.cargo_nome.strip()}** · {st} · {ts}\n"
-                    f"↳ <@{p.executor_id}> · FiveM `{p.id_fivem or '—'}`\n"
-                    f"↳ {p.motivo[:200]}"
-                )
-            corpo = "\n\n".join(linhas)
-
-        cargo_txt = atual[0] if atual else "Nenhum"
-        view = discord.ui.LayoutView(timeout=180)
-        view.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"# 📋 Punições — {membro.display_name}\n"
-                    f"{membro.mention}\n"
-                    f"**Cargo atual de punição:** `{cargo_txt}`"
-                ),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-                discord.ui.TextDisplay(corpo),
-                accent_color=discord.Color.blurple(),
+            await interaction.response.send_message(
+                "❌ Membro não encontrado no servidor.", ephemeral=True
             )
+            return
+        await interaction.response.edit_message(
+            view=FluxoConsultarPunicaoView(membro=membro)
         )
-        await interaction.response.edit_message(view=view)
+
+    async def _on_buscar_id(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ModalDiscordIdConsultar())
+
+    async def _on_confirmar(self, interaction: discord.Interaction):
+        if not self.membro_id:
+            await interaction.response.send_message(
+                "❌ Nenhum usuário selecionado.", ephemeral=True
+            )
+            return
+        membro = (
+            interaction.guild.get_member(self.membro_id) if interaction.guild else None
+        )
+        if membro is None:
+            await interaction.response.send_message(
+                "❌ Membro não está no servidor.", ephemeral=True
+            )
+            return
+        await _exibir_historico_punicoes(interaction, membro)
+
+
+class ModalDiscordIdConsultar(
+    LoggingModalMixin, discord.ui.Modal, title="Buscar Discord ID"
+):
+    discord_id_input = discord.ui.TextInput(
+        label="Discord ID",
+        placeholder="Ex: 1045831331294220309",
+        required=True,
+        max_length=20,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.discord_id_input.value.strip()
+        if not raw.isdigit():
+            await interaction.response.send_message("❌ ID inválido.", ephemeral=True)
+            return
+        uid = int(raw)
+        membro = interaction.guild.get_member(uid) if interaction.guild else None
+        if membro is None:
+            await interaction.response.send_message(
+                "❌ Membro não está no servidor.", ephemeral=True
+            )
+            return
+        await interaction.response.edit_message(
+            view=FluxoConsultarPunicaoView(membro=membro)
+        )
+
+
+async def _exibir_historico_punicoes(
+    interaction: discord.Interaction, membro: discord.Member
+):
+    """Monta o painel de histórico no estilo do mockup e edita a ephemeral."""
+    regs = await listar_punicoes_membro(membro.id)
+    ativas = [p for p in regs if p.ativa]
+    total = len(regs)
+
+    if not regs:
+        corpo = "_Nenhuma punição registrada no banco._"
+    else:
+        linhas = []
+        for i, p in enumerate(regs[:15], start=1):
+            ts = f"<t:{int(p.criada_em.timestamp())}:F>" if p.criada_em else "—"
+            if p.ativa:
+                status = "**Status:** Ativa"
+            else:
+                rem_ts = (
+                    f"<t:{int(p.removida_em.timestamp())}:d>" if p.removida_em else "—"
+                )
+                rem_por = (
+                    f" - **Removida por:** `({p.removida_por})`"
+                    if p.removida_por
+                    else ""
+                )
+                status = f"**Status:** Removida em {rem_ts}{rem_por}"
+                if p.motivo_remocao:
+                    status += f"\n- **Motivo da remoção:** {p.motivo_remocao[:200]}"
+
+            linhas.append(
+                f"**{i}. {ts}**\n"
+                f"- **Staff:** <@{p.executor_id}> `({p.executor_id})` "
+                f"- **Tipo:** {p.cargo_nome.strip()}\n"
+                f"- {status}\n"
+                f"- **Motivo:** {p.motivo[:300]}"
+            )
+        corpo = "\n\n".join(linhas)
+
+    row_rm = discord.ui.ActionRow()
+    b_rm = discord.ui.Button(
+        label="Remover",
+        style=discord.ButtonStyle.secondary,
+        emoji="🧹",
+    )
+
+    async def _cb_ir_remover(inter: discord.Interaction):
+        m = inter.guild.get_member(membro.id) if inter.guild else None
+        if m is None:
+            await inter.response.send_message(
+                "❌ Membro não está no servidor.", ephemeral=True
+            )
+            return
+        await inter.response.edit_message(view=FluxoRemoverPunicaoView(membro=m))
+
+    b_rm.callback = _cb_ir_remover
+    row_rm.add_item(b_rm)
+
+    view = discord.ui.LayoutView(timeout=180)
+    view.add_item(
+        discord.ui.Container(
+            discord.ui.TextDisplay(
+                f"# ⚖️ Histórico de Punições\n"
+                f"**Usuário:** {membro.mention} (`{membro.id}`)"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay(
+                f"### 📊 Resumo\n"
+                f"- **Advertências:** {total}\n"
+                f"- **Ativas:** {len(ativas)}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay(f"### ⚠️ Advertências\n\n{corpo}"),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            row_rm,
+            accent_color=discord.Color.blurple(),
+        )
+    )
+    await interaction.response.edit_message(view=view)
