@@ -98,8 +98,18 @@ class RankingRecrutadoresTasks(commands.Cog):
             return False
 
         try:
-            view, contagem, inicio, fim, total_rec, total_pago = await gerar_view_ranking(
-                tipo, guild=guild, referencia=referencia, modo_postagem=True,
+            (
+                view,
+                contagem,
+                inicio,
+                fim,
+                total_rec,
+                total_pago,
+            ) = await gerar_view_ranking(
+                tipo,
+                guild=guild,
+                referencia=referencia,
+                modo_postagem=True,
             )
             msg = await canal.send(view=view)
             await salvar_historico(
@@ -112,7 +122,9 @@ class RankingRecrutadoresTasks(commands.Cog):
                 channel_id=canal.id,
                 message_id=msg.id,
             )
-            logger.info(f"✅ Ranking {tipo} postado em #{canal.name} e salvo no histórico")
+            logger.info(
+                f"✅ Ranking {tipo} postado em #{canal.name} e salvo no histórico"
+            )
             return True
         except Exception as e:
             logger.exception(f"❌ Falha ao postar ranking {tipo}: {e}")
@@ -134,32 +146,40 @@ class RankingRecrutadoresTasks(commands.Cog):
     # ── /ranking tempo-real ──────────────────────────────────────────────
 
     @ranking_group.command(
-        name="tempo-real",
+        name="recrutamento-tempo-real",
         description="Ranking da semana atual em tempo real (parcial)",
     )
     @app_commands.describe(
         escopo="Semanal (ciclo atual) ou mensal (mês atual)",
     )
-    @app_commands.choices(escopo=[
-        app_commands.Choice(name="Semanal (ciclo atual)", value="semanal"),
-        app_commands.Choice(name="Mensal (mês atual)", value="mensal"),
-    ])
+    @app_commands.choices(
+        escopo=[
+            app_commands.Choice(name="Semanal (ciclo atual)", value="semanal"),
+            app_commands.Choice(name="Mensal (mês atual)", value="mensal"),
+        ]
+    )
     async def ranking_tempo_real(
         self,
         interaction: discord.Interaction,
         escopo: app_commands.Choice[str] = None,
     ):
         await interaction.response.defer(ephemeral=True)
-        tipo_consulta = "tempo_real" if (escopo is None or escopo.value == "semanal") else "mensal"
+        tipo_consulta = (
+            "tempo_real" if (escopo is None or escopo.value == "semanal") else "mensal"
+        )
 
         try:
             if tipo_consulta == "mensal":
                 view, *_ = await gerar_view_ranking(
-                    "mensal", guild=interaction.guild, modo_postagem=False,
+                    "mensal",
+                    guild=interaction.guild,
+                    modo_postagem=False,
                 )
             else:
                 view, *_ = await gerar_view_ranking(
-                    "tempo_real", guild=interaction.guild, modo_postagem=False,
+                    "tempo_real",
+                    guild=interaction.guild,
+                    modo_postagem=False,
                 )
             await interaction.followup.send(view=view, ephemeral=True)
         except Exception as e:
@@ -170,17 +190,19 @@ class RankingRecrutadoresTasks(commands.Cog):
     # ── /ranking postar ──────────────────────────────────────────────────
 
     @ranking_group.command(
-        name="postar",
+        name="recrutamento-postar",
         description="Gera e posta ranking oficial (salva no histórico)",
     )
     @app_commands.describe(
         tipo="Semanal (semana que fecha) ou mensal (mês anterior)",
         no_canal="Se True, posta no canal oficial. Se False, só mostra pra você.",
     )
-    @app_commands.choices(tipo=[
-        app_commands.Choice(name="Semanal", value="semanal"),
-        app_commands.Choice(name="Mensal", value="mensal"),
-    ])
+    @app_commands.choices(
+        tipo=[
+            app_commands.Choice(name="Semanal", value="semanal"),
+            app_commands.Choice(name="Mensal", value="mensal"),
+        ]
+    )
     @is_authorized()
     async def ranking_postar(
         self,
@@ -192,8 +214,17 @@ class RankingRecrutadoresTasks(commands.Cog):
         tipo_val = tipo.value
 
         try:
-            view, contagem, inicio, fim, total_rec, total_pago = await gerar_view_ranking(
-                tipo_val, guild=interaction.guild, modo_postagem=True,
+            (
+                view,
+                contagem,
+                inicio,
+                fim,
+                total_rec,
+                total_pago,
+            ) = await gerar_view_ranking(
+                tipo_val,
+                guild=interaction.guild,
+                modo_postagem=True,
             )
         except Exception as e:
             await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
@@ -237,7 +268,7 @@ class RankingRecrutadoresTasks(commands.Cog):
     # ── /ranking historico ───────────────────────────────────────────────
 
     @ranking_group.command(
-        name="historico",
+        name="recrutamento-historico",
         description="Lista os últimos rankings salvos ou reabre um por ID",
     )
     @app_commands.describe(
@@ -245,11 +276,13 @@ class RankingRecrutadoresTasks(commands.Cog):
         limite="Quantidade de registros na lista (1–25)",
         id="ID do histórico para reabrir o ranking completo",
     )
-    @app_commands.choices(tipo=[
-        app_commands.Choice(name="Todos", value="todos"),
-        app_commands.Choice(name="Semanal", value="semanal"),
-        app_commands.Choice(name="Mensal", value="mensal"),
-    ])
+    @app_commands.choices(
+        tipo=[
+            app_commands.Choice(name="Todos", value="todos"),
+            app_commands.Choice(name="Semanal", value="semanal"),
+            app_commands.Choice(name="Mensal", value="mensal"),
+        ]
+    )
     async def ranking_historico(
         self,
         interaction: discord.Interaction,
@@ -285,10 +318,11 @@ def montar_view_lista_historico_com_ids(
     guild: discord.Guild | None = None,
 ) -> discord.ui.LayoutView:
     """Lista com ID visível para reabrir via /ranking historico id:N."""
-    from src.recrutamento.ranking_service import _formatar_data_curta
-    from src.utils.formatacao import formatar_reais
     from datetime import datetime
     from zoneinfo import ZoneInfo
+
+    from src.recrutamento.ranking_service import _formatar_data_curta
+    from src.utils.formatacao import formatar_reais
 
     if not registros:
         linhas = "_Nenhum ranking histórico encontrado._"
@@ -307,7 +341,11 @@ def montar_view_lista_historico_com_ids(
         linhas = "\n\n".join(blocos)
 
     agora_ts = int(datetime.now(ZoneInfo("UTC")).timestamp())
-    rodape = f"-# {guild.name} • <t:{agora_ts}:f>" if guild else f"-# Histórico • <t:{agora_ts}:f>"
+    rodape = (
+        f"-# {guild.name} • <t:{agora_ts}:f>"
+        if guild
+        else f"-# Histórico • <t:{agora_ts}:f>"
+    )
     rodape += "\n-# Use `/ranking historico id:<nº>` para reabrir o ranking completo."
 
     container = discord.ui.Container(

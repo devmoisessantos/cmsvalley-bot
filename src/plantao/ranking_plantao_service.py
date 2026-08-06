@@ -197,11 +197,15 @@ def montar_view_ranking_chamadas(
         if guild
         else f"-# Ranking • <t:{agora_ts}:f>"
     )
+    icon_url = guild.icon.url if guild.icon else None
 
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(
         discord.ui.Container(
-            discord.ui.TextDisplay(cabecalho),
+            discord.ui.Section(
+                cabecalho,
+                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
+            ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(corpo),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
@@ -263,11 +267,15 @@ def montar_view_ranking_horas(
         if guild
         else f"-# Relatório • <t:{agora_ts}:f>"
     )
+    icon_url = guild.icon.url if guild.icon else None
 
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(
         discord.ui.Container(
-            discord.ui.TextDisplay(cabecalho),
+            discord.ui.Section(
+                cabecalho,
+                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
+            ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(corpo),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
