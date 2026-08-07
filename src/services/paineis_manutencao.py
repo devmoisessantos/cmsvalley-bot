@@ -15,6 +15,10 @@ from sqlalchemy import select
 
 from src.database.connection import async_session
 from src.database.models import PainelPostado
+from src.guia.guia_setup import (
+    garantir_painel_boas_vindas,
+    garantir_painel_tutoriais,
+)
 from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
     garantir_painel_boas_vindas,
@@ -24,6 +28,7 @@ from src.panels.setup_paineis import (
     garantir_painel_gerenciar_membros,
     garantir_painel_plantao,
     garantir_painel_recrutamento,
+    garantir_painel_tutoriais,
     garantir_painel_whitelist,
 )
 from src.punicoes.cogs import garantir_painel_punicoes
@@ -37,6 +42,7 @@ FUNCOES_GARANTIR_PAINEL = {
     "plantao": garantir_painel_plantao,
     "eventos_gate": garantir_painel_eventos_gate,
     "boas_vindas": garantir_painel_boas_vindas,
+    "tutoriais": garantir_painel_tutoriais,
     "fazer_chamada": garantir_painel_fazer_chamada,
     "gerenciar_membros": garantir_painel_gerenciar_membros,
     "punicoes": garantir_painel_punicoes,
