@@ -11,9 +11,9 @@ from src.config import (
 )
 from src.database.connection import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
-from src.gate.evento_gate_lista import _montar_container
-from src.gate.evento_gate_panel import PainelEventosGate
-from src.gate.evento_gate_services import listar_eventos_abertos
+from src.gate.gate_panel import PainelEventosGate
+from src.gate.gate_presenca import montar_container_presenca
+from src.gate.gate_service import listar_eventos_abertos
 from src.guia.boas_vindas_panel import PainelBoasVindasLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
@@ -65,14 +65,14 @@ class CmsValleyBot(commands.Bot):
 
         # Listar extensões (cogs)
         cogs = [
+            "src.backup.backup_cogs",
+            "src.cogs.gerenciar_cargos",
             "src.cogs.utilidade",
             "src.cogs.moderacao",
-            "src.cogs.gerenciar_cargos",
             "src.cogs.busca",
+            "src.cogs.manutencao",
             "src.punicoes.cogs",
-            "src.backup.backup_cogs",
-            "src.gate.gate_class",
-            "src.gate.gate_eventos",
+            "src.gate.gate_cogs",
             "src.whitelist.whitelist_cogs",
             "src.plantao.plantao_cogs",
             "src.plantao.plantao_tasks",
@@ -187,7 +187,7 @@ class CmsValleyBot(commands.Bot):
         for evento in eventos_abertos:
             if evento.message_id:
                 view_presenca = discord.ui.LayoutView(timeout=None)
-                container = await _montar_container(self, evento)
+                container = await montar_container_presenca(self, evento)
                 view_presenca.add_item(container)
                 self.add_view(view_presenca, message_id=evento.message_id)
 
