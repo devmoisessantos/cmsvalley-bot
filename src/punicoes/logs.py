@@ -125,13 +125,13 @@ async def _criar_topico_provas(
             if bloco:
                 await thread.send("\n## 📁 Provas anexadas")
                 await thread.send(
-                    "Links abaixo são enviados fora de container para permitir preview automático do Discord."
+                    "-# Links abaixo são enviados fora de container para permitir preview automático do Discord."
                 )
-                await thread.send("### 🔗 Links**\n\n")
+                await thread.send("### 🔗 Links\n\n")
                 await thread.send("\n".join(bloco))
         else:
             await thread.send(
-                "\n📁 **Provas anexadas**\n_Nenhum link de prova foi informado._"
+                "\n## 📁 **Provas anexadas**\n_Nenhum link de prova foi informado._"
             )
     except discord.HTTPException as e:
         print(f"⚠️ [punicoes] Falha ao postar provas no tópico: {e}")
