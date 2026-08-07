@@ -40,8 +40,8 @@ from src.backup.restore_manager import RestoreManager
 from src.config import (
     AUTO_BACKUP_INTERVAL_HOURS,
     BACKUP_DIR,
+    CANAIS,
     CONFIRMATION_TIMEOUT,
-    LOG_BACKUP_CHANNEL,
     MAX_BACKUPS_PER_GUILD,
 )
 from src.services.sincronizar_usuarios import (
@@ -73,7 +73,7 @@ class BackupCog(commands.Cog):
         self.gerenciador = BackupManager()
         self.restaurador = RestoreManager()
         self.comparador = DiffEngine()
-        self.logger = BackupLogger(LOG_BACKUP_CHANNEL)
+        self.logger = BackupLogger(CANAIS["LOG_BACKUP_CHANNEL"])
         self.tarefa_backup_automatico.change_interval(hours=AUTO_BACKUP_INTERVAL_HOURS)
         self.tarefa_backup_automatico.start()
 
