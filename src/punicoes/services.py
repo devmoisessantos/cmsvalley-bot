@@ -16,7 +16,11 @@ from src.database.models import (
     agora,
 )
 from src.punicoes.helpers import parse_links
-from src.punicoes.logs import registrar_log_punicao
+from src.punicoes.logs import (
+    registrar_advertencia,
+    registrar_log_advertencia,
+    registrar_log_remocao,
+)
 
 
 async def aplicar_punicao(
@@ -30,7 +34,7 @@ async def aplicar_punicao(
     motivo: str,
     links_texto: str | None,
 ) -> tuple[bool, str, Punicao | None]:
-    """Aplica cargo de punição, grava no banco e posta log + tópico de provas."""
+    """Aplica cargo, grava no banco, posta em CANAL_ADVERTENCIAS + LOG_PUNICOES."""
     role = guild.get_role(cargo_id)
     if role is None:
         return (
@@ -64,7 +68,8 @@ async def aplicar_punicao(
         await session.commit()
         await session.refresh(reg)
 
-    msg_log, thread = await registrar_log_punicao(
+    # 1) Registro público (CANAL_ADVERTENCIAS) + tópico de provas + DM
+    msg_adv, thread = await registrar_advertencia(
         guild=guild,
         alvo=alvo,
         executor=executor,
@@ -75,15 +80,27 @@ async def aplicar_punicao(
         punicao_id=reg.id,
     )
 
-    if msg_log:
+    if msg_adv:
         async with async_session() as session:
             r = await session.execute(select(Punicao).where(Punicao.id == reg.id))
             row = r.scalar_one()
-            row.channel_id = msg_log.channel.id
-            row.message_id = msg_log.id
+            row.channel_id = msg_adv.channel.id
+            row.message_id = msg_adv.id
             if thread:
                 row.thread_id = thread.id
             await session.commit()
+
+    # 2) Log interno (LOG_PUNICOES)
+    await registrar_log_advertencia(
+        guild=guild,
+        alvo=alvo,
+        executor=executor,
+        id_fivem=id_fivem,
+        cargo_role=role,
+        motivo=motivo,
+        punicao_id=reg.id,
+        msg_advertencia=msg_adv,
+    )
 
     return True, f"✅ Punição **{cargo_nome}** aplicada em {alvo.mention}.", reg
 
@@ -97,14 +114,10 @@ async def remover_punicao(
     punicao_id: int | None = None,
     motivo_remocao: str | None = None,
 ) -> tuple[bool, str]:
-    """Remove cargo(s) de punição e marca registros ativos como inativos.
-
-    Se ``punicao_id`` for informado, remove apenas aquele registro (e o cargo
-    só se não restar outra advertência ativa do mesmo tipo).
-    Se ``cargo_id`` for informado, remove todas as ativas daquele cargo.
-    Sem ambos, remove todas as punições ativas do membro.
-    """
+    """Remove cargo(s) de punição, marca registros inativos e loga em LOG_PUNICOES."""
     removidos: list[str] = []
+    punicao_ids: list[int] = []
+    id_fivem: str | None = None
     roles_a_remover: list[discord.Role] = []
 
     async with async_session() as session:
@@ -136,20 +149,29 @@ async def remover_punicao(
             rows = list(r.scalars().all())
 
         if not rows:
-            # Fallback: tenta pelos cargos presentes no membro
             if cargo_id:
                 role = guild.get_role(cargo_id)
                 if role and role in alvo.roles:
                     try:
                         await alvo.remove_roles(
                             role,
-                            reason=f"Remoção de punição por {executor} — {motivo_remocao or 'sem motivo'}",
+                            reason=(
+                                f"Remoção de punição por {executor} — "
+                                f"{motivo_remocao or 'sem motivo'}"
+                            ),
                         )
                     except discord.Forbidden:
                         return (
                             False,
                             "❌ Sem permissão para remover os cargos de punição.",
                         )
+                    await registrar_log_remocao(
+                        guild=guild,
+                        alvo=alvo,
+                        executor=executor,
+                        cargos_removidos=[role.name],
+                        motivo_remocao=motivo_remocao,
+                    )
                     return (
                         True,
                         f"✅ Cargo de punição removido de {alvo.mention}: {role.mention}",
@@ -163,11 +185,13 @@ async def remover_punicao(
             row.removida_por = executor.id
             row.motivo_remocao = (motivo_remocao or "")[:500]
             removidos.append(row.cargo_nome)
+            punicao_ids.append(row.id)
+            if row.id_fivem and not id_fivem:
+                id_fivem = row.id_fivem
             cargo_ids_marcados.add(row.cargo_id)
 
         await session.commit()
 
-        # Remove o cargo do Discord apenas se não restar outra adv ativa do mesmo tipo
         for cid in cargo_ids_marcados:
             r2 = await session.execute(
                 select(Punicao).where(
@@ -176,8 +200,7 @@ async def remover_punicao(
                     Punicao.cargo_id == cid,
                 )
             )
-            ainda_ativa = r2.scalar_one_or_none()
-            if ainda_ativa is None:
+            if r2.scalar_one_or_none() is None:
                 role = guild.get_role(cid)
                 if role and role in alvo.roles:
                     roles_a_remover.append(role)
@@ -186,10 +209,23 @@ async def remover_punicao(
         try:
             await alvo.remove_roles(
                 *roles_a_remover,
-                reason=f"Remoção de punição por {executor} — {motivo_remocao or 'sem motivo'}",
+                reason=(
+                    f"Remoção de punição por {executor} — "
+                    f"{motivo_remocao or 'sem motivo'}"
+                ),
             )
         except discord.Forbidden:
             return False, "❌ Sem permissão para remover os cargos de punição."
+
+    await registrar_log_remocao(
+        guild=guild,
+        alvo=alvo,
+        executor=executor,
+        cargos_removidos=removidos,
+        motivo_remocao=motivo_remocao,
+        punicao_ids=punicao_ids,
+        id_fivem=id_fivem,
+    )
 
     lista = ", ".join(f"**{n.strip()}**" for n in removidos)
     return True, f"✅ Punição removida de {alvo.mention}: {lista}"

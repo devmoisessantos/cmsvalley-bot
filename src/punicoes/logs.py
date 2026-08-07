@@ -1,4 +1,9 @@
-"""Log de punição em Components V2 + tópico de provas + DM ao advertido."""
+"""Log de punição em Components V2 + tópico de provas + DM ao advertido.
+
+Canais:
+  - CANAL_ADVERTENCIAS → registro público da advertência + tópico de provas + DM
+  - LOG_PUNICOES       → log interno (aplicação e remoção)
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,17 @@ import discord
 from src.config import CANAIS
 
 
-async def registrar_log_punicao(
+def _canal(guild: discord.Guild, chave: str) -> discord.abc.GuildChannel | None:
+    canal_id = CANAIS.get(chave) or 0
+    return guild.get_channel(canal_id) if canal_id else None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CANAL PÚBLICO — CANAL_ADVERTENCIAS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def registrar_advertencia(
     *,
     guild: discord.Guild,
     alvo: discord.Member,
@@ -21,10 +36,10 @@ async def registrar_log_punicao(
     links: list[str],
     punicao_id: int,
 ) -> tuple[discord.Message | None, discord.Thread | None]:
-    canal_id = CANAIS.get("LOG_PUNICOES") or CANAIS.get("CANAL_ADVERTENCIAS") or 0
-    canal = guild.get_channel(canal_id) if canal_id else None
+    """Posta a advertência em CANAL_ADVERTENCIAS, cria tópico de provas e notifica em DM."""
+    canal = _canal(guild, "CANAL_ADVERTENCIAS")
     if canal is None:
-        print("⚠️ [punicoes] Canal de log de punições não encontrado.")
+        print("⚠️ [punicoes] Canal de advertências (CANAL_ADVERTENCIAS) não encontrado.")
         return None, None
 
     linhas = (
@@ -50,11 +65,8 @@ async def registrar_log_punicao(
     view.add_item(container)
 
     msg = await canal.send(view=view)
-
-    # ── Tópico com provas (ligado ao registro) ──────────────────────────────
     thread = await _criar_topico_provas(msg, canal, links)
 
-    # Notifica o advertido em DM com botão link para o registro
     await notificar_dm_advertencia(
         alvo=alvo,
         executor=executor,
@@ -67,29 +79,136 @@ async def registrar_log_punicao(
     return msg, thread
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# LOG INTERNO — LOG_PUNICOES
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def registrar_log_advertencia(
+    *,
+    guild: discord.Guild,
+    alvo: discord.Member,
+    executor: discord.Member,
+    id_fivem: str,
+    cargo_role: discord.Role,
+    motivo: str,
+    punicao_id: int,
+    msg_advertencia: discord.Message | None = None,
+) -> discord.Message | None:
+    """Registra aplicação de advertência no LOG_PUNICOES (sem tópico de provas)."""
+    canal = _canal(guild, "LOG_PUNICOES")
+    if canal is None:
+        print("⚠️ [punicoes] Canal de log (LOG_PUNICOES) não encontrado.")
+        return None
+
+    link_reg = (
+        f"\n- **Registro público:** [abrir]({msg_advertencia.jump_url})"
+        if msg_advertencia
+        else ""
+    )
+
+    linhas = (
+        f"- **Membro:** {alvo.mention} (`{alvo.id}`)\n"
+        f"- **Responsável:** {executor.mention} (`{executor.id}`)\n"
+        f"- **ID FiveM:** `{id_fivem}`\n"
+        f"- **Punição:** {cargo_role.mention}\n"
+        f"- **Motivo:** {motivo[:500]}\n"
+        f"- **ID do registro:** `#{punicao_id}`"
+        f"{link_reg}"
+    )
+
+    container = discord.ui.Container(
+        discord.ui.TextDisplay("# 🔴 Novo Registro de Punição"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+        discord.ui.Section(
+            linhas,
+            accessory=discord.ui.Thumbnail(alvo.display_avatar.url),
+        ),
+        accent_color=discord.Color.red(),
+    )
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(container)
+
+    try:
+        return await canal.send(view=view)
+    except discord.HTTPException as e:
+        print(f"⚠️ [punicoes] Falha ao postar log de advertência: {e}")
+        return None
+
+
+async def registrar_log_remocao(
+    *,
+    guild: discord.Guild,
+    alvo: discord.Member,
+    executor: discord.Member,
+    cargos_removidos: list[str],
+    motivo_remocao: str | None,
+    punicao_ids: list[int] | None = None,
+    id_fivem: str | None = None,
+) -> discord.Message | None:
+    """Registra remoção de punição no LOG_PUNICOES."""
+    canal = _canal(guild, "LOG_PUNICOES")
+    if canal is None:
+        print("⚠️ [punicoes] Canal de log (LOG_PUNICOES) não encontrado.")
+        return None
+
+    lista_cargos = ", ".join(f"**{c.strip()}**" for c in cargos_removidos) or "—"
+    ids_txt = ", ".join(f"`#{i}`" for i in punicao_ids) if punicao_ids else "—"
+    motivo_txt = (motivo_remocao or "Sem motivo informado")[:500]
+    fivem_txt = f"`{id_fivem}`" if id_fivem else "—"
+
+    linhas = (
+        f"- **Membro:** {alvo.mention} (`{alvo.id}`)\n"
+        f"- **Removido por:** {executor.mention} (`{executor.id}`)\n"
+        f"- **ID FiveM:** {fivem_txt}\n"
+        f"- **Punições removidas:** {lista_cargos}\n"
+        f"- **IDs dos registros:** {ids_txt}\n"
+        f"- **Motivo da remoção:** {motivo_txt}"
+    )
+
+    container = discord.ui.Container(
+        discord.ui.TextDisplay("# 🟢 Punição Removida"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+        discord.ui.Section(
+            linhas,
+            accessory=discord.ui.Thumbnail(alvo.display_avatar.url),
+        ),
+        accent_color=discord.Color.green(),
+    )
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(container)
+
+    try:
+        return await canal.send(view=view)
+    except discord.HTTPException as e:
+        print(f"⚠️ [punicoes] Falha ao postar log de remoção: {e}")
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TÓPICO DE PROVAS + DM
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 async def _criar_topico_provas(
     msg: discord.Message,
     canal: discord.abc.Messageable,
     links: list[str],
 ) -> discord.Thread | None:
-    """Cria o tópico 'Provas anexadas' no registro, posta os links e fecha.
+    """Cria o tópico 'Provas anexadas', posta os links e fecha (archived+locked).
 
-    Fechar = archived+locked: some da lista de tópicos ativos do canal,
-    mas continua acessível clicando no registro da advertência.
-    Não deleta e não exclui o tópico.
+    Some da lista de tópicos ativos, mas continua acessível pelo registro.
     """
     thread: discord.Thread | None = None
 
-    # 1) Tenta criar a partir da mensagem do registro
     try:
         thread = await msg.create_thread(
             name="📁 Provas anexadas",
-            auto_archive_duration=60,  # 1h (mínimo válido)
+            auto_archive_duration=60,
             reason="Provas da advertência",
         )
     except discord.HTTPException as e:
         print(f"⚠️ [punicoes] create_thread via mensagem falhou: {e}")
-        # 2) Fallback: criar pelo canal apontando a mensagem
         try:
             if isinstance(canal, (discord.TextChannel, discord.ForumChannel)):
                 thread = await canal.create_thread(
@@ -106,10 +225,8 @@ async def _criar_topico_provas(
         print("⚠️ [punicoes] Não foi possível criar o tópico de provas.")
         return None
 
-    # Posta as provas (links soltos → Discord gera preview)
     try:
         if links:
-            # Divide em blocos se muitos links (limite de 2000 chars)
             bloco: list[str] = []
             tamanho = 0
             for link in links:
@@ -136,9 +253,6 @@ async def _criar_topico_provas(
     except discord.HTTPException as e:
         print(f"⚠️ [punicoes] Falha ao postar provas no tópico: {e}")
 
-    # Fecha o tópico (some da lista de canais / tópicos ativos).
-    # Continua acessível pelo registro da advertência.
-    # locked impede que membros comuns reabram; archived remove da lista ativa.
     await asyncio.sleep(2)
     try:
         await thread.edit(archived=True, locked=True, reason="Fechar tópico de provas")
@@ -161,7 +275,7 @@ async def notificar_dm_advertencia(
     motivo: str,
     msg_log: discord.Message | None,
 ) -> None:
-    """Envia DM ao usuário advertido com resumo + botão link para o registro."""
+    """Envia DM ao usuário advertido com resumo + botão link para o registro público."""
     data_str = datetime.now().strftime("%d/%m/%Y, %H:%M")
 
     items: list = [
