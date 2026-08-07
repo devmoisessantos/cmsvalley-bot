@@ -1,15 +1,17 @@
+# src/utils/deploy_logger.py
 """
-Utilitário de logs para deploy.
-Basta importar e chamar as funções para ver tudo colorido no console.
+Logs coloridos no console durante a subida do bot.
+
+Basta importar e chamar as funções para acompanhar o deploy no terminal.
 """
 
 import datetime
 from typing import Any
 
 
-# Cores ANSI para o terminal
 class Cores:
-    """Códigos de cor para deixar o console mais legível."""
+    """Códigos ANSI para deixar o console mais legível."""
+
     VERDE = "\033[92m"
     VERMELHO = "\033[91m"
     AMARELO = "\033[93m"
@@ -23,14 +25,14 @@ class Cores:
 
 
 def _horario_atual() -> str:
-    """Retorna o horário atual formatado: [HH:MM:SS]"""
+    """Retorna o horário atual no formato HH:MM:SS."""
     return datetime.datetime.now().strftime("%H:%M:%S")
 
 
-def _formatar(msg: str, cor: str, emoji: str = "") -> str:
-    """Aplica cor e emoji a uma mensagem."""
-    hora = _horario_atual()
-    return f"{Cores.CINZA}[{hora}]{Cores.RESET} {emoji} {cor}{msg}{Cores.RESET}"
+def _formatar(mensagem: str, cor: str, emoji: str = "") -> str:
+    """Aplica horário, emoji e cor a uma mensagem de log."""
+    horario = _horario_atual()
+    return f"{Cores.CINZA}[{horario}]{Cores.RESET} {emoji} {cor}{mensagem}{Cores.RESET}"
 
 
 def info(mensagem: str):
@@ -61,7 +63,8 @@ def destaque(mensagem: str):
 def etapa(numero: int, total: int, descricao: str):
     """
     Mostra o progresso de uma etapa.
-    Ex: [1/5] Carregando cogs...
+
+    Exemplo: [1/5] Carregando cogs...
     """
     print(_formatar(f"[{numero}/{total}] {descricao}", Cores.CIANO, "📌"))
 
@@ -69,7 +72,8 @@ def etapa(numero: int, total: int, descricao: str):
 def separador(titulo: str = ""):
     """
     Imprime uma linha separadora com título opcional.
-    Ex: ═══════ INÍCIO DO DEPLOY ═══════
+
+    Exemplo: ═══ INÍCIO DO DEPLOY ═══
     """
     if titulo:
         linha = f"═══ {titulo} ═══"
@@ -86,13 +90,15 @@ def inicio_deploy():
 def fim_deploy():
     """Marca o fim do deploy com uma linha destacada."""
     separador("DEPLOY CONCLUÍDO")
-    print()  # linha em branco no final
+    print()
 
 
-def resumo_erro(comando: str, erro: Any):
+def resumo_erro(comando: str, erro_ocorrido: Any):
     """
     Exibe um resumo formatado de erro.
+
     Use dentro de try/except para mostrar o que falhou.
     """
     print(_formatar(f"Erro em '{comando}'", Cores.VERMELHO, "💥"))
-    print(f"  {Cores.VERMELHO}{type(erro).__name__}: {erro}{Cores.RESET}")
+    tipo_do_erro = type(erro_ocorrido).__name__
+    print(f"  {Cores.VERMELHO}{tipo_do_erro}: {erro_ocorrido}{Cores.RESET}")

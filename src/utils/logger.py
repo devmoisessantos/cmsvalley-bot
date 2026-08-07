@@ -1,60 +1,116 @@
+# src/utils/logger.py
+"""
+Funções de log de auditoria (cargos e decisões).
+
+Todas usam LogContainerView (Components V2).
+"""
+
+from datetime import (
+    datetime,
+    timezone,
+)
+
 import discord
-from datetime import datetime, timezone
+
 from src.config import CANAIS
 from src.utils.log_container import LogContainerView
+from src.utils.mensagens import COR_INFO
 
 
-async def log_cargo(guild: discord.Guild, canal_id: int, *, candidato: discord.Member,
-                     executor: discord.abc.User, acao: str, cargo: str, extra: str = ""):
-    canal = guild.get_channel(canal_id)
+async def log_cargo(
+    guilda: discord.Guild,
+    canal_id: int,
+    *,
+    candidato: discord.Member,
+    executor: discord.abc.User,
+    acao: str,
+    cargo: str,
+    extra: str = "",
+):
+    """
+    Log simples de uma ação de cargo em um canal qualquer.
+
+    Preferível usar log_mudanca_cargo ou log_decisao quando fizer sentido.
+    """
+    canal = guilda.get_channel(canal_id)
     if canal is None:
         return
 
-    texto = (
+    momento_atual = int(datetime.now(timezone.utc).timestamp())
+
+    linhas = (
         f"**{acao}**\n"
-        f"Membro: {candidato.mention} (`{candidato.id}`)\n"
-        f"Cargo: {cargo}\n"
-        f"Executor: {executor.mention}\n"
-        f"Data: <t:{int(datetime.now(timezone.utc).timestamp())}:F>"
+        f"- **Membro:** {candidato.mention} (`{candidato.id}`)\n"
+        f"- **Cargo:** {cargo}\n"
+        f"- **Executor:** {executor.mention}\n"
+        f"- **Data:** <t:{momento_atual}:F>"
     )
     if extra:
-        texto += f"\n{extra}"
+        linhas += f"\n- {extra}"
 
-    await canal.send(texto)
+    view_do_log = LogContainerView(
+        titulo="📋 Ação de Cargo",
+        linhas=linhas,
+        guild=guilda,
+        cor=COR_INFO,
+        avatar_url=candidato.display_avatar.url,
+    )
+    await canal.send(view=view_do_log)
 
 
-
-async def log_mudanca_cargo(guild: discord.Guild, *, candidato: discord.Member,
-                             executor: discord.abc.User,
-                             cargos_adicionados: list[str] | None = None,
-                             cargos_removidos: list[str] | None = None):
-    """Auditoria bruta: toda vez que um cargo é adicionado/removido pelo bot."""
-    canal = guild.get_channel(CANAIS["LOG_CARGOS"])
+async def log_mudanca_cargo(
+    guilda: discord.Guild,
+    *,
+    candidato: discord.Member,
+    executor: discord.abc.User,
+    cargos_adicionados: list[str] | None = None,
+    cargos_removidos: list[str] | None = None,
+):
+    """
+    Auditoria de toda vez que o bot adiciona ou remove cargos de um membro.
+    Envia no canal LOG_CARGOS.
+    """
+    canal = guilda.get_channel(CANAIS["LOG_CARGOS"])
     if canal is None:
         return
 
     partes = [f"- **Membro:** {candidato.mention} (`{candidato.id}`)"]
+
     if cargos_adicionados:
-        partes.append(f"- **Adicionados:** {', '.join(cargos_adicionados)}")
+        lista_adicionados = ", ".join(cargos_adicionados)
+        partes.append(f"- **Adicionados:** {lista_adicionados}")
+
     if cargos_removidos:
-        partes.append(f"- **Removidos:** {', '.join(cargos_removidos)}")
+        lista_removidos = ", ".join(cargos_removidos)
+        partes.append(f"- **Removidos:** {lista_removidos}")
+
     partes.append(f"- **Executor:** {executor.mention}")
 
-    view = LogContainerView(
+    view_do_log = LogContainerView(
         titulo="🔧 Alteração de Cargo(s)",
         linhas="\n".join(partes),
-        guild=guild,
-        cor=discord.Color.blurple(),
+        guild=guilda,
+        cor=COR_INFO,
         avatar_url=candidato.display_avatar.url,
     )
-    await canal.send(view=view)
+    await canal.send(view=view_do_log)
 
 
-async def log_decisao(guild: discord.Guild, canal_id: int, *, titulo: str, candidato: discord.Member,
-                       executor: discord.abc.User, cargo: str, extra: str = "",
-                       cor: discord.Color = discord.Color.blurple()):
-    """Log padronizado para aprovações/reprovações, em Container."""
-    canal = guild.get_channel(canal_id)
+async def log_decisao(
+    guilda: discord.Guild,
+    canal_id: int,
+    *,
+    titulo: str,
+    candidato: discord.Member,
+    executor: discord.abc.User,
+    cargo: str,
+    extra: str = "",
+    cor: discord.Color = COR_INFO,
+):
+    """
+    Log padronizado para aprovações e reprovações.
+    """
+    canal = guilda.get_channel(canal_id)
     if canal is None:
         return
 
@@ -66,6 +122,11 @@ async def log_decisao(guild: discord.Guild, canal_id: int, *, titulo: str, candi
     if extra:
         linhas += f"\n- {extra}"
 
-    view = LogContainerView(titulo=titulo, linhas=linhas, guild=guild, cor=cor,
-                             avatar_url=candidato.display_avatar.url)
-    await canal.send(view=view)
+    view_do_log = LogContainerView(
+        titulo=titulo,
+        linhas=linhas,
+        guild=guilda,
+        cor=cor,
+        avatar_url=candidato.display_avatar.url,
+    )
+    await canal.send(view=view_do_log)

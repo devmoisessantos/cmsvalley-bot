@@ -1,53 +1,112 @@
-import discord
+# src/utils/error_handling.py
+"""
+Mixins que capturam erros em Views e Modals.
+
+Quando um botão, select ou modal quebra, o erro vai para o canal de LOG_ERROS
+e o membro recebe um aviso discreto.
+"""
+
 import traceback
 
+import discord
+
 from src.config import CANAIS
+from src.utils.mensagens import responder_erro
+
+
+async def _enviar_erro_para_canal_de_logs(
+    interacao: discord.Interaction,
+    titulo: str,
+    nome_do_componente: str,
+    erro: Exception,
+):
+    """Monta o texto do erro e envia no canal de logs, se existir."""
+    guilda = interacao.guild
+    if guilda is None:
+        return
+
+    canal_de_logs = guilda.get_channel(CANAIS["LOG_ERROS"])
+    if canal_de_logs is None:
+        return
+
+    traceback_completo = "".join(
+        traceback.format_exception(type(erro), erro, erro.__traceback__)
+    )
+    # O Discord limita o tamanho da mensagem; pegamos só o final do traceback.
+    traceback_curto = traceback_completo[-1200:]
+
+    texto_do_log = (
+        f"⚠️ **{titulo}**\n"
+        f"Usuário: {interacao.user.mention} (`{interacao.user.id}`)\n"
+        f"Componente: `{nome_do_componente}`\n"
+        f"Erro: `{erro}`\n"
+        f"```py\n{traceback_curto}\n```"
+    )
+
+    try:
+        await canal_de_logs.send(texto_do_log)
+    except discord.HTTPException:
+        pass
+
+
+async def _avisar_membro_sobre_erro(interacao: discord.Interaction):
+    """Avisa o membro que algo deu errado, sem expor detalhes técnicos."""
+    try:
+        await responder_erro(
+            interacao,
+            titulo="Erro inesperado",
+            linhas=["Ocorreu um erro inesperado. A equipe foi notificada."],
+            delay=15,
+        )
+    except discord.HTTPException:
+        # A interação pode ter expirado (passou de 3 segundos ou 15 minutos).
+        pass
 
 
 class LoggingViewMixin:
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
-        guild = interaction.guild
-        canal = guild.get_channel(CANAIS["LOG_ERROS"]) if guild else None
+    """
+    Coloque este mixin nas Views para capturar erros de botões e selects.
 
-        tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-        tb_curto = tb[-1200:]  # evita passar do limite de caracteres do Discord
+    Exemplo:
+        class MeuPainel(LoggingViewMixin, discord.ui.LayoutView):
+            ...
+    """
 
-        mensagem = (
-            f"⚠️ **Erro em componente**\n"
-            f"Usuário: {interaction.user.mention} (`{interaction.user.id}`)\n"
-            f"Componente: `{item.__class__.__name__}`\n"
-            f"Erro: `{error}`\n"
-            f"```py\n{tb_curto}\n```"
+    async def on_error(
+        self,
+        interacao: discord.Interaction,
+        erro: Exception,
+        item,
+    ):
+        nome_do_componente = item.__class__.__name__
+        await _enviar_erro_para_canal_de_logs(
+            interacao,
+            titulo="Erro em componente",
+            nome_do_componente=nome_do_componente,
+            erro=erro,
         )
+        await _avisar_membro_sobre_erro(interacao)
 
-        if canal:
-            await canal.send(mensagem)
-
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ Ocorreu um erro inesperado. A equipe foi notificada.", ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    "❌ Ocorreu um erro inesperado. A equipe foi notificada.", ephemeral=True
-                )
-        except discord.HTTPException:
-            pass  # interação pode já ter expirado
 
 class LoggingModalMixin:
-    async def on_error(self, interaction: discord.Interaction, error: Exception):
-        guild = interaction.guild
-        canal = guild.get_channel(CANAIS["LOG_ERROS"]) if guild else None
-        tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-1200:]
+    """
+    Coloque este mixin nos Modals para capturar erros no envio do formulário.
 
-        if canal:
-            await canal.send(
-                f"⚠️ **Erro em Modal**\n"
-                f"Modal: `{self.__class__.__name__}`\n"
-                f"Usuário: {interaction.user.mention}\n"
-                f"```py\n{tb}\n```"
-            )
+    Exemplo:
+        class MeuModal(LoggingModalMixin, discord.ui.Modal):
+            ...
+    """
 
-        if not interaction.response.is_done():
-            await interaction.response.send_message("❌ Erro inesperado. A equipe foi notificada.", ephemeral=True)
+    async def on_error(
+        self,
+        interacao: discord.Interaction,
+        erro: Exception,
+    ):
+        nome_do_modal = self.__class__.__name__
+        await _enviar_erro_para_canal_de_logs(
+            interacao,
+            titulo="Erro em Modal",
+            nome_do_componente=nome_do_modal,
+            erro=erro,
+        )
+        await _avisar_membro_sobre_erro(interacao)
