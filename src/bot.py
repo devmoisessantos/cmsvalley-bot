@@ -15,13 +15,15 @@ from src.gate.gate_panel import PainelEventosGate
 from src.gate.gate_presenca import montar_container_presenca
 from src.gate.gate_service import listar_eventos_abertos
 from src.guia.boas_vindas_panel import PainelBoasVindasLayout
-from src.guia.guia_setup import garantir_painel_tutoriais
+from src.guia.guia_setup import (
+    garantir_painel_boas_vindas,
+    garantir_painel_tutoriais,
+)
 from src.guia.tutoriais_panel import PainelTutoriaisLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
-    garantir_painel_boas_vindas,
     garantir_painel_eventos_gate,
     garantir_painel_fazer_chamada,
     garantir_painel_gerenciar_cargos,

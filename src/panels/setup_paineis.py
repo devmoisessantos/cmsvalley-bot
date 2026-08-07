@@ -10,7 +10,6 @@ from src.config import (
 from src.database.connection import async_session
 from src.database.models import PainelPostado
 from src.gate.gate_panel import PainelEventosGate
-from src.guia.boas_vindas_panel import PainelBoasVindasLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.plantao.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
@@ -292,53 +291,6 @@ async def garantir_painel_eventos_gate(
         session.add(novo_registro)
         await session.commit()
         print(f"✅ Painel de Eventos Gate postado no canal #{canal.name}.")
-
-
-async def garantir_painel_boas_vindas(
-    bot: discord.Client, interaction: discord.Interaction = None
-):
-    """Garante o painel de boas-vindas (Guia do Estagiário — cat. 1) no canal."""
-    async with async_session() as session:
-        resultado = await session.execute(
-            select(PainelPostado).where(PainelPostado.nome_painel == "boas_vindas")
-        )
-        registro = resultado.scalar_one_or_none()
-
-        canal_id = CANAIS.get("PAINEL_BOAS_VINDAS") or 0
-        if not canal_id:
-            print(
-                "⚠️ CANAIS['PAINEL_BOAS_VINDAS'] não configurado — painel não postado."
-            )
-            return
-
-        canal = bot.get_channel(canal_id)
-        if canal is None:
-            print(f"❌ Canal de boas-vindas ({canal_id}) não encontrado.")
-            return
-
-        if registro is not None:
-            return
-
-        if interaction and interaction.guild:
-            guild = interaction.guild
-        else:
-            guild = bot.get_guild(int(GUILD_ID))
-
-        if guild is None:
-            print("❌ Guild não encontrada!")
-            return
-
-        mensagem = await canal.send(view=PainelBoasVindasLayout(guild))
-
-        session.add(
-            PainelPostado(
-                nome_painel="boas_vindas",
-                canal_id=canal.id,
-                message_id=mensagem.id,
-            )
-        )
-        await session.commit()
-        print(f"✅ Painel de Boas-Vindas postado no canal #{canal.name}.")
 
 
 async def garantir_painel_fazer_chamada(
