@@ -12,9 +12,9 @@ CANAL_PAINEL_RECRUTAMENTO_ID = 1486369071590281326
 LOGO_PATH = "assets/logo.png"
 
 BACKUP_DIR = os.getenv("BACKUP_DIR", "data/backups")
+LOG_BACKUP_CHANNEL = int(os.getenv("LOG_BACKUP_CHANNEL"))
 MAX_BACKUPS_PER_GUILD = int(os.getenv("MAX_BACKUPS_PER_GUILD", 10))
 AUTO_BACKUP_INTERVAL_HOURS = int(os.getenv("AUTO_BACKUP_INTERVAL_HOURS", 24))
-LOG_BACKUP_CHANNEL = int(os.getenv("LOG_BACKUP_CHANNEL"))
 ADMIN_ROLE_NAMES = [
     r.strip()
     for r in os.getenv("ADMIN_ROLE_NAMES", "Admin,Fundador").split(",")
