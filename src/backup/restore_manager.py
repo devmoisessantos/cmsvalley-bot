@@ -1,4 +1,6 @@
-"""Restauração cautelosa a partir de um backup.
+# src/backup/restore_manager.py
+"""
+Restauração cautelosa a partir de um backup.
 
 Princípios:
   1. Só CRIA ou ATUALIZA — nunca apaga cargos/canais.
@@ -28,17 +30,18 @@ class RestoreManager:
 
     async def restaurar_cargos(
         self,
-        guild: discord.Guild,
+        guilda: discord.Guild,
         backup: dict,
         dry_run: bool = False,
     ) -> list[str]:
         self.relatorio = []
-        cargos_por_id = {cargo.id: cargo for cargo in guild.roles}
+        cargos_por_id = {cargo.id: cargo for cargo in guilda.roles}
         cargos_por_nome = {
-            cargo.name: cargo for cargo in guild.roles if not cargo.is_default()
+            cargo.name: cargo for cargo in guilda.roles if not cargo.is_default()
         }
         cargos_do_backup = sorted(
-            backup.get("roles", []), key=lambda item: item.get("position", 0)
+            backup.get("roles", []),
+            key=lambda item: item.get("position", 0),
         )
 
         for dados_cargo in cargos_do_backup:
@@ -50,15 +53,15 @@ class RestoreManager:
                 cargo_existente = cargos_por_nome.get(dados_cargo["name"])
 
             permissoes = discord.Permissions(dados_cargo["permissions"])
-            cor = discord.Color(dados_cargo["color"])
+            cor_do_cargo = discord.Color(dados_cargo["color"])
 
             if cargo_existente is None:
                 self._anotar(f"➕ Criar cargo `{dados_cargo['name']}`")
                 if not dry_run:
-                    await guild.create_role(
+                    await guilda.create_role(
                         name=dados_cargo["name"],
                         permissions=permissoes,
-                        colour=cor,
+                        colour=cor_do_cargo,
                         hoist=dados_cargo.get("hoist", False),
                         mentionable=dados_cargo.get("mentionable", False),
                         reason="Restauração de backup",
@@ -66,21 +69,21 @@ class RestoreManager:
                     await asyncio.sleep(ATRASO_RATE_LIMIT)
                 continue
 
-            mudou = (
+            cargo_mudou = (
                 cargo_existente.name != dados_cargo["name"]
                 or cargo_existente.permissions.value != dados_cargo["permissions"]
                 or cargo_existente.color.value != dados_cargo["color"]
                 or cargo_existente.hoist != dados_cargo.get("hoist", False)
                 or cargo_existente.mentionable != dados_cargo.get("mentionable", False)
             )
-            if mudou:
+            if cargo_mudou:
                 self._anotar(f"✏️ Atualizar cargo `{cargo_existente.name}`")
                 if not dry_run:
                     try:
                         await cargo_existente.edit(
                             name=dados_cargo["name"],
                             permissions=permissoes,
-                            colour=cor,
+                            colour=cor_do_cargo,
                             hoist=dados_cargo.get("hoist", False),
                             mentionable=dados_cargo.get("mentionable", False),
                             reason="Restauração de backup",
@@ -98,34 +101,41 @@ class RestoreManager:
 
     async def restaurar_categorias(
         self,
-        guild: discord.Guild,
+        guilda: discord.Guild,
         backup: dict,
         dry_run: bool = False,
     ) -> list[str]:
         self.relatorio = []
-        categorias_por_id = {cat.id: cat for cat in guild.categories}
-        categorias_por_nome = {cat.name: cat for cat in guild.categories}
+        categorias_por_id = {categoria.id: categoria for categoria in guilda.categories}
+        categorias_por_nome = {
+            categoria.name: categoria for categoria in guilda.categories
+        }
 
-        for dados in sorted(
-            backup.get("categories", []), key=lambda item: item.get("position", 0)
+        for dados_categoria in sorted(
+            backup.get("categories", []),
+            key=lambda item: item.get("position", 0),
         ):
-            categoria = categorias_por_id.get(dados["id"]) or categorias_por_nome.get(
-                dados["name"]
-            )
+            categoria = categorias_por_id.get(
+                dados_categoria["id"]
+            ) or categorias_por_nome.get(dados_categoria["name"])
+
             if categoria is None:
-                self._anotar(f"➕ Criar categoria `{dados['name']}`")
+                self._anotar(f"➕ Criar categoria `{dados_categoria['name']}`")
                 if not dry_run:
-                    await guild.create_category(
-                        name=dados["name"], reason="Restauração de backup"
+                    await guilda.create_category(
+                        name=dados_categoria["name"],
+                        reason="Restauração de backup",
                     )
                     await asyncio.sleep(ATRASO_RATE_LIMIT)
-            elif categoria.name != dados["name"]:
+            elif categoria.name != dados_categoria["name"]:
                 self._anotar(
-                    f"✏️ Renomear categoria `{categoria.name}` → `{dados['name']}`"
+                    f"✏️ Renomear categoria `{categoria.name}` "
+                    f"→ `{dados_categoria['name']}`"
                 )
                 if not dry_run:
                     await categoria.edit(
-                        name=dados["name"], reason="Restauração de backup"
+                        name=dados_categoria["name"],
+                        reason="Restauração de backup",
                     )
                     await asyncio.sleep(ATRASO_RATE_LIMIT)
 
@@ -135,68 +145,73 @@ class RestoreManager:
 
     async def restaurar_canais(
         self,
-        guild: discord.Guild,
+        guilda: discord.Guild,
         backup: dict,
         dry_run: bool = False,
     ) -> list[str]:
         self.relatorio = []
         canais_por_id = {
             canal.id: canal
-            for canal in guild.channels
+            for canal in guilda.channels
             if not isinstance(canal, discord.CategoryChannel)
         }
         canais_por_nome = {
             canal.name: canal
-            for canal in guild.channels
+            for canal in guilda.channels
             if not isinstance(canal, discord.CategoryChannel)
         }
-        categorias_por_id = {cat.id: cat for cat in guild.categories}
+        categorias_por_id = {categoria.id: categoria for categoria in guilda.categories}
 
-        for dados in sorted(
-            backup.get("channels", []), key=lambda item: item.get("position", 0)
+        for dados_canal in sorted(
+            backup.get("channels", []),
+            key=lambda item: item.get("position", 0),
         ):
-            canal = canais_por_id.get(dados["id"]) or canais_por_nome.get(dados["name"])
-            categoria = categorias_por_id.get(dados.get("category_id"))
-            tipo = dados.get("type", "text")
+            canal = canais_por_id.get(dados_canal["id"]) or canais_por_nome.get(
+                dados_canal["name"]
+            )
+            categoria = categorias_por_id.get(dados_canal.get("category_id"))
+            tipo_do_canal = dados_canal.get("type", "text")
 
             if canal is None:
-                self._anotar(f"➕ Criar canal `{dados['name']}` ({tipo})")
+                self._anotar(
+                    f"➕ Criar canal `{dados_canal['name']}` ({tipo_do_canal})"
+                )
                 if not dry_run:
-                    if "voice" in tipo:
-                        await guild.create_voice_channel(
-                            name=dados["name"],
+                    if "voice" in tipo_do_canal:
+                        await guilda.create_voice_channel(
+                            name=dados_canal["name"],
                             category=categoria,
                             reason="Restauração de backup",
                         )
                     else:
-                        await guild.create_text_channel(
-                            name=dados["name"],
+                        await guilda.create_text_channel(
+                            name=dados_canal["name"],
                             category=categoria,
-                            topic=dados.get("topic"),
-                            nsfw=dados.get("nsfw", False),
+                            topic=dados_canal.get("topic"),
+                            nsfw=dados_canal.get("nsfw", False),
                             reason="Restauração de backup",
                         )
                     await asyncio.sleep(ATRASO_RATE_LIMIT)
                 continue
 
-            mudou_nome = canal.name != dados["name"]
-            mudou_extra = False
+            nome_mudou = canal.name != dados_canal["name"]
+            extras_mudaram = False
             if isinstance(canal, discord.TextChannel):
-                mudou_extra = (
-                    canal.topic != dados.get("topic")
-                    or canal.nsfw != dados.get("nsfw", False)
-                )
-            if mudou_nome or mudou_extra:
+                extras_mudaram = canal.topic != dados_canal.get(
+                    "topic"
+                ) or canal.nsfw != dados_canal.get("nsfw", False)
+
+            if nome_mudou or extras_mudaram:
                 self._anotar(f"✏️ Atualizar canal `{canal.name}`")
                 if not dry_run:
-                    argumentos: dict = {
-                        "name": dados["name"],
+                    argumentos_da_edicao: dict = {
+                        "name": dados_canal["name"],
                         "reason": "Restauração de backup",
                     }
                     if isinstance(canal, discord.TextChannel):
-                        argumentos["topic"] = dados.get("topic")
-                        argumentos["nsfw"] = dados.get("nsfw", False)
-                    await canal.edit(**argumentos)
+                        argumentos_da_edicao["topic"] = dados_canal.get("topic")
+                        argumentos_da_edicao["nsfw"] = dados_canal.get("nsfw", False)
+                    await canal.edit(**argumentos_da_edicao)
                     await asyncio.sleep(ATRASO_RATE_LIMIT)
 
         if not self.relatorio:
@@ -205,19 +220,19 @@ class RestoreManager:
 
     async def restaurar_membros(
         self,
-        guild: discord.Guild,
+        guilda: discord.Guild,
         backup: dict,
         dry_run: bool = False,
     ) -> list[str]:
-        """Reaplica cargos/apelidos para quem ainda está no servidor."""
+        """Reaplica cargos e apelidos para quem ainda está no servidor."""
         self.relatorio = []
-        cargos_por_id = {cargo.id: cargo for cargo in guild.roles}
+        cargos_por_id = {cargo.id: cargo for cargo in guilda.roles}
         cargos_por_nome = {
-            cargo.name: cargo for cargo in guild.roles if not cargo.is_default()
+            cargo.name: cargo for cargo in guilda.roles if not cargo.is_default()
         }
 
         for dados_membro in backup.get("members", []):
-            membro = guild.get_member(dados_membro["id"])
+            membro = guilda.get_member(dados_membro["id"])
             if membro is None:
                 continue
 
@@ -225,12 +240,13 @@ class RestoreManager:
             nomes_desejados = dados_membro.get("role_names") or []
 
             cargos_alvo: list[discord.Role] = []
-            for role_id in ids_desejados:
-                cargo = cargos_por_id.get(role_id)
+            for id_do_cargo in ids_desejados:
+                cargo = cargos_por_id.get(id_do_cargo)
                 if cargo and not cargo.is_default() and not cargo.managed:
                     cargos_alvo.append(cargo)
-            for nome in nomes_desejados:
-                cargo = cargos_por_nome.get(nome)
+
+            for nome_do_cargo in nomes_desejados:
+                cargo = cargos_por_nome.get(nome_do_cargo)
                 if (
                     cargo
                     and cargo not in cargos_alvo
@@ -246,42 +262,53 @@ class RestoreManager:
                 if not cargo.is_default() and not cargo.managed
             }
 
-            para_adicionar = [c for c in cargos_alvo if c.id not in ids_atuais]
-            para_remover = [
-                cargos_por_id[role_id]
-                for role_id in ids_atuais - ids_alvo
-                if role_id in cargos_por_id and not cargos_por_id[role_id].managed
+            cargos_para_adicionar = [
+                cargo for cargo in cargos_alvo if cargo.id not in ids_atuais
+            ]
+            cargos_para_remover = [
+                cargos_por_id[id_do_cargo]
+                for id_do_cargo in ids_atuais - ids_alvo
+                if id_do_cargo in cargos_por_id
+                and not cargos_por_id[id_do_cargo].managed
             ]
 
-            if para_adicionar or para_remover:
+            if cargos_para_adicionar or cargos_para_remover:
+                nome_do_membro = dados_membro.get("name", membro.id)
                 self._anotar(
-                    f"👤 {dados_membro.get('name', membro.id)}: "
-                    f"+{len(para_adicionar)} cargo(s), -{len(para_remover)} cargo(s)"
+                    f"👤 {nome_do_membro}: "
+                    f"+{len(cargos_para_adicionar)} cargo(s), "
+                    f"-{len(cargos_para_remover)} cargo(s)"
                 )
                 if not dry_run:
                     try:
-                        if para_adicionar:
+                        if cargos_para_adicionar:
                             await membro.add_roles(
-                                *para_adicionar, reason="Restauração de backup"
+                                *cargos_para_adicionar,
+                                reason="Restauração de backup",
                             )
-                        if para_remover:
+                        if cargos_para_remover:
                             await membro.remove_roles(
-                                *para_remover, reason="Restauração de backup"
+                                *cargos_para_remover,
+                                reason="Restauração de backup",
                             )
                     except discord.Forbidden:
-                        self._anotar(f"⚠️ Sem permissão para alterar cargos de {membro}.")
+                        self._anotar(
+                            f"⚠️ Sem permissão para alterar cargos de {membro}."
+                        )
                     await asyncio.sleep(ATRASO_RATE_LIMIT)
 
-            apelido_backup = dados_membro.get("nickname")
-            if apelido_backup != membro.nick:
+            apelido_no_backup = dados_membro.get("nickname")
+            if apelido_no_backup != membro.nick:
+                nome_do_membro = dados_membro.get("name", membro.id)
                 self._anotar(
-                    f"👤 {dados_membro.get('name', membro.id)}: "
-                    f"apelido `{membro.nick}` → `{apelido_backup}`"
+                    f"👤 {nome_do_membro}: "
+                    f"apelido `{membro.nick}` → `{apelido_no_backup}`"
                 )
                 if not dry_run:
                     try:
                         await membro.edit(
-                            nick=apelido_backup, reason="Restauração de backup"
+                            nick=apelido_no_backup,
+                            reason="Restauração de backup",
                         )
                     except discord.Forbidden:
                         self._anotar(f"⚠️ Sem permissão para renomear {membro}.")
@@ -293,12 +320,13 @@ class RestoreManager:
 
     async def restaurar_tudo(
         self,
-        guild: discord.Guild,
+        guilda: discord.Guild,
         backup: dict,
         dry_run: bool = False,
     ) -> dict[str, list[str]]:
+        """Restaura cargos, categorias e canais (sem membros)."""
         return {
-            "roles": await self.restaurar_cargos(guild, backup, dry_run),
-            "categories": await self.restaurar_categorias(guild, backup, dry_run),
-            "channels": await self.restaurar_canais(guild, backup, dry_run),
+            "roles": await self.restaurar_cargos(guilda, backup, dry_run),
+            "categories": await self.restaurar_categorias(guilda, backup, dry_run),
+            "channels": await self.restaurar_canais(guilda, backup, dry_run),
         }

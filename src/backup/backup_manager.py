@@ -1,4 +1,6 @@
-"""Gerenciador de backup estrutural do servidor Discord.
+# src/backup/backup_manager.py
+"""
+Gerenciador de backup estrutural do servidor Discord.
 
 Pense neste arquivo como o "fotógrafo" do servidor:
 ele olha cargos, canais, categorias, emojis, configurações e membros,
@@ -16,7 +18,10 @@ from typing import Any
 
 import discord
 
-from src.config import BACKUP_DIR, MAX_BACKUPS_PER_GUILD
+from src.config import (
+    BACKUP_DIR,
+    MAX_BACKUPS_PER_GUILD,
+)
 
 
 class BackupManager:
@@ -37,26 +42,29 @@ class BackupManager:
     ) -> list[dict]:
         """Converte permissões de canal/categoria para lista gravável em JSON."""
         resultado: list[dict] = []
+
         for alvo, permissao in overwrites.items():
-            tipo_alvo = "role" if isinstance(alvo, discord.Role) else "member"
+            tipo_do_alvo = "role" if isinstance(alvo, discord.Role) else "member"
             permitir, negar = permissao.pair()
             resultado.append(
                 {
-                    "target_type": tipo_alvo,
+                    "target_type": tipo_do_alvo,
                     "target_id": alvo.id,
                     "target_name": getattr(alvo, "name", str(alvo.id)),
                     "allow": permitir.value,
                     "deny": negar.value,
                 }
             )
+
         return resultado
 
-    def _serializar_cargos(self, guild: discord.Guild) -> list[dict]:
-        lista: list[dict] = []
-        for cargo in guild.roles:
+    def _serializar_cargos(self, guilda: discord.Guild) -> list[dict]:
+        lista_de_cargos: list[dict] = []
+
+        for cargo in guilda.roles:
             if cargo.is_default():
                 continue
-            lista.append(
+            lista_de_cargos.append(
                 {
                     "id": cargo.id,
                     "name": cargo.name,
@@ -68,12 +76,14 @@ class BackupManager:
                     "managed": cargo.managed,
                 }
             )
-        return lista
 
-    def _serializar_categorias(self, guild: discord.Guild) -> list[dict]:
-        lista: list[dict] = []
-        for categoria in guild.categories:
-            lista.append(
+        return lista_de_cargos
+
+    def _serializar_categorias(self, guilda: discord.Guild) -> list[dict]:
+        lista_de_categorias: list[dict] = []
+
+        for categoria in guilda.categories:
+            lista_de_categorias.append(
                 {
                     "id": categoria.id,
                     "name": categoria.name,
@@ -81,14 +91,17 @@ class BackupManager:
                     "overwrites": self._serializar_overwrites(categoria.overwrites),
                 }
             )
-        return lista
 
-    def _serializar_canais(self, guild: discord.Guild) -> list[dict]:
-        lista: list[dict] = []
-        for canal in guild.channels:
+        return lista_de_categorias
+
+    def _serializar_canais(self, guilda: discord.Guild) -> list[dict]:
+        lista_de_canais: list[dict] = []
+
+        for canal in guilda.channels:
             if isinstance(canal, discord.CategoryChannel):
                 continue
-            dados: dict[str, Any] = {
+
+            dados_do_canal: dict[str, Any] = {
                 "id": canal.id,
                 "name": canal.name,
                 "type": str(canal.type),
@@ -96,21 +109,24 @@ class BackupManager:
                 "position": canal.position,
                 "overwrites": self._serializar_overwrites(canal.overwrites),
             }
-            if isinstance(canal, discord.TextChannel):
-                dados["topic"] = canal.topic
-                dados["nsfw"] = canal.nsfw
-                dados["slowmode_delay"] = canal.slowmode_delay
-            elif isinstance(canal, discord.VoiceChannel):
-                dados["bitrate"] = canal.bitrate
-                dados["user_limit"] = canal.user_limit
-            elif isinstance(canal, discord.ForumChannel):
-                dados["topic"] = canal.topic
-                dados["nsfw"] = canal.nsfw
-                dados["slowmode_delay"] = canal.slowmode_delay
-            lista.append(dados)
-        return lista
 
-    def _serializar_emojis(self, guild: discord.Guild) -> list[dict]:
+            if isinstance(canal, discord.TextChannel):
+                dados_do_canal["topic"] = canal.topic
+                dados_do_canal["nsfw"] = canal.nsfw
+                dados_do_canal["slowmode_delay"] = canal.slowmode_delay
+            elif isinstance(canal, discord.VoiceChannel):
+                dados_do_canal["bitrate"] = canal.bitrate
+                dados_do_canal["user_limit"] = canal.user_limit
+            elif isinstance(canal, discord.ForumChannel):
+                dados_do_canal["topic"] = canal.topic
+                dados_do_canal["nsfw"] = canal.nsfw
+                dados_do_canal["slowmode_delay"] = canal.slowmode_delay
+
+            lista_de_canais.append(dados_do_canal)
+
+        return lista_de_canais
+
+    def _serializar_emojis(self, guilda: discord.Guild) -> list[dict]:
         return [
             {
                 "id": emoji.id,
@@ -118,27 +134,29 @@ class BackupManager:
                 "url": str(emoji.url),
                 "animated": emoji.animated,
             }
-            for emoji in guild.emojis
+            for emoji in guilda.emojis
         ]
 
-    def _serializar_configuracoes(self, guild: discord.Guild) -> dict:
+    def _serializar_configuracoes(self, guilda: discord.Guild) -> dict:
         return {
-            "name": guild.name,
-            "icon_url": str(guild.icon.url) if guild.icon else None,
-            "banner_url": str(guild.banner.url) if guild.banner else None,
-            "afk_timeout": guild.afk_timeout,
-            "afk_channel_id": guild.afk_channel.id if guild.afk_channel else None,
-            "verification_level": str(guild.verification_level),
-            "explicit_content_filter": str(guild.explicit_content_filter),
+            "name": guilda.name,
+            "icon_url": str(guilda.icon.url) if guilda.icon else None,
+            "banner_url": str(guilda.banner.url) if guilda.banner else None,
+            "afk_timeout": guilda.afk_timeout,
+            "afk_channel_id": (guilda.afk_channel.id if guilda.afk_channel else None),
+            "verification_level": str(guilda.verification_level),
+            "explicit_content_filter": str(guilda.explicit_content_filter),
         }
 
-    def _serializar_membros(self, guild: discord.Guild) -> list[dict]:
-        lista: list[dict] = []
-        for membro in guild.members:
+    def _serializar_membros(self, guilda: discord.Guild) -> list[dict]:
+        lista_de_membros: list[dict] = []
+
+        for membro in guilda.members:
             if membro.bot:
                 continue
+
             cargos_uteis = [cargo for cargo in membro.roles if not cargo.is_default()]
-            lista.append(
+            lista_de_membros.append(
                 {
                     "id": membro.id,
                     "name": str(membro),
@@ -147,14 +165,17 @@ class BackupManager:
                     "role_names": [cargo.name for cargo in cargos_uteis],
                 }
             )
-        return lista
+
+        return lista_de_membros
 
     def criar_backup(self, guild: discord.Guild, criado_por: str) -> dict:
         """Monta o snapshot completo do servidor (ainda não grava em disco)."""
+        momento_atual = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
         return {
             "guild_id": guild.id,
             "guild_name": guild.name,
-            "created_at": datetime.datetime.utcnow().isoformat(),
+            "created_at": momento_atual,
             "created_by": criado_por,
             "roles": self._serializar_cargos(guild),
             "categories": self._serializar_categorias(guild),
@@ -165,12 +186,15 @@ class BackupManager:
         }
 
     def salvar_backup(self, backup: dict) -> str:
+        """Grava o snapshot em JSON e limpa backups antigos se passar do limite."""
         pasta = self._pasta_do_servidor(backup["guild_id"])
         carimbo = backup["created_at"].replace(":", "-")
         nome_arquivo = f"backup_{carimbo}.json"
         caminho = os.path.join(pasta, nome_arquivo)
+
         with open(caminho, "w", encoding="utf-8") as arquivo:
             json.dump(backup, arquivo, indent=2, ensure_ascii=False)
+
         self._limpar_backups_antigos(backup["guild_id"])
         return caminho
 

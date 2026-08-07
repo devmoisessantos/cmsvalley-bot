@@ -1,4 +1,6 @@
-"""Snapshot vivo dos cargos de cada membro.
+# src/backup/member_snapshot.py
+"""
+Snapshot vivo dos cargos de cada membro.
 
 Duas responsabilidades:
 
@@ -20,7 +22,10 @@ import discord
 from sqlalchemy import select
 
 from src.database.connection import async_session
-from src.database.models import SnapshotCargosMembro, agora
+from src.database.models import (
+    SnapshotCargosMembro,
+    agora,
+)
 
 # Permissões que NUNCA devolvemos automaticamente no rejoin
 PERMISSOES_PERIGOSAS = (
@@ -33,15 +38,17 @@ PERMISSOES_PERIGOSAS = (
     "mention_everyone",
 )
 
-# Liga/desliga o restore automático por servidor (em memória; default = ligado)
+# Liga/desliga o restore automático por servidor (em memória; padrão = ligado)
 _rejoin_por_servidor: dict[int, bool] = {}
 
 
 def rejoin_esta_ativo(guild_id: int) -> bool:
+    """Retorna se o rejoin automático está ligado neste servidor."""
     return _rejoin_por_servidor.get(guild_id, True)
 
 
 def definir_rejoin(guild_id: int, ativo: bool) -> None:
+    """Liga ou desliga o rejoin automático neste servidor."""
     _rejoin_por_servidor[guild_id] = ativo
 
 
@@ -71,17 +78,26 @@ def _desserializar_nomes(texto: str | None) -> list[str]:
         return []
 
 
+def _cargo_tem_permissao_perigosa(cargo: discord.Role) -> bool:
+    """True se o cargo tem alguma permissão que não devemos devolver no rejoin."""
+    for nome_da_permissao in PERMISSOES_PERIGOSAS:
+        if getattr(cargo.permissions, nome_da_permissao, False):
+            return True
+    return False
+
+
 def _cargos_seguros_do_membro(membro: discord.Member) -> list[discord.Role]:
-    """Cargos que faz sentido guardar / devolver no rejoin."""
-    resultado: list[discord.Role] = []
+    """Cargos que faz sentido guardar e devolver no rejoin."""
+    cargos_seguros: list[discord.Role] = []
+
     for cargo in membro.roles:
         if cargo.is_default() or cargo.managed:
             continue
-        # Não guarda cargos com permissões perigosas
-        if any(getattr(cargo.permissions, nome, False) for nome in PERMISSOES_PERIGOSAS):
+        if _cargo_tem_permissao_perigosa(cargo):
             continue
-        resultado.append(cargo)
-    return resultado
+        cargos_seguros.append(cargo)
+
+    return cargos_seguros
 
 
 async def salvar_snapshot_membro(membro: discord.Member) -> None:
@@ -89,72 +105,82 @@ async def salvar_snapshot_membro(membro: discord.Member) -> None:
     if membro.bot:
         return
 
-    cargos = _cargos_seguros_do_membro(membro)
-    ids = [cargo.id for cargo in cargos]
-    nomes = [cargo.name for cargo in cargos]
+    cargos_seguros = _cargos_seguros_do_membro(membro)
+    ids_dos_cargos = [cargo.id for cargo in cargos_seguros]
+    nomes_dos_cargos = [cargo.name for cargo in cargos_seguros]
 
     async with async_session() as sessao:
-        resultado = await sessao.execute(
+        resultado_consulta = await sessao.execute(
             select(SnapshotCargosMembro).where(
                 SnapshotCargosMembro.discord_id == membro.id
             )
         )
-        registro = resultado.scalar_one_or_none()
+        registro = resultado_consulta.scalar_one_or_none()
 
         if registro is None:
             registro = SnapshotCargosMembro(
                 discord_id=membro.id,
                 guild_id=membro.guild.id,
-                role_ids=_serializar_ids(ids),
-                role_names=_serializar_nomes(nomes),
+                role_ids=_serializar_ids(ids_dos_cargos),
+                role_names=_serializar_nomes(nomes_dos_cargos),
                 nickname=membro.nick,
                 atualizado_em=agora(),
             )
             sessao.add(registro)
         else:
             registro.guild_id = membro.guild.id
-            registro.role_ids = _serializar_ids(ids)
-            registro.role_names = _serializar_nomes(nomes)
+            registro.role_ids = _serializar_ids(ids_dos_cargos)
+            registro.role_names = _serializar_nomes(nomes_dos_cargos)
             registro.nickname = membro.nick
             registro.atualizado_em = agora()
 
         await sessao.commit()
 
 
-async def carregar_snapshot(
-    discord_id: int,
-) -> SnapshotCargosMembro | None:
+async def carregar_snapshot(discord_id: int) -> SnapshotCargosMembro | None:
+    """Busca o snapshot salvo deste usuário no banco."""
     async with async_session() as sessao:
-        resultado = await sessao.execute(
+        resultado_consulta = await sessao.execute(
             select(SnapshotCargosMembro).where(
                 SnapshotCargosMembro.discord_id == discord_id
             )
         )
-        return resultado.scalar_one_or_none()
+        return resultado_consulta.scalar_one_or_none()
 
 
-async def sincronizar_todos_os_membros(guild: discord.Guild) -> int:
-    """Percorre o cache de membros e grava snapshot de cada um. Retorna quantos salvou."""
-    quantidade = 0
-    for membro in guild.members:
+async def sincronizar_todos_os_membros(guilda: discord.Guild) -> int:
+    """
+    Percorre o cache de membros e grava snapshot de cada um.
+
+    Retorna quantos membros foram salvos.
+    """
+    quantidade_salvos = 0
+
+    for membro in guilda.members:
         if membro.bot:
             continue
         await salvar_snapshot_membro(membro)
-        quantidade += 1
-    return quantidade
+        quantidade_salvos += 1
+
+    return quantidade_salvos
 
 
 def _cargo_esta_abaixo_do_bot(
-    cargo: discord.Role, cargo_do_bot: discord.Role | None
+    cargo: discord.Role,
+    cargo_mais_alto_do_bot: discord.Role | None,
 ) -> bool:
     """O bot só consegue atribuir cargos abaixo do dele na hierarquia."""
-    if cargo_do_bot is None:
+    if cargo_mais_alto_do_bot is None:
         return False
-    return cargo.position < cargo_do_bot.position
+    return cargo.position < cargo_mais_alto_do_bot.position
 
 
 async def restaurar_cargos_no_rejoin(membro: discord.Member) -> list[str]:
-    """Chamado no on_member_join. Devolve lista de mensagens para log."""
+    """
+    Chamado no on_member_join.
+
+    Devolve uma lista de mensagens para o log do backup.
+    """
     relatorio: list[str] = []
 
     if not rejoin_esta_ativo(membro.guild.id):
@@ -174,40 +200,39 @@ async def restaurar_cargos_no_rejoin(membro: discord.Member) -> list[str]:
 
     cargos_por_id = {cargo.id: cargo for cargo in membro.guild.roles}
     cargos_por_nome = {
-        cargo.name: cargo
-        for cargo in membro.guild.roles
-        if not cargo.is_default()
+        cargo.name: cargo for cargo in membro.guild.roles if not cargo.is_default()
     }
 
-    cargo_do_bot = membro.guild.me.top_role if membro.guild.me else None
+    cargo_mais_alto_do_bot = membro.guild.me.top_role if membro.guild.me else None
     cargos_para_dar: list[discord.Role] = []
 
-    for role_id in ids_salvos:
-        cargo = cargos_por_id.get(role_id)
+    for id_do_cargo in ids_salvos:
+        cargo = cargos_por_id.get(id_do_cargo)
         if cargo is None:
             continue
         if cargo.managed or cargo.is_default():
             continue
-        if any(getattr(cargo.permissions, nome, False) for nome in PERMISSOES_PERIGOSAS):
+        if _cargo_tem_permissao_perigosa(cargo):
             continue
-        if not _cargo_esta_abaixo_do_bot(cargo, cargo_do_bot):
+        if not _cargo_esta_abaixo_do_bot(cargo, cargo_mais_alto_do_bot):
             relatorio.append(
-                f"⚠️ Cargo `{cargo.name}` ignorado (acima ou igual ao bot na hierarquia)."
+                f"⚠️ Cargo `{cargo.name}` ignorado "
+                "(acima ou igual ao bot na hierarquia)."
             )
             continue
         if cargo not in cargos_para_dar:
             cargos_para_dar.append(cargo)
 
-    # Fallback por nome quando o id não existe mais
-    for nome in nomes_salvos:
-        cargo = cargos_por_nome.get(nome)
+    # Fallback por nome quando o id do cargo não existe mais no servidor
+    for nome_do_cargo in nomes_salvos:
+        cargo = cargos_por_nome.get(nome_do_cargo)
         if cargo is None or cargo in cargos_para_dar:
             continue
         if cargo.managed or cargo.is_default():
             continue
-        if any(getattr(cargo.permissions, nome_perm, False) for nome_perm in PERMISSOES_PERIGOSAS):
+        if _cargo_tem_permissao_perigosa(cargo):
             continue
-        if not _cargo_esta_abaixo_do_bot(cargo, cargo_do_bot):
+        if not _cargo_esta_abaixo_do_bot(cargo, cargo_mais_alto_do_bot):
             continue
         cargos_para_dar.append(cargo)
 
@@ -217,8 +242,8 @@ async def restaurar_cargos_no_rejoin(membro: discord.Member) -> list[str]:
                 *cargos_para_dar,
                 reason="Restore automático de cargos (rejoin)",
             )
-            nomes = ", ".join(f"`{c.name}`" for c in cargos_para_dar)
-            relatorio.append(f"✅ Cargos reaplicados em {membro}: {nomes}")
+            nomes_formatados = ", ".join(f"`{cargo.name}`" for cargo in cargos_para_dar)
+            relatorio.append(f"✅ Cargos reaplicados em {membro}: {nomes_formatados}")
         except discord.Forbidden:
             relatorio.append(f"❌ Sem permissão para dar cargos a {membro}.")
         except discord.HTTPException as erro:
@@ -226,7 +251,6 @@ async def restaurar_cargos_no_rejoin(membro: discord.Member) -> list[str]:
     else:
         relatorio.append(f"Nenhum cargo seguro para reaplicar em {membro}.")
 
-    # Apelido
     if snapshot.nickname and snapshot.nickname != membro.nick:
         try:
             await membro.edit(
