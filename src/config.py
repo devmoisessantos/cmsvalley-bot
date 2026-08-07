@@ -14,7 +14,7 @@ LOGO_PATH = "assets/logo.png"
 BACKUP_DIR = os.getenv("BACKUP_DIR", "data/backups")
 MAX_BACKUPS_PER_GUILD = int(os.getenv("MAX_BACKUPS_PER_GUILD", 10))
 AUTO_BACKUP_INTERVAL_HOURS = int(os.getenv("AUTO_BACKUP_INTERVAL_HOURS", 24))
-LOG_CHANNEL_NAME = os.getenv("LOG_CHANNEL_NAME", "backup-logs")
+LOG_BACKUP_CHANNEL = os.getenv("LOG_CHANNEL_ID", "🤖┃ʟᴏɢs-ʙᴀᴄᴋᴜᴘ")
 ADMIN_ROLE_NAMES = [
     r.strip()
     for r in os.getenv("ADMIN_ROLE_NAMES", "Admin,Fundador").split(",")

@@ -41,7 +41,7 @@ from src.config import (
     AUTO_BACKUP_INTERVAL_HOURS,
     BACKUP_DIR,
     CONFIRMATION_TIMEOUT,
-    LOG_CHANNEL_NAME,
+    LOG_BACKUP_CHANNEL,
     MAX_BACKUPS_PER_GUILD,
 )
 from src.services.sincronizar_usuarios import (
@@ -73,7 +73,7 @@ class BackupCog(commands.Cog):
         self.gerenciador = BackupManager()
         self.restaurador = RestoreManager()
         self.comparador = DiffEngine()
-        self.logger = BackupLogger(LOG_CHANNEL_NAME)
+        self.logger = BackupLogger(LOG_BACKUP_CHANNEL)
         self.tarefa_backup_automatico.change_interval(hours=AUTO_BACKUP_INTERVAL_HOURS)
         self.tarefa_backup_automatico.start()
 
@@ -434,7 +434,7 @@ class BackupCog(commands.Cog):
                 f"Espaço usado: **{tamanho_total / 1024:.1f} KB**",
                 f"Intervalo automático: a cada **{AUTO_BACKUP_INTERVAL_HOURS}h**",
                 f"Máx. backups guardados: **{MAX_BACKUPS_PER_GUILD}**",
-                f"Canal de logs: `#{LOG_CHANNEL_NAME}`",
+                f"Canal de logs: {self.logger.mencao_do_canal()}",
                 f"Rejoin automático: **{estado_rejoin}**",
             ],
             cor=COR_INFO,

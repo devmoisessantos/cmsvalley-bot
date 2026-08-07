@@ -2,7 +2,8 @@
 """
 Logger do sistema de backup.
 
-Envia logs no canal configurado (padrão: backup-logs) com Components V2.
+Envia logs no canal configurado com Components V2.
+Aceita nome do canal ("backup-logs") ou ID numérico no .env.
 Se o canal não existir ou o bot não puder escrever, registra no console.
 """
 
@@ -17,11 +18,29 @@ from src.utils.mensagens import COR_INFO
 class BackupLogger:
     """Envia logs detalhados para o canal de backup do servidor."""
 
-    def __init__(self, nome_canal_log: str) -> None:
-        self.nome_canal_log = nome_canal_log
+    def __init__(self, canal_log: str) -> None:
+        # Pode ser nome ("backup-logs") ou ID ("1523367...")
+        self.canal_log = (canal_log or "").strip()
 
     def _encontrar_canal(self, guilda: discord.Guild) -> discord.TextChannel | None:
-        return discord.utils.get(guilda.text_channels, name=self.nome_canal_log)
+        if not self.canal_log:
+            return None
+
+        # ID numérico → busca direta
+        if self.canal_log.isdigit():
+            canal = guilda.get_channel(int(self.canal_log))
+            if isinstance(canal, discord.TextChannel):
+                return canal
+            return None
+
+        # Nome do canal
+        return discord.utils.get(guilda.text_channels, name=self.canal_log)
+
+    def mencao_do_canal(self) -> str:
+        """Texto amigável para cards: menção <#id> ou #nome."""
+        if self.canal_log.isdigit():
+            return f"<#{self.canal_log}>"
+        return f"`#{self.canal_log}`"
 
     async def log(
         self,
@@ -55,11 +74,12 @@ class BackupLogger:
                 await canal.send(view=view_do_log)
             except discord.Forbidden:
                 print(
-                    f"[AVISO] Sem permissão para enviar no canal #{self.nome_canal_log}"
+                    f"[AVISO] Sem permissão para enviar no canal "
+                    f"{self.mencao_do_canal()}"
                 )
         else:
             print(
-                f"[AVISO] Canal de log '#{self.nome_canal_log}' "
+                f"[AVISO] Canal de log '{self.canal_log}' "
                 f"não encontrado em {guild.name}"
             )
 
