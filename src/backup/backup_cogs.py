@@ -19,7 +19,10 @@ import os
 
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import (
+    commands,
+    tasks,
+)
 
 from src.backup.backup_logger import BackupLogger
 from src.backup.backup_manager import BackupManager
@@ -39,11 +42,14 @@ from src.config import (
     LOG_CHANNEL_NAME,
     MAX_BACKUPS_PER_GUILD,
 )
+from src.services.sincronizar_usuarios import (
+    garantir_usuario_basico,
+    sincronizar_usuarios_do_servidor,
+)
 from src.utils.mensagens import (
     CardView,
     excluir_mensagem,
     responder_card,
-    responder_ephemera,
 )
 from src.utils.permissions import apenas_administrador
 from src.utils.views import ConfirmView
@@ -189,6 +195,12 @@ class BackupCog(commands.Cog):
     async def on_member_join(self, membro: discord.Member):
         if membro.bot:
             return
+        # Garante linha básica em usuarios (palco das buscas do bot)
+        try:
+            await garantir_usuario_basico(membro)
+        except Exception as erro:
+            print(f"Aviso ao criar usuario no join: {erro}")
+
         relatorio = await restaurar_cargos_no_rejoin(membro)
         if relatorio:
             await self.logger.log(
@@ -666,9 +678,7 @@ class BackupCog(commands.Cog):
         resultado = await self.restaurador.restaurar_tudo(
             interaction.guild, backup, dry_run=False
         )
-        relatorio = (
-            resultado["roles"] + resultado["categories"] + resultado["channels"]
-        )
+        relatorio = resultado["roles"] + resultado["categories"] + resultado["channels"]
         await self._enviar_card(
             interaction,
             titulo="✅ Restauração completa",
@@ -738,6 +748,43 @@ class BackupCog(commands.Cog):
             delay=15,
         )
 
+    # ══════════════════════════════════════════════════════════════════════
+    # /backup sincronizar-usuarios
+    # ══════════════════════════════════════════════════════════════════════
+
+    @grupo_backup.command(
+        name="sincronizar-usuarios",
+        description="Alimenta a tabela usuarios com os membros atuais do servidor",
+    )
+    @apenas_administrador()
+    async def sincronizar_usuarios(self, interaction: discord.Interaction):
+        """Varre o Discord e preenche lacunas em usuarios (status, nick, id_fivem)."""
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        resultado = await sincronizar_usuarios_do_servidor(interaction.guild)
+
+        linhas = resultado.linhas_resumo()
+        if resultado.erros:
+            linhas.append(f"Avisos/erros: **{len(resultado.erros)}** (ver console)")
+            for trecho in resultado.erros[:5]:
+                print(f"[sincronizar-usuarios] {trecho}")
+
+        await self._enviar_card(
+            interaction,
+            titulo="✅ Tabela usuarios sincronizada",
+            linhas=linhas,
+            cor=discord.Color.green(),
+            delay=40,
+        )
+        await self.logger.log(
+            interaction.guild,
+            "🗄️ Sincronização de usuarios",
+            " | ".join(linhas),
+            discord.Color.green(),
+            autor=str(interaction.user),
+        )
+
 
 async def setup(bot: commands.Bot):
+
     await bot.add_cog(BackupCog(bot))
