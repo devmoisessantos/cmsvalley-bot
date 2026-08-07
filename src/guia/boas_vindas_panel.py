@@ -1,4 +1,6 @@
-"""Painel de boas-vindas — Categoria 1: Preparação Inicial (Guia do Estagiário).
+# src/guia/boas_vindas_panel.py
+"""
+Painel de boas-vindas — Categoria 1: Preparação Inicial (Guia do Estagiário).
 
 Components V2: LayoutView + Container + Section/Thumbnail + MediaGallery + Select.
 """
@@ -13,10 +15,13 @@ from src.config import (
     GUILD_ID,
 )
 from src.utils.error_handling import LoggingViewMixin
+from src.utils.mensagens import (
+    responder_erro,
+    responder_view,
+)
 
-# ── Conteúdo de cada opção do select ─────────────────────────────────────
-
-_OPCOES_GUIA: dict[str, dict] = {
+# Conteúdo de cada opção do select
+OPCOES_DO_GUIA: dict[str, dict] = {
     "uniforme": {
         "emoji": "👕",
         "titulo": "Uniforme de Estagiário",
@@ -25,8 +30,8 @@ _OPCOES_GUIA: dict[str, dict] = {
             "Isso identifica você como membro em formação do CMS Valley e é "
             "obrigatório para atuar no hospital."
         ),
-        "canal_key": "GUIA_UNIFORME",
-        "label_botao": "Abrir canal do uniforme",
+        "chave_do_canal": "GUIA_UNIFORME",
+        "rotulo_do_botao": "Abrir canal do uniforme",
     },
     "regras": {
         "emoji": "📜",
@@ -36,8 +41,8 @@ _OPCOES_GUIA: dict[str, dict] = {
             "O descumprimento pode gerar advertências. Leia com atenção e tire "
             "dúvidas com a equipe se necessário."
         ),
-        "canal_key": "GUIA_REGRAS_HP",
-        "label_botao": "Abrir regras do HP",
+        "chave_do_canal": "GUIA_REGRAS_HP",
+        "rotulo_do_botao": "Abrir regras do HP",
     },
     "regras_bau": {
         "emoji": "🧰",
@@ -47,8 +52,8 @@ _OPCOES_GUIA: dict[str, dict] = {
             "Respeitar essas regras evita punições e garante que o estoque "
             "continue disponível para toda a equipe."
         ),
-        "canal_key": "GUIA_REGRAS_BAU",
-        "label_botao": "Abrir regras do baú",
+        "chave_do_canal": "GUIA_REGRAS_BAU",
+        "rotulo_do_botao": "Abrir regras do baú",
     },
     "parceiros": {
         "emoji": "🤝",
@@ -57,8 +62,8 @@ _OPCOES_GUIA: dict[str, dict] = {
             "É importante saber das **parcerias e benefícios** do CMS Valley.\n\n"
             "Conhecer os parceiros ajuda no dia a dia e no atendimento aos pacientes."
         ),
-        "canal_key": "GUIA_PARCEIROS",
-        "label_botao": "Abrir canal de parceiros",
+        "chave_do_canal": "GUIA_PARCEIROS",
+        "rotulo_do_botao": "Abrir canal de parceiros",
     },
     "tutoriais": {
         "emoji": "📖",
@@ -68,8 +73,8 @@ _OPCOES_GUIA: dict[str, dict] = {
             "Consulte o canal de tutoriais para revisar procedimentos, binds e "
             "fluxos do hospital."
         ),
-        "canal_key": "GUIA_TUTORIAIS",
-        "label_botao": "Abrir tutoriais",
+        "chave_do_canal": "GUIA_TUTORIAIS",
+        "rotulo_do_botao": "Abrir tutoriais",
     },
     "duvidas": {
         "emoji": "🎫",
@@ -79,40 +84,42 @@ _OPCOES_GUIA: dict[str, dict] = {
             "Abra um **ticket** com a equipe. Estamos aqui para ajudar você "
             "nos primeiros passos no CMS Valley."
         ),
-        "canal_key": "GUIA_DUVIDAS_TICKET",
-        "label_botao": "Abrir canal de tickets",
+        "chave_do_canal": "GUIA_DUVIDAS_TICKET",
+        "rotulo_do_botao": "Abrir canal de tickets",
     },
 }
 
 
-def _montar_resposta_opcao(chave: str) -> discord.ui.LayoutView:
-    """Resposta ephemeral em Components V2 para a opção escolhida."""
-    dados = _OPCOES_GUIA[chave]
-    canal_id = CANAIS.get(dados["canal_key"]) or 0
+def montar_resposta_da_opcao(chave_da_opcao: str) -> discord.ui.LayoutView:
+    """Monta a resposta ephemeral (Components V2) da opção escolhida no select."""
+    dados_da_opcao = OPCOES_DO_GUIA[chave_da_opcao]
+    id_do_canal = CANAIS.get(dados_da_opcao["chave_do_canal"]) or 0
 
     componentes: list = [
         discord.ui.TextDisplay(
-            f"# {dados['emoji']} {dados['titulo']}\n\n{dados['texto']}"
+            f"# {dados_da_opcao['emoji']} {dados_da_opcao['titulo']}\n\n"
+            f"{dados_da_opcao['texto']}"
         ),
     ]
 
-    if canal_id:
-        row = discord.ui.ActionRow()
-        row.add_item(
+    if id_do_canal:
+        linha_do_botao = discord.ui.ActionRow()
+        linha_do_botao.add_item(
             discord.ui.Button(
-                label=dados["label_botao"],
+                label=dados_da_opcao["rotulo_do_botao"],
                 style=discord.ButtonStyle.link,
-                url=f"https://discord.com/channels/{GUILD_ID}/{canal_id}",
+                url=f"https://discord.com/channels/{GUILD_ID}/{id_do_canal}",
                 emoji="🔗",
             )
         )
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-        componentes.append(row)
+        componentes.append(linha_do_botao)
     else:
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
         componentes.append(
             discord.ui.TextDisplay(
-                "-# Canal ainda não configurado. Avise a staff se o link estiver ausente."
+                "-# Canal ainda não configurado. "
+                "Avise a staff se o link estiver ausente."
             )
         )
 
@@ -120,9 +127,9 @@ def _montar_resposta_opcao(chave: str) -> discord.ui.LayoutView:
         *componentes,
         accent_color=discord.Color.green(),
     )
-    view = discord.ui.LayoutView(timeout=180)
-    view.add_item(container)
-    return view
+    view_da_resposta = discord.ui.LayoutView(timeout=180)
+    view_da_resposta.add_item(container)
+    return view_da_resposta
 
 
 class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -132,10 +139,12 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guild = guild
 
-        icon_url = guild.icon.url if guild.icon else None
+        url_do_icone = guild.icon.url if guild.icon else None
+        thumbnail_do_servidor = (
+            discord.ui.Thumbnail(url_do_icone) if url_do_icone else None
+        )
 
-        # Select menu
-        select = discord.ui.Select(
+        select_do_guia = discord.ui.Select(
             placeholder="📍 Escolha um primeiro passo…",
             custom_id="guia:boas_vindas_select",
             options=[
@@ -177,35 +186,36 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
                 ),
             ],
         )
-        select.callback = self._on_select
-        row_select = discord.ui.ActionRow()
-        row_select.add_item(select)
+        select_do_guia.callback = self._ao_selecionar_opcao
 
-        # Corpo do painel
+        linha_do_select = discord.ui.ActionRow()
+        linha_do_select.add_item(select_do_guia)
+
         componentes: list = [
             discord.ui.Section(
                 "# 🏥 Centro Médico Sul | CMS Valley",
-                ("> 📚 Guia do Estagiário – **primeiros passos** Enfermeiro(a)."),
-                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
+                "> 📚 Guia do Estagiário – **primeiros passos** Enfermeiro(a).",
+                accessory=thumbnail_do_servidor,
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(
                 "Obrigado por querer se juntar ao **CMS Valley**.\n\n"
-                "Para que você se sinta seguro(a) e preparado(a) desde o primeiro minuto, \n"
-                "criamos este painel com tudo o que você precisa saber antes de colocar o uniforme.\n "
-                "Não pule as etapas! Cada item aqui foi pensado para garantir a sua melhor experiência em sua integração.\n\n"
+                "Para que você se sinta seguro(a) e preparado(a) desde o "
+                "primeiro minuto, criamos este painel com tudo o que você "
+                "precisa saber antes de colocar o uniforme.\n"
+                "Não pule as etapas! Cada item aqui foi pensado para garantir "
+                "a sua melhor experiência em sua integração.\n\n"
             ),
         ]
 
-        # MediaGallery (só se houver URLs configuradas)
-        gallery_urls = [u for u in GUIA_BOAS_VINDAS_GALLERY if u]
-        if gallery_urls:
+        urls_da_galeria = [url for url in GUIA_BOAS_VINDAS_GALLERY if url]
+        if urls_da_galeria:
             componentes.append(
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
             )
             componentes.append(
                 discord.ui.MediaGallery(
-                    *[discord.MediaGalleryItem(url) for url in gallery_urls[:10]]
+                    *[discord.MediaGalleryItem(url) for url in urls_da_galeria[:10]]
                 )
             )
 
@@ -213,7 +223,7 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(
             discord.ui.TextDisplay("**👉 Comece sua jornada pelos tópicos abaixo: ↓**")
         )
-        componentes.append(row_select)
+        componentes.append(linha_do_select)
 
         self.container = discord.ui.Container(
             *componentes,
@@ -221,14 +231,16 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
         self.add_item(self.container)
 
-    async def _on_select(self, interaction: discord.Interaction):
-        chave = interaction.data["values"][0]
-        if chave not in _OPCOES_GUIA:
-            await interaction.response.send_message(
-                "❌ Opção inválida.", ephemeral=True
+    async def _ao_selecionar_opcao(self, interacao: discord.Interaction):
+        chave_escolhida = interacao.data["values"][0]
+
+        if chave_escolhida not in OPCOES_DO_GUIA:
+            await responder_erro(
+                interacao,
+                titulo="Opção inválida",
+                linhas=["Essa opção do guia não existe."],
             )
             return
-        await interaction.response.send_message(
-            view=_montar_resposta_opcao(chave),
-            ephemeral=True,
-        )
+
+        view_da_resposta = montar_resposta_da_opcao(chave_escolhida)
+        await responder_view(interacao, view_da_resposta, ephemeral=True)

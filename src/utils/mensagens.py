@@ -306,6 +306,31 @@ async def responder_ephemera(
     asyncio.create_task(excluir_mensagem(mensagem_enviada, delay=delay))
 
 
+async def responder_view(
+    interacao: discord.Interaction,
+    view: discord.ui.LayoutView | discord.ui.View,
+    *,
+    ephemeral: bool = True,
+) -> discord.Message:
+    """
+    Responde a interação só com uma View (sem texto).
+
+    Útil para painéis efêmeros em Components V2 (ex.: resposta do select do guia).
+    Trata response vs followup automaticamente.
+    """
+    interacao_ja_foi_respondida = interacao.response.is_done()
+
+    if interacao_ja_foi_respondida:
+        mensagem_enviada = await interacao.followup.send(
+            view=view,
+            ephemeral=ephemeral,
+        )
+        return mensagem_enviada
+
+    await interacao.response.send_message(view=view, ephemeral=ephemeral)
+    return await interacao.original_response()
+
+
 # ---------------------------------------------------------------------------
 # Enviar card em um canal (não ligado a uma interação)
 # ---------------------------------------------------------------------------
