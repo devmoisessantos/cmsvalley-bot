@@ -434,7 +434,7 @@ class BackupCog(commands.Cog):
                 f"Espaço usado: **{tamanho_total / 1024:.1f} KB**",
                 f"Intervalo automático: a cada **{AUTO_BACKUP_INTERVAL_HOURS}h**",
                 f"Máx. backups guardados: **{MAX_BACKUPS_PER_GUILD}**",
-                f"Canal de logs: {self.logger.mencao_do_canal()}",
+                f"Canal de logs: `(` {self.logger.mencao_do_canal()} `)`",
                 f"Rejoin automático: **{estado_rejoin}**",
             ],
             cor=COR_INFO,
