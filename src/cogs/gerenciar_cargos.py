@@ -1,4 +1,10 @@
-"""Comando /gerenciar_cargos — abre o painel interativo de cargos."""
+# src/cogs/gerenciar_cargos.py
+"""
+Grupo /cargos — painel interativo de adicionar/remover cargos.
+
+O painel em si continua em panels/gerenciar_cargos_panel.py.
+Aqui só fica o comando de barra que abre o painel.
+"""
 
 from __future__ import annotations
 
@@ -8,33 +14,39 @@ from discord.ext import commands
 
 from src.panels.gerenciar_cargos_panel import GerenciarCargosView
 from src.services.gerenciar_cargos_service import determinar_escopos
-from src.utils.mensagens import responder_card
+from src.utils.mensagens import responder_erro
 
 
-class GerenciarCargos(commands.Cog):
+class CargosCog(commands.Cog):
+    """Comandos do grupo /cargos."""
+
+    grupo_cargos = app_commands.Group(
+        name="cargos",
+        description="Gerenciamento de cargos de membros",
+    )
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(
-        name="gerenciar_cargos",
-        description="Adiciona ou remove cargos de um membro",
+    @grupo_cargos.command(
+        name="painel",
+        description="Abre o painel para adicionar ou remover cargos de um membro",
     )
-    async def gerenciar_cargos(self, interaction: discord.Interaction):
-        escopos = determinar_escopos(interaction.user)
+    async def painel(self, interacao: discord.Interaction):
+        membro_executor = interacao.user
+        escopos_do_executor = determinar_escopos(membro_executor)
 
-        if not escopos:
-            await responder_card(
-                interaction,
-                titulo="❌ Sem permissão",
+        if not escopos_do_executor:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
                 linhas=["Você não possui permissão para usar este comando."],
-                cor=discord.Color.red(),
-                delay=12,
             )
             return
 
-        view = GerenciarCargosView(interaction.user)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        view_do_painel = GerenciarCargosView(membro_executor)
+        await interacao.response.send_message(view=view_do_painel, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(GerenciarCargos(bot))
+    await bot.add_cog(CargosCog(bot))

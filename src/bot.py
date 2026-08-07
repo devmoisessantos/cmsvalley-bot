@@ -65,9 +65,12 @@ class CmsValleyBot(commands.Bot):
 
         # Listar extensões (cogs)
         cogs = [
-            "src.backup.backup_cogs",
+            "src.cogs.utilidade",
+            "src.cogs.moderacao",
             "src.cogs.gerenciar_cargos",
+            "src.cogs.busca",
             "src.punicoes.cogs",
+            "src.backup.backup_cogs",
             "src.gate.gate_class",
             "src.gate.gate_eventos",
             "src.whitelist.whitelist_cogs",
