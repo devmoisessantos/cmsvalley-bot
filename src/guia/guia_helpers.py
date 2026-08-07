@@ -108,8 +108,8 @@ def montar_thumbnail_do_servidor(
     guilda: discord.Guild,
 ) -> discord.ui.Thumbnail | None:
     """Devolve o Thumbnail com o ícone da guilda, ou None se não houver ícone."""
-    guilda_tem_icone = guilda.icon is not None
+    guilda_tem_icone = guilda.icon.url if guilda.icon else None
     if not guilda_tem_icone:
         return None
 
-    return discord.ui.Thumbnail(url=guilda.icon.url)
+    return discord.ui.Thumbnail(guilda_tem_icone) if guilda_tem_icone else None
