@@ -40,7 +40,6 @@ class BackupLogger:
         """Texto amigável para cards: menção <#id> ou #nome."""
         if self.canal_log.isdigit():
             return f"<#{self.canal_log}>"
-        return f"`#{self.canal_log}`"
 
     async def log(
         self,
