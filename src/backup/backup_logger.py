@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import discord
 
-from src.config import LOG_BACKUP_CHANNEL
+from src.config import CANAIS
 from src.utils.log_container import LogContainerView
 from src.utils.mensagens import COR_INFO
 
@@ -39,7 +39,7 @@ class BackupLogger:
 
     def mencao_do_canal(self, guilda: discord.Guild) -> str:
         """Texto amigável para cards: menção <#id> ou #nome."""
-        self.canal_log = guilda.get_channel(LOG_BACKUP_CHANNEL)
+        self.canal_log = guilda.get_channel(CANAIS["LOG_BACKUP_CHANNEL"])
         if self.canal_log:
             return f"<#{self.canal_log}>"
 
