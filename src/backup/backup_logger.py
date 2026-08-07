@@ -2,8 +2,7 @@
 """
 Logger do sistema de backup.
 
-Envia logs no canal configurado com Components V2.
-Aceita nome do canal ("backup-logs") ou ID numérico no .env.
+Envia logs no canal CANAIS["LOG_BACKUP"] com Components V2.
 Se o canal não existir ou o bot não puder escrever, registra no console.
 """
 
@@ -19,29 +18,18 @@ from src.utils.mensagens import COR_INFO
 class BackupLogger:
     """Envia logs detalhados para o canal de backup do servidor."""
 
-    def __init__(self, canal_log: str) -> None:
-        # Pode ser nome ("backup-logs") ou ID ("1523367...")
-        self.canal_log = (canal_log or "").strip()
+    def __init__(self) -> None:
+        self.id_do_canal_log = CANAIS["LOG_BACKUP"]
 
     def _encontrar_canal(self, guilda: discord.Guild) -> discord.TextChannel | None:
-        if not self.canal_log:
-            return None
+        canal = guilda.get_channel(self.id_do_canal_log)
+        if isinstance(canal, discord.TextChannel):
+            return canal
+        return None
 
-        # ID numérico → busca direta
-        if self.canal_log.isdigit():
-            canal = guilda.get_channel(int(self.canal_log))
-            if isinstance(canal, discord.TextChannel):
-                return canal
-            return None
-
-        # Nome do canal
-        return discord.utils.get(guilda.text_channels, name=self.canal_log)
-
-    def mencao_do_canal(self, guilda: discord.Guild) -> str:
-        """Texto amigável para cards: menção <#id> ou #nome."""
-        self.canal_log = guilda.get_channel(CANAIS["LOG_BACKUP_CHANNEL"])
-        if self.canal_log:
-            return f"<#{self.canal_log}>"
+    def mencao_do_canal(self) -> str:
+        """Menção clicável do canal de log de backup."""
+        return f"<#{self.id_do_canal_log}>"
 
     async def log(
         self,
@@ -80,7 +68,7 @@ class BackupLogger:
                 )
         else:
             print(
-                f"[AVISO] Canal de log '{self.canal_log}' "
+                f"[AVISO] Canal de log {self.mencao_do_canal()} "
                 f"não encontrado em {guild.name}"
             )
 
