@@ -346,3 +346,25 @@ class Punicao(Base):
     )
     removida_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     motivo_remocao: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class SnapshotCargosMembro(Base):
+    """Último estado conhecido dos cargos de um membro no servidor.
+
+    Usado quando a pessoa sai e volta: no on_member_join o bot
+    reaplica os cargos (e apelido) salvos aqui.
+
+    role_ids e role_names ficam como texto JSON, por exemplo:
+      '[1486..., 1487...]'  e  '["Doutor", "Plantão"]'
+    """
+
+    __tablename__ = "snapshot_cargos_membro"
+
+    discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    cargo_ids: Mapped[str] = mapped_column(String(2000), default="[]")
+    cargo_nomes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    nickname: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )

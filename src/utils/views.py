@@ -1,34 +1,53 @@
+"""Views reutilizáveis (botões de confirmação, etc.)."""
+
+from __future__ import annotations
+
 import discord
 
 
 class ConfirmView(discord.ui.View):
-    """View com botões Confirmar/Cancelar. Só o autor do comando pode interagir."""
+    """Dois botões: Confirmar e Cancelar.
 
-    def __init__(self, author_id: int, timeout: int = 30):
+    Só quem executou o comando original pode clicar.
+    Depois do clique, self.value fica True ou False e a view para.
+    """
+
+    def __init__(self, autor_id: int, timeout: int = 30):
         super().__init__(timeout=timeout)
-        self.author_id = author_id
-        self.value = None
+        self.autor_id = autor_id
+        self.value: bool | None = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author_id:
+        if interaction.user.id != self.autor_id:
             await interaction.response.send_message(
-                "Apenas quem executou o comando pode confirmar.", ephemeral=True
+                "Apenas quem executou o comando pode confirmar.",
+                ephemeral=True,
             )
             return False
         return True
 
     @discord.ui.button(label="✅ Confirmar", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def botao_confirmar(
+        self, interaction: discord.Interaction, botao: discord.ui.Button
+    ):
         self.value = True
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(content="✅ Confirmado. Aplicando restauração...", view=self)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content="✅ Confirmado. Aplicando…",
+            view=self,
+        )
         self.stop()
 
     @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def botao_cancelar(
+        self, interaction: discord.Interaction, botao: discord.ui.Button
+    ):
         self.value = False
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(content="❌ Restauração cancelada.", view=self)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content="❌ Operação cancelada.",
+            view=self,
+        )
         self.stop()

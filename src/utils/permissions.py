@@ -1,17 +1,22 @@
+"""Checagens de permissão para slash commands."""
+
+from __future__ import annotations
+
 import discord
 from discord import app_commands
+
 from src.config import ADMIN_ROLE_NAMES
 
 
 def is_authorized():
-    """Permite o comando apenas para Administradores ou membros com um dos cargos configurados."""
+    """Administrador do Discord OU um dos cargos listados em ADMIN_ROLE_NAMES."""
 
-    async def predicate(interaction: discord.Interaction) -> bool:
+    async def predicado(interaction: discord.Interaction) -> bool:
         if interaction.user.guild_permissions.administrator:
             return True
 
-        member_role_names = {r.name for r in interaction.user.roles}
-        if member_role_names.intersection(ADMIN_ROLE_NAMES):
+        nomes_dos_cargos = {cargo.name for cargo in interaction.user.roles}
+        if nomes_dos_cargos.intersection(ADMIN_ROLE_NAMES):
             return True
 
         await interaction.response.send_message(
@@ -21,4 +26,20 @@ def is_authorized():
         )
         return False
 
-    return app_commands.check(predicate)
+    return app_commands.check(predicado)
+
+
+def apenas_administrador():
+    """Somente quem tem a permissão Administrator no servidor."""
+
+    async def predicado(interaction: discord.Interaction) -> bool:
+        if interaction.user.guild_permissions.administrator:
+            return True
+
+        await interaction.response.send_message(
+            "❌ Este comando é restrito a **Administradores** do servidor.",
+            ephemeral=True,
+        )
+        return False
+
+    return app_commands.check(predicado)
