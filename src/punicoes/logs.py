@@ -24,6 +24,7 @@ async def registrar_log_punicao(
     canal_id = CANAIS.get("LOG_PUNICOES") or CANAIS.get("CANAL_ADVERTENCIAS") or 0
     canal = guild.get_channel(canal_id) if canal_id else None
     if canal is None:
+        print("⚠️ [punicoes] Canal de log de punições não encontrado.")
         return None, None
 
     linhas = (
@@ -50,33 +51,8 @@ async def registrar_log_punicao(
 
     msg = await canal.send(view=view)
 
-    thread = None
-    try:
-        thread = await msg.create_thread(
-            name="📁 Provas anexadas",
-            auto_archive_duration=60,
-        )
-        # Provas no tópico (links soltos para preview do Discord)
-        if links:
-            bloco_links = "\n\n🔗 **Provas / Links**\n" + "\n".join(links)
-            await thread.send(bloco_links)
-        else:
-            await thread.send(
-                "📁 **Provas anexadas**\n_Nenhum link de prova foi informado._"
-            )
-
-        # Abre o tópico, aguarda 2s e fecha/trava
-        await asyncio.sleep(2)
-        try:
-            await thread.edit(locked=True, archived=True)
-        except discord.HTTPException:
-            try:
-                await thread.edit(locked=True)
-            except discord.HTTPException:
-                pass
-
-    except discord.HTTPException:
-        thread = None
+    # ── Tópico com provas (ligado ao registro) ──────────────────────────────
+    thread = await _criar_topico_provas(msg, canal, links)
 
     # Notifica o advertido em DM com botão link para o registro
     await notificar_dm_advertencia(
@@ -89,6 +65,86 @@ async def registrar_log_punicao(
     )
 
     return msg, thread
+
+
+async def _criar_topico_provas(
+    msg: discord.Message,
+    canal: discord.abc.Messageable,
+    links: list[str],
+) -> discord.Thread | None:
+    """Cria o tópico 'Provas anexadas' no registro, posta os links e fecha.
+
+    Fechar = archived+locked: some da lista de tópicos ativos do canal,
+    mas continua acessível clicando no registro da advertência.
+    Não deleta e não exclui o tópico.
+    """
+    thread: discord.Thread | None = None
+
+    # 1) Tenta criar a partir da mensagem do registro
+    try:
+        thread = await msg.create_thread(
+            name="📁 Provas anexadas",
+            auto_archive_duration=60,  # 1h (mínimo válido)
+            reason="Provas da advertência",
+        )
+    except discord.HTTPException as e:
+        print(f"⚠️ [punicoes] create_thread via mensagem falhou: {e}")
+        # 2) Fallback: criar pelo canal apontando a mensagem
+        try:
+            if isinstance(canal, (discord.TextChannel, discord.ForumChannel)):
+                thread = await canal.create_thread(
+                    name="📁 Provas anexadas",
+                    message=msg,
+                    auto_archive_duration=60,
+                    reason="Provas da advertência",
+                )
+        except discord.HTTPException as e2:
+            print(f"⚠️ [punicoes] create_thread via canal falhou: {e2}")
+            thread = None
+
+    if thread is None:
+        print("⚠️ [punicoes] Não foi possível criar o tópico de provas.")
+        return None
+
+    # Posta as provas (links soltos → Discord gera preview)
+    try:
+        if links:
+            # Divide em blocos se muitos links (limite de 2000 chars)
+            bloco: list[str] = []
+            tamanho = 0
+            for link in links:
+                linha = link.strip()
+                if not linha:
+                    continue
+                if tamanho + len(linha) + 1 > 1900 and bloco:
+                    await thread.send("\n".join(bloco))
+                    bloco = []
+                    tamanho = 0
+                bloco.append(linha)
+                tamanho += len(linha) + 1
+            if bloco:
+                await thread.send("🔗 **Provas / Links**\n" + "\n".join(bloco))
+        else:
+            await thread.send(
+                "📁 **Provas anexadas**\n_Nenhum link de prova foi informado._"
+            )
+    except discord.HTTPException as e:
+        print(f"⚠️ [punicoes] Falha ao postar provas no tópico: {e}")
+
+    # Fecha o tópico (some da lista de canais / tópicos ativos).
+    # Continua acessível pelo registro da advertência.
+    # locked impede que membros comuns reabram; archived remove da lista ativa.
+    await asyncio.sleep(2)
+    try:
+        await thread.edit(archived=True, locked=True, reason="Fechar tópico de provas")
+    except discord.HTTPException as e:
+        print(f"⚠️ [punicoes] Falha ao fechar tópico: {e}")
+        try:
+            await thread.edit(archived=True, reason="Fechar tópico de provas")
+        except discord.HTTPException as e2:
+            print(f"⚠️ [punicoes] Fallback archived também falhou: {e2}")
+
+    return thread
 
 
 async def notificar_dm_advertencia(
@@ -123,7 +179,7 @@ async def notificar_dm_advertencia(
         row = discord.ui.ActionRow()
         row.add_item(
             discord.ui.Button(
-                label="🔗 Acessar a Advertência",
+                label="Acessar a Advertência",
                 style=discord.ButtonStyle.link,
                 url=msg_log.jump_url,
             )
@@ -137,5 +193,4 @@ async def notificar_dm_advertencia(
     try:
         await alvo.send(view=view)
     except (discord.Forbidden, discord.HTTPException):
-        # DM fechada ou bloqueada — ignora
         pass
