@@ -9,7 +9,7 @@ from src.config import (
 )
 from src.database.connection import async_session
 from src.database.models import PainelPostado
-from src.gate.evento_gate_panel import PainelEventosGate
+from src.gate.gate_panel import PainelEventosGate
 from src.guia.boas_vindas_panel import PainelBoasVindasLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
