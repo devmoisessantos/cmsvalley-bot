@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import discord
 
+from src.config import GUIA_DE_TUTORIAIS
 from src.guia.guia_helpers import (
     montar_linha_de_botoes_link,
     montar_thumbnail_do_servidor,
@@ -381,10 +382,23 @@ class PainelTutoriaisLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "(mensagem privada no canal) e permanece até você fechar.\n\n"
                 "Use sempre que precisar relembrar um procedimento."
             ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay("**👉 Selecione um tutorial: ↓**"),
-            linha_do_select,
         ]
+
+        urls_da_galeria = [url for url in GUIA_DE_TUTORIAIS if url]
+        galeria_tem_imagens = len(urls_da_galeria) > 0
+        if galeria_tem_imagens:
+            componentes.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
+            componentes.append(
+                discord.ui.MediaGallery(
+                    *[discord.MediaGalleryItem(url) for url in urls_da_galeria[:10]]
+                )
+            )
+
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(discord.ui.TextDisplay("**👉 Selecione um tutorial: ↓**"))
+        componentes.append(linha_do_select)
 
         self.container = discord.ui.Container(
             *componentes,

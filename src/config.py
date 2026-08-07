@@ -256,7 +256,9 @@ CANAIS = {
 GUIA_BOAS_VINDAS_GALLERY: list[str] = [
     "https://cdn.discordapp.com/attachments/1443642763470962759/1534719249845715196/CENTRO_MEDICO_SUL.gif?ex=6a75262e&is=6a73d4ae&hm=eaf00b8359cf6cbb18569926dde0a7a85f0d253ffee9701ec080206d4ec96f26&",
 ]
-
+GUIA_DE_TUTORIAIS: list[str] = [
+    "https://cdn.discordapp.com/attachments/1535352666375462932/1535353764343447632/GUIA_DE_TUTORIAIS.gif?ex=6a77751e&is=6a76239e&hm=685fb1733a1818eb8db3d6e0ad4446f41f35da9055e0949493567b228fce4b9a&"
+]
 
 PREFIXOS_NICKNAME = {
     "🔰・Enfermeiro (a)": "[ ENF ]",
