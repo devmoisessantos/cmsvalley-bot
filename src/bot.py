@@ -15,6 +15,8 @@ from src.gate.gate_panel import PainelEventosGate
 from src.gate.gate_presenca import montar_container_presenca
 from src.gate.gate_service import listar_eventos_abertos
 from src.guia.boas_vindas_panel import PainelBoasVindasLayout
+from src.guia.guia_setup import garantir_painel_tutoriais
+from src.guia.tutoriais_panel import PainelTutoriaisLayout
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.panels.setup_paineis import (
@@ -73,6 +75,7 @@ class CmsValleyBot(commands.Bot):
             "src.cogs.manutencao",
             "src.punicoes.cogs",
             "src.gate.gate_cogs",
+            "src.guia.guia_cogs",
             "src.whitelist.whitelist_cogs",
             "src.plantao.plantao_cogs",
             "src.plantao.plantao_tasks",
@@ -113,6 +116,7 @@ class CmsValleyBot(commands.Bot):
         self.painel_gerenciar_cargos_view = None
         self.painel_eventos_gate_view = None
         self.painel_boas_vindas_view = None
+        self.painel_tutoriais_view = None
         self.painel_fazer_chamada_view = None
         self.painel_gerenciar_membros_view = None
         self.painel_punicoes_view = None
@@ -158,6 +162,7 @@ class CmsValleyBot(commands.Bot):
             self.painel_plantao_view = PainelPlantaoLayout(guild)
             self.painel_eventos_gate_view = PainelEventosGate(guild=guild)
             self.painel_boas_vindas_view = PainelBoasVindasLayout(guild)
+            self.painel_tutoriais_view = PainelTutoriaisLayout(guild)
             self.painel_fazer_chamada_view = PainelFazerChamadaLayout(guild=guild)
             self.painel_gerenciar_membros_view = PainelGerenciarMembrosLayout(
                 guild=guild
@@ -177,6 +182,7 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_plantao_view)
         self.add_view(self.painel_eventos_gate_view)
         self.add_view(self.painel_boas_vindas_view)
+        self.add_view(self.painel_tutoriais_view)
         self.add_view(self.painel_fazer_chamada_view)
         self.add_view(self.painel_gerenciar_membros_view)
         self.add_view(self.painel_punicoes_view)
@@ -199,6 +205,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_plantao(self)
         await garantir_painel_eventos_gate(self)
         await garantir_painel_boas_vindas(self)
+        await garantir_painel_tutoriais(self)
         await garantir_painel_fazer_chamada(self)
         await garantir_painel_gerenciar_membros(self)
         await garantir_painel_punicoes(self)
