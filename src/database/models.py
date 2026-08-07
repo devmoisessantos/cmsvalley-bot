@@ -1,3 +1,21 @@
+# src/database/models.py
+"""
+Modelos SQLAlchemy do CMS Valley Bot.
+
+Organização por domínio:
+  - Base e utilitário de data
+  - Usuário e histórico de cargos
+  - Recrutamento e prova
+  - Painéis e hierarquia
+  - Plantão e chamada
+  - GATE (eventos e presença)
+  - Ranking
+  - Punições
+  - Snapshot de cargos (rejoin)
+"""
+
+from __future__ import annotations
+
 from datetime import (
     datetime,
     timezone,
@@ -22,19 +40,28 @@ from sqlalchemy.orm import (
 
 
 class Base(DeclarativeBase):
+    """Classe base de todos os modelos."""
+
     pass
 
 
-# Função de data atual
 def agora() -> datetime:
-    return datetime.now(timezone.utc)  # Forma moderna e correta
+    """Retorna o momento atual em UTC (timezone-aware)."""
+    return datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Usuário e histórico de cargos
+# ---------------------------------------------------------------------------
 
 
 class Usuario(Base):
+    """Membro conhecido pelo bot (chave = discord_id)."""
+
     __tablename__ = "usuarios"
 
-    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 👈 novo
     discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
     nickname_atual: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="VISITANTE")
     ja_foi_aprovado: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -42,15 +69,38 @@ class Usuario(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    recrutamentos: Mapped[list["Recrutamento"]] = relationship(
-        back_populates="candidato"
-    )
-    historico_cargos: Mapped[list["HistoricoCargo"]] = relationship(
+    recrutamentos: Mapped[list[Recrutamento]] = relationship(back_populates="candidato")
+    historico_cargos: Mapped[list[HistoricoCargo]] = relationship(
         back_populates="usuario"
     )
 
 
+class HistoricoCargo(Base):
+    """Registro de cargo adicionado ou removido de um membro."""
+
+    __tablename__ = "historico_cargos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("usuarios.discord_id")
+    )
+    cargo: Mapped[str] = mapped_column(String(50))
+    # ADICIONADO / REMOVIDO
+    acao: Mapped[str] = mapped_column(String(20))
+    executor_id: Mapped[int] = mapped_column(BigInteger)
+    data_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+    usuario: Mapped[Usuario] = relationship(back_populates="historico_cargos")
+
+
+# ---------------------------------------------------------------------------
+# Recrutamento e prova
+# ---------------------------------------------------------------------------
+
+
 class Recrutamento(Base):
+    """Processo de recrutamento de um candidato."""
+
     __tablename__ = "recrutamentos"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -70,42 +120,39 @@ class Recrutamento(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # ESTUDANDO | EM_PROVA | APROVADO | REPROVADO | REPROVADO_TEMPO
     status: Mapped[str] = mapped_column(String(30), default="ESTUDANDO")
-    # ESTUDANDO, EM_PROVA, APROVADO, REPROVADO, REPROVADO_TEMPO
-
-    pergunta_atual: Mapped[int] = mapped_column(
-        Integer, default=0
-    )  # controla o progresso (0 a 11)
-    formulario_aberto: Mapped[bool] = mapped_column(
-        Boolean, default=False
-    )  # trava reabertura indevida
+    # Controla o progresso na prova (0 a N perguntas)
+    pergunta_atual: Mapped[int] = mapped_column(Integer, default=0)
+    # Impede reabrir o formulário indevidamente
+    formulario_aberto: Mapped[bool] = mapped_column(Boolean, default=False)
 
     nota_percentual: Mapped[float | None] = mapped_column(Float, nullable=True)
     acertos: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    cargo_final: Mapped[str | None] = mapped_column(
-        String(30), nullable=True
-    )  # ENFERMEIRO / PARAMEDICO
-    candidato: Mapped["Usuario"] = relationship(back_populates="recrutamentos")
-    respostas: Mapped[list["RespostaProva"]] = relationship(
-        back_populates="recrutamento"
-    )
+    # ENFERMEIRO / PARAMEDICO (quando aplicável)
+    cargo_final: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    candidato: Mapped[Usuario] = relationship(back_populates="recrutamentos")
+    respostas: Mapped[list[RespostaProva]] = relationship(back_populates="recrutamento")
 
 
 class Pergunta(Base):
+    """Pergunta da prova de recrutamento."""
+
     __tablename__ = "perguntas"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ordem: Mapped[int] = mapped_column(Integer, unique=True)
     enunciado: Mapped[str] = mapped_column(String(500))
-    opcoes: Mapped[str] = mapped_column(
-        String(1000)
-    )  # JSON: lista de textos das alternativas
-    resposta_correta: Mapped[str] = mapped_column(
-        String(1)
-    )  # letra correspondente à posição (A, B, C...)
+    # JSON: lista de textos das alternativas
+    opcoes: Mapped[str] = mapped_column(String(1000))
+    # Letra da alternativa correta (A, B, C...)
+    resposta_correta: Mapped[str] = mapped_column(String(1))
 
 
 class RespostaProva(Base):
+    """Resposta dada pelo candidato em uma pergunta da prova."""
+
     __tablename__ = "respostas_prova"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -116,25 +163,17 @@ class RespostaProva(Base):
     resposta_escolhida: Mapped[str] = mapped_column(String(200))
     correta: Mapped[bool] = mapped_column(Boolean)
 
-    recrutamento: Mapped["Recrutamento"] = relationship(back_populates="respostas")
+    recrutamento: Mapped[Recrutamento] = relationship(back_populates="respostas")
 
 
-class HistoricoCargo(Base):
-    __tablename__ = "historico_cargos"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    discord_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("usuarios.discord_id")
-    )
-    cargo: Mapped[str] = mapped_column(String(50))
-    acao: Mapped[str] = mapped_column(String(20))  # ADICIONADO / REMOVIDO
-    executor_id: Mapped[int] = mapped_column(BigInteger)  # ID do bot ou do recrutador
-    data_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
-
-    usuario: Mapped["Usuario"] = relationship(back_populates="historico_cargos")
+# ---------------------------------------------------------------------------
+# Painéis persistentes e hierarquia
+# ---------------------------------------------------------------------------
 
 
 class PainelPostado(Base):
+    """Guarda canal + message_id de cada painel persistente do bot."""
+
     __tablename__ = "paineis_postados"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -144,33 +183,40 @@ class PainelPostado(Base):
 
 
 class MensagemHierarquia(Base):
+    """Mensagem publicada da hierarquia (pode haver várias páginas por cargo)."""
+
     __tablename__ = "mensagens_hierarquia"
+    __table_args__ = (UniqueConstraint("cargo_id", "pagina"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     cargo_id: Mapped[int] = mapped_column(BigInteger)
-    pagina: Mapped[int] = mapped_column(Integer, default=1)  # ← NOVO
+    pagina: Mapped[int] = mapped_column(Integer, default=1)
     canal_id: Mapped[int] = mapped_column(BigInteger)
     message_id: Mapped[int] = mapped_column(BigInteger)
 
-    # 🔥 Nova constraint: um cargo não pode ter duas mensagens com a mesma página
-    __table_args__ = (UniqueConstraint("cargo_id", "pagina"),)
+
+# ---------------------------------------------------------------------------
+# Plantão e chamada
+# ---------------------------------------------------------------------------
 
 
 class EstadoPlantao(Base):
+    """Estado atual de plantão de um membro (toggle, call, moedas, AFK)."""
+
     __tablename__ = "estado_plantao"
 
-    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
     discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
     toggle_ligado: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Preenchidos apenas enquanto o médico está DENTRO de uma call válida
+    # Preenchidos só enquanto o membro está em uma call válida
     em_call_valida: Mapped[bool] = mapped_column(Boolean, default=False)
     call_entrada_em: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     canal_atual_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
-    # Contador que "enche" até 1800s e reseta, gerando moeda
+    # Contador que enche até o limite e gera moeda
     segmento_iniciado_em: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -196,6 +242,8 @@ class EstadoPlantao(Base):
 
 
 class LogPlantao(Base):
+    """Evento registrado do sistema de plantão (ligar toggle, sair da call, etc.)."""
+
     __tablename__ = "log_plantao"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -209,7 +257,11 @@ class LogPlantao(Base):
 
 
 class ControleChamada(Base):
-    """Tabela singleton (1 linha só, id=1) — controla o cooldown global e o lock de concorrência."""
+    """
+    Tabela singleton (uma linha só, id=1).
+
+    Controla cooldown global e trava de concorrência da chamada.
+    """
 
     __tablename__ = "controle_chamada"
 
@@ -225,6 +277,8 @@ class ControleChamada(Base):
 
 
 class Chamada(Base):
+    """Registro de uma chamada de presença realizada."""
+
     __tablename__ = "chamadas"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -237,6 +291,8 @@ class Chamada(Base):
 
 
 class FaltaChamada(Base):
+    """Falta registrada em uma chamada de presença."""
+
     __tablename__ = "faltas_chamada"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -246,48 +302,53 @@ class FaltaChamada(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
 
 
+# ---------------------------------------------------------------------------
+# GATE — eventos e presença
+# ---------------------------------------------------------------------------
+
+
 class EventosGate(Base):
+    """Evento da unidade GATE (treino, facxfac, dominas)."""
+
     __tablename__ = "eventos_gate"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    tipo: Mapped[str] = mapped_column(String(20))  # "treino" | "facxfac" | "dominas"
+    # treino | facxfac | dominas
+    tipo: Mapped[str] = mapped_column(String(20))
     titulo: Mapped[str] = mapped_column(String(120))
 
-    # Dados do formulário
-    data_evento: Mapped[str] = mapped_column(String(20))  # "15/06/2026"
-    horario: Mapped[str] = mapped_column(String(20))  # "20:00"
-    limite_participantes: Mapped[int] = mapped_column(
-        Integer, default=0
-    )  # 0 = sem limite
-    adversario: Mapped[str | None] = mapped_column(
-        String(80), nullable=True
-    )  # só FacxFac
+    data_evento: Mapped[str] = mapped_column(String(20))
+    horario: Mapped[str] = mapped_column(String(20))
+    # 0 = sem limite
+    limite_participantes: Mapped[int] = mapped_column(Integer, default=0)
+    # Só usado em FacxFac
+    adversario: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
-    # Controle
-    status: Mapped[str] = mapped_column(
-        String(20), default="aberto"
-    )  # aberto | encerrado
-    criado_por: Mapped[int] = mapped_column(BigInteger)  # discord_id do staff
-    responsavel_id: Mapped[int] = mapped_column(
-        BigInteger
-    )  # quem aparece como responsável
+    # aberto | encerrado
+    status: Mapped[str] = mapped_column(String(20), default="aberto")
+    criado_por: Mapped[int] = mapped_column(BigInteger)
+    responsavel_id: Mapped[int] = mapped_column(BigInteger)
 
     message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     log_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    # Só preenchido quando o evento é encerrado
     closed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=agora
+        DateTime(timezone=True), nullable=True, default=None
     )
 
-    presencas: Mapped[list["Presenca"]] = relationship(
-        back_populates="evento", cascade="all, delete-orphan"
+    presencas: Mapped[list[Presenca]] = relationship(
+        back_populates="evento",
+        cascade="all, delete-orphan",
     )
 
 
 class Presenca(Base):
+    """Presença de um membro em um evento GATE."""
+
     __tablename__ = "presencas"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -301,7 +362,12 @@ class Presenca(Base):
         DateTime(timezone=True), default=agora
     )
 
-    evento: Mapped["EventosGate"] = relationship(back_populates="presencas")
+    evento: Mapped[EventosGate] = relationship(back_populates="presencas")
+
+
+# ---------------------------------------------------------------------------
+# Ranking
+# ---------------------------------------------------------------------------
 
 
 class RankingHistorico(Base):
@@ -310,7 +376,8 @@ class RankingHistorico(Base):
     __tablename__ = "ranking_historico"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    tipo: Mapped[str] = mapped_column(String(40))  # "semanal" | "mensal"
+    # semanal | mensal
+    tipo: Mapped[str] = mapped_column(String(40))
     periodo_inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     periodo_fim: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     total_recrutamentos: Mapped[int] = mapped_column(Integer, default=0)
@@ -321,20 +388,24 @@ class RankingHistorico(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
 
 
+# ---------------------------------------------------------------------------
+# Punições
+# ---------------------------------------------------------------------------
+
+
 class Punicao(Base):
-    """Registro de advertência / punição aplicada a um membro."""
+    """Registro de advertência ou punição aplicada a um membro."""
 
     __tablename__ = "punicoes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
     id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    cargo_id: Mapped[int] = mapped_column(BigInteger)  # role de punição aplicada
+    cargo_id: Mapped[int] = mapped_column(BigInteger)
     cargo_nome: Mapped[str] = mapped_column(String(80))
     motivo: Mapped[str] = mapped_column(String(1500))
-    links: Mapped[str | None] = mapped_column(
-        String(2000), nullable=True
-    )  # um link por linha
+    # Um link por linha
+    links: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     executor_id: Mapped[int] = mapped_column(BigInteger)
     ativa: Mapped[bool] = mapped_column(Boolean, default=True)
     channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -348,22 +419,33 @@ class Punicao(Base):
     motivo_remocao: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
-class SnapshotCargosMembro(Base):
-    """Último estado conhecido dos cargos de um membro no servidor.
+# ---------------------------------------------------------------------------
+# Snapshot de cargos (rejoin automático)
+# ---------------------------------------------------------------------------
 
-    Usado quando a pessoa sai e volta: no on_member_join o bot
-    reaplica os cargos (e apelido) salvos aqui.
+
+class SnapshotCargosMembro(Base):
+    """
+    Último estado conhecido dos cargos de um membro.
+
+    Usado no on_member_join para reaplicar cargos e apelido.
 
     role_ids e role_names ficam como texto JSON, por exemplo:
       '[1486..., 1487...]'  e  '["Doutor", "Plantão"]'
+
+    Os atributos Python são role_ids / role_names (usados em member_snapshot).
+    As colunas no banco podem se chamar cargo_ids / cargo_nomes (legado).
     """
 
     __tablename__ = "snapshot_cargos_membro"
 
     discord_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
-    cargo_ids: Mapped[str] = mapped_column(String(2000), default="[]")
-    cargo_nomes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Mapeia atributo role_ids → coluna cargo_ids (compatível com banco já criado)
+    role_ids: Mapped[str] = mapped_column("cargo_ids", String(2000), default="[]")
+    role_names: Mapped[str | None] = mapped_column(
+        "cargo_nomes", String(2000), nullable=True
+    )
     nickname: Mapped[str | None] = mapped_column(String(100), nullable=True)
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=agora
