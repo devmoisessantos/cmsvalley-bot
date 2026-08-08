@@ -35,6 +35,7 @@ async def registrar_advertencia(
     motivo: str,
     links: list[str],
     punicao_id: int,
+    texto_provas: str | None = None,
 ) -> tuple[discord.Message | None, discord.Thread | None]:
     """Posta a advertência em CANAL_ADVERTENCIAS, cria tópico de provas e notifica em DM."""
     canal = _canal(guild, "CANAL_ADVERTENCIAS")
@@ -65,7 +66,9 @@ async def registrar_advertencia(
     view.add_item(container)
 
     msg = await canal.send(view=view)
-    thread = await _criar_topico_provas(msg, canal, links)
+    thread = await _criar_topico_provas(
+        msg, canal, links, texto_livre=texto_provas
+    )
 
     await notificar_dm_advertencia(
         alvo=alvo,
@@ -76,6 +79,61 @@ async def registrar_advertencia(
         msg_log=msg,
     )
 
+    return msg, thread
+
+
+async def registrar_exoneracao(
+    *,
+    guild: discord.Guild,
+    alvo: discord.Member,
+    executor: discord.Member,
+    id_fivem: str,
+    motivo: str,
+    links: list[str],
+    punicao_id: int | None = None,
+    texto_provas: str | None = None,
+    automatica: bool = False,
+) -> tuple[discord.Message | None, discord.Thread | None]:
+    """Posta a exoneração em CANAL_EXONERACOES (mesmo modelo das advertências)."""
+    canal = _canal(guild, "CANAL_EXONERACOES")
+    if canal is None:
+        print("⚠️ [punicoes] Canal de exonerações (CANAL_EXONERACOES) não encontrado.")
+        return None, None
+
+    origem = "Automática (3ª advertência)" if automatica else "Manual"
+    registro_txt = f"`#{punicao_id}`" if punicao_id else "—"
+
+    linhas = (
+        f"- **Membro exonerado:** {alvo.mention} (`{alvo.id}`)\n"
+        f"- **Exonerado por:** {executor.mention} (`{executor.id}`)\n"
+        f"- **ID FiveM:** `{id_fivem}`\n"
+        f"- **Origem:** {origem}\n"
+        f"- **Cargos finais:** Exonerado + Visitantes\n"
+        f"- **Motivo da exoneração:**\n{motivo}\n"
+        f"- **Registro:** {registro_txt}"
+    )
+
+    container = discord.ui.Container(
+        discord.ui.TextDisplay("# ⛔ Membro Exonerado"),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+        discord.ui.Section(
+            linhas,
+            accessory=discord.ui.Thumbnail(alvo.display_avatar.url),
+        ),
+        accent_color=discord.Color.dark_red(),
+    )
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(container)
+
+    try:
+        msg = await canal.send(view=view)
+    except discord.HTTPException as erro:
+        print(f"⚠️ [punicoes] Falha ao postar exoneração: {erro}")
+        return None, None
+
+    thread = await _criar_topico_provas(
+        msg, canal, links, texto_livre=texto_provas
+    )
     return msg, thread
 
 
@@ -194,10 +252,13 @@ async def _criar_topico_provas(
     msg: discord.Message,
     canal: discord.abc.Messageable,
     links: list[str],
+    texto_livre: str | None = None,
 ) -> discord.Thread | None:
-    """Cria o tópico 'Provas anexadas', posta os links e fecha (archived+locked).
+    """Cria o tópico 'Provas anexadas', posta links e/ou texto livre, depois fecha.
 
-    Some da lista de tópicos ativos, mas continua acessível pelo registro.
+    - Se houver URLs → posta os links (preview do Discord).
+    - Se não houver URL mas houver texto digitado no campo de provas → posta o texto.
+    - Se não houver nada → avisa que não houve prova anexada.
     """
     thread: discord.Thread | None = None
 
@@ -205,7 +266,7 @@ async def _criar_topico_provas(
         thread = await msg.create_thread(
             name="📁 Provas anexadas",
             auto_archive_duration=60,
-            reason="Provas da advertência",
+            reason="Provas da punição",
         )
     except discord.HTTPException as e:
         print(f"⚠️ [punicoes] create_thread via mensagem falhou: {e}")
@@ -215,7 +276,7 @@ async def _criar_topico_provas(
                     name="📁 Provas anexadas",
                     message=msg,
                     auto_archive_duration=60,
-                    reason="Provas da advertência",
+                    reason="Provas da punição",
                 )
         except discord.HTTPException as e2:
             print(f"⚠️ [punicoes] create_thread via canal falhou: {e2}")
@@ -224,6 +285,8 @@ async def _criar_topico_provas(
     if thread is None:
         print("⚠️ [punicoes] Não foi possível criar o tópico de provas.")
         return None
+
+    texto_limpo = (texto_livre or "").strip()
 
     try:
         if links:
@@ -246,9 +309,23 @@ async def _criar_topico_provas(
                 )
                 await thread.send("### 🔗 Links\n\n")
                 await thread.send("\n".join(bloco))
+            # Se além dos links o staff escreveu texto extra, posta também
+            if texto_limpo:
+                urls_no_texto = set(links)
+                texto_sem_urls = texto_limpo
+                for url in urls_no_texto:
+                    texto_sem_urls = texto_sem_urls.replace(url, "")
+                texto_sem_urls = texto_sem_urls.strip()
+                if texto_sem_urls:
+                    await thread.send("### 📝 Observações\n")
+                    await thread.send(texto_sem_urls[:1900])
+        elif texto_limpo:
+            await thread.send("\n## 📁 Provas anexadas")
+            await thread.send("### 📝 Texto informado\n")
+            await thread.send(texto_limpo[:1900])
         else:
             await thread.send(
-                "\n## 📁 **Provas anexadas**\n_Nenhum link de prova foi informado._"
+                "\n## 📁 **Provas anexadas**\n_Nenhum link ou texto de prova foi informado._"
             )
     except discord.HTTPException as e:
         print(f"⚠️ [punicoes] Falha ao postar provas no tópico: {e}")

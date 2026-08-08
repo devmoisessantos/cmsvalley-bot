@@ -48,10 +48,52 @@ def proximo_cargo_punicao(membro: discord.Member) -> tuple[str, int] | None:
 
 
 def parse_links(texto: str | None) -> list[str]:
+    """Extrai URLs de um texto (até 15)."""
     if not texto:
         return []
     urls = re.findall(r"https?://\S+", texto)
     return urls[:15]
+
+
+def ids_cargos_advertencia_formal() -> set[int]:
+    """IDs de Adv 01 / Adv 02 / Adv 03 (exclui verbal e exonerado)."""
+    ids: set[int] = set()
+    for nome, cargo_id in CARGOS_PUNICOES.items():
+        nome_minusculo = nome.lower()
+        e_formal = "adv 0" in nome_minusculo or "adv0" in nome_minusculo
+        e_exonerado = "exonerado" in nome_minusculo
+        e_verbal = "verbal" in nome_minusculo
+        if e_formal and not e_exonerado and not e_verbal:
+            ids.add(cargo_id)
+    return ids
+
+
+def id_cargo_exonerado() -> int | None:
+    """ID do cargo Exonerado, se configurado."""
+    for nome, cargo_id in CARGOS_PUNICOES.items():
+        if "exonerado" in nome.lower():
+            return cargo_id
+    return None
+
+
+def e_cargo_exonerado(cargo_nome: str | None = None, cargo_id: int | None = None) -> bool:
+    """True se o cargo indicado for o de Exonerado."""
+    id_exonerado = id_cargo_exonerado()
+    if cargo_id is not None and id_exonerado is not None:
+        return cargo_id == id_exonerado
+    if cargo_nome:
+        return "exonerado" in cargo_nome.lower()
+    return False
+
+
+def quantidade_advertencias_formais_no_membro(membro: discord.Member) -> int:
+    """Quantas advertências formais (Adv 01/02/03) o membro tem nos cargos."""
+    ids_formais = ids_cargos_advertencia_formal()
+    quantidade = 0
+    for cargo in membro.roles:
+        if cargo.id in ids_formais:
+            quantidade += 1
+    return quantidade
 
 
 async def resolver_id_fivem(discord_id: int) -> str | None:

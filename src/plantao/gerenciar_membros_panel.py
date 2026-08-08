@@ -7,12 +7,22 @@ usuarios, recrutamentos, estado_plantao, log_plantao, faltas_chamada, chamadas
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
 
 import discord
-from sqlalchemy import func, select
+from sqlalchemy import (
+    func,
+    select,
+)
 
-from src.config import NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME
+from src.config import (
+    NOMES_CANAIS_PLANTAO,
+    VALOR_MOEDA_INGAME,
+)
 from src.database.connection import async_session
 from src.database.models import (
     Chamada,
@@ -23,10 +33,24 @@ from src.database.models import (
     Usuario,
 )
 from src.plantao.auditoria import registrar_auditoria_admin
-from src.plantao.permissoes import e_diretoria, mensagem_sem_permissao
-from src.plantao.plantao_service import desligar_servico, garantir_aware
-from src.utils.error_handling import LoggingViewMixin
-from src.utils.formatacao import formatar_dinheiro, formatar_hms
+from src.plantao.permissoes import (
+    e_diretoria,
+    mensagem_sem_permissao,
+)
+from src.plantao.plantao_service import (
+    desligar_servico,
+    garantir_aware,
+)
+from src.punicoes.helpers import resolver_id_fivem
+from src.punicoes.services import executar_exoneracao
+from src.utils.error_handling import (
+    LoggingModalMixin,
+    LoggingViewMixin,
+)
+from src.utils.formatacao import (
+    formatar_dinheiro,
+    formatar_hms,
+)
 
 # ── Consultas ────────────────────────────────────────────────────────────
 
@@ -582,10 +606,16 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         row2.add_item(b5)
 
         b6 = discord.ui.Button(
+            label="Exonerar Membro", style=discord.ButtonStyle.danger, emoji="⛔"
+        )
+        b6.callback = self._abrir_modal_exonerar
+        row2.add_item(b6)
+
+        b7 = discord.ui.Button(
             label="Nova busca", style=discord.ButtonStyle.secondary, emoji="↩️"
         )
-        b6.callback = self._voltar
-        row2.add_item(b6)
+        b7.callback = self._voltar
+        row2.add_item(b7)
 
         componentes.append(row1)
         componentes.append(row2)
@@ -672,6 +702,17 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         if not await self._garantir_perm(interaction):
             return
         await interaction.response.send_modal(ModalEditarStatus(self.alvo))
+
+    async def _abrir_modal_exonerar(self, interaction: discord.Interaction):
+        if not await self._garantir_perm(interaction):
+            return
+        if not isinstance(self.alvo, discord.Member):
+            await interaction.response.send_message(
+                "❌ Alvo precisa estar no servidor para ser exonerado.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(ModalExonerarMembro(self.alvo))
 
     async def _voltar(self, interaction: discord.Interaction):
         if not await self._garantir_perm(interaction):
@@ -849,3 +890,93 @@ class ModalEditarStatus(discord.ui.Modal, title="Editar status (tabela usuarios)
         await interaction.edit_original_response(
             view=FichaMembroAdminView(self.alvo, estado, blocos)
         )
+
+
+class ModalExonerarMembro(LoggingModalMixin, discord.ui.Modal, title="⛔ Exonerar Membro"):
+    motivo = discord.ui.TextInput(
+        label="📄 Motivo da exoneração",
+        style=discord.TextStyle.paragraph,
+        placeholder="Explique o motivo da exoneração...",
+        required=True,
+        max_length=1500,
+    )
+    links = discord.ui.TextInput(
+        label="🔗 Provas (links ou texto)",
+        style=discord.TextStyle.paragraph,
+        placeholder="Links e/ou texto das provas (opcional)",
+        required=False,
+        max_length=1000,
+    )
+
+    def __init__(self, alvo: discord.Member):
+        super().__init__()
+        self.alvo = alvo
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not e_diretoria(interaction.user):
+            await interaction.response.send_message(
+                mensagem_sem_permissao("exonerar membro"), ephemeral=True
+            )
+            return
+
+        if not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message(
+                "❌ Erro de contexto.", ephemeral=True
+            )
+            return
+
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ Guilda não encontrada.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        id_fivem = await resolver_id_fivem(self.alvo.id)
+        if not id_fivem:
+            id_fivem = await _resolver_id_fivem(self.alvo.id)
+        id_fivem = id_fivem or "—"
+
+        motivo_texto = self.motivo.value.strip()
+        links_texto = self.links.value.strip() if self.links.value else None
+
+        ok, mensagem = await executar_exoneracao(
+            guild=interaction.guild,
+            alvo=self.alvo,
+            executor=interaction.user,
+            id_fivem=id_fivem,
+            motivo=motivo_texto,
+            links_texto=links_texto,
+            punicao_id=None,
+            automatica=False,
+        )
+
+        await registrar_auditoria_admin(
+            interaction.guild,
+            executor=interaction.user,
+            alvo=self.alvo,
+            acao="EXONERAR_MEMBRO",
+            detalhes=motivo_texto[:300],
+            cor=discord.Color.dark_red(),
+        )
+
+        membro_atualizado = interaction.guild.get_member(self.alvo.id) or self.alvo
+        estado = await _buscar_estado(membro_atualizado.id)
+        blocos = await montar_blocos_ficha(membro_atualizado, estado)
+        await interaction.edit_original_response(
+            view=FichaMembroAdminView(membro_atualizado, estado, blocos)
+        )
+
+        view_resultado = discord.ui.LayoutView(timeout=120)
+        view_resultado.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    f"# {'✅' if ok else '❌'} Exoneração\n{mensagem}"
+                ),
+                accent_color=(
+                    discord.Color.green() if ok else discord.Color.red()
+                ),
+            )
+        )
+        await interaction.followup.send(view=view_resultado, ephemeral=True)

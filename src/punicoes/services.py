@@ -1,4 +1,4 @@
-"""Serviços de aplicar / remover / consultar punições."""
+"""Serviços de aplicar / remover / consultar punições e exoneração."""
 
 from __future__ import annotations
 
@@ -10,17 +10,29 @@ from datetime import (
 import discord
 from sqlalchemy import select
 
+from src.config import (
+    CARGOS,
+    CARGOS_PUNICOES,
+)
 from src.database.connection import async_session
 from src.database.models import (
     Punicao,
     agora,
 )
-from src.punicoes.helpers import parse_links
+from src.punicoes.helpers import (
+    e_cargo_exonerado,
+    id_cargo_exonerado,
+    ids_cargos_advertencia_formal,
+    parse_links,
+    quantidade_advertencias_formais_no_membro,
+)
 from src.punicoes.logs import (
     registrar_advertencia,
+    registrar_exoneracao,
     registrar_log_advertencia,
     registrar_log_remocao,
 )
+from src.utils.nickname import remover_prefixo_existente
 
 
 async def aplicar_punicao(
@@ -34,7 +46,13 @@ async def aplicar_punicao(
     motivo: str,
     links_texto: str | None,
 ) -> tuple[bool, str, Punicao | None]:
-    """Aplica cargo, grava no banco, posta em CANAL_ADVERTENCIAS + LOG_PUNICOES."""
+    """Aplica cargo, grava no banco, posta em CANAL_ADVERTENCIAS + LOG_PUNICOES.
+
+    Se o cargo for Exonerado, ou se após a aplicação o membro atingir 3
+    advertências formais (Adv 01/02/03), executa a exoneração completa
+    (remove todos os cargos, deixa só Exonerado + Visitantes, limpa prefixo
+    do nick e registra em CANAL_EXONERACOES).
+    """
     role = guild.get_role(cargo_id)
     if role is None:
         return (
@@ -43,14 +61,20 @@ async def aplicar_punicao(
             None,
         )
 
+    e_exoneracao_direta = e_cargo_exonerado(cargo_nome=cargo_nome, cargo_id=cargo_id)
+
     try:
         if role not in alvo.roles:
             await alvo.add_roles(role, reason=f"Punição por {executor} — {motivo[:80]}")
     except discord.Forbidden:
         return False, "❌ Sem permissão para adicionar o cargo de punição.", None
 
+    # Recarrega o membro para contar cargos atualizados
+    membro_atualizado = guild.get_member(alvo.id) or alvo
+
     links = parse_links(links_texto)
-    links_join = "\n".join(links) if links else (links_texto or None)
+    texto_provas = (links_texto or "").strip() or None
+    links_join = "\n".join(links) if links else texto_provas
 
     async with async_session() as session:
         reg = Punicao(
@@ -68,16 +92,47 @@ async def aplicar_punicao(
         await session.commit()
         await session.refresh(reg)
 
+    # Exoneração direta: não usa CANAL_ADVERTENCIAS — só CANAL_EXONERACOES
+    if e_exoneracao_direta:
+        ok_exo, msg_exo = await executar_exoneracao(
+            guild=guild,
+            alvo=membro_atualizado,
+            executor=executor,
+            id_fivem=id_fivem,
+            motivo=motivo,
+            links_texto=links_texto,
+            punicao_id=reg.id,
+            automatica=False,
+        )
+        await registrar_log_advertencia(
+            guild=guild,
+            alvo=membro_atualizado,
+            executor=executor,
+            id_fivem=id_fivem,
+            cargo_role=role,
+            motivo=motivo,
+            punicao_id=reg.id,
+            msg_advertencia=None,
+        )
+        if ok_exo:
+            return True, f"✅ {msg_exo}", reg
+        return (
+            True,
+            f"✅ Cargo **{cargo_nome}** aplicado em {alvo.mention}.\n⚠️ {msg_exo}",
+            reg,
+        )
+
     # 1) Registro público (CANAL_ADVERTENCIAS) + tópico de provas + DM
     msg_adv, thread = await registrar_advertencia(
         guild=guild,
-        alvo=alvo,
+        alvo=membro_atualizado,
         executor=executor,
         id_fivem=id_fivem,
         cargo_role=role,
         motivo=motivo,
         links=links,
         punicao_id=reg.id,
+        texto_provas=texto_provas,
     )
 
     if msg_adv:
@@ -93,7 +148,7 @@ async def aplicar_punicao(
     # 2) Log interno (LOG_PUNICOES)
     await registrar_log_advertencia(
         guild=guild,
-        alvo=alvo,
+        alvo=membro_atualizado,
         executor=executor,
         id_fivem=id_fivem,
         cargo_role=role,
@@ -102,7 +157,178 @@ async def aplicar_punicao(
         msg_advertencia=msg_adv,
     )
 
-    return True, f"✅ Punição **{cargo_nome}** aplicada em {alvo.mention}.", reg
+    # 3) 3ª advertência formal → exoneração automática
+    quantidade_formais = quantidade_advertencias_formais_no_membro(membro_atualizado)
+    automatica_por_limite = (
+        cargo_id in ids_cargos_advertencia_formal() and quantidade_formais >= 3
+    )
+
+    mensagem_extra = ""
+    if automatica_por_limite:
+        ok_exo, msg_exo = await executar_exoneracao(
+            guild=guild,
+            alvo=membro_atualizado,
+            executor=executor,
+            id_fivem=id_fivem,
+            motivo=motivo,
+            links_texto=links_texto,
+            punicao_id=reg.id,
+            automatica=True,
+        )
+        if ok_exo:
+            mensagem_extra = f"\n{msg_exo}"
+        else:
+            mensagem_extra = f"\n⚠️ Punição aplicada, mas a exoneração falhou: {msg_exo}"
+
+    return (
+        True,
+        f"✅ Punição **{cargo_nome}** aplicada em {alvo.mention}.{mensagem_extra}",
+        reg,
+    )
+
+
+async def executar_exoneracao(
+    *,
+    guild: discord.Guild,
+    alvo: discord.Member,
+    executor: discord.Member,
+    id_fivem: str,
+    motivo: str,
+    links_texto: str | None = None,
+    punicao_id: int | None = None,
+    automatica: bool = False,
+) -> tuple[bool, str]:
+    """
+    Exoneração completa:
+    1. Remove TODOS os cargos (exceto @everyone e cargos gerenciados)
+    2. Deixa apenas Exonerado + Visitantes
+    3. Remove o prefixo [ TAG ] do nick → fica Nome | ID
+    4. Registra em CANAL_EXONERACOES
+    5. Se ainda não tiver o cargo Exonerado / registro, adiciona
+    """
+    id_exonerado = id_cargo_exonerado()
+    id_visitantes = CARGOS.get("Visitantes")
+
+    if id_exonerado is None:
+        return False, "❌ Cargo Exonerado não configurado em CARGOS_PUNICOES."
+
+    role_exonerado = guild.get_role(id_exonerado)
+    role_visitantes = guild.get_role(id_visitantes) if id_visitantes else None
+
+    if role_exonerado is None:
+        return False, "❌ Cargo Exonerado não encontrado no servidor."
+
+    bot_member = guild.me
+    if bot_member is None:
+        return False, "❌ Bot sem contexto de membro na guilda."
+
+    # Cargos que devem permanecer
+    ids_para_manter: set[int] = {guild.default_role.id, id_exonerado}
+    if id_visitantes:
+        ids_para_manter.add(id_visitantes)
+
+    cargos_para_remover: list[discord.Role] = []
+    for cargo in list(alvo.roles):
+        if cargo.id in ids_para_manter:
+            continue
+        if cargo.managed:
+            continue
+        if cargo >= bot_member.top_role:
+            continue
+        cargos_para_remover.append(cargo)
+
+    motivo_discord = f"Exoneração por {executor} — {motivo[:80]}"
+
+    try:
+        if cargos_para_remover:
+            await alvo.remove_roles(*cargos_para_remover, reason=motivo_discord)
+
+        cargos_para_adicionar: list[discord.Role] = []
+        if role_exonerado not in alvo.roles:
+            cargos_para_adicionar.append(role_exonerado)
+        if role_visitantes is not None and role_visitantes not in alvo.roles:
+            cargos_para_adicionar.append(role_visitantes)
+        if cargos_para_adicionar:
+            await alvo.add_roles(*cargos_para_adicionar, reason=motivo_discord)
+    except discord.Forbidden:
+        return False, "❌ Sem permissão para alterar cargos do membro."
+    except discord.HTTPException as erro:
+        return False, f"❌ Falha ao ajustar cargos: {erro}"
+
+    # Nick: remove [ TAG ], mantém o restante (ex.: "Nome | 12345")
+    nick_limpo = remover_prefixo_existente(alvo.display_name)[:32]
+    try:
+        nick_atual = alvo.nick or alvo.display_name
+        if nick_limpo and nick_limpo != nick_atual:
+            await alvo.edit(nick=nick_limpo, reason=motivo_discord)
+    except (discord.Forbidden, discord.HTTPException):
+        # Nick não é crítico — segue a exoneração mesmo se falhar
+        pass
+
+    # Grava registro de Exonerado no banco quando ainda não veio de aplicar_punicao
+    # (ex.: botão em gerenciar-membros) ou quando é automática pela 3ª adv.
+    reg_id = punicao_id
+    links = parse_links(links_texto)
+    texto_provas = (links_texto or "").strip() or None
+    links_join = "\n".join(links) if links else texto_provas
+
+    precisa_novo_registro = automatica or punicao_id is None
+    if precisa_novo_registro:
+        async with async_session() as session:
+            reg = Punicao(
+                discord_id=alvo.id,
+                id_fivem=id_fivem,
+                cargo_id=id_exonerado,
+                cargo_nome=next(
+                    (
+                        nome
+                        for nome, rid in CARGOS_PUNICOES.items()
+                        if rid == id_exonerado
+                    ),
+                    "🚫┇Exonerado",
+                ),
+                motivo=(
+                    motivo[:1500]
+                    if motivo
+                    else (
+                        "Exoneração automática (3ª advertência)"
+                        if automatica
+                        else "Exoneração manual"
+                    )
+                ),
+                links=links_join[:2000] if links_join else None,
+                executor_id=executor.id,
+                ativa=True,
+                criada_em=agora(),
+            )
+            session.add(reg)
+            await session.commit()
+            await session.refresh(reg)
+            reg_id = reg.id
+
+    msg_exo, _thread = await registrar_exoneracao(
+        guild=guild,
+        alvo=alvo,
+        executor=executor,
+        id_fivem=id_fivem or "—",
+        motivo=motivo,
+        links=links,
+        punicao_id=reg_id,
+        texto_provas=texto_provas,
+        automatica=automatica,
+    )
+
+    if msg_exo and reg_id is not None:
+        async with async_session() as session:
+            r = await session.execute(select(Punicao).where(Punicao.id == reg_id))
+            row = r.scalar_one_or_none()
+            if row is not None:
+                row.channel_id = msg_exo.channel.id
+                row.message_id = msg_exo.id
+                await session.commit()
+
+    origem = "automática (3ª advertência)" if automatica else "manual"
+    return True, f"⛔ Exoneração {origem} concluída em {alvo.mention}."
 
 
 async def remover_punicao(
