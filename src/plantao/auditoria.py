@@ -17,8 +17,8 @@ async def registrar_auditoria_admin(
     detalhes: str | None = None,
     cor: discord.Color | None = None,
 ) -> None:
-    """Posta no canal LOG_PLANTAO (ou LOG_CARGOS como fallback) um registro V2."""
-    canal_id = CANAIS.get("LOG_PLANTAO") or CANAIS.get("LOG_CARGOS") or 0
+    """Posta no canal LOG_AUDITORIA_ADMIN um registro V2."""
+    canal_id = CANAIS.get("LOG_AUDITORIA_ADMIN")
     canal = guild.get_channel(canal_id) if canal_id else None
     if canal is None:
         return
@@ -30,7 +30,7 @@ async def registrar_auditoria_admin(
         linhas += f"\n- **Detalhes:** {detalhes}"
 
     view = LogContainerView(
-        titulo="🔎 Auditoria Admin — Plantão",
+        titulo="🔎 Auditoria Admin — Gerenciar Membros",
         linhas=linhas,
         guild=guild,
         cor=cor or discord.Color.dark_gold(),
