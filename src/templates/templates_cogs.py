@@ -34,6 +34,7 @@ from src.utils.mensagens import (
     COR_INFO,
     COR_SUCESSO,
     enviar_card,
+    responder_erro,
 )
 from src.utils.permissions import apenas_administrador
 
@@ -89,6 +90,7 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         self.guilda = guilda
         # Mensagem separada com o Container V2 completo (editada a cada update)
         self.mensagem_preview = mensagem_preview
+        self.mensagem_editor: discord.Message | None = None
         # Quando "Editar bloco" escolhe um índice, os modais usam este valor
         self.indice_em_edicao: int | None = None
         self._reconstruir()
@@ -140,7 +142,7 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             botao.callback = callback
             linha_3.add_item(botao)
 
-        # 4) Editar bloco | Editar último | Remover último
+        # 4) Editar bloco | Editar último | Mover bloco | Remover último
         linha_4 = discord.ui.ActionRow()
         for rotulo, emoji, estilo, callback in (
             (
@@ -154,6 +156,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
                 "✏️",
                 discord.ButtonStyle.primary,
                 self._ao_clicar_editar_ultimo,
+            ),
+            (
+                "Mover bloco",
+                "↕️",
+                discord.ButtonStyle.secondary,
+                self._ao_clicar_mover_bloco,
             ),
             (
                 "Remover último",
@@ -274,15 +282,31 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
     async def on_timeout(self) -> None:
         await self._destruir_mensagem_preview()
 
-    async def _atualizar_painel(self, interacao: discord.Interaction) -> None:
-        if interacao.guild is not None:
+    async def _atualizar_painel(
+        self,
+        interacao: discord.Interaction | None = None,
+    ) -> None:
+        if interacao is not None and interacao.guild is not None:
             self.guilda = interacao.guild
         self._reconstruir()
-        if interacao.response.is_done():
-            await interacao.edit_original_response(view=self)
-        else:
-            await interacao.response.edit_message(view=self)
-        # Atualiza o preview na mensagem irmã
+
+        # Preferência: editar a mensagem do editor guardada (funciona mesmo
+        # quando a interação veio de um card/modal auxiliar).
+        if self.mensagem_editor is not None:
+            try:
+                await self.mensagem_editor.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                self.mensagem_editor = None
+
+        if interacao is not None and self.mensagem_editor is None:
+            if interacao.response.is_done():
+                try:
+                    await interacao.edit_original_response(view=self)
+                except (discord.HTTPException, discord.InteractionResponded):
+                    pass
+            else:
+                await interacao.response.edit_message(view=self)
+
         await self._atualizar_mensagem_preview()
 
     async def _ao_clicar_titulo(self, interacao: discord.Interaction):
@@ -406,17 +430,32 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         await interacao.response.send_modal(modal)
 
     async def _ao_clicar_editar_bloco(self, interacao: discord.Interaction):
-        """Pede o número do bloco (1-based) e abre o editor correspondente."""
+        """Pede o número do bloco e depois envia CardView com botão Abrir editor."""
         if not await self._garantir_dono(interacao):
             return
         rascunho = obter_rascunho(self.id_do_usuario)
         if not rascunho.blocos:
-            await interacao.response.send_message(
-                "❌ Não há blocos para editar.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Sem blocos",
+                linhas=["Não há blocos para editar. Adicione algum primeiro."],
             )
             return
-        await interacao.response.send_modal(ModalEscolherBloco(self))
+        await interacao.response.send_modal(ModalEscolherBloco(self, modo="editar"))
+
+    async def _ao_clicar_mover_bloco(self, interacao: discord.Interaction):
+        """Pede o número do bloco e depois CardView com Select pra cima/baixo."""
+        if not await self._garantir_dono(interacao):
+            return
+        rascunho = obter_rascunho(self.id_do_usuario)
+        if len(rascunho.blocos) < 2:
+            await responder_erro(
+                interacao,
+                titulo="Poucos blocos",
+                linhas=["É preciso ter pelo menos **2 blocos** para mover."],
+            )
+            return
+        await interacao.response.send_modal(ModalEscolherBloco(self, modo="mover"))
 
     async def _ao_clicar_rodape(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
@@ -505,76 +544,198 @@ async def _enviar_codigo_em_partes(
 # ---------------------------------------------------------------------------
 
 
-class ViewAbrirEditorBloco(LoggingViewMixin, discord.ui.View):
+async def _enviar_card_acao_bloco(
+    interacao: discord.Interaction,
+    painel: "PainelTemplatesView",
+    indice: int,
+    modo: str,
+) -> None:
     """
-    Passo intermediário: Discord não permite send_modal em cima de
-    outro modal. O usuário confirma e aí sim abrimos o editor.
+    Após o modal do número do bloco, envia CardView (mensagens.py)
+    com Select (mover) ou botão (editar).
     """
+    rascunho = obter_rascunho(painel.id_do_usuario)
+    bloco = rascunho.blocos[indice]
+    resumo = f"`{indice + 1}.` **{bloco.tipo}**"
+    if bloco.texto:
+        resumo += f" — {bloco.texto[:80]}"
 
-    def __init__(self, painel: "PainelTemplatesView", indice: int):
-        super().__init__(timeout=120)
-        self.painel = painel
-        self.indice = indice
-        rascunho = obter_rascunho(painel.id_do_usuario)
-        tipo = (
-            rascunho.blocos[indice].tipo if 0 <= indice < len(rascunho.blocos) else "?"
+    if modo == "mover":
+        linha = discord.ui.ActionRow()
+        seletor = discord.ui.Select(
+            placeholder="Mover este bloco…",
+            options=[
+                discord.SelectOption(
+                    label="1. Pra cima",
+                    value="cima",
+                    description="Troca de lugar com o bloco anterior",
+                    emoji="⬆️",
+                ),
+                discord.SelectOption(
+                    label="2. Pra baixo",
+                    value="baixo",
+                    description="Troca de lugar com o próximo bloco",
+                    emoji="⬇️",
+                ),
+            ],
         )
-        botao = discord.ui.Button(
-            label=f"Abrir editor · bloco {indice + 1} ({tipo})",
-            style=discord.ButtonStyle.primary,
-            emoji="✏️",
-        )
-        botao.callback = self._ao_abrir
-        self.add_item(botao)
 
-    async def _ao_abrir(self, interacao: discord.Interaction):
-        if interacao.user.id != self.painel.id_do_usuario:
-            await interacao.response.send_message(
-                "❌ Este controle não é seu.", ephemeral=True
+        async def _ao_mover(interacao_select: discord.Interaction):
+            if interacao_select.user.id != painel.id_do_usuario:
+                await responder_erro(
+                    interacao_select,
+                    titulo="Sem permissão",
+                    linhas=["Este controle não é seu."],
+                )
+                return
+            valores = (
+                interacao_select.data.get("values") if interacao_select.data else None
+            )
+            direcao = valores[0] if valores else ""
+            rascunho_atual = obter_rascunho(painel.id_do_usuario)
+            if indice < 0 or indice >= len(rascunho_atual.blocos):
+                await responder_erro(
+                    interacao_select,
+                    titulo="Bloco sumiu",
+                    linhas=["Esse bloco não existe mais no rascunho."],
+                )
+                return
+
+            if direcao == "cima":
+                if indice == 0:
+                    await responder_aviso_local(
+                        interacao_select,
+                        "Já é o primeiro bloco.",
+                    )
+                    return
+                (
+                    rascunho_atual.blocos[indice - 1],
+                    rascunho_atual.blocos[indice],
+                ) = (
+                    rascunho_atual.blocos[indice],
+                    rascunho_atual.blocos[indice - 1],
+                )
+                destino = indice
+            elif direcao == "baixo":
+                if indice >= len(rascunho_atual.blocos) - 1:
+                    await responder_aviso_local(
+                        interacao_select,
+                        "Já é o último bloco.",
+                    )
+                    return
+                (
+                    rascunho_atual.blocos[indice + 1],
+                    rascunho_atual.blocos[indice],
+                ) = (
+                    rascunho_atual.blocos[indice],
+                    rascunho_atual.blocos[indice + 1],
+                )
+                destino = indice + 2
+            else:
+                await responder_erro(
+                    interacao_select,
+                    titulo="Direção inválida",
+                    linhas=["Escolha Pra cima ou Pra baixo."],
+                )
+                return
+
+            await painel._atualizar_painel(interacao_select)
+            await enviar_card(
+                interacao_select,
+                titulo="✅ Bloco movido",
+                linhas=[
+                    f"Bloco agora na posição **{destino}**.",
+                    "Editor e preview foram atualizados.",
+                ],
+                cor=COR_SUCESSO,
+                delay=12,
+            )
+
+        seletor.callback = _ao_mover
+        linha.add_item(seletor)
+        await enviar_card(
+            interacao,
+            titulo="↕️ Mover bloco",
+            linhas=[
+                f"Bloco selecionado: {resumo}",
+                "Escolha no menu: **Pra cima** ou **Pra baixo**.",
+            ],
+            cor=COR_INFO,
+            extra_row=linha,
+            delay=None,
+        )
+        return
+
+    # modo == "editar"
+    linha = discord.ui.ActionRow()
+    botao = discord.ui.Button(
+        label="Abrir editor",
+        style=discord.ButtonStyle.primary,
+        emoji="✏️",
+    )
+
+    async def _ao_abrir_editor(interacao_botao: discord.Interaction):
+        if interacao_botao.user.id != painel.id_do_usuario:
+            await responder_erro(
+                interacao_botao,
+                titulo="Sem permissão",
+                linhas=["Este controle não é seu."],
             )
             return
-        rascunho = obter_rascunho(self.painel.id_do_usuario)
-        if self.indice < 0 or self.indice >= len(rascunho.blocos):
-            await interacao.response.send_message(
-                "❌ Bloco não existe mais.", ephemeral=True
+        rascunho_atual = obter_rascunho(painel.id_do_usuario)
+        if indice < 0 or indice >= len(rascunho_atual.blocos):
+            await responder_erro(
+                interacao_botao,
+                titulo="Bloco sumiu",
+                linhas=["Esse bloco não existe mais no rascunho."],
             )
             return
-
-        self.painel.indice_em_edicao = self.indice
-        alvo = rascunho.blocos[self.indice]
-        modal = _modal_para_bloco(self.painel, alvo)
+        painel.indice_em_edicao = indice
+        alvo = rascunho_atual.blocos[indice]
+        modal = _modal_para_bloco(painel, alvo)
         if modal is None:
-            self.painel.indice_em_edicao = None
-            await interacao.response.send_message(
-                f"❌ Tipo `{alvo.tipo}` sem editor.",
-                ephemeral=True,
+            painel.indice_em_edicao = None
+            await responder_erro(
+                interacao_botao,
+                titulo="Sem editor",
+                linhas=[f"Tipo `{alvo.tipo}` ainda não tem modal de edição."],
             )
             return
-        await interacao.response.send_modal(modal)
+        await interacao_botao.response.send_modal(modal)
+
+    botao.callback = _ao_abrir_editor
+    linha.add_item(botao)
+    await enviar_card(
+        interacao,
+        titulo="✏️ Editar bloco",
+        linhas=[
+            f"Bloco selecionado: {resumo}",
+            "Clique em **Abrir editor** para modificar este bloco.",
+        ],
+        cor=COR_INFO,
+        extra_row=linha,
+        delay=None,
+    )
 
 
-def _modal_para_bloco(painel: "PainelTemplatesView", bloco: "BlocoTemplate"):
-    """Devolve o Modal correto para o tipo do bloco (editar_ultimo=True)."""
-    if bloco.tipo in ("titulo", "texto"):
-        return ModalTextoBloco(painel, bloco.tipo, editar_ultimo=True)
-    if bloco.tipo == "secao":
-        return ModalSecaoCompleta(painel, editar_ultimo=True)
-    if bloco.tipo == "separador":
-        return ModalSeparador(painel, editar_ultimo=True)
-    if bloco.tipo == "galeria":
-        return ModalGaleria(painel, editar_ultimo=True)
-    if bloco.tipo == "arquivo":
-        return ModalArquivo(painel, editar_ultimo=True)
-    if bloco.tipo == "botoes":
-        return ModalBotao(painel, editar_ultimo=True)
-    if bloco.tipo == "select_string":
-        return ModalSelectString(painel, editar_ultimo=True)
-    if bloco.tipo.startswith("select_"):
-        return ModalSelectEspecial(painel, bloco.tipo, editar_ultimo=True)
-    return None
+async def responder_aviso_local(
+    interacao: discord.Interaction,
+    texto: str,
+) -> None:
+    """Aviso rápido via mensagens.py (card)."""
+    from src.utils.mensagens import responder_aviso
+
+    await responder_aviso(
+        interacao,
+        titulo="Aviso",
+        linhas=[texto],
+        delay=10,
+    )
 
 
-class ModalEscolherBloco(LoggingModalMixin, discord.ui.Modal, title="Editar bloco nº"):
+class ModalEscolherBloco(LoggingModalMixin, discord.ui.Modal):
+    """Pede o número do bloco; em seguida envia CardView (editar ou mover)."""
+
     numero = discord.ui.TextInput(
         label="Número do bloco (veja a lista)",
         max_length=3,
@@ -582,34 +743,36 @@ class ModalEscolherBloco(LoggingModalMixin, discord.ui.Modal, title="Editar bloc
         placeholder="1",
     )
 
-    def __init__(self, painel: PainelTemplatesView):
-        super().__init__()
+    def __init__(self, painel: "PainelTemplatesView", modo: str = "editar"):
+        titulo = "Mover bloco nº" if modo == "mover" else "Editar bloco nº"
+        super().__init__(title=titulo[:45])
         self.painel = painel
+        self.modo = modo
 
     async def on_submit(self, interacao: discord.Interaction):
         rascunho = obter_rascunho(self.painel.id_do_usuario)
         try:
             indice = int(self.numero.value.strip()) - 1
         except ValueError:
-            await interacao.response.send_message(
-                "❌ Informe um número válido.", ephemeral=True
+            await responder_erro(
+                interacao,
+                titulo="Número inválido",
+                linhas=["Informe só o número do bloco, por exemplo `2`."],
             )
             return
         if indice < 0 or indice >= len(rascunho.blocos):
-            await interacao.response.send_message(
-                f"❌ Bloco inexistente. Use 1–{len(rascunho.blocos)}.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Bloco inexistente",
+                linhas=[f"Use um número entre **1** e **{len(rascunho.blocos)}**."],
             )
             return
 
-        # Não dá para send_modal logo após outro modal — usa botão intermediário
-        await interacao.response.send_message(
-            content=(
-                f"Bloco **{indice + 1}** (`{rascunho.blocos[indice].tipo}`) selecionado.\n"
-                "Clique no botão para abrir o editor:"
-            ),
-            view=ViewAbrirEditorBloco(self.painel, indice),
-            ephemeral=True,
+        await _enviar_card_acao_bloco(
+            interacao,
+            self.painel,
+            indice,
+            self.modo,
         )
 
 
@@ -1034,8 +1197,9 @@ class TemplatesCog(commands.Cog):
         )
         # 1) Editor (efêmero)
         await interacao.response.send_message(view=painel, ephemeral=True)
+        painel.mensagem_editor = await interacao.original_response()
 
-        # 2) Preview V2 em mensagem separada (também efêmera, editada a cada change)
+        # 2) Preview V2 em mensagem separada (editada a cada change)
         rascunho = obter_rascunho(interacao.user.id)
         view_preview = montar_preview(rascunho, interacao.guild)
         mensagem_preview = await interacao.followup.send(
