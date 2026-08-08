@@ -592,23 +592,47 @@ async def _enviar_card_acao_bloco(
         resumo += f" — {bloco.texto[:80]}"
 
     if modo == "mover":
+        # Opções: cima / baixo + troca direta com qualquer outro bloco
+        opcoes_mover: list[discord.SelectOption] = [
+            discord.SelectOption(
+                label="Pra cima",
+                value="cima",
+                description="Troca com o bloco imediatamente acima",
+                emoji="⬆️",
+            ),
+            discord.SelectOption(
+                label="Pra baixo",
+                value="baixo",
+                description="Troca com o bloco imediatamente abaixo",
+                emoji="⬇️",
+            ),
+        ]
+
+        for indice_outro, outro in enumerate(rascunho.blocos):
+            if indice_outro == indice:
+                continue
+            # Discord: máximo 25 opções no Select (2 fixas + até 23 destinos)
+            if len(opcoes_mover) >= 25:
+                break
+            detalhe = (outro.texto or "").strip().replace("\n", " ")
+            if len(detalhe) > 40:
+                detalhe = detalhe[:37] + "..."
+            descricao = detalhe or outro.tipo
+            if len(descricao) > 100:
+                descricao = descricao[:97] + "..."
+            opcoes_mover.append(
+                discord.SelectOption(
+                    label=f"{indice_outro + 1}. {outro.tipo}"[:100],
+                    value=f"troca:{indice_outro}",
+                    description=f"Troca de lugar com este bloco · {descricao}"[:100],
+                    emoji="🔀",
+                )
+            )
+
         linha = discord.ui.ActionRow()
         seletor = discord.ui.Select(
-            placeholder="Mover este bloco…",
-            options=[
-                discord.SelectOption(
-                    label="1. Pra cima",
-                    value="cima",
-                    description="Troca de lugar com o bloco anterior",
-                    emoji="⬆️",
-                ),
-                discord.SelectOption(
-                    label="2. Pra baixo",
-                    value="baixo",
-                    description="Troca de lugar com o próximo bloco",
-                    emoji="⬇️",
-                ),
-            ],
+            placeholder="Pra cima, pra baixo ou trocar com…",
+            options=opcoes_mover,
         )
 
         async def _ao_mover(interacao_select: discord.Interaction):
@@ -622,7 +646,7 @@ async def _enviar_card_acao_bloco(
             valores = (
                 interacao_select.data.get("values") if interacao_select.data else None
             )
-            direcao = valores[0] if valores else ""
+            escolha = valores[0] if valores else ""
             rascunho_atual = obter_rascunho(painel.id_do_usuario)
             if indice < 0 or indice >= len(rascunho_atual.blocos):
                 await responder_erro(
@@ -632,7 +656,7 @@ async def _enviar_card_acao_bloco(
                 )
                 return
 
-            if direcao == "cima":
+            if escolha == "cima":
                 if indice == 0:
                     await responder_aviso_local(
                         interacao_select,
@@ -646,8 +670,8 @@ async def _enviar_card_acao_bloco(
                     rascunho_atual.blocos[indice],
                     rascunho_atual.blocos[indice - 1],
                 )
-                destino = indice
-            elif direcao == "baixo":
+                nova_posicao = indice  # 1-based após subir
+            elif escolha == "baixo":
                 if indice >= len(rascunho_atual.blocos) - 1:
                     await responder_aviso_local(
                         interacao_select,
@@ -661,12 +685,41 @@ async def _enviar_card_acao_bloco(
                     rascunho_atual.blocos[indice],
                     rascunho_atual.blocos[indice + 1],
                 )
-                destino = indice + 2
+                nova_posicao = indice + 2
+            elif escolha.startswith("troca:"):
+                try:
+                    indice_destino = int(escolha.split(":", 1)[1])
+                except ValueError:
+                    await responder_erro(
+                        interacao_select,
+                        titulo="Destino inválido",
+                        linhas=["Não foi possível ler o bloco de destino."],
+                    )
+                    return
+                if (
+                    indice_destino < 0
+                    or indice_destino >= len(rascunho_atual.blocos)
+                    or indice_destino == indice
+                ):
+                    await responder_erro(
+                        interacao_select,
+                        titulo="Destino inválido",
+                        linhas=["O bloco de destino não existe mais."],
+                    )
+                    return
+                (
+                    rascunho_atual.blocos[indice],
+                    rascunho_atual.blocos[indice_destino],
+                ) = (
+                    rascunho_atual.blocos[indice_destino],
+                    rascunho_atual.blocos[indice],
+                )
+                nova_posicao = indice_destino + 1
             else:
                 await responder_erro(
                     interacao_select,
-                    titulo="Direção inválida",
-                    linhas=["Escolha Pra cima ou Pra baixo."],
+                    titulo="Opção inválida",
+                    linhas=["Escolha pra cima, pra baixo ou um bloco da lista."],
                 )
                 return
 
@@ -675,7 +728,7 @@ async def _enviar_card_acao_bloco(
                 interacao_select,
                 titulo="✅ Bloco movido",
                 linhas=[
-                    f"Bloco agora na posição **{destino}**.",
+                    f"Bloco agora na posição **{nova_posicao}**.",
                     "Editor e preview foram atualizados.",
                 ],
                 cor=COR_SUCESSO,
@@ -689,7 +742,7 @@ async def _enviar_card_acao_bloco(
             titulo="↕️ Mover bloco",
             linhas=[
                 f"Bloco selecionado: {resumo}",
-                "Escolha no menu: **Pra cima** ou **Pra baixo**.",
+                "No menu: **Pra cima**, **Pra baixo** ou **troque** com outro bloco da lista.",
             ],
             cor=COR_INFO,
             extra_row=linha,
