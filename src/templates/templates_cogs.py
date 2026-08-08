@@ -13,11 +13,6 @@ from discord.ext import commands
 
 from src.templates.templates_modelo import (
     TEM_CHANNEL_SELECT,
-    TEM_CHECKBOX_GROUP,
-    TEM_FILE,
-    TEM_FILE_UPLOAD,
-    TEM_LABEL,
-    TEM_RADIO_GROUP,
     TEM_ROLE_SELECT,
     TEM_USER_SELECT,
     BlocoTemplate,
@@ -25,7 +20,6 @@ from src.templates.templates_modelo import (
     gerar_codigo_modal,
     limpar_rascunho,
     mapa_de_cores,
-    montar_componentes_do_container,
     montar_preview,
     montar_texto_do_rodape,
     obter_rascunho,
@@ -48,6 +42,65 @@ from src.utils.permissions import apenas_administrador
 # ---------------------------------------------------------------------------
 
 
+def _preview_textual(
+    rascunho,
+    guilda: discord.Guild | None,
+) -> str:
+    """
+    Representação leve do card final (só texto).
+
+    Usado no painel para não estourar o limite de 40 componentes do LayoutView.
+    O botão Preview V2 monta o Container real em mensagem ephemeral.
+    """
+    if not rascunho.blocos and not rascunho.rodape_ativo:
+        return "_Vazio — adicione blocos pelos botões._"
+
+    partes: list[str] = []
+    for bloco in rascunho.blocos:
+        if bloco.tipo == "titulo":
+            partes.append(f"# {bloco.texto}")
+        elif bloco.tipo == "texto":
+            partes.append(bloco.texto)
+        elif bloco.tipo == "separador":
+            partes.append("─" * 12)
+        elif bloco.tipo == "secao":
+            extra = ""
+            if bloco.usar_thumbnail_servidor:
+                extra = "  _(thumb: ícone do servidor)_"
+            elif bloco.url_thumbnail:
+                extra = "  _(thumb: URL)_"
+            elif bloco.accessory_botao_rotulo:
+                extra = f"  _[btn: {bloco.accessory_botao_rotulo}]_"
+            partes.append(f"{bloco.texto}{extra}")
+        elif bloco.tipo == "galeria":
+            partes.append(f"🖼️ Galeria ({len(bloco.urls_midia)} imagem(ns))")
+        elif bloco.tipo == "arquivo":
+            partes.append(f"📎 Arquivo: `{bloco.nome_arquivo or '?'}`")
+        elif bloco.tipo == "botoes":
+            nomes = " · ".join(f"`{r}`" for r, _, _ in bloco.botoes)
+            partes.append(f"🔘 Botões: {nomes}")
+        elif bloco.tipo == "select_string":
+            nomes = " · ".join(lab for lab, _, _ in bloco.opcoes_select)
+            partes.append(f"📋 Select: {nomes or bloco.placeholder_select}")
+        elif bloco.tipo.startswith("select_"):
+            partes.append(f"📋 {bloco.tipo}: {bloco.placeholder_select_especial}")
+        else:
+            partes.append(f"`{bloco.tipo}`")
+
+    if rascunho.rodape_ativo:
+        from src.templates.templates_modelo import montar_texto_do_rodape
+
+        rodape = montar_texto_do_rodape(rascunho, guilda)
+        if rodape:
+            partes.append(rodape)
+
+    texto = "\n\n".join(partes)
+    # TextDisplay compartilha pool de ~4000 chars na mensagem
+    if len(texto) > 1800:
+        texto = texto[:1800] + "\n-# …preview truncado"
+    return texto
+
+
 class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
     """
     Painel efêmero onde a staff monta o Container bloco a bloco.
@@ -66,15 +119,24 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         self._reconstruir()
 
     def _reconstruir(self) -> None:
+        """
+        Monta o painel do editor.
+
+        Importante: LayoutView tem limite de **40 componentes aninhados**.
+        Por isso o preview *ao vivo* no card é textual (leve).
+        O botão Preview continua abrindo o Container V2 completo (ephemeral).
+        """
         self.clear_items()
         rascunho = obter_rascunho(self.id_do_usuario)
 
+        # --- linha 1: conteúdo ---
         linha_conteudo = discord.ui.ActionRow()
         for rotulo, emoji, callback in (
             ("Título", "✏️", self._ao_clicar_titulo),
             ("Texto", "📝", self._ao_clicar_texto),
             ("Seção", "🗂️", self._ao_clicar_secao),
             ("Separador", "➖", self._ao_clicar_separador),
+            ("Galeria", "🖼️", self._ao_clicar_galeria),
         ):
             botao = discord.ui.Button(
                 label=rotulo, style=discord.ButtonStyle.primary, emoji=emoji
@@ -82,12 +144,14 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             botao.callback = callback
             linha_conteudo.add_item(botao)
 
+        # --- linha 2: mídia + interação ---
         linha_midia = discord.ui.ActionRow()
         for rotulo, emoji, callback in (
-            ("Galeria", "🖼️", self._ao_clicar_galeria),
             ("Arquivo", "📎", self._ao_clicar_arquivo),
             ("Botão", "🔘", self._ao_clicar_botao),
-            ("Select texto", "📋", self._ao_clicar_select_string),
+            ("Select", "📋", self._ao_clicar_select_string),
+            ("User", "👤", self._ao_clicar_select_user),
+            ("Role", "🎭", self._ao_clicar_select_role),
         ):
             botao = discord.ui.Button(
                 label=rotulo, style=discord.ButtonStyle.secondary, emoji=emoji
@@ -95,34 +159,40 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             botao.callback = callback
             linha_midia.add_item(botao)
 
-        linha_selects = discord.ui.ActionRow()
-        for rotulo, emoji, callback in (
-            ("UserSelect", "👤", self._ao_clicar_select_user),
-            ("RoleSelect", "🎭", self._ao_clicar_select_role),
-            ("ChannelSelect", "#️⃣", self._ao_clicar_select_channel),
-            ("Remover último", "🗑️", self._ao_clicar_remover_ultimo),
+        # --- linha 3: canal + editar/remover + rodapé ---
+        linha_edicao = discord.ui.ActionRow()
+        for rotulo, emoji, estilo, callback in (
+            (
+                "Channel",
+                "#️⃣",
+                discord.ButtonStyle.secondary,
+                self._ao_clicar_select_channel,
+            ),
+            (
+                "Editar último",
+                "✏️",
+                discord.ButtonStyle.primary,
+                self._ao_clicar_editar_ultimo,
+            ),
+            (
+                "Remover último",
+                "🗑️",
+                discord.ButtonStyle.danger,
+                self._ao_clicar_remover_ultimo,
+            ),
+            ("Rodapé", "📌", discord.ButtonStyle.secondary, self._ao_clicar_rodape),
+            (
+                "Cód. Modal",
+                "🪟",
+                discord.ButtonStyle.secondary,
+                self._ao_clicar_codigo_modal,
+            ),
         ):
-            botao = discord.ui.Button(
-                label=rotulo, style=discord.ButtonStyle.secondary, emoji=emoji
-            )
+            botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
             botao.callback = callback
-            linha_selects.add_item(botao)
+            linha_edicao.add_item(botao)
 
-        # ActionRow de botões (sem Select — select precisa de linha exclusiva)
-        linha_extras = discord.ui.ActionRow()
-        botao_rodape = discord.ui.Button(
-            label="Rodapé", style=discord.ButtonStyle.secondary, emoji="📌"
-        )
-        botao_rodape.callback = self._ao_clicar_rodape
-        linha_extras.add_item(botao_rodape)
-
-        botao_modal = discord.ui.Button(
-            label="Código Modal", style=discord.ButtonStyle.secondary, emoji="🪟"
-        )
-        botao_modal.callback = self._ao_clicar_codigo_modal
-        linha_extras.add_item(botao_modal)
-
-        # Select ocupa ActionRow inteiro (regra do Discord: 1 select por linha)
+        # --- linha 4: cor (Select sozinho) ---
         linha_cor = discord.ui.ActionRow()
         seletor_cor = discord.ui.Select(
             placeholder="Cor do Container…",
@@ -134,12 +204,13 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         seletor_cor.callback = self._ao_escolher_cor
         linha_cor.add_item(seletor_cor)
 
+        # --- linha 5: ações finais ---
         linha_acoes = discord.ui.ActionRow()
         for rotulo, emoji, estilo, callback in (
-            ("Preview", "👁️", discord.ButtonStyle.success, self._ao_clicar_preview),
+            ("Preview V2", "👁️", discord.ButtonStyle.success, self._ao_clicar_preview),
             ("Código msg", "📄", discord.ButtonStyle.danger, self._ao_clicar_codigo),
             ("Resetar", "♻️", discord.ButtonStyle.secondary, self._ao_clicar_resetar),
-            ("Ajuda API", "❓", discord.ButtonStyle.primary, self._ao_clicar_ajuda_api),
+            ("Ajuda", "❓", discord.ButtonStyle.primary, self._ao_clicar_ajuda_api),
         ):
             botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
             botao.callback = callback
@@ -151,47 +222,33 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             if rascunho.rodape_ativo
             else ""
         )
-        api_detectada = (
-            f"File={TEM_FILE} · Label={TEM_LABEL} · FileUpload={TEM_FILE_UPLOAD} · "
-            f"Radio={TEM_RADIO_GROUP} · CheckboxGroup={TEM_CHECKBOX_GROUP}"
-        )
 
-        # --- editor (controles) ---
+        # Preview textual (não conta dezenas de componentes — evita limite 40)
+        preview_texto = _preview_textual(rascunho, self.guilda)
+
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# 🧩 Construtor Bot UI Kit (V2)"),
                 discord.ui.TextDisplay(
-                    "Monte o **Container** bloco a bloco.\n"
-                    "O **preview ao vivo** fica abaixo. O botão Preview ainda abre "
-                    "uma cópia ephemeral separada."
+                    "# 🧩 Construtor Bot UI Kit (V2)\n"
+                    "-# Preview ao vivo abaixo (texto). "
+                    "**Preview V2** abre o Container completo (ephemeral)."
                 ),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(
                     f"### Blocos ({len(rascunho.blocos)})\n"
                     f"{resumo_dos_blocos(rascunho)}\n\n"
                     f"**Cor:** `{rascunho.cor_nome}` · **Rodapé:** `{status_rodape}`"
                     + (f"\n{texto_rodape}" if texto_rodape else "")
-                    + f"\n-# API: {api_detectada}"
                 ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(f"### Preview ao vivo\n{preview_texto}"),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 linha_conteudo,
                 linha_midia,
-                linha_selects,
-                linha_extras,
+                linha_edicao,
                 linha_cor,
                 linha_acoes,
                 accent_color=discord.Color.dark_teal(),
-            )
-        )
-
-        # --- preview ao vivo (mesmo card, container separado) ---
-        componentes_preview = montar_componentes_do_container(rascunho, self.guilda)
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("### Preview ao vivo"),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                *componentes_preview,
-                accent_color=rascunho.cor,
             )
         )
 
@@ -308,6 +365,52 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             rascunho.blocos.pop()
         await self._atualizar_painel(interacao)
 
+    async def _ao_clicar_editar_ultimo(self, interacao: discord.Interaction):
+        """Abre o modal do tipo do último bloco, já preenchido."""
+        if not await self._garantir_dono(interacao):
+            return
+        rascunho = obter_rascunho(self.id_do_usuario)
+        if not rascunho.blocos:
+            await interacao.response.send_message(
+                "❌ Não há bloco para editar.",
+                ephemeral=True,
+            )
+            return
+
+        ultimo = rascunho.blocos[-1]
+        if ultimo.tipo in ("titulo", "texto"):
+            await interacao.response.send_modal(
+                ModalTextoBloco(self, ultimo.tipo, editar_ultimo=True)
+            )
+        elif ultimo.tipo == "secao":
+            await interacao.response.send_modal(
+                ModalSecaoCompleta(self, editar_ultimo=True)
+            )
+        elif ultimo.tipo == "separador":
+            await interacao.response.send_modal(
+                ModalSeparador(self, editar_ultimo=True)
+            )
+        elif ultimo.tipo == "galeria":
+            await interacao.response.send_modal(ModalGaleria(self, editar_ultimo=True))
+        elif ultimo.tipo == "arquivo":
+            await interacao.response.send_modal(ModalArquivo(self, editar_ultimo=True))
+        elif ultimo.tipo == "botoes":
+            await interacao.response.send_modal(ModalBotao(self, editar_ultimo=True))
+        elif ultimo.tipo == "select_string":
+            await interacao.response.send_modal(
+                ModalSelectString(self, editar_ultimo=True)
+            )
+        elif ultimo.tipo.startswith("select_"):
+            # Selects especiais não têm modal rico — só placeholder
+            await interacao.response.send_modal(
+                ModalSelectEspecial(self, ultimo.tipo, editar_ultimo=True)
+            )
+        else:
+            await interacao.response.send_message(
+                f"❌ Tipo `{ultimo.tipo}` ainda sem editor dedicado.",
+                ephemeral=True,
+            )
+
     async def _ao_clicar_rodape(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
@@ -404,23 +507,34 @@ class ModalTextoBloco(LoggingModalMixin, discord.ui.Modal):
         required=True,
     )
 
-    def __init__(self, painel: PainelTemplatesView, tipo: str):
-        super().__init__(
-            title="Adicionar título" if tipo == "titulo" else "Adicionar texto"
-        )
+    def __init__(
+        self,
+        painel: PainelTemplatesView,
+        tipo: str,
+        editar_ultimo: bool = False,
+    ):
+        titulo = "Editar " if editar_ultimo else "Adicionar "
+        titulo += "título" if tipo == "titulo" else "texto"
+        super().__init__(title=titulo[:45])
         self.painel = painel
         self.tipo = tipo
+        self.editar_ultimo = editar_ultimo
+        if editar_ultimo:
+            rascunho = obter_rascunho(painel.id_do_usuario)
+            if rascunho.blocos:
+                self.campo_texto.default = rascunho.blocos[-1].texto
 
     async def on_submit(self, interacao: discord.Interaction):
-        obter_rascunho(self.painel.id_do_usuario).blocos.append(
-            BlocoTemplate(tipo=self.tipo, texto=self.campo_texto.value.strip())
-        )
+        novo = BlocoTemplate(tipo=self.tipo, texto=self.campo_texto.value.strip())
+        rascunho = obter_rascunho(self.painel.id_do_usuario)
+        if self.editar_ultimo and rascunho.blocos:
+            rascunho.blocos[-1] = novo
+        else:
+            rascunho.blocos.append(novo)
         await self.painel._atualizar_painel(interacao)
 
 
-class ModalSecaoCompleta(
-    LoggingModalMixin, discord.ui.Modal, title="Seção + accessory"
-):
+class ModalSecaoCompleta(LoggingModalMixin, discord.ui.Modal):
     texto = discord.ui.TextInput(
         label="Texto da seção",
         style=discord.TextStyle.paragraph,
@@ -449,26 +563,37 @@ class ModalSecaoCompleta(
         max_length=300,
     )
 
-    def __init__(self, painel: PainelTemplatesView):
-        super().__init__()
+    def __init__(self, painel: PainelTemplatesView, editar_ultimo: bool = False):
+        super().__init__(title="Editar seção" if editar_ultimo else "Seção + accessory")
         self.painel = painel
+        self.editar_ultimo = editar_ultimo
+        if editar_ultimo:
+            bloco = obter_rascunho(painel.id_do_usuario).blocos[-1]
+            self.texto.default = bloco.texto
+            self.usar_icone.default = "sim" if bloco.usar_thumbnail_servidor else "não"
+            self.url_thumb.default = bloco.url_thumbnail or ""
+            self.botao_rotulo.default = bloco.accessory_botao_rotulo or ""
+            self.botao_url.default = bloco.accessory_botao_url or ""
 
     async def on_submit(self, interacao: discord.Interaction):
         usar = self.usar_icone.value.strip().lower() in ("sim", "s", "yes", "y", "1")
-        obter_rascunho(self.painel.id_do_usuario).blocos.append(
-            BlocoTemplate(
-                tipo="secao",
-                texto=self.texto.value.strip(),
-                usar_thumbnail_servidor=usar,
-                url_thumbnail=(self.url_thumb.value or "").strip(),
-                accessory_botao_rotulo=(self.botao_rotulo.value or "").strip(),
-                accessory_botao_url=(self.botao_url.value or "").strip(),
-            )
+        novo = BlocoTemplate(
+            tipo="secao",
+            texto=self.texto.value.strip(),
+            usar_thumbnail_servidor=usar,
+            url_thumbnail=(self.url_thumb.value or "").strip(),
+            accessory_botao_rotulo=(self.botao_rotulo.value or "").strip(),
+            accessory_botao_url=(self.botao_url.value or "").strip(),
         )
+        rascunho = obter_rascunho(self.painel.id_do_usuario)
+        if self.editar_ultimo and rascunho.blocos:
+            rascunho.blocos[-1] = novo
+        else:
+            rascunho.blocos.append(novo)
         await self.painel._atualizar_painel(interacao)
 
 
-class ModalSeparador(LoggingModalMixin, discord.ui.Modal, title="Separador"):
+class ModalSeparador(LoggingModalMixin, discord.ui.Modal):
     espacamento = discord.ui.TextInput(
         label="Espaçamento (small ou large)",
         max_length=5,
@@ -476,21 +601,29 @@ class ModalSeparador(LoggingModalMixin, discord.ui.Modal, title="Separador"):
         default="large",
     )
 
-    def __init__(self, painel: PainelTemplatesView):
-        super().__init__()
+    def __init__(self, painel: PainelTemplatesView, editar_ultimo: bool = False):
+        super().__init__(title="Editar separador" if editar_ultimo else "Separador")
         self.painel = painel
+        self.editar_ultimo = editar_ultimo
+        if editar_ultimo:
+            self.espacamento.default = (
+                obter_rascunho(painel.id_do_usuario).blocos[-1].espacamento
+            )
 
     async def on_submit(self, interacao: discord.Interaction):
         valor = self.espacamento.value.strip().lower()
         if valor not in ("small", "large"):
             valor = "large"
-        obter_rascunho(self.painel.id_do_usuario).blocos.append(
-            BlocoTemplate(tipo="separador", espacamento=valor)
-        )
+        novo = BlocoTemplate(tipo="separador", espacamento=valor)
+        rascunho = obter_rascunho(self.painel.id_do_usuario)
+        if self.editar_ultimo and rascunho.blocos:
+            rascunho.blocos[-1] = novo
+        else:
+            rascunho.blocos.append(novo)
         await self.painel._atualizar_painel(interacao)
 
 
-class ModalGaleria(LoggingModalMixin, discord.ui.Modal, title="MediaGallery"):
+class ModalGaleria(LoggingModalMixin, discord.ui.Modal):
     urls = discord.ui.TextInput(
         label="URLs (uma por linha, até 10)",
         style=discord.TextStyle.paragraph,
@@ -498,9 +631,13 @@ class ModalGaleria(LoggingModalMixin, discord.ui.Modal, title="MediaGallery"):
         required=True,
     )
 
-    def __init__(self, painel: PainelTemplatesView):
-        super().__init__()
+    def __init__(self, painel: PainelTemplatesView, editar_ultimo: bool = False):
+        super().__init__(title="Editar galeria" if editar_ultimo else "MediaGallery")
         self.painel = painel
+        self.editar_ultimo = editar_ultimo
+        if editar_ultimo:
+            bloco = obter_rascunho(painel.id_do_usuario).blocos[-1]
+            self.urls.default = "\n".join(bloco.urls_midia)
 
     async def on_submit(self, interacao: discord.Interaction):
         lista = [
@@ -513,13 +650,16 @@ class ModalGaleria(LoggingModalMixin, discord.ui.Modal, title="MediaGallery"):
                 "❌ Nenhuma URL http válida.", ephemeral=True
             )
             return
-        obter_rascunho(self.painel.id_do_usuario).blocos.append(
-            BlocoTemplate(tipo="galeria", urls_midia=lista)
-        )
+        novo = BlocoTemplate(tipo="galeria", urls_midia=lista)
+        rascunho = obter_rascunho(self.painel.id_do_usuario)
+        if self.editar_ultimo and rascunho.blocos:
+            rascunho.blocos[-1] = novo
+        else:
+            rascunho.blocos.append(novo)
         await self.painel._atualizar_painel(interacao)
 
 
-class ModalArquivo(LoggingModalMixin, discord.ui.Modal, title="File (attachment)"):
+class ModalArquivo(LoggingModalMixin, discord.ui.Modal):
     nome = discord.ui.TextInput(
         label="Nome do arquivo (ex: relatorio.pdf)",
         max_length=100,
@@ -527,18 +667,28 @@ class ModalArquivo(LoggingModalMixin, discord.ui.Modal, title="File (attachment)
         default="arquivo.bin",
     )
 
-    def __init__(self, painel: PainelTemplatesView):
-        super().__init__()
+    def __init__(self, painel: PainelTemplatesView, editar_ultimo: bool = False):
+        super().__init__(
+            title="Editar arquivo" if editar_ultimo else "File (attachment)"
+        )
         self.painel = painel
+        self.editar_ultimo = editar_ultimo
+        if editar_ultimo:
+            self.nome.default = (
+                obter_rascunho(painel.id_do_usuario).blocos[-1].nome_arquivo
+            )
 
     async def on_submit(self, interacao: discord.Interaction):
-        obter_rascunho(self.painel.id_do_usuario).blocos.append(
-            BlocoTemplate(tipo="arquivo", nome_arquivo=self.nome.value.strip())
-        )
+        novo = BlocoTemplate(tipo="arquivo", nome_arquivo=self.nome.value.strip())
+        rascunho = obter_rascunho(self.painel.id_do_usuario)
+        if self.editar_ultimo and rascunho.blocos:
+            rascunho.blocos[-1] = novo
+        else:
+            rascunho.blocos.append(novo)
         await self.painel._atualizar_painel(interacao)
 
 
-class ModalBotao(LoggingModalMixin, discord.ui.Modal, title="Button"):
+class ModalBotao(LoggingModalMixin, discord.ui.Modal):
     rotulo = discord.ui.TextInput(label="Rótulo", max_length=80, required=True)
     estilo = discord.ui.TextInput(
         label="Estilo: primary/secondary/success/danger/link",
@@ -552,9 +702,17 @@ class ModalBotao(LoggingModalMixin, discord.ui.Modal, title="Button"):
         required=True,
     )
 
-    def __init__(self, painel: PainelTemplatesView):
-        super().__init__()
+    def __init__(self, painel: PainelTemplatesView, editar_ultimo: bool = False):
+        super().__init__(title="Editar botão" if editar_ultimo else "Button")
         self.painel = painel
+        self.editar_ultimo = editar_ultimo
+        if editar_ultimo:
+            bloco = obter_rascunho(painel.id_do_usuario).blocos[-1]
+            if bloco.botoes:
+                rotulo, estilo, valor = bloco.botoes[0]
+                self.rotulo.default = rotulo
+                self.estilo.default = estilo
+                self.url_ou_id.default = valor
 
     async def on_submit(self, interacao: discord.Interaction):
         estilo = self.estilo.value.strip().lower()
@@ -566,27 +724,35 @@ class ModalBotao(LoggingModalMixin, discord.ui.Modal, title="Button"):
                 "❌ Botão link precisa de URL http(s).", ephemeral=True
             )
             return
+        item = (self.rotulo.value.strip(), estilo, valor)
         rascunho = obter_rascunho(self.painel.id_do_usuario)
-        if rascunho.blocos and rascunho.blocos[-1].tipo == "botoes":
+        if (
+            self.editar_ultimo
+            and rascunho.blocos
+            and rascunho.blocos[-1].tipo == "botoes"
+        ):
+            # Substitui o primeiro botão do bloco (ou o bloco inteiro se só havia 1)
+            if rascunho.blocos[-1].botoes:
+                rascunho.blocos[-1].botoes[0] = item
+            else:
+                rascunho.blocos[-1].botoes = [item]
+        elif (
+            rascunho.blocos
+            and rascunho.blocos[-1].tipo == "botoes"
+            and not self.editar_ultimo
+        ):
             if len(rascunho.blocos[-1].botoes) >= 5:
                 await interacao.response.send_message(
                     "❌ Máximo de 5 botões por ActionRow.", ephemeral=True
                 )
                 return
-            rascunho.blocos[-1].botoes.append(
-                (self.rotulo.value.strip(), estilo, valor)
-            )
+            rascunho.blocos[-1].botoes.append(item)
         else:
-            rascunho.blocos.append(
-                BlocoTemplate(
-                    tipo="botoes",
-                    botoes=[(self.rotulo.value.strip(), estilo, valor)],
-                )
-            )
+            rascunho.blocos.append(BlocoTemplate(tipo="botoes", botoes=[item]))
         await self.painel._atualizar_painel(interacao)
 
 
-class ModalSelectString(LoggingModalMixin, discord.ui.Modal, title="SelectOption"):
+class ModalSelectString(LoggingModalMixin, discord.ui.Modal):
     placeholder = discord.ui.TextInput(
         label="Placeholder (1ª opção do menu)",
         max_length=100,
@@ -601,9 +767,18 @@ class ModalSelectString(LoggingModalMixin, discord.ui.Modal, title="SelectOption
         required=False,
     )
 
-    def __init__(self, painel: PainelTemplatesView):
-        super().__init__()
+    def __init__(self, painel: PainelTemplatesView, editar_ultimo: bool = False):
+        super().__init__(title="Editar select" if editar_ultimo else "SelectOption")
         self.painel = painel
+        self.editar_ultimo = editar_ultimo
+        if editar_ultimo:
+            bloco = obter_rascunho(painel.id_do_usuario).blocos[-1]
+            self.placeholder.default = bloco.placeholder_select
+            if bloco.opcoes_select:
+                lab, val, desc = bloco.opcoes_select[0]
+                self.label.default = lab
+                self.value.default = val
+                self.descricao.default = desc
 
     async def on_submit(self, interacao: discord.Interaction):
         rascunho = obter_rascunho(self.painel.id_do_usuario)
@@ -611,7 +786,18 @@ class ModalSelectString(LoggingModalMixin, discord.ui.Modal, title="SelectOption
         value = self.value.value.strip()
         desc = (self.descricao.value or "").strip()
         placeholder = (self.placeholder.value or "Escolha uma opção…").strip()
-        if rascunho.blocos and rascunho.blocos[-1].tipo == "select_string":
+        if (
+            self.editar_ultimo
+            and rascunho.blocos
+            and rascunho.blocos[-1].tipo == "select_string"
+        ):
+            bloco = rascunho.blocos[-1]
+            bloco.placeholder_select = placeholder
+            if bloco.opcoes_select:
+                bloco.opcoes_select[0] = (label, value, desc)
+            else:
+                bloco.opcoes_select = [(label, value, desc)]
+        elif rascunho.blocos and rascunho.blocos[-1].tipo == "select_string":
             if len(rascunho.blocos[-1].opcoes_select) >= 25:
                 await interacao.response.send_message(
                     "❌ Máximo de 25 opções.", ephemeral=True
@@ -626,6 +812,44 @@ class ModalSelectString(LoggingModalMixin, discord.ui.Modal, title="SelectOption
                     opcoes_select=[(label, value, desc)],
                 )
             )
+        await self.painel._atualizar_painel(interacao)
+
+
+class ModalSelectEspecial(LoggingModalMixin, discord.ui.Modal, title="Select especial"):
+    placeholder = discord.ui.TextInput(
+        label="Placeholder",
+        max_length=100,
+        required=True,
+        default="Selecione…",
+    )
+
+    def __init__(
+        self,
+        painel: PainelTemplatesView,
+        tipo: str,
+        editar_ultimo: bool = False,
+    ):
+        super().__init__()
+        self.painel = painel
+        self.tipo = tipo
+        self.editar_ultimo = editar_ultimo
+        if editar_ultimo:
+            self.placeholder.default = (
+                obter_rascunho(painel.id_do_usuario)
+                .blocos[-1]
+                .placeholder_select_especial
+            )
+
+    async def on_submit(self, interacao: discord.Interaction):
+        novo = BlocoTemplate(
+            tipo=self.tipo,
+            placeholder_select_especial=self.placeholder.value.strip(),
+        )
+        rascunho = obter_rascunho(self.painel.id_do_usuario)
+        if self.editar_ultimo and rascunho.blocos:
+            rascunho.blocos[-1] = novo
+        else:
+            rascunho.blocos.append(novo)
         await self.painel._atualizar_painel(interacao)
 
 
