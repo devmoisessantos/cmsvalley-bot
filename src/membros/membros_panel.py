@@ -9,15 +9,11 @@ from __future__ import annotations
 
 from datetime import (
     datetime,
-    timedelta,
     timezone,
 )
 
 import discord
-from sqlalchemy import (
-    func,
-    select,
-)
+from sqlalchemy import select
 
 from src.config import (
     NOMES_CANAIS_PLANTAO,
@@ -25,12 +21,20 @@ from src.config import (
 )
 from src.database.connection import async_session
 from src.database.models import (
-    Chamada,
     EstadoPlantao,
-    FaltaChamada,
-    LogPlantao,
-    Recrutamento,
     Usuario,
+)
+from src.membros.membros_service import (
+    buscar_estado_plantao,
+    buscar_recrutamento_como_candidato,
+    buscar_usuario,
+    estatisticas_chamadas,
+    estatisticas_como_recrutador,
+    formatar_cargos_do_membro,
+    formatar_timestamp,
+    resolver_id_fivem_do_membro,
+    tempo_total_segundos_plantao,
+    ultimos_logs_plantao,
 )
 from src.plantao.auditoria import registrar_auditoria_admin
 from src.plantao.permissoes import (
@@ -52,181 +56,47 @@ from src.utils.formatacao import (
     formatar_hms,
 )
 
-# ── Consultas ────────────────────────────────────────────────────────────
+# ── Consultas (delegadas a src.membros.membros_service) ──────────────────
 
 
-async def _resolver_id_fivem(discord_id: int) -> str | None:
-    """Prioridade: EstadoPlantao → Usuario → último Recrutamento APROVADO."""
-    async with async_session() as session:
-        r = await session.execute(
-            select(EstadoPlantao.id_fivem).where(
-                EstadoPlantao.discord_id == discord_id,
-                EstadoPlantao.id_fivem.is_not(None),
-            )
-        )
-        v = r.scalar_one_or_none()
-        if v:
-            return str(v)
-
-        r = await session.execute(
-            select(Usuario.id_fivem).where(
-                Usuario.discord_id == discord_id,
-                Usuario.id_fivem.is_not(None),
-            )
-        )
-        v = r.scalar_one_or_none()
-        if v:
-            return str(v)
-
-        r = await session.execute(
-            select(Recrutamento.id_fivem)
-            .where(
-                Recrutamento.discord_id_candidato == discord_id,
-                Recrutamento.status == "APROVADO",
-                Recrutamento.id_fivem.is_not(None),
-            )
-            .order_by(Recrutamento.data_fim.desc().nullslast(), Recrutamento.id.desc())
-            .limit(1)
-        )
-        v = r.scalar_one_or_none()
-        return str(v) if v else None
+async def _resolver_id_fivem(discord_id: int):
+    return await resolver_id_fivem_do_membro(discord_id)
 
 
-async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
-    async with async_session() as session:
-        r = await session.execute(
-            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
-        )
-        return r.scalar_one_or_none()
+async def _buscar_estado(discord_id: int):
+    return await buscar_estado_plantao(discord_id)
 
 
-async def _buscar_usuario(discord_id: int) -> Usuario | None:
-    async with async_session() as session:
-        r = await session.execute(
-            select(Usuario).where(Usuario.discord_id == discord_id)
-        )
-        return r.scalar_one_or_none()
+async def _buscar_usuario(discord_id: int):
+    return await buscar_usuario(discord_id)
 
 
-async def _recrutamento_como_candidato(discord_id: int) -> Recrutamento | None:
-    async with async_session() as session:
-        r = await session.execute(
-            select(Recrutamento)
-            .where(Recrutamento.discord_id_candidato == discord_id)
-            .order_by(Recrutamento.id.desc())
-            .limit(1)
-        )
-        return r.scalar_one_or_none()
+async def _recrutamento_como_candidato(discord_id: int):
+    return await buscar_recrutamento_como_candidato(discord_id)
 
 
-async def _stats_como_recrutador(
-    discord_id: int,
-) -> tuple[int, int, list[Recrutamento]]:
-    """Retorna (total APROVADO, total última semana, últimos 5 APROVADO)."""
-    agora = datetime.now(timezone.utc)
-    semana = agora - timedelta(days=7)
-    async with async_session() as session:
-        total = await session.execute(
-            select(func.count())
-            .select_from(Recrutamento)
-            .where(
-                Recrutamento.discord_id_recrutador == discord_id,
-                Recrutamento.status == "APROVADO",
-            )
-        )
-        total_n = int(total.scalar_one() or 0)
-
-        sem = await session.execute(
-            select(func.count())
-            .select_from(Recrutamento)
-            .where(
-                Recrutamento.discord_id_recrutador == discord_id,
-                Recrutamento.status == "APROVADO",
-                Recrutamento.data_fim.is_not(None),
-                Recrutamento.data_fim >= semana,
-            )
-        )
-        sem_n = int(sem.scalar_one() or 0)
-
-        ultimos = await session.execute(
-            select(Recrutamento)
-            .where(
-                Recrutamento.discord_id_recrutador == discord_id,
-                Recrutamento.status == "APROVADO",
-            )
-            .order_by(Recrutamento.data_fim.desc().nullslast(), Recrutamento.id.desc())
-            .limit(5)
-        )
-        lista = list(ultimos.scalars().all())
-    return total_n, sem_n, lista
+async def _stats_como_recrutador(discord_id: int):
+    return await estatisticas_como_recrutador(discord_id)
 
 
-async def _stats_chamadas(discord_id: int) -> tuple[int, int, int]:
-    """(faltas, chamadas_como_doutor, presentes_aproximado via falta invertida não)."""
-    async with async_session() as session:
-        faltas = await session.execute(
-            select(func.count())
-            .select_from(FaltaChamada)
-            .where(FaltaChamada.discord_id == discord_id)
-        )
-        faltas_n = int(faltas.scalar_one() or 0)
-
-        como_doutor = await session.execute(
-            select(func.count())
-            .select_from(Chamada)
-            .where(Chamada.doutor_id == discord_id)
-        )
-        doutor_n = int(como_doutor.scalar_one() or 0)
-
-    return faltas_n, doutor_n
+async def _stats_chamadas(discord_id: int):
+    return await estatisticas_chamadas(discord_id)
 
 
-async def _tempo_total_segundos(discord_id: int) -> int:
-    async with async_session() as session:
-        r = await session.execute(
-            select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
-                LogPlantao.discord_id == discord_id,
-                LogPlantao.duracao_segundos.is_not(None),
-            )
-        )
-        return int(r.scalar_one() or 0)
+async def _tempo_total_segundos(discord_id: int):
+    return await tempo_total_segundos_plantao(discord_id)
 
 
-async def _ultimos_logs(discord_id: int, limite: int = 6) -> list[LogPlantao]:
-    async with async_session() as session:
-        r = await session.execute(
-            select(LogPlantao)
-            .where(LogPlantao.discord_id == discord_id)
-            .order_by(LogPlantao.criado_em.desc())
-            .limit(limite)
-        )
-        return list(r.scalars().all())
+async def _ultimos_logs(discord_id: int, limite: int = 6):
+    return await ultimos_logs_plantao(discord_id, limite=limite)
 
 
-# ── Formatação ───────────────────────────────────────────────────────────
+def _formatar_cargos(membro):
+    return formatar_cargos_do_membro(membro)
 
 
-def _formatar_cargos(membro: discord.Member) -> str:
-    roles = [
-        r
-        for r in sorted(membro.roles, key=lambda x: x.position, reverse=True)
-        if r.name != "@everyone"
-    ]
-    if not roles:
-        return "_Nenhum cargo._"
-    mencoes = [r.mention for r in roles]
-    linhas = []
-    for i in range(0, len(mencoes), 3):
-        linhas.append(" · ".join(mencoes[i : i + 3]))
-    return "\n".join(linhas)
-
-
-def _ts(dt: datetime | None) -> str:
-    if dt is None:
-        return "—"
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return f"<t:{int(dt.timestamp())}:d>"
+def _ts(dt):
+    return formatar_timestamp(dt)
 
 
 async def montar_blocos_ficha(
@@ -892,7 +762,9 @@ class ModalEditarStatus(discord.ui.Modal, title="Editar status (tabela usuarios)
         )
 
 
-class ModalExonerarMembro(LoggingModalMixin, discord.ui.Modal, title="⛔ Exonerar Membro"):
+class ModalExonerarMembro(
+    LoggingModalMixin, discord.ui.Modal, title="⛔ Exonerar Membro"
+):
     motivo = discord.ui.TextInput(
         label="📄 Motivo da exoneração",
         style=discord.TextStyle.paragraph,
@@ -974,9 +846,7 @@ class ModalExonerarMembro(LoggingModalMixin, discord.ui.Modal, title="⛔ Exoner
                 discord.ui.TextDisplay(
                     f"# {'✅' if ok else '❌'} Exoneração\n{mensagem}"
                 ),
-                accent_color=(
-                    discord.Color.green() if ok else discord.Color.red()
-                ),
+                accent_color=(discord.Color.green() if ok else discord.Color.red()),
             )
         )
         await interaction.followup.send(view=view_resultado, ephemeral=True)

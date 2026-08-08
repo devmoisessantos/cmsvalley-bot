@@ -1,9 +1,6 @@
-# src/cogs/gerenciar_cargos.py
-"""
-Grupo /cargos — painel interativo de adicionar/remover cargos.
+"""Comandos de barra do domínio membros.
 
-O painel em si continua em panels/gerenciar_cargos_panel.py.
-Aqui só fica o comando de barra que abre o painel.
+/cargos painel  — abre o painel interativo de adicionar/remover cargos
 """
 
 from __future__ import annotations
@@ -12,13 +9,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.panels.gerenciar_cargos_panel import GerenciarCargosView
-from src.services.gerenciar_cargos_service import determinar_escopos
+from src.membros.cargos_panel import GerenciarCargosView
+from src.membros.cargos_service import determinar_escopos
 from src.utils.mensagens import responder_erro
 
 
-class CargosCog(commands.Cog):
-    """Comandos do grupo /cargos."""
+class MembrosCog(commands.Cog):
+    """Comandos de gerenciamento de membros e cargos."""
 
     grupo_cargos = app_commands.Group(
         name="cargos",
@@ -32,7 +29,7 @@ class CargosCog(commands.Cog):
         name="painel",
         description="Abre o painel para adicionar ou remover cargos de um membro",
     )
-    async def painel(self, interacao: discord.Interaction):
+    async def painel_cargos(self, interacao: discord.Interaction):
         membro_executor = interacao.user
         escopos_do_executor = determinar_escopos(membro_executor)
 
@@ -49,4 +46,4 @@ class CargosCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(CargosCog(bot))
+    await bot.add_cog(MembrosCog(bot))

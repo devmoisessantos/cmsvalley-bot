@@ -109,6 +109,7 @@ class PlantaoTasks(commands.Cog):
                         await notificar_dm_plantao_desligado_automatico(
                             membro,
                             minutos=DESLIGAMENTO_AUTOMATICO_MINUTOS,
+                            guilda=guild,
                         )
                         await registrar_evento_plantao(
                             guild,
@@ -127,13 +128,7 @@ class PlantaoTasks(commands.Cog):
                             membro,
                             minutos=LEMBRETE_3_MINUTOS,
                             nivel=3,
-                        )
-                        await registrar_evento_plantao(
-                            guild,
-                            estado.discord_id,
-                            "LEMBRETE_25",
-                            id_fivem_atual,
-                            campos_extra={"Tempo Ocioso": f"{round(minutos, 1)} min"},
+                            guilda=guild,
                         )
 
                     elif (
@@ -144,13 +139,7 @@ class PlantaoTasks(commands.Cog):
                             membro,
                             minutos=LEMBRETE_2_MINUTOS,
                             nivel=2,
-                        )
-                        await registrar_evento_plantao(
-                            guild,
-                            estado.discord_id,
-                            "LEMBRETE_15",
-                            id_fivem_atual,
-                            campos_extra={"Tempo Ocioso": f"{round(minutos, 1)} min"},
+                            guilda=guild,
                         )
 
                     elif (
@@ -161,13 +150,7 @@ class PlantaoTasks(commands.Cog):
                             membro,
                             minutos=LEMBRETE_1_MINUTOS,
                             nivel=1,
-                        )
-                        await registrar_evento_plantao(
-                            guild,
-                            estado.discord_id,
-                            "LEMBRETE_10",
-                            id_fivem_atual,
-                            campos_extra={"Tempo Ocioso": f"{round(minutos, 1)} min"},
+                            guilda=guild,
                         )
 
                 except Exception:
@@ -251,15 +234,7 @@ class PlantaoTasks(commands.Cog):
                             membro,
                             limite_minutos=AFK_LIMITE_MINUTOS,
                             penalidade_moedas=PENALIDADE_AFK_MOEDAS,
-                        )
-                        await registrar_evento_plantao(
-                            guild,
-                            estado.discord_id,
-                            "AFK_AVISO",
-                            estado.id_fivem,
-                            campos_extra={
-                                "Minutos Mudo+Surdo": f"{round(minutos_afk, 1)}"
-                            },
+                            guilda=guild,
                         )
 
                 except Exception:
@@ -297,6 +272,7 @@ class PlantaoTasks(commands.Cog):
             membro,
             limite_minutos=AFK_LIMITE_MINUTOS,
             penalidade_moedas=PENALIDADE_AFK_MOEDAS,
+            guilda=guild,
         )
 
         await registrar_evento_plantao(
@@ -349,6 +325,7 @@ async def executar_housekeeping_plantao(bot: commands.Bot):
             await notificar_dm_plantao_housekeeping(
                 membro,
                 horas_limite=HOUSEKEEPING_LIMITE_HORAS,
+                guilda=guild,
             )
             await registrar_evento_plantao(
                 guild,

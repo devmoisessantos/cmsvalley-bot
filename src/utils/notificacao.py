@@ -78,6 +78,78 @@ def _linha_de_botoes(
     return linha if len(linha.children) > 0 else None
 
 
+async def _registrar_log_notificacao_dm(
+    *,
+    destino: discord.abc.User | discord.Member | None,
+    titulo: str,
+    linhas_resumo: list[str],
+    enviou: bool,
+    motivo_falha: str | None = None,
+    guilda: discord.Guild | None = None,
+) -> None:
+    """
+    Posta no canal LOG_NOTIFICACOES_DM o resultado do envio da DM.
+    Não mistura com LOG_PLANTAO.
+    """
+    canal_id = CANAIS.get("LOG_NOTIFICACOES_DM") or 0
+    if canal_id <= 0:
+        return
+
+    guilda_resolvida = guilda
+    if guilda_resolvida is None and isinstance(destino, discord.Member):
+        guilda_resolvida = destino.guild
+
+    if guilda_resolvida is None:
+        # tenta achar a guilda pelo ID configurado (cache do bot não disponível aqui)
+        return
+
+    canal = guilda_resolvida.get_channel(canal_id)
+    if canal is None:
+        logger.warning(
+            "Canal LOG_NOTIFICACOES_DM (%s) não encontrado na guilda",
+            canal_id,
+        )
+        return
+
+    id_destino = getattr(destino, "id", None) if destino is not None else None
+    mencao = (
+        destino.mention
+        if destino is not None and hasattr(destino, "mention")
+        else f"`{id_destino}`"
+    )
+    status = "✅ Enviada" if enviou else f"❌ Falhou ({motivo_falha or 'desconhecido'})"
+    cor = COR_SUCESSO if enviou else COR_ERRO
+
+    corpo = (
+        f"- **Destino:** {mencao} (`{id_destino}`)\n"
+        f"- **Status:** {status}\n"
+        f"- **Título da DM:** {titulo}\n"
+    )
+    if linhas_resumo:
+        preview = " | ".join(linhas_resumo[:4])
+        if len(preview) > 280:
+            preview = preview[:277] + "..."
+        corpo += f"- **Resumo:** {preview}"
+
+    try:
+        from src.utils.log_container import LogContainerView
+
+        avatar = None
+        if destino is not None and hasattr(destino, "display_avatar"):
+            avatar = destino.display_avatar.url
+
+        view_do_log = LogContainerView(
+            titulo="📨 Log de Notificação DM",
+            linhas=corpo,
+            guild=guilda_resolvida,
+            cor=cor,
+            avatar_url=avatar,
+        )
+        await canal.send(view=view_do_log)
+    except Exception as erro:
+        logger.warning("Falha ao postar LOG_NOTIFICACOES_DM: %s", erro)
+
+
 async def enviar_dm_card(
     destino: discord.abc.User | discord.Member | None,
     *,
@@ -85,14 +157,26 @@ async def enviar_dm_card(
     linhas: list[str],
     cor: discord.Color = COR_INFO,
     botoes_link: list[tuple[str, str]] | None = None,
+    guilda: discord.Guild | None = None,
+    registrar_log: bool = True,
 ) -> bool:
     """
     Envia um card Components V2 na DM do usuário.
 
     Retorna True se enviou, False se falhou (DM fechada, membro None, etc.).
+    Por padrão registra o resultado em LOG_NOTIFICACOES_DM.
     """
     if destino is None:
         logger.warning("enviar_dm_card chamado com destino=None")
+        if registrar_log:
+            await _registrar_log_notificacao_dm(
+                destino=None,
+                titulo=titulo,
+                linhas_resumo=linhas,
+                enviou=False,
+                motivo_falha="destino None",
+                guilda=guilda,
+            )
         return False
 
     componentes: list = [
@@ -110,57 +194,97 @@ async def enviar_dm_card(
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(*componentes, accent_color=cor))
 
+    enviou = False
+    motivo_falha: str | None = None
     try:
         await destino.send(view=view)
         logger.info("DM enviada para %s (%s)", destino, getattr(destino, "id", "?"))
-        return True
+        enviou = True
     except discord.Forbidden:
+        motivo_falha = "DM bloqueada"
         logger.warning(
             "DM bloqueada para %s (%s)",
             destino,
             getattr(destino, "id", "?"),
         )
-        return False
     except discord.HTTPException as erro:
+        motivo_falha = f"HTTP {erro}"
         logger.warning(
             "Falha HTTP ao enviar DM para %s: %s",
             getattr(destino, "id", "?"),
             erro,
         )
-        return False
+
+    if registrar_log:
+        await _registrar_log_notificacao_dm(
+            destino=destino,
+            titulo=titulo,
+            linhas_resumo=linhas,
+            enviou=enviou,
+            motivo_falha=motivo_falha,
+            guilda=guilda,
+        )
+    return enviou
 
 
 async def enviar_dm_texto(
     destino: discord.abc.User | discord.Member | None,
     texto: str,
+    *,
+    guilda: discord.Guild | None = None,
+    registrar_log: bool = True,
 ) -> bool:
     """
     Envia texto simples na DM (legado / casos sem card).
     Preferir enviar_dm_card sempre que possível.
     """
+    titulo = "Mensagem de texto"
     if destino is None:
         logger.warning("enviar_dm_texto chamado com destino=None")
+        if registrar_log:
+            await _registrar_log_notificacao_dm(
+                destino=None,
+                titulo=titulo,
+                linhas_resumo=[texto[:120]],
+                enviou=False,
+                motivo_falha="destino None",
+                guilda=guilda,
+            )
         return False
+
+    enviou = False
+    motivo_falha: str | None = None
     try:
         await destino.send(texto)
         logger.info(
             "DM texto enviada para %s (%s)", destino, getattr(destino, "id", "?")
         )
-        return True
+        enviou = True
     except discord.Forbidden:
+        motivo_falha = "DM bloqueada"
         logger.warning(
             "DM bloqueada para %s (%s)",
             destino,
             getattr(destino, "id", "?"),
         )
-        return False
     except discord.HTTPException as erro:
+        motivo_falha = f"HTTP {erro}"
         logger.warning(
             "Falha HTTP ao enviar DM texto para %s: %s",
             getattr(destino, "id", "?"),
             erro,
         )
-        return False
+
+    if registrar_log:
+        await _registrar_log_notificacao_dm(
+            destino=destino,
+            titulo=titulo,
+            linhas_resumo=[texto[:120]],
+            enviou=enviou,
+            motivo_falha=motivo_falha,
+            guilda=guilda,
+        )
+    return enviou
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +414,7 @@ async def notificar_dm_plantao_lembrete_ocioso(
     *,
     minutos: int,
     nivel: int,
+    guilda: discord.Guild | None = None,
 ) -> bool:
     """
     Lembrete de ociosidade (fora de call com plantão ligado).
@@ -322,6 +447,7 @@ async def notificar_dm_plantao_lembrete_ocioso(
         titulo=titulo,
         linhas=linhas,
         cor=cor,
+        guilda=guilda,
     )
 
 
@@ -329,6 +455,7 @@ async def notificar_dm_plantao_desligado_automatico(
     membro: discord.Member | None,
     *,
     minutos: int,
+    guilda: discord.Guild | None = None,
 ) -> bool:
     """Plantão encerrado por ociosidade prolongada."""
     return await enviar_dm_card(
@@ -343,6 +470,7 @@ async def notificar_dm_plantao_desligado_automatico(
             "O plantão foi desligado. Ligue novamente pelo painel quando for atuar.",
         ],
         cor=COR_ERRO,
+        guilda=guilda,
     )
 
 
@@ -351,6 +479,7 @@ async def notificar_dm_plantao_afk_aviso(
     *,
     limite_minutos: int,
     penalidade_moedas: int,
+    guilda: discord.Guild | None = None,
 ) -> bool:
     """Aviso de AFK (mudo + surdo prolongado)."""
     horas = max(1, limite_minutos // 60)
@@ -369,6 +498,7 @@ async def notificar_dm_plantao_afk_aviso(
             ),
         ],
         cor=COR_AVISO,
+        guilda=guilda,
     )
 
 
@@ -377,6 +507,7 @@ async def notificar_dm_plantao_afk_desconectado(
     *,
     limite_minutos: int,
     penalidade_moedas: int,
+    guilda: discord.Guild | None = None,
 ) -> bool:
     """Desconectado por AFK + penalidade aplicada."""
     return await enviar_dm_card(
@@ -391,6 +522,7 @@ async def notificar_dm_plantao_afk_desconectado(
             f"Penalidade aplicada: **-{penalidade_moedas} moedas**.",
         ],
         cor=COR_ERRO,
+        guilda=guilda,
     )
 
 
@@ -398,6 +530,7 @@ async def notificar_dm_plantao_housekeeping(
     membro: discord.Member | None,
     *,
     horas_limite: int,
+    guilda: discord.Guild | None = None,
 ) -> bool:
     """Plantão fechado pelo housekeeping (sessão abandonada)."""
     return await enviar_dm_card(
@@ -410,6 +543,7 @@ async def notificar_dm_plantao_housekeeping(
             "Ligue novamente pelo painel se for atuar.",
         ],
         cor=COR_AVISO,
+        guilda=guilda,
     )
 
 

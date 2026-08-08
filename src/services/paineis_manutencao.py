@@ -19,12 +19,14 @@ from src.guia.guia_setup import (
     garantir_painel_boas_vindas,
     garantir_painel_tutoriais,
 )
+from src.membros.membros_setup import (
+    garantir_painel_gerenciar_cargos,
+    garantir_painel_gerenciar_membros,
+)
 from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
     garantir_painel_eventos_gate,
     garantir_painel_fazer_chamada,
-    garantir_painel_gerenciar_cargos,
-    garantir_painel_gerenciar_membros,
     garantir_painel_plantao,
     garantir_painel_recrutamento,
     garantir_painel_whitelist,

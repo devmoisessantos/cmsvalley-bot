@@ -1,6 +1,6 @@
 import discord
 
-from src.services.gerenciar_cargos_service import (
+from src.membros.cargos_service import (
     adicionar_cargo,
     determinar_escopos,
     listar_cargos_do_escopo,

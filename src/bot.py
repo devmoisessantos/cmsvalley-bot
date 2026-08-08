@@ -20,20 +20,22 @@ from src.guia.guia_setup import (
     garantir_painel_tutoriais,
 )
 from src.guia.tutoriais_panel import PainelTutoriaisLayout
+from src.membros.cargos_panel import PainelGerenciarCargoLayout
+from src.membros.membros_panel import PainelGerenciarMembrosLayout
+from src.membros.membros_setup import (
+    garantir_painel_gerenciar_cargos,
+    garantir_painel_gerenciar_membros,
+)
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
-from src.panels.gerenciar_cargos_panel import PainelGerenciarCargoLayout
 from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
     garantir_painel_eventos_gate,
     garantir_painel_fazer_chamada,
-    garantir_painel_gerenciar_cargos,
-    garantir_painel_gerenciar_membros,
     garantir_painel_plantao,
     garantir_painel_recrutamento,
     garantir_painel_whitelist,
 )
 from src.plantao.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
-from src.plantao.gerenciar_membros_panel import PainelGerenciarMembrosLayout
 from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.plantao.plantao_tasks import executar_housekeeping_plantao
 from src.punicoes.cogs import garantir_painel_punicoes
@@ -70,7 +72,7 @@ class CmsValleyBot(commands.Bot):
         # Listar extensões (cogs)
         cogs = [
             "src.backup.backup_cogs",
-            "src.cogs.gerenciar_cargos",
+            "src.membros.membros_cogs",
             "src.cogs.utilidade",
             "src.cogs.moderacao",
             "src.cogs.busca",
@@ -87,6 +89,8 @@ class CmsValleyBot(commands.Bot):
             "src.hierarquia.hierarquia_class",
             "src.recrutamento.recrutamento_cogs",
             "src.recrutamento.ranking_tasks",
+            "src.notificacoes.notificar_cogs",
+            "src.templates.templates_cogs",
         ]
 
         total = len(cogs)
