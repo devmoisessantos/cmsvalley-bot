@@ -305,7 +305,7 @@ async def _criar_topico_provas(
             if bloco:
                 await thread.send("\n## 📁 Provas anexadas")
                 await thread.send(
-                    "-# Links abaixo são enviados fora de container para permitir preview automático do Discord."
+                    "-# Links abaixo são enviados fora de container para permitir preview automático do Discord.\n\n"
                 )
                 await thread.send("### 🔗 Links\n\n")
                 await thread.send("\n".join(bloco))
@@ -317,11 +317,14 @@ async def _criar_topico_provas(
                     texto_sem_urls = texto_sem_urls.replace(url, "")
                 texto_sem_urls = texto_sem_urls.strip()
                 if texto_sem_urls:
-                    await thread.send("### 📝 Observações\n")
+                    await thread.send("\n### 📝 Observações\n\n")
                     await thread.send(texto_sem_urls[:1900])
         elif texto_limpo:
             await thread.send("\n## 📁 Provas anexadas")
-            await thread.send("### 📝 Texto informado\n")
+            await thread.send(
+                "-# Não foi registrado links, abaixo são textos como prova anexados pelo Responsável da Exoneração.\n\n"
+            )
+            await thread.send("\n### 📝 Observações\n\n")
             await thread.send(texto_limpo[:1900])
         else:
             await thread.send(
