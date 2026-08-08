@@ -395,38 +395,15 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
 
         self.indice_em_edicao = len(rascunho.blocos) - 1
         ultimo = rascunho.blocos[-1]
-        if ultimo.tipo in ("titulo", "texto"):
-            await interacao.response.send_modal(
-                ModalTextoBloco(self, ultimo.tipo, editar_ultimo=True)
-            )
-        elif ultimo.tipo == "secao":
-            await interacao.response.send_modal(
-                ModalSecaoCompleta(self, editar_ultimo=True)
-            )
-        elif ultimo.tipo == "separador":
-            await interacao.response.send_modal(
-                ModalSeparador(self, editar_ultimo=True)
-            )
-        elif ultimo.tipo == "galeria":
-            await interacao.response.send_modal(ModalGaleria(self, editar_ultimo=True))
-        elif ultimo.tipo == "arquivo":
-            await interacao.response.send_modal(ModalArquivo(self, editar_ultimo=True))
-        elif ultimo.tipo == "botoes":
-            await interacao.response.send_modal(ModalBotao(self, editar_ultimo=True))
-        elif ultimo.tipo == "select_string":
-            await interacao.response.send_modal(
-                ModalSelectString(self, editar_ultimo=True)
-            )
-        elif ultimo.tipo.startswith("select_"):
-            # Selects especiais não têm modal rico — só placeholder
-            await interacao.response.send_modal(
-                ModalSelectEspecial(self, ultimo.tipo, editar_ultimo=True)
-            )
-        else:
+        modal = _modal_para_bloco(self, ultimo)
+        if modal is None:
+            self.indice_em_edicao = None
             await interacao.response.send_message(
-                f"❌ Tipo `{ultimo.tipo}` ainda sem editor dedicado.",
+                f"❌ Tipo `{ultimo.tipo}` sem editor.",
                 ephemeral=True,
             )
+            return
+        await interacao.response.send_modal(modal)
 
     async def _ao_clicar_editar_bloco(self, interacao: discord.Interaction):
         """Pede o número do bloco (1-based) e abre o editor correspondente."""
@@ -528,6 +505,75 @@ async def _enviar_codigo_em_partes(
 # ---------------------------------------------------------------------------
 
 
+class ViewAbrirEditorBloco(LoggingViewMixin, discord.ui.View):
+    """
+    Passo intermediário: Discord não permite send_modal em cima de
+    outro modal. O usuário confirma e aí sim abrimos o editor.
+    """
+
+    def __init__(self, painel: "PainelTemplatesView", indice: int):
+        super().__init__(timeout=120)
+        self.painel = painel
+        self.indice = indice
+        rascunho = obter_rascunho(painel.id_do_usuario)
+        tipo = (
+            rascunho.blocos[indice].tipo if 0 <= indice < len(rascunho.blocos) else "?"
+        )
+        botao = discord.ui.Button(
+            label=f"Abrir editor · bloco {indice + 1} ({tipo})",
+            style=discord.ButtonStyle.primary,
+            emoji="✏️",
+        )
+        botao.callback = self._ao_abrir
+        self.add_item(botao)
+
+    async def _ao_abrir(self, interacao: discord.Interaction):
+        if interacao.user.id != self.painel.id_do_usuario:
+            await interacao.response.send_message(
+                "❌ Este controle não é seu.", ephemeral=True
+            )
+            return
+        rascunho = obter_rascunho(self.painel.id_do_usuario)
+        if self.indice < 0 or self.indice >= len(rascunho.blocos):
+            await interacao.response.send_message(
+                "❌ Bloco não existe mais.", ephemeral=True
+            )
+            return
+
+        self.painel.indice_em_edicao = self.indice
+        alvo = rascunho.blocos[self.indice]
+        modal = _modal_para_bloco(self.painel, alvo)
+        if modal is None:
+            self.painel.indice_em_edicao = None
+            await interacao.response.send_message(
+                f"❌ Tipo `{alvo.tipo}` sem editor.",
+                ephemeral=True,
+            )
+            return
+        await interacao.response.send_modal(modal)
+
+
+def _modal_para_bloco(painel: "PainelTemplatesView", bloco: "BlocoTemplate"):
+    """Devolve o Modal correto para o tipo do bloco (editar_ultimo=True)."""
+    if bloco.tipo in ("titulo", "texto"):
+        return ModalTextoBloco(painel, bloco.tipo, editar_ultimo=True)
+    if bloco.tipo == "secao":
+        return ModalSecaoCompleta(painel, editar_ultimo=True)
+    if bloco.tipo == "separador":
+        return ModalSeparador(painel, editar_ultimo=True)
+    if bloco.tipo == "galeria":
+        return ModalGaleria(painel, editar_ultimo=True)
+    if bloco.tipo == "arquivo":
+        return ModalArquivo(painel, editar_ultimo=True)
+    if bloco.tipo == "botoes":
+        return ModalBotao(painel, editar_ultimo=True)
+    if bloco.tipo == "select_string":
+        return ModalSelectString(painel, editar_ultimo=True)
+    if bloco.tipo.startswith("select_"):
+        return ModalSelectEspecial(painel, bloco.tipo, editar_ultimo=True)
+    return None
+
+
 class ModalEscolherBloco(LoggingModalMixin, discord.ui.Modal, title="Editar bloco nº"):
     numero = discord.ui.TextInput(
         label="Número do bloco (veja a lista)",
@@ -556,46 +602,15 @@ class ModalEscolherBloco(LoggingModalMixin, discord.ui.Modal, title="Editar bloc
             )
             return
 
-        self.painel.indice_em_edicao = indice
-        alvo = rascunho.blocos[indice]
-        if alvo.tipo in ("titulo", "texto"):
-            await interacao.response.send_modal(
-                ModalTextoBloco(self.painel, alvo.tipo, editar_ultimo=True)
-            )
-        elif alvo.tipo == "secao":
-            await interacao.response.send_modal(
-                ModalSecaoCompleta(self.painel, editar_ultimo=True)
-            )
-        elif alvo.tipo == "separador":
-            await interacao.response.send_modal(
-                ModalSeparador(self.painel, editar_ultimo=True)
-            )
-        elif alvo.tipo == "galeria":
-            await interacao.response.send_modal(
-                ModalGaleria(self.painel, editar_ultimo=True)
-            )
-        elif alvo.tipo == "arquivo":
-            await interacao.response.send_modal(
-                ModalArquivo(self.painel, editar_ultimo=True)
-            )
-        elif alvo.tipo == "botoes":
-            await interacao.response.send_modal(
-                ModalBotao(self.painel, editar_ultimo=True)
-            )
-        elif alvo.tipo == "select_string":
-            await interacao.response.send_modal(
-                ModalSelectString(self.painel, editar_ultimo=True)
-            )
-        elif alvo.tipo.startswith("select_"):
-            await interacao.response.send_modal(
-                ModalSelectEspecial(self.painel, alvo.tipo, editar_ultimo=True)
-            )
-        else:
-            self.painel.indice_em_edicao = None
-            await interacao.response.send_message(
-                f"❌ Tipo `{alvo.tipo}` sem editor.",
-                ephemeral=True,
-            )
+        # Não dá para send_modal logo após outro modal — usa botão intermediário
+        await interacao.response.send_message(
+            content=(
+                f"Bloco **{indice + 1}** (`{rascunho.blocos[indice].tipo}`) selecionado.\n"
+                "Clique no botão para abrir o editor:"
+            ),
+            view=ViewAbrirEditorBloco(self.painel, indice),
+            ephemeral=True,
+        )
 
 
 class ModalTextoBloco(LoggingModalMixin, discord.ui.Modal):
