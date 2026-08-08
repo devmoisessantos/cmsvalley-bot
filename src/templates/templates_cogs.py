@@ -107,6 +107,7 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             botao.callback = callback
             linha_selects.add_item(botao)
 
+        # ActionRow de botões (sem Select — select precisa de linha exclusiva)
         linha_extras = discord.ui.ActionRow()
         botao_rodape = discord.ui.Button(
             label="Rodapé", style=discord.ButtonStyle.secondary, emoji="📌"
@@ -120,6 +121,8 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         botao_modal.callback = self._ao_clicar_codigo_modal
         linha_extras.add_item(botao_modal)
 
+        # Select ocupa ActionRow inteiro (regra do Discord: 1 select por linha)
+        linha_cor = discord.ui.ActionRow()
         seletor_cor = discord.ui.Select(
             placeholder="Cor do Container…",
             options=[
@@ -128,7 +131,7 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             ],
         )
         seletor_cor.callback = self._ao_escolher_cor
-        linha_extras.add_item(seletor_cor)
+        linha_cor.add_item(seletor_cor)
 
         linha_acoes = discord.ui.ActionRow()
         for rotulo, emoji, estilo, callback in (
@@ -174,6 +177,7 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
                 linha_midia,
                 linha_selects,
                 linha_extras,
+                linha_cor,
                 linha_acoes,
                 accent_color=discord.Color.dark_teal(),
             )
