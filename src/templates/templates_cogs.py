@@ -544,6 +544,27 @@ async def _enviar_codigo_em_partes(
 # ---------------------------------------------------------------------------
 
 
+def _modal_para_bloco(painel: "PainelTemplatesView", bloco):
+    """Devolve o Modal correto para o tipo do bloco (modo edição)."""
+    if bloco.tipo in ("titulo", "texto"):
+        return ModalTextoBloco(painel, bloco.tipo, editar_ultimo=True)
+    if bloco.tipo == "secao":
+        return ModalSecaoCompleta(painel, editar_ultimo=True)
+    if bloco.tipo == "separador":
+        return ModalSeparador(painel, editar_ultimo=True)
+    if bloco.tipo == "galeria":
+        return ModalGaleria(painel, editar_ultimo=True)
+    if bloco.tipo == "arquivo":
+        return ModalArquivo(painel, editar_ultimo=True)
+    if bloco.tipo == "botoes":
+        return ModalBotao(painel, editar_ultimo=True)
+    if bloco.tipo == "select_string":
+        return ModalSelectString(painel, editar_ultimo=True)
+    if bloco.tipo.startswith("select_"):
+        return ModalSelectEspecial(painel, bloco.tipo, editar_ultimo=True)
+    return None
+
+
 async def _enviar_card_acao_bloco(
     interacao: discord.Interaction,
     painel: "PainelTemplatesView",
