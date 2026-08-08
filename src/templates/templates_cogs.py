@@ -286,26 +286,36 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         self,
         interacao: discord.Interaction | None = None,
     ) -> None:
+        """
+        Atualiza editor + preview.
+
+        Importante: se a interação ainda não foi respondida (ex.: submit de Modal),
+        fazemos defer primeiro. Caso contrário o Discord mostra falha silenciosa
+        no formulário mesmo com o preview atualizado.
+        """
         if interacao is not None and interacao.guild is not None:
             self.guilda = interacao.guild
+
+        # Modal/botão auxiliar: precisa acusar recebimento em até 3s
+        if interacao is not None and not interacao.response.is_done():
+            try:
+                await interacao.response.defer(ephemeral=True)
+            except discord.HTTPException:
+                pass
+
         self._reconstruir()
 
-        # Preferência: editar a mensagem do editor guardada (funciona mesmo
-        # quando a interação veio de um card/modal auxiliar).
         if self.mensagem_editor is not None:
             try:
                 await self.mensagem_editor.edit(view=self)
             except (discord.NotFound, discord.HTTPException):
                 self.mensagem_editor = None
-
-        if interacao is not None and self.mensagem_editor is None:
-            if interacao.response.is_done():
-                try:
-                    await interacao.edit_original_response(view=self)
-                except (discord.HTTPException, discord.InteractionResponded):
-                    pass
-            else:
-                await interacao.response.edit_message(view=self)
+        elif interacao is not None:
+            # Sem mensagem_editor guardada: tenta editar a mensagem da interação
+            try:
+                await interacao.edit_original_response(view=self)
+            except (discord.HTTPException, discord.NotFound):
+                pass
 
         await self._atualizar_mensagem_preview()
 
@@ -886,11 +896,10 @@ class ModalSecaoCompleta(LoggingModalMixin, discord.ui.Modal):
             accessory_botao_rotulo=(self.botao_rotulo.value or "").strip(),
             accessory_botao_url=(self.botao_url.value or "").strip(),
         )
-        rascunho = obter_rascunho(self.painel.id_do_usuario)
-        if self.editar_ultimo and rascunho.blocos:
-            rascunho.blocos[-1] = novo
+        if self.editar_ultimo:
+            _aplicar_bloco_editado(self.painel, novo)
         else:
-            rascunho.blocos.append(novo)
+            obter_rascunho(self.painel.id_do_usuario).blocos.append(novo)
         await self.painel._atualizar_painel(interacao)
 
 
