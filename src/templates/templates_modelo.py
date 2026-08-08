@@ -128,18 +128,7 @@ class RascunhoTemplate:
     modal_com_radio: bool = True
     modal_com_checkbox: bool = True
 
-    def __post_init__(self) -> None:
-        if not self.blocos:
-            self.blocos = [
-                BlocoTemplate(tipo="titulo", texto="Título do card"),
-                BlocoTemplate(
-                    tipo="texto",
-                    texto=(
-                        "Corpo do card. Adicione separadores, seções, "
-                        "galeria, botões e selects pelo painel."
-                    ),
-                ),
-            ]
+    # Sem blocos padrão: painel começa vazio e Resetar zera de verdade.
 
     @property
     def cor(self) -> discord.Color:
@@ -156,7 +145,8 @@ def obter_rascunho(id_do_usuario: int) -> RascunhoTemplate:
 
 
 def limpar_rascunho(id_do_usuario: int) -> None:
-    _rascunhos_por_usuario.pop(id_do_usuario, None)
+    """Zera o rascunho mantendo a sessão com lista de blocos vazia."""
+    _rascunhos_por_usuario[id_do_usuario] = RascunhoTemplate(blocos=[])
 
 
 def _url_icone_da_guilda(guilda: discord.Guild | None) -> str | None:
@@ -381,27 +371,40 @@ def montar_preview(
 
 
 def resumo_dos_blocos(rascunho: RascunhoTemplate) -> str:
+    """Lista legível de todos os blocos (texto completo, sem corte agressivo)."""
     if not rascunho.blocos:
-        return "_nenhum bloco_"
+        return "_Nenhum bloco. Use os botões para montar o card._"
     linhas: list[str] = []
     for i, bloco in enumerate(rascunho.blocos, 1):
-        extra = ""
         if bloco.tipo in ("titulo", "texto", "secao") and bloco.texto:
-            extra = f" — `{bloco.texto[:36]}`"
+            # Texto integral; quebra visual em linhas curtas se for muito longo
+            corpo = bloco.texto.strip()
+            linhas.append(f"`{i}.` **{bloco.tipo}**\n{corpo}")
         elif bloco.tipo == "separador":
-            extra = f" ({bloco.espacamento})"
+            linhas.append(f"`{i}.` **separador** ({bloco.espacamento})")
         elif bloco.tipo == "galeria":
-            extra = f" ({len(bloco.urls_midia)} img)"
+            urls = ", ".join(bloco.urls_midia[:3])
+            mais = f" +{len(bloco.urls_midia) - 3}" if len(bloco.urls_midia) > 3 else ""
+            linhas.append(
+                f"`{i}.` **galeria** ({len(bloco.urls_midia)} img) {urls}{mais}"
+            )
         elif bloco.tipo == "botoes":
-            extra = f" ({len(bloco.botoes)} btn)"
+            rotulos = ", ".join(r for r, _, _ in bloco.botoes)
+            linhas.append(f"`{i}.` **botoes** ({len(bloco.botoes)}): {rotulos}")
         elif bloco.tipo == "select_string":
-            extra = f" ({len(bloco.opcoes_select)} opc)"
+            opcoes = ", ".join(lab for lab, _, _ in bloco.opcoes_select)
+            linhas.append(
+                f"`{i}.` **select_string** ({len(bloco.opcoes_select)} opc): {opcoes}"
+            )
         elif bloco.tipo.startswith("select_"):
-            extra = f" ({bloco.placeholder_select_especial[:24]})"
+            linhas.append(
+                f"`{i}.` **{bloco.tipo}** — {bloco.placeholder_select_especial}"
+            )
         elif bloco.tipo == "arquivo":
-            extra = f" (`{bloco.nome_arquivo or '?'}`)"
-        linhas.append(f"`{i}.` **{bloco.tipo}**{extra}")
-    return "\n".join(linhas)
+            linhas.append(f"`{i}.` **arquivo** `{bloco.nome_arquivo or '?'}`")
+        else:
+            linhas.append(f"`{i}.` **{bloco.tipo}**")
+    return "\n\n".join(linhas)
 
 
 def _codigo_do_bloco(bloco: BlocoTemplate, indent: str = "    ") -> list[str]:

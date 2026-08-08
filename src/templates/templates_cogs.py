@@ -25,6 +25,7 @@ from src.templates.templates_modelo import (
     gerar_codigo_modal,
     limpar_rascunho,
     mapa_de_cores,
+    montar_componentes_do_container,
     montar_preview,
     montar_texto_do_rodape,
     obter_rascunho,
@@ -155,22 +156,22 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             f"Radio={TEM_RADIO_GROUP} · CheckboxGroup={TEM_CHECKBOX_GROUP}"
         )
 
+        # --- editor (controles) ---
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay("# 🧩 Construtor Bot UI Kit (V2)"),
                 discord.ui.TextDisplay(
                     "Monte o **Container** bloco a bloco.\n"
-                    "**Preview** mostra o resultado · **Código msg** gera a mensagem · "
-                    "**Código Modal** gera Label/FileUpload/Radio/Checkbox."
+                    "O **preview ao vivo** fica abaixo. O botão Preview ainda abre "
+                    "uma cópia ephemeral separada."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 discord.ui.TextDisplay(
                     f"### Blocos ({len(rascunho.blocos)})\n"
                     f"{resumo_dos_blocos(rascunho)}\n\n"
-                    f"### Cor\n`{rascunho.cor_nome}`\n\n"
-                    f"### Rodapé\n`{status_rodape}`"
+                    f"**Cor:** `{rascunho.cor_nome}` · **Rodapé:** `{status_rodape}`"
                     + (f"\n{texto_rodape}" if texto_rodape else "")
-                    + f"\n\n### API detectada\n-# {api_detectada}"
+                    + f"\n-# API: {api_detectada}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 linha_conteudo,
@@ -180,6 +181,17 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
                 linha_cor,
                 linha_acoes,
                 accent_color=discord.Color.dark_teal(),
+            )
+        )
+
+        # --- preview ao vivo (mesmo card, container separado) ---
+        componentes_preview = montar_componentes_do_container(rascunho, self.guilda)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("### Preview ao vivo"),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                *componentes_preview,
+                accent_color=rascunho.cor,
             )
         )
 
@@ -332,8 +344,8 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_clicar_resetar(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
+        # Zera de verdade: 0 blocos, sem recriar defaults
         limpar_rascunho(self.id_do_usuario)
-        obter_rascunho(self.id_do_usuario)
         await self._atualizar_painel(interacao)
 
     async def _ao_clicar_ajuda_api(self, interacao: discord.Interaction):
