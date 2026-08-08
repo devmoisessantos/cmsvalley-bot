@@ -490,12 +490,19 @@ CANAIS_PLANTAO = {
     "SALA_CURSOS": [1486369084403876061, 1486369087645946006, 1486369090279837747],
 }
 
-SEGUNDOS_PARA_MOEDA = 1800  # 10 segundos pra testar depois mudar
+# Plantão — tempo em call para creditar 1 moeda (30 minutos)
+SEGUNDOS_PARA_MOEDA = 1800
 VALOR_MOEDA_INGAME = 100_000
-LEMBRETE_1_MINUTOS = 1
-LEMBRETE_2_MINUTOS = 2
-DESLIGAMENTO_AUTOMATICO_MINUTOS = 3
+
+# Plantão — ociosidade (fora de call com toggle ligado)
+# O loop verifica a cada 1 minuto; avisos em 10 / 15 / 25; desliga em 30.
+LEMBRETE_1_MINUTOS = 10
+LEMBRETE_2_MINUTOS = 15
+LEMBRETE_3_MINUTOS = 25
+DESLIGAMENTO_AUTOMATICO_MINUTOS = 30
 HOUSEKEEPING_LIMITE_HORAS = 6
+
+# Plantão — AFK (mudo + surdo no mesmo canal)
 AFK_AVISO_MINUTOS = 170  # avisa 10 min antes do corte (170 = 2h50)
 AFK_LIMITE_MINUTOS = 180  # 3 horas — desconecta e penaliza
 PENALIDADE_AFK_MOEDAS = 3

@@ -1,53 +1,80 @@
-import discord
 import logging
-from discord.ext import tasks, commands
-from datetime import datetime, timezone, timedelta
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
+
+import discord
+from discord.ext import (
+    commands,
+    tasks,
+)
 from sqlalchemy import select
 
 from src.config import (
-    GUILD_ID, LEMBRETE_1_MINUTOS, LEMBRETE_2_MINUTOS,
-    DESLIGAMENTO_AUTOMATICO_MINUTOS, HOUSEKEEPING_LIMITE_HORAS,
-    AFK_AVISO_MINUTOS, AFK_LIMITE_MINUTOS, PENALIDADE_AFK_MOEDAS,
+    AFK_AVISO_MINUTOS,
+    AFK_LIMITE_MINUTOS,
+    DESLIGAMENTO_AUTOMATICO_MINUTOS,
+    GUILD_ID,
+    HOUSEKEEPING_LIMITE_HORAS,
+    LEMBRETE_1_MINUTOS,
+    LEMBRETE_2_MINUTOS,
+    LEMBRETE_3_MINUTOS,
+    PENALIDADE_AFK_MOEDAS,
 )
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
-from src.plantao.plantao_service import (
-    garantir_aware, 
-    _finalizar_periodo_em_call, 
-    _membro_mutado_e_surdo,
-)
 from src.plantao.plantao_logger import registrar_evento_plantao
-
+from src.plantao.plantao_service import (
+    _finalizar_periodo_em_call,
+    _membro_mutado_e_surdo,
+    garantir_aware,
+)
+from src.utils.notificacao import (
+    notificar_dm_plantao_afk_aviso,
+    notificar_dm_plantao_afk_desconectado,
+    notificar_dm_plantao_desligado_automatico,
+    notificar_dm_plantao_housekeeping,
+    notificar_dm_plantao_lembrete_ocioso,
+)
 
 logger = logging.getLogger(__name__)
 
-async def _notificar(membro: discord.Member | None, texto: str):
-    if membro is None:
-        logger.warning("⚠️ _notificar chamado com membro=None — get_member falhou (cache/intents?)")
-        return
-    try:
-        await membro.send(texto)
-        logger.info(f"✅ DM enviada para {membro} `({membro.id})`")
-    except discord.Forbidden:
-        logger.warning(f"⚠️ DM bloqueada para {membro} `({membro.id})` — Forbidden")
+
+def _resetar_lembretes_ociosidade(estado: EstadoPlantao) -> None:
+    estado.lembrete_1_enviado = False
+    estado.lembrete_2_enviado = False
+    estado.lembrete_3_enviado = False
+
 
 class PlantaoTasks(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.verificar_ociosos.start()
-        self.verificar_afk.start() 
-        logger.info("🚀 PlantaoTasks Cog inicializado, loop deve começar após bot.wait_until_ready()")
+        self.verificar_afk.start()
+        logger.info(
+            "PlantaoTasks inicializado — ociosidade checada a cada 1 minuto "
+            "(avisos %s/%s/%s min, desliga em %s min)",
+            LEMBRETE_1_MINUTOS,
+            LEMBRETE_2_MINUTOS,
+            LEMBRETE_3_MINUTOS,
+            DESLIGAMENTO_AUTOMATICO_MINUTOS,
+        )
 
     def cog_unload(self):
         self.verificar_ociosos.cancel()
         self.verificar_afk.cancel()
 
+    # ------------------------------------------------------------------
+    # Ociosidade (fora de call)
+    # ------------------------------------------------------------------
+
     @tasks.loop(minutes=1)
     async def verificar_ociosos(self):
-
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
-            logger.error(f"❌ Guild {GUILD_ID} não encontrada")
+            logger.error("Guild %s não encontrada", GUILD_ID)
             return
 
         async with async_session() as session:
@@ -62,78 +89,108 @@ class PlantaoTasks(commands.Cog):
             for estado in estados:
                 try:
                     inicio_ocioso = garantir_aware(estado.ocioso_desde)
-                    minutos = (datetime.now(timezone.utc) - inicio_ocioso).total_seconds() / 60
+                    minutos = (
+                        datetime.now(timezone.utc) - inicio_ocioso
+                    ).total_seconds() / 60
                     membro = guild.get_member(estado.discord_id)
                     id_fivem_atual = estado.id_fivem
-                    logger.info(f"👤 {estado.discord_id}: {minutos:.2f} min ocioso, membro={membro}")
+                    logger.info(
+                        "%s: %.2f min ocioso, membro=%s",
+                        estado.discord_id,
+                        minutos,
+                        membro,
+                    )
 
                     if minutos >= DESLIGAMENTO_AUTOMATICO_MINUTOS:
                         saldo_atual = estado.saldo_moedas
                         estado.toggle_ligado = False
                         estado.ocioso_desde = None
-                        estado.lembrete_1_enviado = False
-                        estado.lembrete_2_enviado = False
-                        await _notificar(
+                        _resetar_lembretes_ociosidade(estado)
+                        await notificar_dm_plantao_desligado_automatico(
                             membro,
-                            f"🔴 Seu plantão foi encerrado automaticamente: mais de "
-                            f"`{DESLIGAMENTO_AUTOMATICO_MINUTOS} minutos` sem estar em uma call.",
+                            minutos=DESLIGAMENTO_AUTOMATICO_MINUTOS,
                         )
                         await registrar_evento_plantao(
-                            guild, estado.discord_id, 
+                            guild,
+                            estado.discord_id,
                             "DESLIGAMENTO_AUTOMATICO",
                             id_fivem_atual,
                             duracao_segundos=int(minutos * 60),
                             campos_extra={"Saldo no Momento": f"{saldo_atual} moedas"},
                         )
 
-                    elif minutos >= LEMBRETE_2_MINUTOS and not estado.lembrete_2_enviado:
-                        estado.lembrete_2_enviado = True
-                        minutos_atuais = round(minutos, 1)
-                        await _notificar(
+                    elif (
+                        minutos >= LEMBRETE_3_MINUTOS and not estado.lembrete_3_enviado
+                    ):
+                        estado.lembrete_3_enviado = True
+                        await notificar_dm_plantao_lembrete_ocioso(
                             membro,
-                            f"⚠️ Já se passaram `{LEMBRETE_2_MINUTOS} minutos` sem você estar em call. "
-                            "Conecte-se logo ou o plantão será encerrado automaticamente.",
+                            minutos=LEMBRETE_3_MINUTOS,
+                            nivel=3,
                         )
                         await registrar_evento_plantao(
-                            guild, 
-                            estado.discord_id, 
-                            "LEMBRETE_15",
+                            guild,
+                            estado.discord_id,
+                            "LEMBRETE_25",
                             id_fivem_atual,
-                            campos_extra={"Tempo Ocioso": f"{minutos_atuais} min"},
+                            campos_extra={"Tempo Ocioso": f"{round(minutos, 1)} min"},
                         )
 
-                    elif minutos >= LEMBRETE_1_MINUTOS and not estado.lembrete_1_enviado:
-                        estado.lembrete_1_enviado = True
-                        minutos_atuais = round(minutos, 1)
-                        await _notificar(
+                    elif (
+                        minutos >= LEMBRETE_2_MINUTOS and not estado.lembrete_2_enviado
+                    ):
+                        estado.lembrete_2_enviado = True
+                        await notificar_dm_plantao_lembrete_ocioso(
                             membro,
-                            f"📌 Já se passaram `{LEMBRETE_1_MINUTOS} minutos` sem você estar em call. "
-                            "Não esqueça de se conectar!",
+                            minutos=LEMBRETE_2_MINUTOS,
+                            nivel=2,
                         )
                         await registrar_evento_plantao(
-                            guild, 
-                            estado.discord_id, 
+                            guild,
+                            estado.discord_id,
+                            "LEMBRETE_15",
+                            id_fivem_atual,
+                            campos_extra={"Tempo Ocioso": f"{round(minutos, 1)} min"},
+                        )
+
+                    elif (
+                        minutos >= LEMBRETE_1_MINUTOS and not estado.lembrete_1_enviado
+                    ):
+                        estado.lembrete_1_enviado = True
+                        await notificar_dm_plantao_lembrete_ocioso(
+                            membro,
+                            minutos=LEMBRETE_1_MINUTOS,
+                            nivel=1,
+                        )
+                        await registrar_evento_plantao(
+                            guild,
+                            estado.discord_id,
                             "LEMBRETE_10",
                             id_fivem_atual,
-                            campos_extra={"Tempo Ocioso": f"{minutos_atuais} min"},
+                            campos_extra={"Tempo Ocioso": f"{round(minutos, 1)} min"},
                         )
 
                 except Exception:
-                    logger.exception(f"💥 Falha ao processar ociosidade de {estado.discord_id}, pulando pra o próximo")
+                    logger.exception(
+                        "Falha ao processar ociosidade de %s",
+                        estado.discord_id,
+                    )
                     continue
 
             await session.commit()
 
     @verificar_ociosos.error
     async def verificar_ociosos_error(self, error):
-        logger.error(f"💥 Loop quebrou: {error}", exc_info=True)
+        logger.error("Loop ociosos quebrou: %s", error, exc_info=True)
 
     @verificar_ociosos.before_loop
     async def antes_de_comecar(self):
-        logger.info("⏳ Aguardando bot.wait_until_ready()...")
         await self.bot.wait_until_ready()
-        logger.info("✅ Bot pronto, loop vai começar a rodar")
+        logger.info("Bot pronto — loop de ociosidade ativo")
 
+    # ------------------------------------------------------------------
+    # AFK (mudo + surdo)
+    # ------------------------------------------------------------------
 
     @tasks.loop(minutes=1)
     async def verificar_afk(self):
@@ -151,7 +208,7 @@ class PlantaoTasks(commands.Cog):
                 )
             )
             estados = resultado.scalars().all()
-            logger.info(f"🔇 verificar_afk TICK — {len(estados)} em call ativa")
+            logger.info("verificar_afk — %s em call ativa", len(estados))
 
             for estado in estados:
                 try:
@@ -163,51 +220,63 @@ class PlantaoTasks(commands.Cog):
                     canal_atual = estado.canal_atual_id
 
                     if not condicao_afk:
-                        # Não está mais mudo+surdo — reseta o rastreamento
                         if estado.afk_mudo_surdo_desde is not None:
                             estado.afk_mudo_surdo_desde = None
                             estado.afk_canal_referencia_id = None
                             estado.afk_aviso_enviado = False
                         continue
 
-                    # Está mudo+surdo agora — verifica se é continuação ou início novo
-                    if estado.afk_mudo_surdo_desde is None or estado.afk_canal_referencia_id != canal_atual:
+                    if (
+                        estado.afk_mudo_surdo_desde is None
+                        or estado.afk_canal_referencia_id != canal_atual
+                    ):
                         estado.afk_mudo_surdo_desde = agora
                         estado.afk_canal_referencia_id = canal_atual
                         estado.afk_aviso_enviado = False
                         continue
 
-                    minutos_afk = (agora - garantir_aware(estado.afk_mudo_surdo_desde)).total_seconds() / 60
+                    minutos_afk = (
+                        agora - garantir_aware(estado.afk_mudo_surdo_desde)
+                    ).total_seconds() / 60
 
                     if minutos_afk >= AFK_LIMITE_MINUTOS:
                         await self._desconectar_por_afk(guild, estado, membro, session)
 
-                    elif minutos_afk >= AFK_AVISO_MINUTOS and not estado.afk_aviso_enviado:
+                    elif (
+                        minutos_afk >= AFK_AVISO_MINUTOS
+                        and not estado.afk_aviso_enviado
+                    ):
                         estado.afk_aviso_enviado = True
-                        await _notificar(
+                        await notificar_dm_plantao_afk_aviso(
                             membro,
-                            f"🔇 Você está mudo e surdo há quase {AFK_LIMITE_MINUTOS // 60}h no mesmo canal. "
-                            "Se você não estiver mais ativo, será desconectado automaticamente em breve "
-                            f"e perderá {PENALIDADE_AFK_MOEDAS} moedas de penalidade.",
+                            limite_minutos=AFK_LIMITE_MINUTOS,
+                            penalidade_moedas=PENALIDADE_AFK_MOEDAS,
                         )
                         await registrar_evento_plantao(
-                            guild, estado.discord_id, "AFK_AVISO", estado.id_fivem,
-                            campos_extra={"Minutos Mudo+Surdo": f"{round(minutos_afk, 1)}"},
+                            guild,
+                            estado.discord_id,
+                            "AFK_AVISO",
+                            estado.id_fivem,
+                            campos_extra={
+                                "Minutos Mudo+Surdo": f"{round(minutos_afk, 1)}"
+                            },
                         )
 
                 except Exception:
-                    logger.exception(f"💥 Falha ao processar AFK de {estado.discord_id}, pulando")
+                    logger.exception("Falha ao processar AFK de %s", estado.discord_id)
                     continue
 
             await session.commit()
 
     async def _desconectar_por_afk(self, guild, estado, membro, session):
-        """Fecha o segmento de call (credita o que já era devido), desconecta fisicamente
-        da call de voz, e aplica a penalidade de moedas."""
+        """Fecha segmento, desconecta da call e aplica penalidade de moedas."""
         await _finalizar_periodo_em_call(
-            estado, guild,
+            estado,
+            guild,
             evento="CALL_ENCERRADA_POR_AFK",
-            motivo=f"Mudo+surdo por {AFK_LIMITE_MINUTOS} min no mesmo canal, sem atividade",
+            motivo=(
+                f"Mudo+surdo por {AFK_LIMITE_MINUTOS} min no mesmo canal, sem atividade"
+            ),
         )
 
         estado.saldo_moedas = max(0, estado.saldo_moedas - PENALIDADE_AFK_MOEDAS)
@@ -220,19 +289,21 @@ class PlantaoTasks(commands.Cog):
         try:
             await membro.move_to(None)
         except discord.Forbidden:
-            logger.warning(f"⚠️ Sem permissão 'Mover Membros' para desconectar {membro.id} por AFK")
+            logger.warning("Sem permissão para desconectar %s por AFK", membro.id)
         except discord.HTTPException:
-            logger.warning(f"⚠️ Falha ao desconectar {membro.id} por AFK (HTTPException)")
+            logger.warning("Falha HTTP ao desconectar %s por AFK", membro.id)
 
-        await _notificar(
+        await notificar_dm_plantao_afk_desconectado(
             membro,
-            f"🔇 Você foi desconectado automaticamente da call por inatividade "
-            f"(mudo e surdo por {AFK_LIMITE_MINUTOS} minutos no mesmo canal). "
-            f"Penalidade aplicada: -{PENALIDADE_AFK_MOEDAS} moedas.",
+            limite_minutos=AFK_LIMITE_MINUTOS,
+            penalidade_moedas=PENALIDADE_AFK_MOEDAS,
         )
 
         await registrar_evento_plantao(
-            guild, estado.discord_id, "PENALIDADE_AFK", id_fivem_atual,
+            guild,
+            estado.discord_id,
+            "PENALIDADE_AFK",
+            id_fivem_atual,
             campos_extra={
                 "Moedas Removidas": str(PENALIDADE_AFK_MOEDAS),
                 "Saldo Após Penalidade": f"{saldo_apos_penalidade} moedas",
@@ -241,7 +312,7 @@ class PlantaoTasks(commands.Cog):
 
     @verificar_afk.error
     async def verificar_afk_error(self, error):
-        logger.error(f"💥 Loop verificar_afk quebrou: {error}", exc_info=True)
+        logger.error("Loop AFK quebrou: %s", error, exc_info=True)
 
     @verificar_afk.before_loop
     async def antes_de_comecar_afk(self):
@@ -249,7 +320,7 @@ class PlantaoTasks(commands.Cog):
 
 
 async def executar_housekeeping_plantao(bot: commands.Bot):
-    """Roda uma vez ao iniciar o bot: fecha sessões de plantão abandonadas há mais de 12h."""
+    """Fecha sessões de plantão abandonadas há mais de HOUSEKEEPING_LIMITE_HORAS."""
     guild = bot.get_guild(int(GUILD_ID))
     if guild is None:
         return
@@ -265,27 +336,25 @@ async def executar_housekeeping_plantao(bot: commands.Bot):
         for estado in estados:
             ultima = garantir_aware(estado.ultima_atualizacao)
             if ultima >= limite:
-                continue  # sessão recente, não mexe
+                continue
 
             if estado.em_call_valida:
                 await _finalizar_periodo_em_call(estado)
 
             estado.toggle_ligado = False
             estado.ocioso_desde = None
-            estado.lembrete_1_enviado = False
-            estado.lembrete_2_enviado = False
+            _resetar_lembretes_ociosidade(estado)
 
             membro = guild.get_member(estado.discord_id)
-            await _notificar(
+            await notificar_dm_plantao_housekeeping(
                 membro,
-                "🔧 Seu plantão foi encerrado automaticamente pelo sistema "
-                f"(sessão ficou aberta por mais de {HOUSEKEEPING_LIMITE_HORAS}h sem atividade).",
+                horas_limite=HOUSEKEEPING_LIMITE_HORAS,
             )
             await registrar_evento_plantao(
-                guild, 
-                estado.discord_id, 
+                guild,
+                estado.discord_id,
                 "HOUSEKEEPING",
-                estado.id_fivem
+                estado.id_fivem,
             )
         await session.commit()
 

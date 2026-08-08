@@ -231,6 +231,7 @@ class EstadoPlantao(Base):
     )
     lembrete_1_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
     lembrete_2_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
+    lembrete_3_enviado: Mapped[bool] = mapped_column(Boolean, default=False)
     modo_coordenacao: Mapped[bool] = mapped_column(Boolean, default=False)
     afk_mudo_surdo_desde: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -8,11 +8,11 @@ Canais:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 import discord
 
 from src.config import CANAIS
+from src.utils.notificacao import notificar_dm_advertencia
 
 
 def _canal(guild: discord.Guild, chave: str) -> discord.abc.GuildChannel | None:
@@ -66,9 +66,7 @@ async def registrar_advertencia(
     view.add_item(container)
 
     msg = await canal.send(view=view)
-    thread = await _criar_topico_provas(
-        msg, canal, links, texto_livre=texto_provas
-    )
+    thread = await _criar_topico_provas(msg, canal, links, texto_livre=texto_provas)
 
     await notificar_dm_advertencia(
         alvo=alvo,
@@ -131,9 +129,7 @@ async def registrar_exoneracao(
         print(f"⚠️ [punicoes] Falha ao postar exoneração: {erro}")
         return None, None
 
-    thread = await _criar_topico_provas(
-        msg, canal, links, texto_livre=texto_provas
-    )
+    thread = await _criar_topico_provas(msg, canal, links, texto_livre=texto_provas)
     return msg, thread
 
 
@@ -160,7 +156,7 @@ async def registrar_log_advertencia(
         return None
 
     link_reg = (
-        f"\n- **Registro público:** [abrir]({msg_advertencia.jump_url})"
+        f"\n- **Registro público:** [*Clique Aqui]({msg_advertencia.jump_url}) para abrir o registro."
         if msg_advertencia
         else ""
     )
@@ -344,52 +340,3 @@ async def _criar_topico_provas(
             print(f"⚠️ [punicoes] Fallback archived também falhou: {e2}")
 
     return thread
-
-
-async def notificar_dm_advertencia(
-    *,
-    alvo: discord.Member,
-    executor: discord.Member,
-    id_fivem: str,
-    cargo_nome: str,
-    motivo: str,
-    msg_log: discord.Message | None,
-) -> None:
-    """Envia DM ao usuário advertido com resumo + botão link para o registro público."""
-    data_str = datetime.now().strftime("%d/%m/%Y, %H:%M")
-
-    items: list = [
-        discord.ui.TextDisplay("# Você recebeu uma advertência!"),
-        discord.ui.TextDisplay(f"> **ID FiveM:** `{id_fivem}`"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-        discord.ui.TextDisplay(f"### > **🧾 Punição:**\n`{cargo_nome.strip()}`"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay("### > **⏳ Duração:**\n`Até o Pagamento via Ticket`"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(f"### > **📝 Motivo:**\n`{motivo[:500]}`"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(
-            f"### > **👮 Aplicado por:**\n{executor.mention} (`{executor.id}`)"
-        ),
-        discord.ui.TextDisplay(f"### > **📅 Data da Punição:**\n`{data_str}`"),
-    ]
-
-    if msg_log is not None:
-        row = discord.ui.ActionRow()
-        row.add_item(
-            discord.ui.Button(
-                label="Acessar a Advertência",
-                style=discord.ButtonStyle.link,
-                url=msg_log.jump_url,
-            )
-        )
-        items.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-        items.append(row)
-
-    view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.Container(*items, accent_color=discord.Color.dark_red()))
-
-    try:
-        await alvo.send(view=view)
-    except (discord.Forbidden, discord.HTTPException):
-        pass

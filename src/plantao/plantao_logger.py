@@ -3,7 +3,10 @@ from sqlalchemy import select
 
 from src.config import CANAIS
 from src.database.connection import async_session
-from src.database.models import LogPlantao, Recrutamento
+from src.database.models import (
+    LogPlantao,
+    Recrutamento,
+)
 from src.utils.formatacao import formatar_hms
 
 EVENTOS_PLANTAO = {
@@ -19,6 +22,7 @@ EVENTOS_PLANTAO = {
     "MOEDA_CREDITADA": (" 💰 Crédito de Moeda Adicionado", discord.Color.green()),
     "LEMBRETE_10": (" 📌 Lembrete: 10 minutos inativo", discord.Color.orange()),
     "LEMBRETE_15": (" ⚠️ Atenção: 15 minutos inativo", discord.Color.orange()),
+    "LEMBRETE_25": (" 🚨 Último aviso: 25 minutos inativo", discord.Color.red()),
     "DESLIGAMENTO_AUTOMATICO": (" ⏹️ Encerramento Automático", discord.Color.red()),
     "HOUSEKEEPING": (" 🧹 Limpeza de Plantão Ativo", discord.Color.dark_grey()),
     "OCIOSO_ENCERRADO": (" ▶️ Plantão Reativado", discord.Color.blurple()),
