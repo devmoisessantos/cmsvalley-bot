@@ -377,7 +377,7 @@ class ModalMotivoAdvertencia(
     links = discord.ui.TextInput(
         label="🔗 Provas link (medal, youtube, clip…)",
         style=discord.TextStyle.paragraph,
-        placeholder="Anexe aqui as provas em links (um por linha)",
+        placeholder="Links de prova (um por linha) — opcional se enviar arquivo",
         required=False,
         max_length=1000,
     )
@@ -397,6 +397,41 @@ class ModalMotivoAdvertencia(
         self.id_fivem = id_fivem
         self.cargo_nome = cargo_nome
         self.cargo_id = cargo_id
+        self.provas_arquivo = None
+
+        # FileUpload (discord.py 2.6+) — dentro de Label, só em Modal
+        if hasattr(discord.ui, "FileUpload") and hasattr(discord.ui, "Label"):
+            self.provas_arquivo = discord.ui.FileUpload(
+                min_values=0,
+                max_values=5,
+                required=False,
+            )
+            self.add_item(
+                discord.ui.Label(
+                    text="📎 Provas em arquivo",
+                    description="Imagens, prints, PDF… (até 5 arquivos)",
+                    component=self.provas_arquivo,
+                )
+            )
+
+    async def _coletar_arquivos_prova(self) -> list[tuple[bytes, str]]:
+        """Lê os arquivos do FileUpload e devolve [(bytes, nome), ...]."""
+        arquivos: list[tuple[bytes, str]] = []
+        if self.provas_arquivo is None:
+            return arquivos
+
+        anexos = getattr(self.provas_arquivo, "values", None) or []
+        for anexo in anexos:
+            try:
+                dados = await anexo.read()
+            except Exception as erro:
+                print(f"⚠️ [punicoes] falha ao ler arquivo de prova: {erro}")
+                continue
+            if not dados:
+                continue
+            nome = getattr(anexo, "filename", None) or "prova.bin"
+            arquivos.append((dados, nome))
+        return arquivos
 
     async def on_submit(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member):
@@ -414,6 +449,8 @@ class ModalMotivoAdvertencia(
             return
 
         await interaction.response.defer(ephemeral=True)
+        arquivos_provas = await self._coletar_arquivos_prova()
+
         ok, msg, _reg = await aplicar_punicao(
             guild=interaction.guild,
             alvo=alvo,
@@ -423,6 +460,7 @@ class ModalMotivoAdvertencia(
             cargo_id=self.cargo_id,
             motivo=self.motivo.value.strip(),
             links_texto=self.links.value.strip() if self.links.value else None,
+            arquivos_provas=arquivos_provas or None,
         )
         limpar_sessao(self.executor_id)
 
