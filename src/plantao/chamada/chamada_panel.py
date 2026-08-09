@@ -1,10 +1,13 @@
 import asyncio
+import io
 import logging
+import os
 from datetime import (
     datetime,
     timezone,
 )
 
+import aiohttp
 import discord
 from sqlalchemy import select
 
@@ -1157,8 +1160,44 @@ async def _criar_topico_print_ems(
         return None
 
     await asyncio.sleep(2)
+
+    sessao = aiohttp.ClientSession()
+    resposta = sessao.get(url_print)
     try:
         if url_print:
+            async with sessao:
+                async with resposta:
+                    if resposta.status == 200:
+                        imagem_do_ems = await resposta.read()
+
+                        tipo_imagem = await resposta.headers.get("content-type", "")
+                        if "png" == tipo_imagem:
+                            extensao = ".png"
+                        elif "jpeg" in tipo_imagem or "jpg" in tipo_imagem:
+                            extensao = ".jpg"
+                        elif "gif" == tipo_imagem:
+                            extensao = ".gif"
+                        else:
+                            extensao = (
+                                os.path.splitext(url_print.split("?")[0])[1] or ".png"
+                            )
+
+                        arquivo = discord.File(
+                            io.BitesIO(imagem_do_ems), filename=f"print_ems{extensao}"
+                        )
+
+                        await thread.send(
+                            "\n## 📁 Print do `/ems` anexado", file=arquivo
+                        )
+                    else:
+                        await thread.send("\n## 📁 Print do `/ems` anexado")
+                        await thread.send(
+                            "## Não foi possivel enviar a imagem do `/EMS` nesse momento."
+                        )
+                        await thread.send(
+                            "-# ⚠️ Não foi possível baixar a imagem. \n- Link original:\n",
+                            url_print,
+                        )
             # Link fora de Container para o Discord gerar preview da imagem
             await thread.send("\n## 📁 Print do `/ems` anexado")
             await thread.send(

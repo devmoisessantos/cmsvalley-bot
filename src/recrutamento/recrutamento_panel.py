@@ -45,14 +45,10 @@ class PainelRecrutamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 ),
                 accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
             ),
-
             # ────────────────────────────────────────────────
             # Separator
             # ────────────────────────────────────────────────
-            discord.ui.Separator(
-                spacing=discord.SeparatorSpacing.large
-            ),
-
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             # ────────────────────────────────────────────────
             # TextDisplay
             # ────────────────────────────────────────────────
@@ -63,14 +59,10 @@ class PainelRecrutamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "✅ Tenha o **ID do Discord** do candidato em mãos.\n"
                 "✅ Certifique-se de que o candidato está presente na call de recrutamento."
             ),
-
             # ────────────────────────────────────────────────
             # Separator
             # ────────────────────────────────────────────────
-            discord.ui.Separator(
-                spacing=discord.SeparatorSpacing.large
-            ),
-
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             # ────────────────────────────────────────────────
             # ActionRow
             # ────────────────────────────────────────────────
@@ -87,5 +79,6 @@ class PainelRecrutamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
     async def liberar_avaliacao(self, interaction: discord.Interaction):
-            from src.services.liberacao_service import liberar_avaliacao_click
-            await liberar_avaliacao_click(interaction)
+        from src.services.liberacao_service import liberar_avaliacao_click
+
+        await liberar_avaliacao_click(interaction)
