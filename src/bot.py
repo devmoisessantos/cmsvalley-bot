@@ -82,6 +82,7 @@ class CmsValleyBot(commands.Bot):
             "src.guia.guia_cogs",
             "src.whitelist.whitelist_cogs",
             "src.plantao.plantao_cogs",
+            "src.plantao.chamada.chamada_cogs",
             "src.plantao.plantao_tasks",
             "src.plantao.plantao_listener",
             "src.plantao.ranking_plantao_tasks",
