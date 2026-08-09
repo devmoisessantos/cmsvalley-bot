@@ -31,16 +31,16 @@ class PainelFazerChamadaLayout(LoggingViewMixin, discord.ui.LayoutView):
         row.add_item(botao)
 
         self.container = discord.ui.Container(
-            discord.ui.TextDisplay("# 🩺 Central de Chamadas"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.Section(
-                "> Área dos **Doutores** — controle de presença do plantão.",
-                (
-                    "Apenas **Doutor ou acima** pode iniciar uma chamada.\n\n"
-                    "Ao iniciar, envie o print do `/ems` no chat deste canal "
-                    "e o sistema cruzará com quem está de plantão."
-                ),
+                "# 🩺 Central de Chamadas",
+                ("> Área dos **Doutores** — controle de presença do plantão."),
                 accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay(
+                "Apenas **Doutor ou acima** pode iniciar uma chamada.\n\n"
+                "Ao iniciar, envie o print do `/ems` no chat deste canal "
+                "e o sistema cruzará com quem está de plantão."
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             row,
