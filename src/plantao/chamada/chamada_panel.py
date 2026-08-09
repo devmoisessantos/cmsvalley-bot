@@ -142,7 +142,7 @@ def _linha_desconhecido(e: dict) -> str:
 # ─────────────────────────────────────────────
 
 
-class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
+class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, membro: discord.Member, proximo_horario, liberado: bool):
         super().__init__(timeout=180)
         self.membro = membro
@@ -156,14 +156,14 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
             )
 
         linhas = (
-            f"`🩺` **Modo Coordenação ativo** — {membro.mention}\n"
+            f"`🩺` **Modo Chamada ativo** — {membro.mention}\n"
             f"`📋` {status_texto}\n"
             "`ℹ️` Ao realizar a chamada, você vai enviar um print do `/ems` "
             "e o sistema vai cruzar com quem está de plantão."
         )
 
         componentes = [
-            discord.ui.TextDisplay("# 🧭 Painel de Coordenação"),
+            discord.ui.TextDisplay("# 🧭 Painel de Chamada"),
             discord.ui.TextDisplay(linhas),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         ]
@@ -177,12 +177,6 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
         botao_chamada.callback = self._callback_realizar_chamada
         row.add_item(botao_chamada)
 
-        botao_voltar = discord.ui.Button(
-            label="↩️ Sair do Modo Coordenação", style=discord.ButtonStyle.secondary
-        )
-        botao_voltar.callback = self._callback_sair
-        row.add_item(botao_voltar)
-
         componentes.append(row)
         self.container = discord.ui.Container(
             *componentes, accent_color=discord.Color.blurple()
@@ -190,7 +184,7 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(self.container)
 
     @classmethod
-    async def construir(cls, membro: discord.Member) -> "PainelCoordenacaoView":
+    async def construir(cls, membro: discord.Member) -> "PainelChamadaView":
         proximo_horario, liberado = await calcular_proximo_horario_permitido()
         return cls(membro, proximo_horario, liberado)
 
@@ -206,19 +200,6 @@ class PainelCoordenacaoView(LoggingViewMixin, discord.ui.LayoutView):
             if estado:
                 estado.modo_coordenacao = False
                 await session.commit()
-
-        # Coordenação saiu do painel de plantão — encerra o card ephemeral
-        view = discord.ui.LayoutView(timeout=30)
-        view.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# ↩️ Modo coordenação encerrado\n"
-                    "Use **#fazer-chamada** para iniciar uma nova chamada."
-                ),
-                accent_color=discord.Color.dark_grey(),
-            )
-        )
-        await interaction.edit_original_response(view=view)
 
     async def _callback_realizar_chamada(self, interaction: discord.Interaction):
         if not membro_e_doutor_ou_acima(interaction.user):
