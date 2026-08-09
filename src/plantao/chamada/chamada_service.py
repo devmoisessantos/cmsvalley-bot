@@ -1,33 +1,51 @@
 import re
-import discord
-from datetime import datetime, timedelta, timezone
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
 from zoneinfo import ZoneInfo
-from sqlalchemy import select, func
+
+import discord
+from sqlalchemy import (
+    func,
+    select,
+)
 
 from src.config import (
-    TIMEZONE_LOCAL, RR_HORARIOS, INTERVALO_CHAMADA_MINUTOS,
-    CARGOS_PUNICOES, CANAIS
+    CANAIS,
+    CARGOS_PUNICOES,
+    INTERVALO_CHAMADA_MINUTOS,
+    RR_HORARIOS,
+    TIMEZONE_LOCAL,
 )
+from src.database.connection import async_session
+from src.database.models import (
+    Chamada,
+    ControleChamada,
+    FaltaChamada,
+    Recrutamento,
+)
+from src.plantao.plantao_service import garantir_aware
 from src.utils.log_container import LogContainerView
 from src.utils.logger import log_mudanca_cargo
-from src.database.connection import async_session
-from src.database.models import Chamada, ControleChamada, Recrutamento, FaltaChamada
-from src.plantao.plantao_service import garantir_aware
-
 
 ORDEM_PUNICOES = [
-    "⛔┇ADV VERBAL ",   # falta 1 → aplicado direto
-    "🚫┇Adv 01",        # falta 3 → aplicado (falta 2 só avisa que vem essa)
-    "🚫┇Adv 02",        # falta 5 → aplicado (falta 4 só avisa)
-    "🚫┇Adv 03",        # falta 7 → aplicado (falta 6 só avisa)
-    "🚫┇Exonerado",     # falta 9 → aplicado (falta 8 só avisa)
+    "⛔┇ADV VERBAL ",  # falta 1 → aplicado direto
+    "🚫┇Adv 01",  # falta 3 → aplicado (falta 2 só avisa que vem essa)
+    "🚫┇Adv 02",  # falta 5 → aplicado (falta 4 só avisa)
+    "🚫┇Adv 03",  # falta 7 → aplicado (falta 6 só avisa)
+    "🚫┇Exonerado",  # falta 9 → aplicado (falta 8 só avisa)
 ]
 
 _PADRAO_LINHA_EMS = re.compile(r"(\d{3,7})\s*[:.\-]\s*(.+)")
-CONFIANCA_MINIMA_AUTOMATICA = 0.5  # abaixo disso, marca a entrada como "revisar manualmente"
+CONFIANCA_MINIMA_AUTOMATICA = (
+    0.5  # abaixo disso, marca a entrada como "revisar manualmente"
+)
 # ─────────────────────────────────────────────
 # 1) Cooldown / janela liberada
 # ─────────────────────────────────────────────
+
 
 def _limite_apos_rr_mais_recente(agora_utc: datetime) -> datetime:
     """Encontra o horário mais recente de 'RR + 1h' que já passou (olha hoje e ontem,
@@ -40,7 +58,9 @@ def _limite_apos_rr_mais_recente(agora_utc: datetime) -> datetime:
         dia_ref = (agora_local + timedelta(days=offset_dias)).date()
         for horario_str in RR_HORARIOS:
             hora, minuto = map(int, horario_str.split(":"))
-            rr_dt = datetime(dia_ref.year, dia_ref.month, dia_ref.day, hora, minuto, tzinfo=tz)
+            rr_dt = datetime(
+                dia_ref.year, dia_ref.month, dia_ref.day, hora, minuto, tzinfo=tz
+            )
             limite = rr_dt + timedelta(hours=1)
             if limite <= agora_local:
                 candidatos.append(limite)
@@ -52,7 +72,9 @@ def _limite_apos_rr_mais_recente(agora_utc: datetime) -> datetime:
 
 
 async def obter_controle_chamada(session) -> ControleChamada:
-    resultado = await session.execute(select(ControleChamada).where(ControleChamada.id == 1))
+    resultado = await session.execute(
+        select(ControleChamada).where(ControleChamada.id == 1)
+    )
     controle = resultado.scalar_one_or_none()
     if controle is None:
         controle = ControleChamada(id=1)
@@ -71,9 +93,9 @@ async def calcular_proximo_horario_permitido() -> tuple[datetime, bool]:
         if controle.ultima_chamada_em is None:
             proximo = limite_rr
         else:
-            proximo_por_intervalo = garantir_aware(controle.ultima_chamada_em) + timedelta(
-                minutes=INTERVALO_CHAMADA_MINUTOS
-            )
+            proximo_por_intervalo = garantir_aware(
+                controle.ultima_chamada_em
+            ) + timedelta(minutes=INTERVALO_CHAMADA_MINUTOS)
             proximo = max(limite_rr, proximo_por_intervalo)
 
         await session.commit()
@@ -84,6 +106,7 @@ async def calcular_proximo_horario_permitido() -> tuple[datetime, bool]:
 # ─────────────────────────────────────────────
 # 2) Lock de concorrência (só um Doutor por vez)
 # ─────────────────────────────────────────────
+
 
 async def tentar_iniciar_chamada(doutor_id: int) -> tuple[bool, int | None]:
     """Tenta pegar o lock. Retorna (conseguiu, id_do_doutor_que_ja_esta_chamando_se_falhou)."""
@@ -139,7 +162,11 @@ def extrair_entradas_do_ems(linhas_com_confianca: list[tuple[str, float]]) -> di
             continue
         ids_ja_vistos.add(id_fivem)
 
-        entrada = {"id_fivem": id_fivem, "nome_ems": match.group(2).strip(), "confianca": confianca}
+        entrada = {
+            "id_fivem": id_fivem,
+            "nome_ems": match.group(2).strip(),
+            "confianca": confianca,
+        }
 
         if confianca >= CONFIANCA_MINIMA_AUTOMATICA:
             confiaveis.append(entrada)
@@ -147,9 +174,12 @@ def extrair_entradas_do_ems(linhas_com_confianca: list[tuple[str, float]]) -> di
             revisar.append(entrada)
 
     return {"confiaveis": confiaveis, "revisar": revisar}
+
+
 # ─────────────────────────────────────────────
 # 4) Cruzamento com o banco — separa SUL (reconhecido) de NORTE/desconhecido
 # ─────────────────────────────────────────────
+
 
 async def cruzar_entradas_com_banco(entradas: list[tuple[str, str]]) -> dict:
     """Pra cada (id_fivem, nome) do print, verifica se existe Recrutamento aprovado
@@ -162,14 +192,22 @@ async def cruzar_entradas_com_banco(entradas: list[tuple[str, str]]) -> dict:
         for id_fivem, nome_ems in entradas:
             resultado = await session.execute(
                 select(Recrutamento.discord_id_candidato)
-                .where(Recrutamento.id_fivem == id_fivem, Recrutamento.status == "APROVADO")
+                .where(
+                    Recrutamento.id_fivem == id_fivem, Recrutamento.status == "APROVADO"
+                )
                 .order_by(Recrutamento.id.desc())
                 .limit(1)
             )
             discord_id = resultado.scalar_one_or_none()
 
             if discord_id is not None:
-                reconhecidos.append({"id_fivem": id_fivem, "nome_ems": nome_ems, "discord_id": discord_id})
+                reconhecidos.append(
+                    {
+                        "id_fivem": id_fivem,
+                        "nome_ems": nome_ems,
+                        "discord_id": discord_id,
+                    }
+                )
             else:
                 nao_reconhecidos.append({"id_fivem": id_fivem, "nome_ems": nome_ems})
 
@@ -192,20 +230,28 @@ def _calcular_estado_punicao(total_faltas: int) -> dict:
 
 async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) -> int:
     async with async_session() as session:
-        session.add(FaltaChamada(discord_id=discord_id, chamada_id=chamada_id, motivo=motivo))
+        session.add(
+            FaltaChamada(discord_id=discord_id, chamada_id=chamada_id, motivo=motivo)
+        )
         await session.commit()
 
         resultado = await session.execute(
-            select(func.count()).select_from(FaltaChamada).where(FaltaChamada.discord_id == discord_id)
+            select(func.count())
+            .select_from(FaltaChamada)
+            .where(FaltaChamada.discord_id == discord_id)
         )
         total_faltas = resultado.scalar_one()
 
     estado_punicao = _calcular_estado_punicao(total_faltas)
 
     if estado_punicao["aplicar"]:
-        await _aplicar_punicao(guild, discord_id, total_faltas, estado_punicao["cargo_nome"])
+        await _aplicar_punicao(
+            guild, discord_id, total_faltas, estado_punicao["cargo_nome"]
+        )
     else:
-        await _avisar_proxima_punicao(guild, discord_id, total_faltas, estado_punicao["cargo_aviso_nome"])
+        await _avisar_proxima_punicao(
+            guild, discord_id, total_faltas, estado_punicao["cargo_aviso_nome"]
+        )
 
     return total_faltas
 
@@ -222,10 +268,14 @@ async def _aplicar_punicao(guild, discord_id: int, total_faltas: int, cargo_nome
 
     # Remove tiers anteriores de punição, pra não acumular vários cargos ao mesmo tempo
     cargos_punicao_ids = set(CARGOS_PUNICOES.values())
-    cargos_antigos = [r for r in membro.roles if r.id in cargos_punicao_ids and r.id != cargo.id]
+    cargos_antigos = [
+        r for r in membro.roles if r.id in cargos_punicao_ids and r.id != cargo.id
+    ]
     if cargos_antigos:
         try:
-            await membro.remove_roles(*cargos_antigos, reason="Escalonamento de punição por faltas")
+            await membro.remove_roles(
+                *cargos_antigos, reason="Escalonamento de punição por faltas"
+            )
         except discord.Forbidden:
             pass
 
@@ -235,9 +285,13 @@ async def _aplicar_punicao(guild, discord_id: int, total_faltas: int, cargo_nome
         pass
 
     await log_mudanca_cargo(
-        guild, candidato=membro, executor=guild.me,
+        guild,
+        candidato=membro,
+        executor=guild.me,
         cargos_adicionados=[cargo.mention],
-        cargos_removidos=[r.mention for r in cargos_antigos] if cargos_antigos else None,
+        cargos_removidos=[r.mention for r in cargos_antigos]
+        if cargos_antigos
+        else None,
     )
 
     canal = guild.get_channel(CANAIS.get("CANAL_ADVERTENCIAS"))
@@ -257,7 +311,9 @@ async def _aplicar_punicao(guild, discord_id: int, total_faltas: int, cargo_nome
         await canal.send(view=view)
 
 
-async def _avisar_proxima_punicao(guild, discord_id: int, total_faltas: int, cargo_aviso_nome: str):
+async def _avisar_proxima_punicao(
+    guild, discord_id: int, total_faltas: int, cargo_aviso_nome: str
+):
     membro = guild.get_member(discord_id)
     if membro is None:
         return
@@ -411,4 +467,3 @@ async def admin_excluir_chamada(chamada_id: int) -> bool:
         await session.delete(chamada)
         await session.commit()
         return True
-
