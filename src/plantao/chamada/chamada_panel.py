@@ -1197,8 +1197,6 @@ async def _criar_topico_print_ems(
         print("⚠️ [chamadas] Não foi possível criar o tópico para o print do EMS.")
         return None
 
-    await asyncio.sleep(2)
-
     # 1) Preferência: bytes capturados no momento do envio pelo doutor
     dados_imagem = sessao.print_ems_bytes
     nome_arquivo = sessao.print_ems_nome_arquivo or "print_ems.png"
@@ -1208,6 +1206,8 @@ async def _criar_topico_print_ems(
         dados_imagem, nome_baixado = await _baixar_bytes_da_url(sessao.print_ems_url)
         if dados_imagem:
             nome_arquivo = nome_baixado
+
+    await asyncio.sleep(2)
 
     try:
         if dados_imagem:
@@ -1226,7 +1226,7 @@ async def _criar_topico_print_ems(
             # Último recurso: só o link (pode já estar quebrado)
             await thread.send(
                 "## 📁 Print do `/ems`"
-                "-# Não foi possível anexar o arquivo. Link original (pode expirar):"
+                "-# Não foi possível anexar o arquivo. Link original (pode expirar):\n"
                 f"{sessao.print_ems_url}"
             )
         else:
