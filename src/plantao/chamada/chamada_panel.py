@@ -1132,9 +1132,6 @@ async def _criar_topico_print_ems(
     """
     thread: discord.Thread | None = None
 
-    if thread is None:
-        return None
-
     try:
         thread = await mensagem.create_thread(
             name="📁 Print /ems",
@@ -1155,11 +1152,15 @@ async def _criar_topico_print_ems(
             print(f"⚠️ [chamada] create_thread via canal falhou: {erro_canal}")
             thread = None
 
+    if thread is None:
+        print("⚠️ [chamadas] Não foi possível criar o tópico para o print do EMS.")
+        return None
+
     await asyncio.sleep(2)
     try:
         if url_print:
             # Link fora de Container para o Discord gerar preview da imagem
-            await thread.send("## 📁 Print do `/ems` anexado")
+            await thread.send("\n## 📁 Print do `/ems` anexado")
             await thread.send(
                 "-# Link enviado fora de container para permitir preview automático.\n"
             )
