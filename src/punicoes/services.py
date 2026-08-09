@@ -45,6 +45,7 @@ async def aplicar_punicao(
     cargo_id: int,
     motivo: str,
     links_texto: str | None,
+    arquivos_provas: list[tuple[bytes, str]] | None = None,
 ) -> tuple[bool, str, Punicao | None]:
     """Aplica cargo, grava no banco, posta em CANAL_ADVERTENCIAS + LOG_PUNICOES.
 
@@ -103,6 +104,7 @@ async def aplicar_punicao(
             links_texto=links_texto,
             punicao_id=reg.id,
             automatica=False,
+            arquivos_provas=arquivos_provas,
         )
         await registrar_log_advertencia(
             guild=guild,
@@ -133,6 +135,7 @@ async def aplicar_punicao(
         links=links,
         punicao_id=reg.id,
         texto_provas=texto_provas,
+        arquivos_provas=arquivos_provas,
     )
 
     if msg_adv:
@@ -197,6 +200,7 @@ async def executar_exoneracao(
     links_texto: str | None = None,
     punicao_id: int | None = None,
     automatica: bool = False,
+    arquivos_provas: list[tuple[bytes, str]] | None = None,
 ) -> tuple[bool, str]:
     """
     Exoneração completa:
@@ -316,6 +320,7 @@ async def executar_exoneracao(
         punicao_id=reg_id,
         texto_provas=texto_provas,
         automatica=automatica,
+        arquivos_provas=arquivos_provas,
     )
 
     if msg_exo and reg_id is not None:

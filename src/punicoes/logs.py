@@ -8,6 +8,7 @@ Canais:
 from __future__ import annotations
 
 import asyncio
+import io
 
 import discord
 
@@ -36,6 +37,7 @@ async def registrar_advertencia(
     links: list[str],
     punicao_id: int,
     texto_provas: str | None = None,
+    arquivos_provas: list[tuple[bytes, str]] | None = None,
 ) -> tuple[discord.Message | None, discord.Thread | None]:
     """Posta a advertência em CANAL_ADVERTENCIAS, cria tópico de provas e notifica em DM."""
     canal = _canal(guild, "CANAL_ADVERTENCIAS")
@@ -66,7 +68,13 @@ async def registrar_advertencia(
     view.add_item(container)
 
     msg = await canal.send(view=view)
-    thread = await _criar_topico_provas(msg, canal, links, texto_livre=texto_provas)
+    thread = await _criar_topico_provas(
+        msg,
+        canal,
+        links,
+        texto_livre=texto_provas,
+        arquivos=arquivos_provas,
+    )
 
     await notificar_dm_advertencia(
         alvo=alvo,
@@ -91,6 +99,7 @@ async def registrar_exoneracao(
     punicao_id: int | None = None,
     texto_provas: str | None = None,
     automatica: bool = False,
+    arquivos_provas: list[tuple[bytes, str]] | None = None,
 ) -> tuple[discord.Message | None, discord.Thread | None]:
     """Posta a exoneração em CANAL_EXONERACOES (mesmo modelo das advertências)."""
     canal = _canal(guild, "CANAL_EXONERACOES")
@@ -129,7 +138,13 @@ async def registrar_exoneracao(
         print(f"⚠️ [punicoes] Falha ao postar exoneração: {erro}")
         return None, None
 
-    thread = await _criar_topico_provas(msg, canal, links, texto_livre=texto_provas)
+    thread = await _criar_topico_provas(
+        msg,
+        canal,
+        links,
+        texto_livre=texto_provas,
+        arquivos=arquivos_provas,
+    )
     return msg, thread
 
 
@@ -249,11 +264,13 @@ async def _criar_topico_provas(
     canal: discord.abc.Messageable,
     links: list[str],
     texto_livre: str | None = None,
+    arquivos: list[tuple[bytes, str]] | None = None,
 ) -> discord.Thread | None:
-    """Cria o tópico 'Provas anexadas', posta links e/ou texto livre, depois fecha.
+    """Cria o tópico 'Provas anexadas', posta links, arquivos e/ou texto, depois fecha.
 
-    - Se houver URLs → posta os links (preview do Discord).
-    - Se não houver URL mas houver texto digitado no campo de provas → posta o texto.
+    - Arquivos → reenviados pelo bot (discord.File) — cópia permanente.
+    - URLs → links (preview do Discord).
+    - Texto livre → observações.
     - Se não houver nada → avisa que não houve prova anexada.
     """
     thread: discord.Thread | None = None
@@ -283,8 +300,31 @@ async def _criar_topico_provas(
         return None
 
     texto_limpo = (texto_livre or "").strip()
+    lista_arquivos = arquivos or []
 
     try:
+        # 1) Arquivos do FileUpload — reenvio permanente pelo bot
+        if lista_arquivos:
+            await thread.send("## 📁 Provas em arquivo")
+            await thread.send(
+                "-# Arquivos reenviados pelo bot (cópia permanente neste tópico)."
+            )
+            for dados, nome in lista_arquivos:
+                try:
+                    buffer = io.BytesIO(dados)
+                    buffer.seek(0)
+                    nome_seguro = "".join(
+                        c if c.isalnum() or c in "._-" else "_"
+                        for c in (nome or "prova.bin")
+                    )[:80]
+                    if "." not in nome_seguro:
+                        nome_seguro = f"{nome_seguro}.bin"
+                    await thread.send(
+                        file=discord.File(fp=buffer, filename=nome_seguro)
+                    )
+                except Exception as erro_arq:
+                    print(f"⚠️ [punicoes] falha ao postar arquivo de prova: {erro_arq}")
+
         if links:
             bloco: list[str] = []
             tamanho = 0
@@ -322,9 +362,9 @@ async def _criar_topico_provas(
             )
             await thread.send("\n### 📝 Observações\n\n")
             await thread.send(texto_limpo[:1900])
-        else:
+        elif not lista_arquivos:
             await thread.send(
-                "\n## 📁 **Provas anexadas**\n_Nenhum link ou texto de prova foi informado._"
+                "\n## 📁 **Provas anexadas**\n_Nenhum link, arquivo ou texto de prova foi informado._"
             )
     except discord.HTTPException as e:
         print(f"⚠️ [punicoes] Falha ao postar provas no tópico: {e}")

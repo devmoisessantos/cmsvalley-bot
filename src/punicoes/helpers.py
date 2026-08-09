@@ -76,7 +76,9 @@ def id_cargo_exonerado() -> int | None:
     return None
 
 
-def e_cargo_exonerado(cargo_nome: str | None = None, cargo_id: int | None = None) -> bool:
+def e_cargo_exonerado(
+    cargo_nome: str | None = None, cargo_id: int | None = None
+) -> bool:
     """True se o cargo indicado for o de Exonerado."""
     id_exonerado = id_cargo_exonerado()
     if cargo_id is not None and id_exonerado is not None:

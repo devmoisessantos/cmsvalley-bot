@@ -6,7 +6,10 @@ import discord
 from discord.ext import commands
 from sqlalchemy import select
 
-from src.config import CANAIS, GUILD_ID
+from src.config import (
+    CANAIS,
+    GUILD_ID,
+)
 from src.database.connection import async_session
 from src.database.models import PainelPostado
 from src.punicoes.panel import PainelPunicoesLayout
@@ -20,7 +23,9 @@ async def garantir_painel_punicoes(bot: discord.Client):
         if r.scalar_one_or_none() is not None:
             return
 
-        canal_id = CANAIS.get("PAINEL_PUNICOES") or CANAIS.get("CANAL_ADVERTENCIAS") or 0
+        canal_id = (
+            CANAIS.get("PAINEL_PUNICOES") or CANAIS.get("CANAL_ADVERTENCIAS") or 0
+        )
         canal = bot.get_channel(canal_id) if canal_id else None
         if canal is None:
             print("⚠️ Canal do painel de punições não configurado.")
