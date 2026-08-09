@@ -24,10 +24,10 @@ from src.plantao.chamada.chamada_service import (
     registrar_falta,
 )
 from src.utils.mensagens import (
+    responder_aviso,
     responder_erro,
     responder_info,
     responder_sucesso,
-    responder_aviso,
 )
 from src.utils.permissions import apenas_administrador
 
@@ -136,11 +136,11 @@ class ChamadaCog(commands.Cog):
         linhas = []
         for chamada in lista:
             linhas.append(
-                f"`#{chamada.id}` · doutor `{chamada.doutor_id}` · "
+                f"`#{chamada.id}` · Responsável: `<@{chamada.doutor_id}>` · "
                 f"EMS `{chamada.total_medicos_ems}` · "
                 f"toggle `{chamada.total_toggle_ligado}` · "
                 f"✓{chamada.total_presentes} ✗{chamada.total_ausentes} · "
-                f"`{chamada.criada_em}`"
+                f"`{chamada.criada_em}`\n\n"
             )
         await responder_info(
             interacao,
@@ -278,9 +278,9 @@ class ChamadaCog(commands.Cog):
         linhas = []
         for falta in lista:
             linhas.append(
-                f"`falta #{falta.id}` · user `{falta.discord_id}` · "
-                f"chamada `#{falta.chamada_id}` · `{falta.motivo}` · "
-                f"`{falta.criado_em}`"
+                f"`Falta #{falta.id}` · Usuário: `<@{falta.discord_id}>` · "
+                f"Chamada `#{falta.chamada_id}` · `{falta.motivo}` · "
+                f"`{falta.criado_em}`\n"
             )
         extra = ""
         if membro is not None:
