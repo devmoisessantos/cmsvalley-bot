@@ -261,17 +261,34 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
-        # Baixa os bytes NA HORA — o link da CDN expira e a mensagem
-        # original será apagada depois; sem cópia local o tópico fica "Imagem não encontrada".
+        # Baixa os bytes já no envio do doutor (antes do OCR e antes de apagar a msg).
+        # Assim o tópico no final só reenvia a cópia local — não depende da CDN.
         anexo = mensagem_print.attachments[0]
         sessao.print_ems_url = anexo.url
         sessao.print_ems_nome_arquivo = anexo.filename or "print_ems.png"
+        sessao.print_ems_mensagem = mensagem_print
         try:
             sessao.print_ems_bytes = await anexo.read()
         except (discord.HTTPException, OSError) as erro_leitura:
-            print(f"⚠️ [chamada] falha ao ler anexo do print: {erro_leitura}")
+            print(f"⚠️ [chamada] anexo.read falhou: {erro_leitura}")
             sessao.print_ems_bytes = None
-        sessao.print_ems_mensagem = mensagem_print
+
+        if not sessao.print_ems_bytes:
+            # fallback imediato pela URL/proxy enquanto o link ainda é válido
+            url_tentativa = getattr(anexo, "proxy_url", None) or anexo.url
+            dados_url, nome_url = await _baixar_bytes_da_url(url_tentativa)
+            if dados_url:
+                sessao.print_ems_bytes = dados_url
+                sessao.print_ems_nome_arquivo = nome_url
+                print(f"✅ [chamada] print baixado via URL ({len(dados_url)} bytes)")
+            else:
+                print("⚠️ [chamada] não foi possível guardar bytes do print no envio")
+        else:
+            print(
+                f"✅ [chamada] print em memória "
+                f"({len(sessao.print_ems_bytes)} bytes, {sessao.print_ems_nome_arquivo})"
+            )
+
         await _processar_print_ems(interaction, anexo.url)
 
 
@@ -1222,8 +1239,14 @@ async def _criar_topico_print_ems(
     sessao: SessaoChamada,
 ) -> discord.Thread | None:
     """
-    Cria tópico, posta o print como arquivo do bot e, após 2s,
-    arquiva/trava — mesmo fluxo do tópico de provas (advertências).
+    Igual ao tópico de provas (advertências):
+    1) cria o tópico ligado ao card
+    2) posta o print (arquivo do bot)
+    3) espera 2 segundos
+    4) arquiva + trava
+
+    O tópico some da lista lateral ao arquivar — isso é normal no Discord.
+    Ele continua acessível pelo card (ícone de tópico na mensagem).
     """
     thread: discord.Thread | None = None
 
@@ -1251,11 +1274,11 @@ async def _criar_topico_print_ems(
         print("⚠️ [chamada] Não foi possível criar o tópico para o print do EMS.")
         return None
 
+    # Bytes já devem ter sido baixados quando o doutor enviou o print
     dados_imagem, nome_arquivo = await _resolver_bytes_do_print(sessao)
 
     try:
         if dados_imagem:
-            # BytesIO precisa estar no início; File consome o buffer
             buffer = io.BytesIO(dados_imagem)
             buffer.seek(0)
             arquivo = discord.File(fp=buffer, filename=nome_arquivo)
@@ -1267,8 +1290,8 @@ async def _criar_topico_print_ems(
                 file=arquivo,
             )
             print(
-                f"✅ [chamada] print postado no tópico "
-                f"({len(dados_imagem)} bytes, {nome_arquivo})"
+                f"✅ [chamada] print no tópico "
+                f"({len(dados_imagem)} bytes, {nome_arquivo}) thread={thread.id}"
             )
         elif sessao.print_ems_url:
             await thread.send(
@@ -1290,7 +1313,7 @@ async def _criar_topico_print_ems(
             except discord.HTTPException:
                 pass
 
-    # Igual advertências: espera 2s e fecha o tópico
+    # Mesmo fluxo das advertências: 2s e fecha
     await asyncio.sleep(2)
     try:
         await thread.edit(
@@ -1298,8 +1321,8 @@ async def _criar_topico_print_ems(
             locked=True,
             reason="Fechar tópico do Print EMS",
         )
-    except discord.HTTPException as erro_arquivo:
-        print(f"⚠️ [chamada] Falha ao fechar tópico: {erro_arquivo}")
+    except discord.HTTPException as erro_fechar:
+        print(f"⚠️ [chamada] Falha ao fechar tópico: {erro_fechar}")
         try:
             await thread.edit(archived=True, reason="Fechar tópico do Print EMS")
         except discord.HTTPException as erro_fallback:
