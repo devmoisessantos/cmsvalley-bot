@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import discord
 
-from src.plantao.chamada.chamada_panel import PainelCoordenacaoView
-from src.plantao.permissoes import e_doutor_ou_acima, mensagem_sem_permissao
+from src.plantao.chamada.chamada_panel import PainelChamadaView
+from src.plantao.permissoes import (
+    e_doutor_ou_acima,
+    mensagem_sem_permissao,
+)
 from src.utils.error_handling import LoggingViewMixin
 
 
@@ -60,5 +63,5 @@ class PainelFazerChamadaLayout(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         # Reutiliza o fluxo existente (cooldown + print EMS + etapas)
-        view = await PainelCoordenacaoView.construir(interaction.user)
+        view = await PainelChamadaView.construir(interaction.user)
         await interaction.response.send_message(view=view, ephemeral=True)
