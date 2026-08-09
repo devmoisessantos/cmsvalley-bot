@@ -136,11 +136,11 @@ class ChamadaCog(commands.Cog):
         linhas = []
         for chamada in lista:
             linhas.append(
-                f"`#{chamada.id}` · Responsável: `<@{chamada.doutor_id}>` · "
-                f"EMS `{chamada.total_medicos_ems}` · "
-                f"toggle `{chamada.total_toggle_ligado}` · "
+                f"`#{chamada.id}` · Responsável: <@{chamada.doutor_id}> \n"
+                f"EMS `{chamada.total_medicos_ems}` Toggle `{chamada.total_toggle_ligado}` \n"
                 f"✓{chamada.total_presentes} ✗{chamada.total_ausentes} · "
-                f"`{chamada.criada_em}`\n\n"
+                f"`{chamada.criada_em}`"
+                f""
             )
         await responder_info(
             interacao,
@@ -278,14 +278,15 @@ class ChamadaCog(commands.Cog):
         linhas = []
         for falta in lista:
             linhas.append(
-                f"`Falta #{falta.id}` · Usuário: `<@{falta.discord_id}>` · "
-                f"Chamada `#{falta.chamada_id}` · `{falta.motivo}` · "
-                f"`{falta.criado_em}`\n"
+                f"`Falta #{falta.id}` · Usuário: <@{falta.discord_id}> "
+                f"Chamada `#{falta.chamada_id}` · `{falta.motivo}` \n"
+                f"`{falta.criado_em}`"
+                f""
             )
         extra = ""
         if membro is not None:
             total = await admin_contar_faltas(membro.id)
-            extra = f" · total do membro: **{total}**"
+            extra = f" · Total do membro: **{total}**"
         await responder_info(
             interacao,
             titulo=f"Faltas ({len(lista)}){extra}",
