@@ -1,18 +1,23 @@
 # src/recrutamento/recrutamento_logs.py
+from datetime import (
+    datetime,
+    timezone,
+)
+
 import discord
-from datetime import datetime, timezone
 
 from src.utils.error_handling import LoggingViewMixin
 
 
 class NovoRecrutamentoLog(LoggingViewMixin, discord.ui.LayoutView):
-    def __init__(self, 
-                 candidato: discord.Member, 
-                 recrutador: discord.Member,
-                 cargo_role: discord.Role, 
-                 id_fivem: str, 
-                 guild: discord.Guild
-        ):
+    def __init__(
+        self,
+        candidato: discord.Member,
+        recrutador: discord.Member,
+        cargo_role: discord.Role,
+        id_fivem: str,
+        guild: discord.Guild,
+    ):
         super().__init__(timeout=None)
 
         linhas = (
@@ -27,23 +32,26 @@ class NovoRecrutamentoLog(LoggingViewMixin, discord.ui.LayoutView):
 
         container = discord.ui.Container(
             discord.ui.TextDisplay("# 🔴| Novo Recrutamento Iniciado!\n\n"),
-            discord.ui.Section(linhas, accessory=discord.ui.Thumbnail(candidato.display_avatar.url)),
+            discord.ui.Section(
+                linhas, accessory=discord.ui.Thumbnail(candidato.display_avatar.url)
+            ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(rodape),
             accent_color=discord.Color.red(),
         )
         self.add_item(container)
-print("alguma coisa")
+
 
 class NovoRecrutamentoManualLog(LoggingViewMixin, discord.ui.LayoutView):
-    def __init__(self,
-                 candidato: discord.Member,
-                 recrutador: discord.Member,
-                 executor: discord.Member,
-                 cargo_role: discord.Role,
-                 id_fivem: str,
-                 guild: discord.Guild
-        ):
+    def __init__(
+        self,
+        candidato: discord.Member,
+        recrutador: discord.Member,
+        executor: discord.Member,
+        cargo_role: discord.Role,
+        id_fivem: str,
+        guild: discord.Guild,
+    ):
         super().__init__(timeout=None)
 
         linhas = (
@@ -59,9 +67,11 @@ class NovoRecrutamentoManualLog(LoggingViewMixin, discord.ui.LayoutView):
 
         container = discord.ui.Container(
             discord.ui.TextDisplay("# 🟠| Recrutamento Manual Registrado!\n\n"),
-            discord.ui.Section(linhas, accessory=discord.ui.Thumbnail(candidato.display_avatar.url)),
+            discord.ui.Section(
+                linhas, accessory=discord.ui.Thumbnail(candidato.display_avatar.url)
+            ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(rodape),
             accent_color=discord.Color.orange(),
         )
-        self.add_item(container)     
+        self.add_item(container)

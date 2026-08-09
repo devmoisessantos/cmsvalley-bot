@@ -183,6 +183,18 @@ class BackupCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, membro: discord.Member):
+        # Cancela recrutamento ativo no banco (não trava reentrada / novo processo)
+        try:
+            from src.recrutamento.recrutamento_service import (
+                cancelar_por_saida_do_servidor,
+            )
+
+            await cancelar_por_saida_do_servidor(membro.id)
+        except Exception as erro_cancel:
+            print(
+                f"⚠️ [rejoin] falha ao cancelar recrutamento de {membro.id}: {erro_cancel}"
+            )
+
         await salvar_snapshot_membro(membro)
 
     @commands.Cog.listener()

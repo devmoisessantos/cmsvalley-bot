@@ -21,6 +21,7 @@ import json
 import discord
 from sqlalchemy import select
 
+from src.config import CARGOS
 from src.database.connection import async_session
 from src.database.models import (
     SnapshotCargosMembro,
@@ -235,6 +236,33 @@ async def restaurar_cargos_no_rejoin(membro: discord.Member) -> list[str]:
         if not _cargo_esta_abaixo_do_bot(cargo, cargo_mais_alto_do_bot):
             continue
         cargos_para_dar.append(cargo)
+
+    # Recrutamento incompleto / cancelado: no rejoin só Visitantes + ESTUDANTE
+    # (nunca devolver PROVA / Aprovado / cargos de avaliação)
+    try:
+        from src.recrutamento.recrutamento_service import candidato_tem_fluxo_incompleto
+
+        fluxo_incompleto = await candidato_tem_fluxo_incompleto(membro.id)
+    except Exception:
+        fluxo_incompleto = False
+
+    if fluxo_incompleto:
+        ids_permitidos = {
+            CARGOS.get("Visitantes"),
+            CARGOS.get("ESTUDANTE"),
+        }
+        ids_permitidos.discard(None)
+        filtrados = [c for c in cargos_para_dar if c.id in ids_permitidos]
+        removidos = [c for c in cargos_para_dar if c.id not in ids_permitidos]
+        if removidos:
+            nomes = ", ".join(f"`{c.name}`" for c in removidos)
+            relatorio.append(
+                f"⚠️ Recrutamento incompleto/cancelado — cargos não restaurados: {nomes}"
+            )
+        cargos_para_dar = filtrados
+        relatorio.append(
+            "ℹ️ Rejoin limitado a Visitantes + ESTUDANTE (fluxo de recrutamento incompleto)."
+        )
 
     if cargos_para_dar:
         try:
