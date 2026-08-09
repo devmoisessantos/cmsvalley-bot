@@ -11,7 +11,7 @@ from src.config import (
 from src.utils.log_container import LogContainerView
 from src.utils.logger import log_mudanca_cargo
 from src.database.connection import async_session
-from src.database.models import ControleChamada, Recrutamento, FaltaChamada
+from src.database.models import Chamada, ControleChamada, Recrutamento, FaltaChamada
 from src.plantao.plantao_service import garantir_aware
 
 
@@ -269,3 +269,146 @@ async def _avisar_proxima_punicao(guild, discord_id: int, total_faltas: int, car
         )
     except discord.Forbidden:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Administração de chamada (comandos /chamada)
+# ---------------------------------------------------------------------------
+
+
+async def admin_status_controle() -> dict:
+    """Snapshot do singleton controle_chamada + se já pode chamar."""
+    agora = datetime.now(timezone.utc)
+    async with async_session() as session:
+        controle = await obter_controle_chamada(session)
+        await session.commit()
+        dados = {
+            "chamada_em_andamento": bool(controle.chamada_em_andamento),
+            "doutor_em_chamada_id": controle.doutor_em_chamada_id,
+            "chamada_iniciada_em": controle.chamada_iniciada_em,
+            "ultima_chamada_em": controle.ultima_chamada_em,
+        }
+    proximo, liberado = await calcular_proximo_horario_permitido()
+    dados["proximo_horario"] = proximo
+    dados["liberado_agora"] = liberado
+    dados["agora"] = agora
+    return dados
+
+
+async def admin_liberar_lock(marcar_cooldown: bool = False) -> bool:
+    """
+    Força liberação do lock de chamada em andamento.
+    marcar_cooldown=True também atualiza ultima_chamada_em.
+    """
+    async with async_session() as session:
+        controle = await obter_controle_chamada(session)
+        estava = bool(controle.chamada_em_andamento)
+        controle.chamada_em_andamento = False
+        controle.doutor_em_chamada_id = None
+        controle.chamada_iniciada_em = None
+        if marcar_cooldown:
+            controle.ultima_chamada_em = datetime.now(timezone.utc)
+        await session.commit()
+        return estava
+
+
+async def admin_resetar_cooldown() -> None:
+    """Zera ultima_chamada_em (próxima chamada só respeita janela de RR)."""
+    async with async_session() as session:
+        controle = await obter_controle_chamada(session)
+        controle.ultima_chamada_em = None
+        await session.commit()
+
+
+async def admin_listar_chamadas(limite: int = 15) -> list[Chamada]:
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(Chamada).order_by(Chamada.id.desc()).limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def admin_buscar_chamada(chamada_id: int) -> Chamada | None:
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(Chamada).where(Chamada.id == chamada_id)
+        )
+        return resultado.scalar_one_or_none()
+
+
+async def admin_listar_faltas(
+    discord_id: int | None = None,
+    limite: int = 20,
+) -> list[FaltaChamada]:
+    async with async_session() as session:
+        consulta = select(FaltaChamada).order_by(FaltaChamada.id.desc()).limit(limite)
+        if discord_id is not None:
+            consulta = (
+                select(FaltaChamada)
+                .where(FaltaChamada.discord_id == discord_id)
+                .order_by(FaltaChamada.id.desc())
+                .limit(limite)
+            )
+        resultado = await session.execute(consulta)
+        return list(resultado.scalars().all())
+
+
+async def admin_contar_faltas(discord_id: int) -> int:
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(func.count())
+            .select_from(FaltaChamada)
+            .where(FaltaChamada.discord_id == discord_id)
+        )
+        return int(resultado.scalar_one() or 0)
+
+
+async def admin_remover_falta(falta_id: int) -> bool:
+    """Apaga uma falta pelo id. Não desfaz cargos já aplicados."""
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(FaltaChamada).where(FaltaChamada.id == falta_id)
+        )
+        falta = resultado.scalar_one_or_none()
+        if falta is None:
+            return False
+        await session.delete(falta)
+        await session.commit()
+        return True
+
+
+async def admin_criar_chamada_manual(
+    doutor_id: int,
+    total_medicos_ems: int = 0,
+    total_toggle_ligado: int = 0,
+    total_presentes: int = 0,
+    total_ausentes: int = 0,
+) -> Chamada:
+    """Insere registro histórico de chamada (admin / correção)."""
+    async with async_session() as session:
+        chamada = Chamada(
+            doutor_id=doutor_id,
+            total_medicos_ems=total_medicos_ems,
+            total_toggle_ligado=total_toggle_ligado,
+            total_presentes=total_presentes,
+            total_ausentes=total_ausentes,
+        )
+        session.add(chamada)
+        await session.commit()
+        await session.refresh(chamada)
+        return chamada
+
+
+async def admin_excluir_chamada(chamada_id: int) -> bool:
+    """Remove registro de chamada. Faltas ligadas ao id ficam órfãs (proposital)."""
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(Chamada).where(Chamada.id == chamada_id)
+        )
+        chamada = resultado.scalar_one_or_none()
+        if chamada is None:
+            return False
+        await session.delete(chamada)
+        await session.commit()
+        return True
+

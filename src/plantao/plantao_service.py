@@ -16,10 +16,7 @@ from src.config import (
 )
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
-from src.plantao.plantao_logger import (
-    obter_id_fivem_de_recrutamento,
-    registrar_evento_plantao,
-)
+from src.plantao.plantao_logger import registrar_evento_plantao
 from src.utils.formatacao import formatar_dinheiro
 
 
@@ -87,13 +84,12 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
             await session.commit()
             return "❌ Você já está em serviço."
 
-        # Busca e "congela" o id_fivem no momento em que liga o serviço
-        estado.id_fivem = await obter_id_fivem_de_recrutamento(membro.id)
-
+        # id_fivem já vem resolvido pelo painel (recrutamento ou modal)
         estado.id_fivem = id_fivem
         estado.toggle_ligado = True
         estado.lembrete_1_enviado = False
         estado.lembrete_2_enviado = False
+        estado.lembrete_3_enviado = False
 
         canal_atual = _membro_esta_em_call_valida(membro)
         if canal_atual is not None:
@@ -253,3 +249,81 @@ async def _finalizar_periodo_em_call(
                 "Saldo Total": f"{estado.saldo_moedas} moedas ({formatar_dinheiro(estado.saldo_moedas * VALOR_MOEDA_INGAME)})",
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Administração de estado (comandos /plantao)
+# ---------------------------------------------------------------------------
+
+
+async def consultar_estado_plantao(discord_id: int) -> EstadoPlantao | None:
+    """Busca o registro de estado sem criar linha nova."""
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        return resultado.scalar_one_or_none()
+
+
+async def listar_em_servico(limite: int = 40) -> list[EstadoPlantao]:
+    """Lista membros com toggle ligado (mais recentes primeiro)."""
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao)
+            .where(EstadoPlantao.toggle_ligado.is_(True))
+            .order_by(EstadoPlantao.ultima_atualizacao.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def admin_definir_moedas(discord_id: int, novo_saldo: int) -> EstadoPlantao:
+    """Define o saldo de moedas (admin). Cria estado se não existir."""
+    async with async_session() as session:
+        estado = await _obter_ou_criar_estado(session, discord_id)
+        estado.saldo_moedas = max(0, int(novo_saldo))
+        await session.commit()
+        await session.refresh(estado)
+        return estado
+
+
+async def admin_forcar_desligar(discord_id: int) -> bool:
+    """
+    Desliga toggle e zera campos de call/ociosidade no banco.
+    Retorna False se o membro já estava desligado ou sem registro.
+    """
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado.scalar_one_or_none()
+        if estado is None or not estado.toggle_ligado:
+            return False
+        estado.toggle_ligado = False
+        estado.em_call_valida = False
+        estado.call_entrada_em = None
+        estado.segmento_iniciado_em = None
+        estado.canal_atual_id = None
+        estado.ocioso_desde = None
+        estado.lembrete_1_enviado = False
+        estado.lembrete_2_enviado = False
+        estado.lembrete_3_enviado = False
+        estado.afk_mudo_surdo_desde = None
+        estado.afk_aviso_enviado = False
+        await session.commit()
+        return True
+
+
+async def admin_limpar_estado(discord_id: int) -> bool:
+    """Apaga o registro de estado_plantao do membro. Retorna se existia."""
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado.scalar_one_or_none()
+        if estado is None:
+            return False
+        await session.delete(estado)
+        await session.commit()
+        return True
+
