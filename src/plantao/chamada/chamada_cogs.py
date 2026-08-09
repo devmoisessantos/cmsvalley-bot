@@ -23,6 +23,7 @@ from src.plantao.chamada.chamada_service import (
     admin_status_controle,
     registrar_falta,
 )
+from src.utils.formatacao import formatar_data_hora_local
 from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
@@ -50,17 +51,19 @@ class ChamadaCog(commands.Cog):
     @apenas_administrador()
     async def chamada_status(self, interacao: discord.Interaction):
         dados = await admin_status_controle()
+        doutor = dados["doutor_em_chamada_id"]
+        doutor_txt = f"<@{doutor}>" if doutor else "_ninguém_"
         linhas = [
             f"**Em andamento:** `{'sim' if dados['chamada_em_andamento'] else 'não'}`",
-            f"**Doutor na chamada:** `{dados['doutor_em_chamada_id'] or '—'}`",
-            f"**Iniciada em:** `{dados['chamada_iniciada_em'] or '—'}`",
-            f"**Última chamada:** `{dados['ultima_chamada_em'] or '—'}`",
-            f"**Próximo horário:** `{dados['proximo_horario']}`",
+            f"**Doutor responsável:** {doutor_txt}",
+            f"**Iniciada em:** `{formatar_data_hora_local(dados['chamada_iniciada_em'])}`",
+            f"**Última chamada:** `{formatar_data_hora_local(dados['ultima_chamada_em'])}`",
+            f"**Próximo horário permitido:** `{formatar_data_hora_local(dados['proximo_horario'])}`",
             f"**Liberado agora:** `{'sim' if dados['liberado_agora'] else 'não'}`",
         ]
         await responder_info(
             interacao,
-            titulo="Status da chamada",
+            titulo="Chamada · status do sistema",
             linhas=linhas,
             delay=40,
         )
@@ -136,15 +139,15 @@ class ChamadaCog(commands.Cog):
         linhas = []
         for chamada in lista:
             linhas.append(
-                f"`#{chamada.id}` · Responsável: <@{chamada.doutor_id}> \n"
-                f"EMS `{chamada.total_medicos_ems}` Toggle `{chamada.total_toggle_ligado}` \n"
-                f"✓{chamada.total_presentes} ✗{chamada.total_ausentes} · "
-                f"`{chamada.criada_em}`"
-                f""
+                f"`#{chamada.id}` · doutor <@{chamada.doutor_id}> · "
+                f"EMS `{chamada.total_medicos_ems}` · "
+                f"toggle `{chamada.total_toggle_ligado}` · "
+                f"✓ `{chamada.total_presentes}` · ✗ `{chamada.total_ausentes}` · "
+                f"`{formatar_data_hora_local(chamada.criada_em)}`"
             )
         await responder_info(
             interacao,
-            titulo=f"Histórico ({len(lista)})",
+            titulo=f"Chamada · histórico ({len(lista)})",
             linhas=linhas,
             delay=60,
         )
@@ -170,14 +173,14 @@ class ChamadaCog(commands.Cog):
             return
         await responder_info(
             interacao,
-            titulo=f"Chamada #{chamada.id}",
+            titulo=f"Chamada · registro #{chamada.id}",
             linhas=[
-                f"**Doutor:** `{chamada.doutor_id}`",
-                f"**Médicos EMS:** `{chamada.total_medicos_ems}`",
+                f"**Doutor:** <@{chamada.doutor_id}>",
+                f"**Médicos no /ems:** `{chamada.total_medicos_ems}`",
                 f"**Toggle ligado:** `{chamada.total_toggle_ligado}`",
                 f"**Presentes:** `{chamada.total_presentes}`",
                 f"**Ausentes:** `{chamada.total_ausentes}`",
-                f"**Criada em:** `{chamada.criada_em}`",
+                f"**Criada em:** `{formatar_data_hora_local(chamada.criada_em)}`",
             ],
             delay=40,
         )
@@ -278,18 +281,17 @@ class ChamadaCog(commands.Cog):
         linhas = []
         for falta in lista:
             linhas.append(
-                f"`Falta #{falta.id}` · Usuário: <@{falta.discord_id}> "
-                f"Chamada `#{falta.chamada_id}` · `{falta.motivo}` \n"
-                f"`{falta.criado_em}`"
-                f""
+                f"`#{falta.id}` · <@{falta.discord_id}> · "
+                f"chamada `#{falta.chamada_id}` · _{falta.motivo}_ · "
+                f"`{formatar_data_hora_local(falta.criado_em)}`"
             )
         extra = ""
         if membro is not None:
             total = await admin_contar_faltas(membro.id)
-            extra = f" · Total do membro: **{total}**"
+            extra = f" · total do membro: **{total}**"
         await responder_info(
             interacao,
-            titulo=f"Faltas ({len(lista)}){extra}",
+            titulo=f"Chamada · faltas ({len(lista)}){extra}",
             linhas=linhas,
             delay=60,
         )

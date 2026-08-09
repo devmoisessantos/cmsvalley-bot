@@ -10,7 +10,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.plantao.plantao_panel import InformacoesPlantaoView, _buscar_estado
+from src.plantao.plantao_panel import (
+    InformacoesPlantaoView,
+    _buscar_estado,
+)
 from src.plantao.plantao_service import (
     admin_definir_moedas,
     admin_forcar_desligar,
@@ -18,6 +21,7 @@ from src.plantao.plantao_service import (
     consultar_estado_plantao,
     listar_em_servico,
 )
+from src.utils.formatacao import formatar_data_hora_local
 from src.utils.mensagens import (
     responder_erro,
     responder_info,
@@ -77,22 +81,23 @@ class PlantaoCog(commands.Cog):
             )
             return
 
+        canal_txt = (
+            f"<#{estado.canal_atual_id}>" if estado.canal_atual_id else "_fora de call_"
+        )
         linhas = [
-            f"**Membro:** {membro.mention} (`{membro.id}`)",
-            f"**ID FiveM:** `{estado.id_fivem or '—'}`",
+            f"**Membro:** {membro.mention}",
+            f"**FiveM:** `{estado.id_fivem or '—'}`",
             f"**Toggle:** `{'ligado' if estado.toggle_ligado else 'desligado'}`",
-            f"**Em call válida:** `{'sim' if estado.em_call_valida else 'não'}`",
-            f"**Canal atual:** `{estado.canal_atual_id or '—'}`",
-            f"**Moedas:** `{estado.saldo_moedas}`",
-            f"**Segundos acumulados:** `{estado.segundos_acumulados}`",
-            f"**Modo coordenação:** `{'sim' if estado.modo_coordenacao else 'não'}`",
-            f"**Lembretes ociosidade:** "
-            f"`{estado.lembrete_1_enviado}/{estado.lembrete_2_enviado}/{estado.lembrete_3_enviado}`",
-            f"**Última atualização:** `{estado.ultima_atualizacao}`",
+            f"**Call válida:** `{'sim' if estado.em_call_valida else 'não'}` · {canal_txt}",
+            f"**Moedas:** `{estado.saldo_moedas}` · **Segundos no segmento:** `{estado.segundos_acumulados}`",
+            f"**Coordenação:** `{'sim' if estado.modo_coordenacao else 'não'}`",
+            f"**Lembretes ociosidade (1/2/3):** "
+            f"`{int(estado.lembrete_1_enviado)}/{int(estado.lembrete_2_enviado)}/{int(estado.lembrete_3_enviado)}`",
+            f"**Última atualização:** `{formatar_data_hora_local(estado.ultima_atualizacao)}`",
         ]
         await responder_info(
             interacao,
-            titulo="Estado de plantão",
+            titulo=f"Plantão · {membro.display_name}",
             linhas=linhas,
             delay=45,
         )
@@ -115,13 +120,14 @@ class PlantaoCog(commands.Cog):
         linhas: list[str] = []
         for estado in lista:
             linhas.append(
-                f"`{estado.discord_id}` · ID `{estado.id_fivem or '—'}` · "
+                f"<@{estado.discord_id}> · FiveM `{estado.id_fivem or '—'}` · "
                 f"moedas `{estado.saldo_moedas}` · "
-                f"call `{'sim' if estado.em_call_valida else 'não'}`"
+                f"call `{'sim' if estado.em_call_valida else 'não'}` · "
+                f"`{formatar_data_hora_local(estado.ultima_atualizacao)}`"
             )
         await responder_info(
             interacao,
-            titulo=f"Em serviço ({len(lista)})",
+            titulo=f"Plantão · em serviço ({len(lista)})",
             linhas=linhas,
             delay=60,
         )

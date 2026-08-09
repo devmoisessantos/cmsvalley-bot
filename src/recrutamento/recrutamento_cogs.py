@@ -33,6 +33,7 @@ from src.recrutamento.recrutamento_service import (
     buscar_recrutamento_ativo,
     cancelar_recrutamento_ativo,
 )
+from src.utils.formatacao import formatar_data_hora_local
 from src.utils.mensagens import (
     responder_erro,
     responder_info,
@@ -91,25 +92,35 @@ class RecrutamentoCog(commands.Cog):
             )
             return
 
-        linhas = [
-            "**Ativo agora:** "
-            + (
-                f"`#{ativo.id}` · `{ativo.status}` · recrutador `<@{ativo.discord_id_recrutador}>`"
-                if ativo
-                else "_nenhum_"
-            ),
-            "",
-            "**Últimos registros:**",
-        ]
-        for rec in ultimos:
+        if ativo:
+            linhas = [
+                f"**Candidato:** {membro.mention}",
+                f"**Processo ativo:** `#{ativo.id}`",
+                f"**Status:** `{ativo.status}`",
+                f"**Recrutador:** <@{ativo.discord_id_recrutador}>",
+                f"**FiveM:** `{ativo.id_fivem or '—'}`",
+                f"**Formulário:** `{'aberto' if ativo.formulario_aberto else 'fechado'}`",
+                f"**Início:** `{formatar_data_hora_local(ativo.data_inicio)}`",
+            ]
+        else:
+            linhas = [
+                f"**Candidato:** {membro.mention}",
+                "**Processo ativo:** _nenhum_",
+            ]
+
+        linhas.append("")
+        linhas.append("**Histórico recente**")
+        for registro in ultimos:
             linhas.append(
-                f"`#{rec.id}` · `{rec.status}` · fivem `{rec.id_fivem or '—'}` · "
-                f"formulario `{'aberto' if rec.formulario_aberto else 'fechado'}` · "
-                f"`{rec.data_inicio}`"
+                f"`#{registro.id}` · **{registro.status}** · "
+                f"FiveM `{registro.id_fivem or '—'}` · "
+                f"Formulário `{'aberto' if registro.formulario_aberto else 'fechado'}` · "
+                f"`{formatar_data_hora_local(registro.data_inicio)}`"
             )
+
         await responder_info(
             interacao,
-            titulo=f"Recrutamento — {membro.display_name}",
+            titulo=f"Recrutamento · {membro.display_name}",
             linhas=linhas,
             delay=45,
         )

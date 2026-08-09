@@ -44,3 +44,25 @@ def formatar_data_hora(data_hora) -> str:
     nome_do_mes = MESES_ABREV[data_hora.month]
     horario = data_hora.strftime("%H:%M")
     return f"{data_hora.day} de {nome_do_mes} às {horario}"
+
+
+def formatar_data_hora_local(data_hora) -> str:
+    """
+    Converte datetime (UTC ou naive) para America/Sao_Paulo
+    no formato `YYYY-MM-DD HH:MM:SS`.
+
+    Exemplo: 2026-08-09 02:04:29
+    """
+    if data_hora is None:
+        return "—"
+
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+
+    from src.config import TIMEZONE_LOCAL
+
+    if data_hora.tzinfo is None:
+        data_hora = data_hora.replace(tzinfo=timezone.utc)
+
+    local = data_hora.astimezone(ZoneInfo(TIMEZONE_LOCAL))
+    return local.strftime("%Y-%m-%d %H:%M:%S")
