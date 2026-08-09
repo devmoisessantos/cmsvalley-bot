@@ -1131,6 +1131,10 @@ async def _criar_topico_print_ems(
     (mesmo espírito do tópico de provas das advertências).
     """
     thread: discord.Thread | None = None
+
+    if thread is None:
+        return None
+
     try:
         thread = await mensagem.create_thread(
             name="📁 Print /ems",
@@ -1151,9 +1155,7 @@ async def _criar_topico_print_ems(
             print(f"⚠️ [chamada] create_thread via canal falhou: {erro_canal}")
             thread = None
 
-    if thread is None:
-        return None
-
+    await asyncio.sleep(2)
     try:
         if url_print:
             # Link fora de Container para o Discord gerar preview da imagem
@@ -1166,6 +1168,17 @@ async def _criar_topico_print_ems(
             await thread.send("_Nenhum print do `/ems` foi anexado nesta chamada._")
     except discord.HTTPException as erro_envio:
         print(f"⚠️ [chamada] falha ao postar print no tópico: {erro_envio}")
+
+    try:
+        await thread.edit(
+            archived=True, locked=True, reason="Fechar tópico do Print EMS"
+        )
+    except discord.HTTPException as e:
+        print(f"⚠️ [Chamada] Falha ao fechar tópico: {e}")
+        try:
+            await thread.edit(archived=True, reason="Fechar tópico do print dp EMS ")
+        except discord.HTTPException as e2:
+            print(f"⚠️ [chamada] Fallback archived também falhou: {e2}")
 
     return thread
 
