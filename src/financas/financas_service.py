@@ -248,7 +248,9 @@ async def processar_fechamento_ranking(
         except discord.HTTPException as erro:
             logger.exception("Falha ao postar finanças %s: %s", chave_area, erro)
     else:
-        logger.warning("CANAL_FINANCAS não encontrado — fechamento %s sem post", chave_area)
+        logger.warning(
+            "CANAL_FINANCAS não encontrado — fechamento %s sem post", chave_area
+        )
 
     for diretor_id in DIRETOR_CONTROLE_FINANCEIRO_IDS:
         try:
