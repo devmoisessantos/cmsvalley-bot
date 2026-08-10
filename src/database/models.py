@@ -578,3 +578,16 @@ class AdvertenciaVerbalBau(Base):
     automatica: Mapped[bool] = mapped_column(Boolean, default=True)
     aplicada_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     criada_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+
+class ConfigBau(Base):
+    """Overrides de configuração do baú (limites, tolerância) editáveis pelo painel admin."""
+
+    __tablename__ = "config_bau"
+
+    chave: Mapped[str] = mapped_column(String(80), primary_key=True)
+    valor: Mapped[str] = mapped_column(String(200))
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+    atualizado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

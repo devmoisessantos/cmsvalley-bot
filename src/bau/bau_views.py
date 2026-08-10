@@ -5,11 +5,21 @@ from __future__ import annotations
 import discord
 
 from src.bau.bau_service import resolver_caso
-from src.config import CANAIS, PRAZO_DEVOLUCAO_BAU_MINUTOS
+from src.config import (
+    CANAIS,
+    PRAZO_DEVOLUCAO_BAU_MINUTOS,
+)
 from src.database.connection import async_session
 from src.database.models import CasoBau
-from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
-from src.utils.mensagens import responder_erro, responder_sucesso, responder_aviso
+from src.utils.error_handling import (
+    LoggingModalMixin,
+    LoggingViewMixin,
+)
+from src.utils.mensagens import (
+    responder_aviso,
+    responder_erro,
+    responder_sucesso,
+)
 
 
 class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
@@ -27,9 +37,17 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
         limite_1: int,
         limite_2: int | None,
     ) -> discord.ui.LayoutView:
-        cor = discord.Color.red() if caso.e_grave or caso.status == "PUNIDO" else discord.Color.orange()
-        mencao = f"<@{caso.discord_id}>" if caso.discord_id else "_Discord não vinculado_"
-        gravidade = "🔴 GRAVE (camada 2)" if caso.e_grave else "🟠 Limite diário (camada 1)"
+        cor = (
+            discord.Color.red()
+            if caso.e_grave or caso.status == "PUNIDO"
+            else discord.Color.orange()
+        )
+        mencao = (
+            f"<@{caso.discord_id}>" if caso.discord_id else "_Discord não vinculado_"
+        )
+        gravidade = (
+            "🔴 GRAVE (camada 2)" if caso.e_grave else "🟠 Limite diário (camada 1)"
+        )
         texto = (
             f"# 📦 REGISTRO DE CAIXA — BAÚ\n"
             f"> **{gravidade}**\n\n"
@@ -46,6 +64,7 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
             texto += "\n\n⚠️ **DM falhou** — avisar o membro no servidor."
 
         view = ViewCasoBau(caso_id=caso.id)
+        caso_fechado = caso.status in ("RESOLVIDO", "IGNORADO", "PUNIDO")
 
         linha = discord.ui.ActionRow()
         b_ok = discord.ui.Button(
@@ -53,6 +72,7 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
             style=discord.ButtonStyle.success,
             emoji="✅",
             custom_id=f"bau:devolveu:{caso.id}",
+            disabled=caso_fechado,
         )
         b_ok.callback = view._ao_devolveu
         linha.add_item(b_ok)
@@ -62,6 +82,7 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
             style=discord.ButtonStyle.danger,
             emoji="📌",
             custom_id=f"bau:ocorrencia:{caso.id}",
+            disabled=caso_fechado,
         )
         b_ocor.callback = view._ao_ocorrencia
         linha.add_item(b_ocor)
@@ -71,10 +92,13 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
             style=discord.ButtonStyle.secondary,
             emoji="🔕",
             custom_id=f"bau:ignorar:{caso.id}",
+            disabled=caso_fechado,
         )
         b_ign.callback = view._ao_ignorar
         linha.add_item(b_ign)
 
+        if caso_fechado:
+            texto += "\n\n-# Caso **" + str(caso.status) + "** — botões desativados."
         view.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(texto),
@@ -86,13 +110,28 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
         return view
 
     async def _ao_devolveu(self, interacao: discord.Interaction):
+        async with async_session() as sessao:
+            caso_atual = await sessao.get(CasoBau, self.caso_id)
+        if caso_atual is not None and caso_atual.status in (
+            "RESOLVIDO",
+            "IGNORADO",
+            "PUNIDO",
+        ):
+            await responder_aviso(
+                interacao,
+                titulo="Caso já encerrado",
+                linhas=[f"Status atual: `{caso_atual.status}`."],
+            )
+            return
         caso = await resolver_caso(
             self.caso_id,
             por_discord_id=interacao.user.id,
             status="RESOLVIDO",
         )
         if caso is None:
-            await responder_erro(interacao, titulo="Caso", linhas=["Caso não encontrado."])
+            await responder_erro(
+                interacao, titulo="Caso", linhas=["Caso não encontrado."]
+            )
             return
         await responder_sucesso(
             interacao,
@@ -126,7 +165,9 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
         await interacao.response.send_modal(ModalJustificarCaso(caso_id=self.caso_id))
 
 
-class ModalJustificarCaso(LoggingModalMixin, discord.ui.Modal, title="🔕 Justificar / Ignorar"):
+class ModalJustificarCaso(
+    LoggingModalMixin, discord.ui.Modal, title="🔕 Justificar / Ignorar"
+):
     motivo = discord.ui.TextInput(
         label="Motivo obrigatório",
         style=discord.TextStyle.paragraph,
@@ -147,7 +188,9 @@ class ModalJustificarCaso(LoggingModalMixin, discord.ui.Modal, title="🔕 Justi
             motivo_ignore=self.motivo.value.strip(),
         )
         if caso is None:
-            await responder_erro(interacao, titulo="Caso", linhas=["Caso não encontrado."])
+            await responder_erro(
+                interacao, titulo="Caso", linhas=["Caso não encontrado."]
+            )
             return
         await responder_sucesso(
             interacao,
@@ -185,7 +228,11 @@ class ViewDmDevolucao(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(texto),
-                linha if url else discord.ui.TextDisplay("-# Configure CANAL_TICKETS_BAU no config."),
+                linha
+                if url
+                else discord.ui.TextDisplay(
+                    "-# Configure CANAL_TICKETS_BAU no config."
+                ),
                 accent_color=discord.Color.orange(),
             )
         )

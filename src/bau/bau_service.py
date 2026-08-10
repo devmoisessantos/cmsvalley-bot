@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
 from zoneinfo import ZoneInfo
 
-import discord
-from sqlalchemy import and_, func, select
+from sqlalchemy import (
+    func,
+    select,
+)
 
-from src.bau.bau_parse import LogBauParseado, parsear_mensagem_log_bau
+from src.bau.bau_parse import (
+    LogBauParseado,
+    parsear_mensagem_log_bau,
+)
 from src.config import (
     ALIASES_ITENS_BAU,
     HORAS_RESET_CICLO_BAU,
@@ -17,14 +26,15 @@ from src.config import (
     LIMITES_BAU_CAMADA_2,
     PRAZO_DEVOLUCAO_BAU_MINUTOS,
     TIMEZONE_LOCAL,
+    TOLERANCIA_EXTRA_BAU,
     VERBAIS_PARA_ADV1_BAU,
 )
 from src.database.connection import async_session
 from src.database.models import (
     AdvertenciaVerbalBau,
     CasoBau,
+    ConfigBau,
     ContadorItemBau,
-    agora,
 )
 
 # Lock por id_fivem para não corromper contador em logs simultâneos
@@ -35,6 +45,71 @@ def _trava_do_id(id_fivem: str) -> asyncio.Lock:
     if id_fivem not in _travas_por_id:
         _travas_por_id[id_fivem] = asyncio.Lock()
     return _travas_por_id[id_fivem]
+
+
+async def obter_tolerancia_extra() -> int:
+    """Tolerância além do limite diário (padrão config, override no banco)."""
+    async with async_session() as sessao:
+        registro = await sessao.get(ConfigBau, "tolerancia_extra")
+        if registro is not None:
+            try:
+                return max(0, int(registro.valor))
+            except ValueError:
+                pass
+    return int(TOLERANCIA_EXTRA_BAU)
+
+
+async def obter_limites_camada_1() -> dict[str, int]:
+    limites = dict(LIMITES_BAU_CAMADA_1)
+    async with async_session() as sessao:
+        resultado = await sessao.execute(select(ConfigBau))
+        for registro in resultado.scalars().all():
+            if registro.chave.startswith("limite_1_"):
+                item = registro.chave.removeprefix("limite_1_")
+                try:
+                    limites[item] = int(registro.valor)
+                except ValueError:
+                    continue
+    return limites
+
+
+async def obter_limites_camada_2() -> dict[str, int]:
+    limites = dict(LIMITES_BAU_CAMADA_2)
+    async with async_session() as sessao:
+        resultado = await sessao.execute(select(ConfigBau))
+        for registro in resultado.scalars().all():
+            if registro.chave.startswith("limite_2_"):
+                item = registro.chave.removeprefix("limite_2_")
+                try:
+                    limites[item] = int(registro.valor)
+                except ValueError:
+                    continue
+    return limites
+
+
+async def salvar_config_bau(
+    chave: str,
+    valor: str,
+    *,
+    atualizado_por: int | None = None,
+) -> None:
+    async with async_session() as sessao:
+        registro = await sessao.get(ConfigBau, chave)
+        if registro is None:
+            registro = ConfigBau(chave=chave, valor=str(valor))
+            sessao.add(registro)
+        else:
+            registro.valor = str(valor)
+        registro.atualizado_por = atualizado_por
+        registro.atualizado_em = datetime.now(timezone.utc)
+        await sessao.commit()
+
+
+def quantidade_dispara_alerta(
+    quantidade: int, limite_diario: int, tolerancia: int
+) -> bool:
+    """True só se passou de limite + tolerância (ex.: limite 1, tol 1 → alerta em 3+)."""
+    return quantidade > (limite_diario + tolerancia)
 
 
 def chave_ciclo_atual(referencia: datetime | None = None) -> str:
@@ -51,7 +126,11 @@ def chave_ciclo_atual(referencia: datetime | None = None) -> str:
 
 async def resolver_discord_id(id_fivem: str) -> int | None:
     """Resolve Discord ID a partir do passaporte FiveM (Usuario → Plantão → Recrutamento)."""
-    from src.database.models import EstadoPlantao, Recrutamento, Usuario
+    from src.database.models import (
+        EstadoPlantao,
+        Recrutamento,
+        Usuario,
+    )
 
     id_texto = str(id_fivem).strip()
     async with async_session() as sessao:
@@ -376,16 +455,20 @@ async def processar_log_parseado(
                 ciclo=ciclo,
             )
 
-            limite_1 = LIMITES_BAU_CAMADA_1.get(item.item_canonico)
-            limite_2 = LIMITES_BAU_CAMADA_2.get(item.item_canonico)
+            limites_1 = await obter_limites_camada_1()
+            limites_2 = await obter_limites_camada_2()
+            tolerancia = await obter_tolerancia_extra()
+            limite_1 = limites_1.get(item.item_canonico)
+            limite_2 = limites_2.get(item.item_canonico)
             if limite_1 is None:
                 continue
 
-            # Devolução que volta abaixo do limite 1 → fecha caso aberto
-            if delta < 0 and quantidade < limite_1:
-                caso_aberto = await buscar_caso_aberto(
-                    log.id_fivem, item.item_canonico
-                )
+            # Máximo sem alerta = limite diário + tolerância (ex.: 1+1=2)
+            teto_sem_alerta = limite_1 + tolerancia
+
+            # Devolução que volta ao teto ou abaixo → fecha caso aberto
+            if delta < 0 and quantidade <= teto_sem_alerta:
+                caso_aberto = await buscar_caso_aberto(log.id_fivem, item.item_canonico)
                 if caso_aberto is not None:
                     await resolver_caso(
                         caso_aberto.id,
@@ -402,7 +485,8 @@ async def processar_log_parseado(
                     )
                 continue
 
-            if quantidade < limite_1:
+            # Só alerta acima de limite + tolerância
+            if not quantidade_dispara_alerta(quantidade, limite_1, tolerancia):
                 continue
 
             e_grave = limite_2 is not None and quantidade >= limite_2

@@ -218,8 +218,10 @@ CANAIS = {
     "CANAL_RANKING_LAUDOS": 1486369179044155685,
     "LOG_LAUDO": 1536242617573183508,
     "LOG_BAU": 1486369263479423047,  # logs do baú (servidor)
-    "CANAL_ALERTA_BAU": 1486369103777366106,  # ← preencher: alertas de excesso / casos
-    "CANAL_TICKETS_BAU": 1486369093769760843,  # ← preencher: canal/categoria de tickets (link DM)
+    "CANAL_ALERTA_BAU": 1486369103777366106,  # ← alertas de excesso / casos
+    "CANAL_PAINEL_BAU": 1536397321074511872,  # ← painel fixo (admin também usa /bau painel)
+    "CANAL_TICKETS_BAU": 1486369093769760843,  # ← canal/categoria de tickets (link DM)
+    "CANAL_TICKET_VALLEY": 1077995758785138758,
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
     "RANKING_RECRUTADORES": 1486369056574406736,  # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
     "RANKING_CHAMADAS": 1486369149792948356,
@@ -592,6 +594,11 @@ HORAS_RESET_CICLO_BAU = (0, 11, 17)
 
 # Minutos para devolver após estourar limite 1/2
 PRAZO_DEVOLUCAO_BAU_MINUTOS = 30
+
+# Quantidade extra tolerada além do limite diário sem gerar alerta.
+# Alerta só quando quantidade > limite_diario + TOLERANCIA_EXTRA_BAU
+# Ex.: limite 1 → até 2 ok; alerta a partir de 3. Cristal 10 → até 11 ok; alerta 12+.
+TOLERANCIA_EXTRA_BAU = 1
 
 # 3 verbais → sobe para ADV 1 (notifica diretoria; decisão manual depois)
 VERBAIS_PARA_ADV1_BAU = 3
