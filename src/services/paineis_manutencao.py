@@ -19,6 +19,7 @@ from src.guia.guia_setup import (
     garantir_painel_boas_vindas,
     garantir_painel_tutoriais,
 )
+from src.laudos.laudos_setup import garantir_painel_laudos
 from src.membros.membros_setup import (
     garantir_painel_gerenciar_cargos,
     garantir_painel_gerenciar_membros,
@@ -46,6 +47,7 @@ FUNCOES_GARANTIR_PAINEL = {
     "fazer_chamada": garantir_painel_fazer_chamada,
     "gerenciar_membros": garantir_painel_gerenciar_membros,
     "punicoes": garantir_painel_punicoes,
+    "laudos": garantir_painel_laudos,
 }
 
 NOMES_DOS_PAINEIS = list(FUNCOES_GARANTIR_PAINEL.keys())

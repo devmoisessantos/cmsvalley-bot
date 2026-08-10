@@ -20,6 +20,8 @@ from src.guia.guia_setup import (
     garantir_painel_tutoriais,
 )
 from src.guia.tutoriais_panel import PainelTutoriaisLayout
+from src.laudos.laudos_panel import PainelLaudosLayout
+from src.laudos.laudos_setup import garantir_painel_laudos
 from src.membros.cargos_panel import PainelGerenciarCargoLayout
 from src.membros.membros_panel import PainelGerenciarMembrosLayout
 from src.membros.membros_setup import (
@@ -92,6 +94,7 @@ class CmsValleyBot(commands.Bot):
             "src.recrutamento.ranking_tasks",
             "src.notificacoes.notificar_cogs",
             "src.templates.templates_cogs",
+            "src.laudos.laudos_cogs",
         ]
 
         total = len(cogs)
@@ -175,6 +178,7 @@ class CmsValleyBot(commands.Bot):
                 guild=guild
             )
             self.painel_punicoes_view = PainelPunicoesLayout(guild=guild)
+            self.painel_laudos_view = PainelLaudosLayout(guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -187,6 +191,7 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_whitelist_view)
         self.add_view(self.painel_gerenciar_cargos_view)
         self.add_view(self.painel_plantao_view)
+        self.add_view(self.painel_laudos_view)
         self.add_view(self.painel_eventos_gate_view)
         self.add_view(self.painel_boas_vindas_view)
         self.add_view(self.painel_tutoriais_view)
@@ -216,6 +221,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_fazer_chamada(self)
         await garantir_painel_gerenciar_membros(self)
         await garantir_painel_punicoes(self)
+        await garantir_painel_laudos(self)
 
         fim_deploy()
 

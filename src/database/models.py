@@ -451,3 +451,49 @@ class SnapshotCargosMembro(Base):
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=agora
     )
+
+
+# ---------------------------------------------------------------------------
+# Laudos psicológicos (porte de arma)
+# ---------------------------------------------------------------------------
+
+
+class ConsultaLaudo(Base):
+    """Consulta psicológica em andamento ou finalizada."""
+
+    __tablename__ = "consultas_laudo"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id_psicologo: Mapped[int] = mapped_column(BigInteger, index=True)
+    discord_id_paciente: Mapped[int] = mapped_column(BigInteger, index=True)
+    id_fivem_psicologo: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    id_fivem_paciente: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # ABERTA | FINALIZADA | CANCELADA
+    status: Mapped[str] = mapped_column(String(20), default="ABERTA", index=True)
+    iniciada_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+    finalizada_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class Laudo(Base):
+    """Laudo psicológico gerado ao final de uma consulta."""
+
+    __tablename__ = "laudos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    consulta_id: Mapped[int] = mapped_column(Integer, index=True)
+    discord_id_psicologo: Mapped[int] = mapped_column(BigInteger, index=True)
+    discord_id_paciente: Mapped[int] = mapped_column(BigInteger, index=True)
+    id_fivem_psicologo: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    id_fivem_paciente: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # APROVADO | REPROVADO
+    parecer: Mapped[str] = mapped_column(String(20))
+    motivo: Mapped[str] = mapped_column(String(1500))
+    registro_profissional: Mapped[str] = mapped_column(String(80))
+    canal_laudo_message_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
