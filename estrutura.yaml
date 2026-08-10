@@ -1,3 +1,4 @@
+```yaml
 📂 src/
 ├── 📄 __init__.py (0.0 B)
 ├── 📁 backup/
@@ -131,3 +132,4 @@
     ├── 📄 whitelist_cogs.py (1.9 KB)
     ├── 📄 whitelist_panel.py (5.0 KB)
     └── 📄 whitelist_service.py (5.4 KB)
+```

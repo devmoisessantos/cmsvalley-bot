@@ -217,6 +217,9 @@ CANAIS = {
     "CANAL_LAUDOS": 1486369162455683185,  # laudos publicados
     "CANAL_RANKING_LAUDOS": 1486369179044155685,
     "LOG_LAUDO": 1536242617573183508,
+    "LOG_BAU": 1486369263479423047,  # logs do baú (servidor)
+    "CANAL_ALERTA_BAU": 1486369103777366106,  # ← preencher: alertas de excesso / casos
+    "CANAL_TICKETS_BAU": 1486369093769760843,  # ← preencher: canal/categoria de tickets (link DM)
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
     "RANKING_RECRUTADORES": 1486369056574406736,  # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
     "RANKING_CHAMADAS": 1486369149792948356,
@@ -579,3 +582,59 @@ LIMITE_FALTAS_PARA_ADVERTENCIA = 3
 PENALIDADE_FALTA_MOEDAS = 1
 BONUS_PRESENCA_CHAMADA = 1
 BONUS_REALIZAR_CHAMADA = 1
+
+
+# ---------------------------------------------------------------------------
+# Baú do Hospital — limites por ciclo e políticas
+# ---------------------------------------------------------------------------
+# Ciclos de reset do contador (hora local TIMEZONE_LOCAL)
+HORAS_RESET_CICLO_BAU = (0, 11, 17)
+
+# Minutos para devolver após estourar limite 1/2
+PRAZO_DEVOLUCAO_BAU_MINUTOS = 30
+
+# 3 verbais → sobe para ADV 1 (notifica diretoria; decisão manual depois)
+VERBAIS_PARA_ADV1_BAU = 3
+
+# Limite 1: aviso + DM + timer (camada quantitativa)
+LIMITES_BAU_CAMADA_1 = {
+    "celular": 1,
+    "roupas": 1,
+    "mochila": 6,
+    "cristal": 10,
+    "radio": 1,
+    "repairkit": 5,
+}
+
+# Limite 2: grave — alerta reforçado à diretoria (mesmo contador, outro patamar)
+LIMITES_BAU_CAMADA_2 = {
+    "celular": 25,
+    "roupas": 25,
+    "mochila": 30,
+    "cristal": 30,
+    "radio": 25,
+    "repairkit": 20,
+}
+
+# Aliases normalizados (sem acento, lower) → chave canônica do limite
+ALIASES_ITENS_BAU = {
+    "celular": "celular",
+    "celulares": "celular",
+    "phone": "celular",
+    "roupas": "roupas",
+    "roupa": "roupas",
+    "clothes": "roupas",
+    "mochila": "mochila",
+    "mochilas": "mochila",
+    "bag": "mochila",
+    "cristal": "cristal",
+    "cristais": "cristal",
+    "crystal": "cristal",
+    "radio": "radio",
+    "rádio": "radio",
+    "radios": "radio",
+    "repairkit": "repairkit",
+    "repair kit": "repairkit",
+    "kit reparo": "repairkit",
+    "kitdereparo": "repairkit",
+}

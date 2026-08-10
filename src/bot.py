@@ -96,6 +96,9 @@ class CmsValleyBot(commands.Bot):
             "src.templates.templates_cogs",
             "src.laudos.laudos_cogs",
             "src.laudos.ranking_laudos_tasks",
+            "src.bau.bau_cogs",
+            "src.bau.bau_tasks",
+            "src.bau.bau_listener",
         ]
 
         total = len(cogs)
