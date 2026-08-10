@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import discord
 from sqlalchemy import select
 
+from src.bau.bau_setup import garantir_painel_bau
 from src.database.connection import async_session
 from src.database.models import PainelPostado
 from src.guia.guia_setup import (
@@ -48,6 +49,7 @@ FUNCOES_GARANTIR_PAINEL = {
     "gerenciar_membros": garantir_painel_gerenciar_membros,
     "punicoes": garantir_painel_punicoes,
     "laudos": garantir_painel_laudos,
+    "bau": garantir_painel_bau,
 }
 
 NOMES_DOS_PAINEIS = list(FUNCOES_GARANTIR_PAINEL.keys())

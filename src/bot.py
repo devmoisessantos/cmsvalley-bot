@@ -4,6 +4,8 @@ import traceback
 import discord
 from discord.ext import commands
 
+from src.bau.bau_panel import PainelBauLayout
+from src.bau.bau_setup import garantir_painel_bau
 from src.config import (
     CANAIS,
     DISCORD_TOKEN,
@@ -178,11 +180,10 @@ class CmsValleyBot(commands.Bot):
             self.painel_boas_vindas_view = PainelBoasVindasLayout(guild)
             self.painel_tutoriais_view = PainelTutoriaisLayout(guild)
             self.painel_fazer_chamada_view = PainelFazerChamadaLayout(guild=guild)
-            self.painel_gerenciar_membros_view = PainelGerenciarMembrosLayout(
-                guild=guild
-            )
             self.painel_punicoes_view = PainelPunicoesLayout(guild=guild)
+            self.painel_bau_view = PainelBauLayout(guild)
             self.painel_laudos_view = PainelLaudosLayout(guild)
+            self.painel_gerenciar_membros_view = PainelGerenciarMembrosLayout(guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -196,6 +197,7 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_gerenciar_cargos_view)
         self.add_view(self.painel_plantao_view)
         self.add_view(self.painel_laudos_view)
+        self.add_view(self.painel_bau_view)
         self.add_view(self.painel_eventos_gate_view)
         self.add_view(self.painel_boas_vindas_view)
         self.add_view(self.painel_tutoriais_view)
@@ -226,6 +228,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_gerenciar_membros(self)
         await garantir_painel_punicoes(self)
         await garantir_painel_laudos(self)
+        await garantir_painel_bau(self)
 
         fim_deploy()
 

@@ -611,6 +611,7 @@ LIMITES_BAU_CAMADA_1 = {
     "cristal": 10,
     "radio": 1,
     "repairkit": 5,
+    "mascara": 1,
 }
 
 # Limite 2: grave — alerta reforçado à diretoria (mesmo contador, outro patamar)
@@ -621,6 +622,7 @@ LIMITES_BAU_CAMADA_2 = {
     "cristal": 30,
     "radio": 25,
     "repairkit": 20,
+    "mascara": 20,
 }
 
 # Aliases normalizados (sem acento, lower) → chave canônica do limite
@@ -644,4 +646,6 @@ ALIASES_ITENS_BAU = {
     "repair kit": "repairkit",
     "kit reparo": "repairkit",
     "kitdereparo": "repairkit",
+    "mascara": "mascara",
+    "mascaras": "mascaras",
 }

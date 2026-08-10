@@ -21,6 +21,7 @@ from src.database.models import (
     CasoBau,
     ContadorItemBau,
 )
+from src.services.paineis_manutencao import recriar_painel
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
@@ -47,8 +48,29 @@ class BauCog(commands.Cog):
         self.bot = bot
 
     @grupo_bau.command(
+        name="publicar",
+        description="[Admin] Publica ou recria o painel de controle no CANAL_PAINEL_BAU",
+    )
+    @apenas_administrador()
+    async def publicar(self, interacao: discord.Interaction):
+        await interacao.response.defer(ephemeral=True)
+        resultado = await recriar_painel(self.bot, "bau")
+        if resultado.ok:
+            await responder_sucesso(
+                interacao,
+                titulo="Painel do baú",
+                linhas=[resultado.mensagem],
+            )
+        else:
+            await responder_erro(
+                interacao,
+                titulo="Falha ao publicar painel",
+                linhas=[resultado.mensagem],
+            )
+
+    @grupo_bau.command(
         name="painel",
-        description="[Admin] Painel ephemeral de gestão do sistema de baú",
+        description="[Admin] Painel ephemeral de gestão avançada do baú",
     )
     @apenas_administrador()
     async def painel(self, interacao: discord.Interaction):
