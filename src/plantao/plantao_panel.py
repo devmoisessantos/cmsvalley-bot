@@ -166,20 +166,16 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         icon_url = guild.icon.url if guild.icon else None
 
         container = discord.ui.Container(
-            discord.ui.TextDisplay(
-                "# 🛡️ Central de Plantão\n"
-                "> **Gerencie seu status de serviço e acumule recompensas.**"
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.Section(
-                "## Sistema de Recompensas",
-                (
-                    "Utilize os botões abaixo para iniciar ou encerrar seu plantão.\n"
-                    "**Lembre-se:** você deve estar em uma call de voz para acumular tempo!"
-                ),
+                "# 🛡️ Central de Plantão\n",
+                ("> **Gerencie seu status de serviço e acumule recompensas.**"),
                 accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
             ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(
+                "## Sistema de Recompensas\n\n"
+                "Utilize os botões abaixo para iniciar ou encerrar seu plantão.\n"
+                "**Lembre-se:** você deve estar em uma call de voz para acumular tempo!\n\n\n"
                 "💰 **Recompensa:** 1 Moeda (Valor: $100.000) a cada **30 min**.\n"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
