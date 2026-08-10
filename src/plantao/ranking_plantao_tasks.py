@@ -127,6 +127,27 @@ class RankingPlantaoTasks(commands.Cog):
                 channel_id=canal.id,
                 message_id=msg.id,
             )
+            # Só chamadas geram pagamento unitário (horas = moedas no bot)
+            if categoria == "chamada":
+                try:
+                    from src.config import VALOR_UNITARIO_RANKING
+                    from src.financas.financas_service import (
+                        processar_fechamento_ranking,
+                    )
+
+                    await processar_fechamento_ranking(
+                        self.bot,
+                        guild,
+                        chave_area="chamadas",
+                        contagem=contagem,
+                        inicio=inicio,
+                        fim=fim,
+                        total_unidades=total,
+                        total_pago=total * VALOR_UNITARIO_RANKING,
+                    )
+                except Exception as erro_fin:
+                    logger.exception("Fechamento financeiro chamadas: %s", erro_fin)
+
             logger.info(f"✅ Ranking {tipo_hist} postado em #{canal.name}")
             return True
         except Exception as e:

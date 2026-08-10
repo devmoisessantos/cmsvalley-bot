@@ -101,6 +101,7 @@ class CmsValleyBot(commands.Bot):
             "src.bau.bau_cogs",
             "src.bau.bau_tasks",
             "src.bau.bau_listener",
+            "src.financas.financas_cogs",
         ]
 
         total = len(cogs)
@@ -180,10 +181,12 @@ class CmsValleyBot(commands.Bot):
             self.painel_boas_vindas_view = PainelBoasVindasLayout(guild)
             self.painel_tutoriais_view = PainelTutoriaisLayout(guild)
             self.painel_fazer_chamada_view = PainelFazerChamadaLayout(guild=guild)
+            self.painel_gerenciar_membros_view = PainelGerenciarMembrosLayout(
+                guild=guild
+            )
             self.painel_punicoes_view = PainelPunicoesLayout(guild=guild)
-            self.painel_bau_view = PainelBauLayout(guild)
             self.painel_laudos_view = PainelLaudosLayout(guild)
-            self.painel_gerenciar_membros_view = PainelGerenciarMembrosLayout(guild)
+            self.painel_bau_view = PainelBauLayout(guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)

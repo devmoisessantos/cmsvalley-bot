@@ -200,11 +200,58 @@ COOLDOWN_REPROVACAO_HORAS = 24
 TEMPO_LIMITE_PROVA_MINUTOS = 60
 NOTA_MINIMA_APROVACAO = 70
 
-# Ranking semanal de recrutadores
-VALOR_POR_RECRUTAMENTO = 100_000  # R$ 100.000 por recrutamento aprovado
+# Rankings que geram pagamento (mesmo valor unitário)
+VALOR_UNITARIO_RANKING = 100_000  # laudo, recrutamento, chamada
+VALOR_POR_RECRUTAMENTO = VALOR_UNITARIO_RANKING  # alias legado
 RANKING_HORA_POST = 11  # sábado 11h — postagem do ranking
 RANKING_HORA_INICIO_CICLO = 12  # sábado 12h — início do novo ciclo
 RANKING_DIA_POST_MENSAL = 1
+
+# DMs de controle financeiro (IDs Discord, separados por vírgula no .env)
+DIRETOR_CONTROLE_FINANCEIRO_IDS = [
+    int(parte.strip())
+    for parte in os.getenv(
+        "DIRETOR_CONTROLE_FINANCEIRO_IDS", "859100649366356000"
+    ).split(",")
+    if parte.strip().isdigit()
+]
+
+# Metadados por área para solicitação no canal de finanças
+# responsavel_discord_id / responsavel_fid podem ficar None/"—" até cadastrar
+AREAS_FINANCEIRAS = {
+    "recrutamento": {
+        "titulo": "RECRUTADORES",
+        "unidade": "recrutamento",
+        "unidade_plural": "recrutamentos",
+        "cargo_id": CARGOS.get("👑・Responsável Recrutamento・🎯"),
+        "responsavel_discord_id": None,
+        "responsavel_fid": "—",
+    },
+    "laudos": {
+        "titulo": "LAUDOS",
+        "unidade": "laudo",
+        "unidade_plural": "laudos",
+        "cargo_id": CARGOS.get("👑・Responsável Psicólogo・🧠"),
+        "responsavel_discord_id": None,
+        "responsavel_fid": "—",
+    },
+    "chamadas": {
+        "titulo": "CHAMADAS",
+        "unidade": "chamada",
+        "unidade_plural": "chamadas",
+        "cargo_id": CARGOS.get("👑・Responsável Doutor・🥼"),
+        "responsavel_discord_id": None,
+        "responsavel_fid": "—",
+    },
+    "plantao_moedas": {
+        "titulo": "PLANTÃO (TROCA DE MOEDAS)",
+        "unidade": "moeda",
+        "unidade_plural": "moedas",
+        "cargo_id": None,
+        "responsavel_discord_id": None,
+        "responsavel_fid": "—",
+    },
+}
 
 CANAIS = {
     "CANAL_MARCAR_PRESENCA_GATE": 1533997231475261571,
@@ -227,6 +274,8 @@ CANAIS = {
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
     "RANKING_RECRUTADORES": 1486369056574406736,  # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
     "RANKING_CHAMADAS": 1486369149792948356,
+    # Finanças — solicitações de pagamento de área / troca de moedas plantão
+    "CANAL_FINANCAS": 1486369137021161472,
     "RANKING_HORAS_PLANTAO": 1534862719457427466,
     "CRIAR_EVENTO_GATE": 1533993716635799643,
     "WHITELIST_CANAL_ID": 1528299364970266657,

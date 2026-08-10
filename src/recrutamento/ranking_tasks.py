@@ -13,7 +13,10 @@ from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import (
+    commands,
+    tasks,
+)
 
 from src.config import (
     CANAIS,
@@ -122,6 +125,23 @@ class RankingRecrutadoresTasks(commands.Cog):
                 channel_id=canal.id,
                 message_id=msg.id,
             )
+            # Fechamento financeiro (finanças + DM controle)
+            try:
+                from src.financas.financas_service import processar_fechamento_ranking
+
+                await processar_fechamento_ranking(
+                    self.bot,
+                    guild,
+                    chave_area="recrutamento",
+                    contagem=contagem,
+                    inicio=inicio,
+                    fim=fim,
+                    total_unidades=total_rec,
+                    total_pago=total_pago,
+                )
+            except Exception as erro_fin:
+                logger.exception("Fechamento financeiro recrutamento: %s", erro_fin)
+
             logger.info(
                 f"✅ Ranking {tipo} postado em #{canal.name} e salvo no histórico"
             )

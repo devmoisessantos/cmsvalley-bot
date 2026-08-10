@@ -287,6 +287,91 @@ async def admin_definir_moedas(discord_id: int, novo_saldo: int) -> EstadoPlanta
         return estado
 
 
+async def solicitar_troca_moedas(
+    membro: discord.Member,
+    quantidade_moedas: int,
+) -> tuple[bool, str, int, int]:
+    """
+    Debita moedas do saldo e prepara dados para solicitação no canal de finanças.
+
+    Retorna (ok, mensagem, saldo_restante, valor_ingame).
+    Não envia mensagem no Discord — o painel/logger faz isso.
+    """
+    if quantidade_moedas <= 0:
+        return False, "Informe uma quantidade maior que zero.", 0, 0
+
+    async with async_session() as session:
+        estado = await _obter_ou_criar_estado(session, membro.id)
+        saldo_atual = int(estado.saldo_moedas or 0)
+        if quantidade_moedas > saldo_atual:
+            return (
+                False,
+                f"Saldo insuficiente. Você tem **{saldo_atual}** moeda(s).",
+                saldo_atual,
+                0,
+            )
+
+        estado.saldo_moedas = saldo_atual - quantidade_moedas
+        await session.commit()
+        saldo_restante = int(estado.saldo_moedas)
+        id_fivem = estado.id_fivem
+
+    valor_ingame = quantidade_moedas * VALOR_MOEDA_INGAME
+
+    await registrar_evento_plantao(
+        membro.guild,
+        membro,
+        "TROCA_MOEDAS_SOLICITADA",
+        {
+            "Moedas trocadas": str(quantidade_moedas),
+            "Valor in-game": formatar_dinheiro(valor_ingame),
+            "Saldo restante": str(saldo_restante),
+            "ID FiveM": id_fivem or "—",
+        },
+    )
+
+    return (
+        True,
+        (
+            f"**{quantidade_moedas}** moeda(s) → {formatar_dinheiro(valor_ingame)}. "
+            f"Saldo restante: **{saldo_restante}**."
+        ),
+        saldo_restante,
+        valor_ingame,
+    )
+
+
+def montar_texto_solicitacao_troca_moedas(
+    *,
+    membro: discord.Member,
+    id_fivem: str | None,
+    quantidade_moedas: int,
+    valor_ingame: int,
+) -> str:
+    """Template do canal de finanças para troca de moedas de plantão."""
+    fid = id_fivem or "—"
+    from datetime import (
+        datetime,
+        timezone,
+    )
+
+    agora = datetime.now(timezone.utc)
+    periodo = agora.strftime("%d/%m/%Y")
+    return (
+        "# 💰・SOLICITAÇÃO - PAGAMENTO DE ÁREA\n"
+        "**=============================**\n"
+        f"• 👨‍⚕️ **Responsável:** {membro.mention}\n"
+        f"• 🆔 **FID:** {fid}\n"
+        f"• 🎯 **Área Médica:** Plantão (troca de moedas)\n"
+        f"• 💰 **Valor Semanal:** {formatar_dinheiro(valor_ingame)}\n"
+        f"• 📅 **Período:** {periodo}\n"
+        f"• 🧾 **Observações (se houver):** "
+        f"_Troca de **{quantidade_moedas}** moeda(s) de plantão por dinheiro in-game "
+        f"({formatar_dinheiro(VALOR_MOEDA_INGAME)} cada). Discord `{membro.id}`._\n"
+        "**=============================**"
+    )
+
+
 async def admin_forcar_desligar(discord_id: int) -> bool:
     """
     Desliga toggle e zera campos de call/ociosidade no banco.
@@ -326,4 +411,3 @@ async def admin_limpar_estado(discord_id: int) -> bool:
         await session.delete(estado)
         await session.commit()
         return True
-

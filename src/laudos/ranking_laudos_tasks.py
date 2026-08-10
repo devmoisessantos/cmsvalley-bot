@@ -112,6 +112,23 @@ class RankingLaudosTasks(commands.Cog):
                 channel_id=canal.id,
                 message_id=mensagem.id,
             )
+            try:
+                from src.config import VALOR_UNITARIO_RANKING
+                from src.financas.financas_service import processar_fechamento_ranking
+
+                await processar_fechamento_ranking(
+                    self.bot,
+                    guilda,
+                    chave_area="laudos",
+                    contagem=contagem,
+                    inicio=inicio,
+                    fim=fim,
+                    total_unidades=total,
+                    total_pago=total * VALOR_UNITARIO_RANKING,
+                )
+            except Exception as erro_fin:
+                logger.exception("Fechamento financeiro laudos: %s", erro_fin)
+
             logger.info(
                 "Ranking laudos %s postado em #%s (total=%s)",
                 periodo,

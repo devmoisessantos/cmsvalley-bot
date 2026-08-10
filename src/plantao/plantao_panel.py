@@ -20,12 +20,18 @@ from src.plantao.plantao_service import (
     garantir_aware,
     ligar_servico,
     membro_pode_informar_id_manualmente,
+    solicitar_troca_moedas,
 )
 from src.recrutamento.recrutamento_service import resolver_id_fivem
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.formatacao import (
     formatar_dinheiro,
     formatar_hms,
+)
+from src.utils.mensagens import (
+    responder_aviso,
+    responder_erro,
+    responder_sucesso,
 )
 
 logger = logging.getLogger(__name__)
@@ -337,6 +343,15 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         botao.callback = self._callback_toggle
         row_botao.add_item(botao)
 
+        botao_troca = discord.ui.Button(
+            label="Trocar moedas",
+            style=discord.ButtonStyle.primary,
+            emoji="💵",
+            disabled=(saldo <= 0),
+        )
+        botao_troca.callback = self._callback_trocar_moedas
+        row_botao.add_item(botao_troca)
+
         avatar_url = membro.display_avatar.url
         componentes = [
             discord.ui.Section(
@@ -402,6 +417,20 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
         await interaction.edit_original_response(view=nova_view)
 
+    async def _callback_trocar_moedas(self, interaction: discord.Interaction):
+        estado = await _buscar_estado(interaction.user.id)
+        saldo = estado.saldo_moedas if estado else 0
+        if saldo <= 0:
+            await responder_aviso(
+                interaction,
+                titulo="Sem moedas",
+                linhas=["Você não tem moedas para trocar."],
+            )
+            return
+        await interaction.response.send_modal(
+            ModalTrocarMoedasPlantao(saldo_disponivel=saldo)
+        )
+
     async def _callback_selecionar_call(self, interaction: discord.Interaction):
         canal_id = int(interaction.data["values"][0])
         nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
@@ -426,3 +455,110 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
         await interaction.response.send_message(view=view_link, ephemeral=True)
+
+
+class ModalTrocarMoedasPlantao(discord.ui.Modal, title="💵 Trocar moedas por dinheiro"):
+    quantidade_input = discord.ui.TextInput(
+        label="Quantidade de moedas",
+        placeholder="Ex: 5",
+        required=True,
+        max_length=4,
+    )
+
+    def __init__(self, saldo_disponivel: int):
+        super().__init__()
+        self.saldo_disponivel = saldo_disponivel
+        self.quantidade_input.placeholder = f"Saldo disponível: {saldo_disponivel}"
+
+    async def on_submit(self, interaction: discord.Interaction):
+        bruto = self.quantidade_input.value.strip()
+        if not bruto.isdigit():
+            await responder_erro(
+                interaction,
+                titulo="Quantidade inválida",
+                linhas=["Informe um número inteiro de moedas."],
+            )
+            return
+
+        quantidade = int(bruto)
+        if not isinstance(interaction.user, discord.Member):
+            await responder_erro(
+                interaction,
+                titulo="Contexto inválido",
+                linhas=["Use este recurso dentro do servidor."],
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        ok, mensagem, saldo_restante, valor_ingame = await solicitar_troca_moedas(
+            interaction.user,
+            quantidade,
+        )
+        if not ok:
+            await responder_erro(
+                interaction,
+                titulo="Troca não realizada",
+                linhas=[mensagem],
+            )
+            return
+
+        estado = await _buscar_estado(interaction.user.id)
+        id_fivem = estado.id_fivem if estado else None
+        if not id_fivem:
+            id_fivem = await resolver_id_fivem(interaction.user.id)
+
+        postou = False
+        if interaction.guild is not None:
+            from src.financas.financas_service import publicar_solicitacao_troca_moedas
+
+            try:
+                postou = await publicar_solicitacao_troca_moedas(
+                    interaction.guild,
+                    membro=interaction.user,
+                    id_fivem=id_fivem,
+                    quantidade_moedas=quantidade,
+                    valor_ingame=valor_ingame,
+                )
+            except discord.HTTPException as erro:
+                await responder_aviso(
+                    interaction,
+                    titulo="Moedas debitadas — falha no canal",
+                    linhas=[
+                        mensagem,
+                        f"Erro ao enviar no canal de finanças: `{erro}`",
+                    ],
+                    delay=20,
+                )
+                postou = False
+
+        if postou:
+            await responder_sucesso(
+                interaction,
+                titulo="Solicitação enviada",
+                linhas=[
+                    mensagem,
+                    "Pedido publicado no **canal de finanças** (com botão de confirmação).",
+                    "Aguarde a equipe processar o pagamento in-game.",
+                ],
+                delay=15,
+            )
+        else:
+            await responder_aviso(
+                interaction,
+                titulo="Moedas debitadas — finanças offline",
+                linhas=[
+                    mensagem,
+                    "Não foi possível postar no canal de finanças.",
+                    "Avise a diretoria manualmente.",
+                ],
+                delay=20,
+            )
+
+        # Atualiza a ficha de informações se ainda for a mensagem original
+        try:
+            novo_estado = await _buscar_estado(interaction.user.id)
+            nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+            await interaction.edit_original_response(view=nova_view)
+        except discord.HTTPException:
+            pass
