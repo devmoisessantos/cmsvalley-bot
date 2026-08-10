@@ -32,13 +32,23 @@ async def publicar_laudo_nos_canais(
             if laudo.parecer == "APROVADO"
             else discord.Color.red()
         )
+
+        # Thumbnail: paciente se estiver no servidor; senão, psicólogo
+        if paciente is not None:
+            url_thumbnail = paciente.display_avatar.url
+        else:
+            url_thumbnail = psicologo.display_avatar.url
+
+        # Section aceita *strings/TextDisplay*, NÃO tuple — isso gerava TypeError
+        cabecalho = discord.ui.Section(
+            "# 📋 **LAUDO PSICOLÓGICO** — CMS Valley\n"
+            "> Avaliação para porte de arma de fogo.",
+            accessory=discord.ui.Thumbnail(url_thumbnail),
+        )
+
         layout.add_item(
             discord.ui.Container(
-                discord.ui.Section(
-                    "# 📋 **LAUDO PSICOLÓGICO** — CMS Valley",
-                    ("> Avaliação para porte de arma de fogo.**\n",),
-                    accessory=discord.ui.Thumbnail(paciente.display_avatar.url),
-                ),
+                cabecalho,
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(texto_laudo),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
@@ -46,7 +56,7 @@ async def publicar_laudo_nos_canais(
                     f"-# Registro `#{laudo.id}` · Consulta `#{laudo.consulta_id}` · {guild.name}"
                 ),
                 accent_color=cor,
-            ),
+            )
         )
         mensagem_publica = await canal_laudos.send(view=layout)
 
