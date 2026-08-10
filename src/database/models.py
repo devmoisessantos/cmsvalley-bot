@@ -497,3 +497,84 @@ class Laudo(Base):
         BigInteger, nullable=True
     )
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+
+# ---------------------------------------------------------------------------
+# Baú do Hospital — contadores, casos e advertências verbais
+# ---------------------------------------------------------------------------
+
+
+class ContadorItemBau(Base):
+    """Quantidade líquida retirada por item no ciclo atual (por passaporte FiveM)."""
+
+    __tablename__ = "contadores_item_bau"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_fivem: Mapped[str] = mapped_column(String(20), index=True)
+    nome_cidade: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    item_canonico: Mapped[str] = mapped_column(String(40), index=True)
+    quantidade: Mapped[int] = mapped_column(Integer, default=0)
+    ciclo_chave: Mapped[str] = mapped_column(
+        String(32), index=True
+    )  # ex: 2026-08-10_00
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+
+
+class CasoBau(Base):
+    """Caso de excesso de baú — sobrevive a reset de ciclo até ser resolvido."""
+
+    __tablename__ = "casos_bau"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_fivem: Mapped[str] = mapped_column(String(20), index=True)
+    nome_cidade: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    discord_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
+    item_canonico: Mapped[str] = mapped_column(String(40), index=True)
+    quantidade_atual: Mapped[int] = mapped_column(Integer, default=0)
+    # AGUARDANDO | GRAVE | RESOLVIDO | IGNORADO | PUNIDO
+    status: Mapped[str] = mapped_column(String(20), default="AGUARDANDO", index=True)
+    e_grave: Mapped[bool] = mapped_column(Boolean, default=False)
+    dm_falhou: Mapped[bool] = mapped_column(Boolean, default=False)
+    dm_enviada_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expira_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    canal_alerta_message_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    motivo_ignore: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolvido_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    resolvido_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+
+
+class AdvertenciaVerbalBau(Base):
+    """Prontuário permanente de advertências verbais do baú (nunca reseta)."""
+
+    __tablename__ = "advertencias_verbais_bau"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id_fivem: Mapped[str] = mapped_column(String(20), index=True)
+    discord_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
+    nome_cidade: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    caso_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    item_canonico: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    motivo: Mapped[str] = mapped_column(String(500))
+    # VERBAL | ADV1_ESCALADA
+    tipo: Mapped[str] = mapped_column(String(20), default="VERBAL")
+    automatica: Mapped[bool] = mapped_column(Boolean, default=True)
+    aplicada_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    criada_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
