@@ -5,7 +5,6 @@ from src.config import (
     CANAIS,
     CANAL_PAINEL_RECRUTAMENTO_ID,
     GUILD_ID,
-    LOGO_PATH,
 )
 from src.database.connection import async_session
 from src.database.models import PainelPostado
@@ -97,8 +96,8 @@ async def garantir_painel_recrutamento(
             print("❌ Guild não encontrada!")
             return
 
-        arquivo = discord.File(LOGO_PATH, filename="logo.png")
-        mensagem = await canal.send(view=PainelRecrutamentoLayout(guild), file=arquivo)
+        # Painéis usam o ícone do servidor (Thumbnail); não dependem de assets/logo.png
+        mensagem = await canal.send(view=PainelRecrutamentoLayout(guild))
 
         novo_registro = PainelPostado(
             nome_painel="recrutamento",
@@ -142,8 +141,7 @@ async def garantir_painel_avaliacao(
             print("❌ Guild não encontrada!")
             return
 
-        arquivo = discord.File(LOGO_PATH, filename="logo.png")
-        mensagem = await canal.send(view=PainelAvaliacaoLayout(guild), file=arquivo)
+        mensagem = await canal.send(view=PainelAvaliacaoLayout(guild))
 
         # Salva o registro no banco
         novo_registro = PainelPostado(
@@ -184,8 +182,7 @@ async def garantir_painel_plantao(
             print("❌ Guild não encontrada!")
             return
 
-        arquivo = discord.File(LOGO_PATH, filename="logo.png")
-        mensagem = await canal.send(view=PainelPlantaoLayout(guild=guild), file=arquivo)
+        mensagem = await canal.send(view=PainelPlantaoLayout(guild=guild))
 
         # Salva o registro no banco
         novo_registro = PainelPostado(

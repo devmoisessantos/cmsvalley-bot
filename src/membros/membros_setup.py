@@ -12,7 +12,6 @@ from sqlalchemy import select
 from src.config import (
     CANAIS,
     GUILD_ID,
-    LOGO_PATH,
 )
 from src.database.connection import async_session
 from src.database.models import PainelPostado
@@ -56,9 +55,8 @@ async def garantir_painel_gerenciar_cargos(
             print("❌ Guild não encontrada!")
             return
 
-        arquivo_da_logo = discord.File(LOGO_PATH, filename="logo.png")
         view_do_painel = PainelGerenciarCargoLayout(guild=guilda)
-        mensagem = await canal.send(view=view_do_painel, file=arquivo_da_logo)
+        mensagem = await canal.send(view=view_do_painel)
 
         sessao.add(
             PainelPostado(

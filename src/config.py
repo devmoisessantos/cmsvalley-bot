@@ -9,7 +9,8 @@ GUILD_ID = int(os.getenv("GUILD_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 # preencha com o ID do canal onde o painel vai ficar
 CANAL_PAINEL_RECRUTAMENTO_ID = 1486369071590281326
-LOGO_PATH = "assets/logo.png"
+# Legado — painéis usam guild.icon; não exigir arquivo local
+# LOGO_PATH = "assets/logo.png"
 
 BACKUP_DIR = os.getenv("BACKUP_DIR", "data/backups")
 MAX_BACKUPS_PER_GUILD = int(os.getenv("MAX_BACKUPS_PER_GUILD", 10))
