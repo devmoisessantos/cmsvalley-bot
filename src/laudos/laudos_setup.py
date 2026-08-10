@@ -5,7 +5,10 @@ from __future__ import annotations
 import discord
 from sqlalchemy import select
 
-from src.config import CANAIS, GUILD_ID
+from src.config import (
+    CANAIS,
+    GUILD_ID,
+)
 from src.database.connection import async_session
 from src.database.models import PainelPostado
 from src.laudos.laudos_panel import PainelLaudosLayout

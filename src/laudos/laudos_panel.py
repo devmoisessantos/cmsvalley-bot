@@ -20,6 +20,7 @@ from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
     responder_sucesso,
+    responder_view,
 )
 
 TEXTO_PAINEL = (
@@ -109,79 +110,109 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         return True
 
     async def _ao_iniciar_consulta(self, interacao: discord.Interaction):
-        if not await self._checar_psicologo(interacao):
+        """Abre o seletor de paciente. Resposta imediata para evitar 10062."""
+        try:
+            if not await self._checar_psicologo(interacao):
+                return
+            await responder_view(
+                interacao,
+                ViewSelecionarPaciente(interacao.user.id),
+                ephemeral=True,
+            )
+        except discord.NotFound:
             return
-        await interacao.response.send_message(
-            view=ViewSelecionarPaciente(interacao.user.id),
-            ephemeral=True,
-        )
+        except discord.HTTPException as erro_http:
+            print(f"⚠️ [laudos] iniciar consulta HTTP: {erro_http}")
 
     async def _ao_gerar_laudo(self, interacao: discord.Interaction):
-        if not await self._checar_psicologo(interacao):
-            return
-        consulta = await buscar_consulta_aberta(interacao.user.id)
-        if consulta is None:
-            await responder_aviso(
-                interacao,
-                titulo="Consulta não iniciada",
-                linhas=[
-                    "Você precisa clicar em **Iniciar Consulta** e selecionar o paciente "
-                    "antes de gerar o laudo.",
-                ],
+        """Abre o modal do laudo se houver consulta aberta."""
+        try:
+            if not isinstance(interacao.user, discord.Member):
+                await responder_erro(
+                    interacao,
+                    titulo="Contexto inválido",
+                    linhas=["Use este painel dentro do servidor."],
+                )
+                return
+            if not membro_e_psicologo(interacao.user):
+                await responder_erro(
+                    interacao,
+                    titulo="Sem permissão",
+                    linhas=[
+                        "Apenas **Psicólogo** ou **Responsável Psicólogo** podem usar este painel.",
+                    ],
+                )
+                return
+
+            consulta = await buscar_consulta_aberta(interacao.user.id)
+            if consulta is None:
+                await responder_aviso(
+                    interacao,
+                    titulo="Consulta não iniciada",
+                    linhas=[
+                        "Você precisa clicar em **Iniciar Consulta** e selecionar o paciente "
+                        "antes de gerar o laudo.",
+                    ],
+                )
+                return
+
+            if interacao.response.is_done():
+                return
+            await interacao.response.send_modal(
+                ModalGerarLaudo(
+                    consulta_id=consulta.id,
+                    paciente_id=consulta.discord_id_paciente,
+                )
             )
+        except discord.NotFound:
             return
-        await interacao.response.send_modal(
-            ModalGerarLaudo(
-                consulta_id=consulta.id,
-                paciente_id=consulta.discord_id_paciente,
-            )
-        )
+        except discord.HTTPException as erro_http:
+            print(f"⚠️ [laudos] gerar laudo HTTP: {erro_http}")
 
     async def _ao_cancelar_consulta(self, interacao: discord.Interaction):
-        if not await self._checar_psicologo(interacao):
+        try:
+            if not await self._checar_psicologo(interacao):
+                return
+            ok, mensagem = await cancelar_consulta_aberta(interacao.user.id)
+            if ok:
+                await responder_sucesso(
+                    interacao,
+                    titulo="Consulta cancelada",
+                    linhas=[mensagem],
+                )
+            else:
+                await responder_aviso(
+                    interacao,
+                    titulo="Nada a cancelar",
+                    linhas=[mensagem],
+                )
+        except discord.NotFound:
             return
-        ok, mensagem = await cancelar_consulta_aberta(interacao.user.id)
-        if ok:
-            await responder_sucesso(
-                interacao,
-                titulo="Consulta cancelada",
-                linhas=[mensagem],
-            )
-        else:
-            await responder_aviso(
-                interacao,
-                titulo="Nada a cancelar",
-                linhas=[mensagem],
-            )
+        except discord.HTTPException as erro_http:
+            print(f"⚠️ [laudos] cancelar consulta HTTP: {erro_http}")
 
 
-class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
-    """Select efêmero para escolher o paciente da consulta."""
+class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.View):
+    """
+    Select efêmero para escolher o paciente.
+
+    Usa View clássica (não LayoutView) de propósito:
+    UserSelect em resposta ephemeral é mais estável assim e evita
+    interação expirar / 10062 na abertura do seletor.
+    """
 
     def __init__(self, id_do_psicologo: int):
         super().__init__(timeout=180)
         self.id_do_psicologo = id_do_psicologo
 
+        # Sem custom_id fixo: view efêmera, não precisa sobreviver a restart
         seletor = discord.ui.UserSelect(
             placeholder="Selecione o paciente avaliado…",
             min_values=1,
             max_values=1,
-            custom_id="laudos:select_paciente",
         )
         seletor.callback = self._ao_escolher_paciente
-        linha = discord.ui.ActionRow()
-        linha.add_item(seletor)
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# 🩺 Iniciar consulta\n"
-                    "Escolha o **membro** que será avaliado nesta consulta."
-                ),
-                linha,
-                accent_color=discord.Color.blurple(),
-            )
-        )
+        self.add_item(seletor)
 
     async def _ao_escolher_paciente(self, interacao: discord.Interaction):
         if interacao.user.id != self.id_do_psicologo:
@@ -232,6 +263,15 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Use o painel dentro do servidor."],
             )
             return
+
+        # Defer antes do banco — evita 10062 se a gravação demorar
+        if not interacao.response.is_done():
+            try:
+                await interacao.response.defer(ephemeral=True)
+            except discord.NotFound:
+                return
+            except discord.HTTPException:
+                return
 
         ok, mensagem, consulta = await iniciar_consulta(
             psicologo=interacao.user,
