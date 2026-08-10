@@ -34,13 +34,19 @@ async def publicar_laudo_nos_canais(
         )
         layout.add_item(
             discord.ui.Container(
+                discord.ui.Section(
+                    "# 📋 **LAUDO PSICOLÓGICO** — CMS Valley",
+                    ("> Avaliação para porte de arma de fogo.**\n",),
+                    accessory=discord.ui.Thumbnail(paciente.display_avatar.url),
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(texto_laudo),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(
                     f"-# Registro `#{laudo.id}` · Consulta `#{laudo.consulta_id}` · {guild.name}"
                 ),
                 accent_color=cor,
-            )
+            ),
         )
         mensagem_publica = await canal_laudos.send(view=layout)
 

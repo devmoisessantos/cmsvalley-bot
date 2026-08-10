@@ -162,7 +162,6 @@ def montar_texto_laudo(
 ) -> str:
     emoji_parecer = "✅ APROVADO" if parecer == "APROVADO" else "❌ REPROVADO"
     return (
-        "📋 **LAUDO PSICOLÓGICO — AVALIAÇÃO PARA PORTE DE ARMA DE FOGO**\n\n"
         "👤 **Identificação do Avaliado**\n"
         f"• Nome: <@{discord_id_paciente}>\n"
         f"• Passaporte: `{id_fivem_paciente}`\n\n"
