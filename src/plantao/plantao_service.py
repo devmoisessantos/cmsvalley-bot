@@ -320,9 +320,10 @@ async def solicitar_troca_moedas(
 
     await registrar_evento_plantao(
         membro.guild,
-        membro,
+        membro.id,
         "TROCA_MOEDAS_SOLICITADA",
-        {
+        id_fivem,
+        campos_extra={
             "Moedas trocadas": str(quantidade_moedas),
             "Valor in-game": formatar_dinheiro(valor_ingame),
             "Saldo restante": str(saldo_restante),
