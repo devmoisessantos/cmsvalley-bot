@@ -32,6 +32,10 @@ EVENTOS_PLANTAO = {
         discord.Color.dark_orange(),
     ),
     "PENALIDADE_AFK": ("⚠️ Penalidade Aplicada (AFK)", discord.Color.dark_red()),
+    "TROCA_MOEDAS_SOLICITADA": (
+        "💵 Troca de Moedas Solicitada",
+        discord.Color.gold(),
+    ),
 }
 
 

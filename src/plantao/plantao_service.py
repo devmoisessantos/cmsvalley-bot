@@ -318,18 +318,30 @@ async def solicitar_troca_moedas(
 
     valor_ingame = quantidade_moedas * VALOR_MOEDA_INGAME
 
-    await registrar_evento_plantao(
-        membro.guild,
-        membro.id,
-        "TROCA_MOEDAS_SOLICITADA",
-        id_fivem,
-        campos_extra={
-            "Moedas trocadas": str(quantidade_moedas),
-            "Valor in-game": formatar_dinheiro(valor_ingame),
-            "Saldo restante": str(saldo_restante),
-            "ID FiveM": id_fivem or "—",
-        },
-    )
+    # Log não pode derrubar a troca se falhar
+    try:
+        await registrar_evento_plantao(
+            membro.guild,
+            membro.id,
+            "TROCA_MOEDAS_SOLICITADA",
+            id_fivem,
+            campos_extra={
+                "Moedas trocadas": str(quantidade_moedas),
+                "Valor in-game": formatar_dinheiro(valor_ingame),
+                "Saldo restante": str(saldo_restante),
+                "ID FiveM": id_fivem or "—",
+            },
+        )
+    except Exception as erro_log:
+        from src.utils.error_handling import enviar_erro_para_log_erros
+
+        await enviar_erro_para_log_erros(
+            membro.guild,
+            "Troca de moedas — falha ao registrar evento de plantão",
+            erro_log,
+            contexto="solicitar_troca_moedas.registrar_evento_plantao",
+            usuario=membro,
+        )
 
     return (
         True,

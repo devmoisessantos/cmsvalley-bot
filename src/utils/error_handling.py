@@ -14,39 +14,58 @@ from src.config import CANAIS
 from src.utils.mensagens import responder_erro
 
 
-async def _enviar_erro_para_canal_de_logs(
-    interacao: discord.Interaction,
+async def enviar_erro_para_log_erros(
+    guilda: discord.Guild | None,
     titulo: str,
-    nome_do_componente: str,
     erro: Exception,
+    *,
+    contexto: str | None = None,
+    usuario: discord.abc.User | None = None,
 ):
-    """Monta o texto do erro e envia no canal de logs, se existir."""
-    guilda = interacao.guild
+    """
+    Envia traceback para CANAIS['LOG_ERROS'].
+    Pode ser chamado de qualquer lugar (service, task, modal), com ou sem interação.
+    """
     if guilda is None:
         return
 
-    canal_de_logs = guilda.get_channel(CANAIS["LOG_ERROS"])
+    canal_de_logs = guilda.get_channel(CANAIS.get("LOG_ERROS") or 0)
     if canal_de_logs is None:
         return
 
     traceback_completo = "".join(
         traceback.format_exception(type(erro), erro, erro.__traceback__)
     )
-    # O Discord limita o tamanho da mensagem; pegamos só o final do traceback.
-    traceback_curto = traceback_completo[-1200:]
+    traceback_curto = traceback_completo[-1500:]
 
-    texto_do_log = (
-        f"⚠️ **{titulo}**\n"
-        f"Usuário: {interacao.user.mention} (`{interacao.user.id}`)\n"
-        f"Componente: `{nome_do_componente}`\n"
-        f"Erro: `{erro}`\n"
-        f"```py\n{traceback_curto}\n```"
-    )
+    linhas = [f"⚠️ **{titulo}**"]
+    if usuario is not None:
+        linhas.append(f"Usuário: {usuario.mention} (`{usuario.id}`)")
+    if contexto:
+        linhas.append(f"Contexto: `{contexto}`")
+    linhas.append(f"Erro: `{type(erro).__name__}: {erro}`")
+    linhas.append(f"```py\n{traceback_curto}\n```")
 
     try:
-        await canal_de_logs.send(texto_do_log)
+        await canal_de_logs.send("\n".join(linhas))
     except discord.HTTPException:
         pass
+
+
+async def _enviar_erro_para_canal_de_logs(
+    interacao: discord.Interaction,
+    titulo: str,
+    nome_do_componente: str,
+    erro: Exception,
+):
+    """Atalho a partir de uma interação (Views / Modals)."""
+    await enviar_erro_para_log_erros(
+        interacao.guild,
+        titulo,
+        erro,
+        contexto=nome_do_componente,
+        usuario=interacao.user,
+    )
 
 
 async def _avisar_membro_sobre_erro(interacao: discord.Interaction):

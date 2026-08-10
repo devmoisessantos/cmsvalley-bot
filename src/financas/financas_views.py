@@ -1,7 +1,8 @@
 """Views do canal de finanças (botão Pagamento realizado).
 
-O texto da solicitação vai em `content` da mensagem.
-A view só carrega o botão com custom_id fixo (funciona após restart).
+Usa discord.ui.View clássico de propósito:
+- funciona com `content=` da mensagem (texto da solicitação)
+- custom_id fixo sobrevive a restart do bot
 """
 
 from __future__ import annotations
@@ -14,7 +15,10 @@ from datetime import (
 import discord
 
 from src.plantao.permissoes import e_diretoria
-from src.utils.error_handling import LoggingViewMixin
+from src.utils.error_handling import (
+    LoggingViewMixin,
+    enviar_erro_para_log_erros,
+)
 from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
@@ -24,15 +28,15 @@ from src.utils.mensagens import (
 CUSTOM_ID_PAGAMENTO_REALIZADO = "financas:pagamento_realizado"
 
 
-class ViewBotaoPagamentoFinancas(LoggingViewMixin, discord.ui.LayoutView):
+class ViewBotaoPagamentoFinancas(LoggingViewMixin, discord.ui.View):
     """
-    Botão persistente para marcar solicitação de pagamento como paga.
+    Botão persistente. O texto da solicitação fica em message.content.
     """
 
     def __init__(self, *, ja_pago: bool = False):
         super().__init__(timeout=None)
+        self.ja_pago = ja_pago
 
-        linha_botoes = discord.ui.ActionRow()
         botao_pagamento = discord.ui.Button(
             label="Pagamento realizado" if not ja_pago else "Pago ✓",
             style=(
@@ -45,17 +49,26 @@ class ViewBotaoPagamentoFinancas(LoggingViewMixin, discord.ui.LayoutView):
             disabled=ja_pago,
         )
         botao_pagamento.callback = self._ao_marcar_pago
-        linha_botoes.add_item(botao_pagamento)
-
-        cor_container = discord.Color.green() if ja_pago else discord.Color.dark_gold()
-        self.add_item(
-            discord.ui.Container(
-                linha_botoes,
-                accent_color=cor_container,
-            )
-        )
+        self.add_item(botao_pagamento)
 
     async def _ao_marcar_pago(self, interacao: discord.Interaction):
+        try:
+            await self._processar_marcar_pago(interacao)
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao marcar pagamento (finanças)",
+                erro,
+                contexto="ViewBotaoPagamentoFinancas._ao_marcar_pago",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Falha ao marcar pagamento. A equipe foi notificada."],
+            )
+
+    async def _processar_marcar_pago(self, interacao: discord.Interaction):
         membro = interacao.user
         if not isinstance(membro, discord.Member) or not e_diretoria(membro):
             await responder_erro(
@@ -89,13 +102,27 @@ class ViewBotaoPagamentoFinancas(LoggingViewMixin, discord.ui.LayoutView):
                 content=texto_novo,
                 view=view_paga,
             )
-        except discord.HTTPException:
+        except discord.HTTPException as erro_edit:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Falha HTTP ao editar solicitação de pagamento",
+                erro_edit,
+                contexto="edit_message pagamento realizado",
+                usuario=membro,
+            )
             if not interacao.response.is_done():
                 await interacao.response.defer(ephemeral=True)
             if mensagem is not None:
                 try:
                     await mensagem.edit(content=texto_novo, view=view_paga)
-                except discord.HTTPException:
+                except discord.HTTPException as erro_edit2:
+                    await enviar_erro_para_log_erros(
+                        interacao.guild,
+                        "Falha HTTP ao editar mensagem de finanças",
+                        erro_edit2,
+                        contexto="message.edit pagamento realizado",
+                        usuario=membro,
+                    )
                     await responder_erro(
                         interacao,
                         titulo="Falha ao atualizar",
@@ -112,5 +139,5 @@ class ViewBotaoPagamentoFinancas(LoggingViewMixin, discord.ui.LayoutView):
 
 
 def view_persistente_financas() -> ViewBotaoPagamentoFinancas:
-    """Instância só para registrar o custom_id no startup do bot."""
+    """Registrar no startup (custom_id fixo)."""
     return ViewBotaoPagamentoFinancas(ja_pago=False)

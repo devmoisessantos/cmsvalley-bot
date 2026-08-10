@@ -23,7 +23,11 @@ from src.plantao.plantao_service import (
     solicitar_troca_moedas,
 )
 from src.recrutamento.recrutamento_service import resolver_id_fivem
-from src.utils.error_handling import LoggingViewMixin
+from src.utils.error_handling import (
+    LoggingModalMixin,
+    LoggingViewMixin,
+    enviar_erro_para_log_erros,
+)
 from src.utils.formatacao import (
     formatar_dinheiro,
     formatar_hms,
@@ -457,7 +461,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         await interaction.response.send_message(view=view_link, ephemeral=True)
 
 
-class ModalTrocarMoedasPlantao(discord.ui.Modal, title="💵 Trocar moedas por dinheiro"):
+class ModalTrocarMoedasPlantao(
+    LoggingModalMixin, discord.ui.Modal, title="💵 Trocar moedas por dinheiro"
+):
     quantidade_input = discord.ui.TextInput(
         label="Quantidade de moedas",
         placeholder="Ex: 5",
@@ -471,6 +477,29 @@ class ModalTrocarMoedasPlantao(discord.ui.Modal, title="💵 Trocar moedas por d
         self.quantidade_input.placeholder = f"Saldo disponível: {saldo_disponivel}"
 
     async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await self._executar_troca(interaction)
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interaction.guild,
+                "ModalTrocarMoedasPlantao — falha no on_submit",
+                erro,
+                contexto="ModalTrocarMoedasPlantao.on_submit",
+                usuario=interaction.user,
+            )
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+            await responder_erro(
+                interaction,
+                titulo="Erro na troca de moedas",
+                linhas=[
+                    "Ocorreu um erro inesperado. A equipe foi notificada no log de erros.",
+                    f"`{type(erro).__name__}: {erro}`",
+                ],
+                delay=20,
+            )
+
+    async def _executar_troca(self, interaction: discord.Interaction):
         bruto = self.quantidade_input.value.strip()
         if not bruto.isdigit():
             await responder_erro(
@@ -512,25 +541,13 @@ class ModalTrocarMoedasPlantao(discord.ui.Modal, title="💵 Trocar moedas por d
         if interaction.guild is not None:
             from src.financas.financas_service import publicar_solicitacao_troca_moedas
 
-            try:
-                postou = await publicar_solicitacao_troca_moedas(
-                    interaction.guild,
-                    membro=interaction.user,
-                    id_fivem=id_fivem,
-                    quantidade_moedas=quantidade,
-                    valor_ingame=valor_ingame,
-                )
-            except discord.HTTPException as erro:
-                await responder_aviso(
-                    interaction,
-                    titulo="Moedas debitadas — falha no canal",
-                    linhas=[
-                        mensagem,
-                        f"Erro ao enviar no canal de finanças: `{erro}`",
-                    ],
-                    delay=20,
-                )
-                postou = False
+            postou = await publicar_solicitacao_troca_moedas(
+                interaction.guild,
+                membro=interaction.user,
+                id_fivem=id_fivem,
+                quantidade_moedas=quantidade,
+                valor_ingame=valor_ingame,
+            )
 
         if postou:
             await responder_sucesso(
@@ -550,12 +567,12 @@ class ModalTrocarMoedasPlantao(discord.ui.Modal, title="💵 Trocar moedas por d
                 linhas=[
                     mensagem,
                     "Não foi possível postar no canal de finanças.",
-                    "Avise a diretoria manualmente.",
+                    "Detalhes foram enviados ao **log de erros**.",
+                    "Avise a diretoria manualmente se precisar.",
                 ],
                 delay=20,
             )
 
-        # Atualiza a ficha de informações se ainda for a mensagem original
         try:
             novo_estado = await _buscar_estado(interaction.user.id)
             nova_view = InformacoesPlantaoView(interaction.user, novo_estado)

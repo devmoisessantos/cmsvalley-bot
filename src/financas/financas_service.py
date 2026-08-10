@@ -19,6 +19,7 @@ from src.config import (
 )
 from src.financas.financas_views import ViewBotaoPagamentoFinancas
 from src.membros.membros_service import resolver_id_fivem_do_membro
+from src.utils.error_handling import enviar_erro_para_log_erros
 from src.utils.formatacao import formatar_reais
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,17 @@ def _formatar_ids_fivem(ids: list[str]) -> str:
     if len(ids) == 2:
         return f"{ids[0]} e {ids[1]}"
     return ", ".join(ids[:-1]) + f" e {ids[-1]}"
+
+
+def _obter_canal_financas(guild: discord.Guild) -> discord.abc.Messageable | None:
+    canal_id = CANAIS.get("CANAL_FINANCAS") or 0
+    if not canal_id:
+        logger.warning("CANAL_FINANCAS não configurado no config")
+        return None
+    canal = guild.get_channel(canal_id)
+    if canal is None:
+        logger.warning("Canal finanças id=%s não encontrado na guild", canal_id)
+    return canal
 
 
 async def montar_linhas_pagamento(
@@ -136,11 +148,7 @@ def montar_texto_controle_dm(
     unidade_plural = area.get("unidade_plural", "itens")
 
     corpo = "\n\n".join(linhas_pagamento) if linhas_pagamento else "_Nenhum pagamento._"
-    link_canal = (
-        f"<# {canal_financas_id}>".replace(" ", "")
-        if canal_financas_id
-        else "_canal finanças_"
-    )
+    link_canal = f"<#{canal_financas_id}>" if canal_financas_id else "_canal finanças_"
 
     return (
         f"# 📋 **CONTROLE DE PAGAMENTO — {titulo_area}**\n"
@@ -192,9 +200,40 @@ async def processar_fechamento_ranking(
     2) Lista detalhada (IDs FiveM) no mesmo canal
     3) DM de controle para DIRETOR_CONTROLE_FINANCEIRO_IDS
     """
+    try:
+        await _processar_fechamento_ranking_interno(
+            bot,
+            guild,
+            chave_area=chave_area,
+            contagem=contagem,
+            inicio=inicio,
+            fim=fim,
+            total_unidades=total_unidades,
+            total_pago=total_pago,
+        )
+    except Exception as erro:
+        logger.exception("Fechamento ranking %s falhou", chave_area)
+        await enviar_erro_para_log_erros(
+            guild,
+            f"Fechamento financeiro — {chave_area}",
+            erro,
+            contexto="processar_fechamento_ranking",
+        )
+
+
+async def _processar_fechamento_ranking_interno(
+    bot: discord.Client,
+    guild: discord.Guild,
+    *,
+    chave_area: str,
+    contagem: dict[int, int],
+    inicio: datetime,
+    fim: datetime,
+    total_unidades: int | None = None,
+    total_pago: int | None = None,
+) -> None:
     if not contagem:
-        logger.info("Fechamento %s: contagem vazia — só registra zero", chave_area)
-        # ainda pode postar solicitação zerada se quiser; por ora sai
+        logger.info("Fechamento %s: contagem vazia — nada a postar", chave_area)
         return
 
     valor_unitario = VALOR_UNITARIO_RANKING
@@ -205,9 +244,8 @@ async def processar_fechamento_ranking(
     pago = total_pago if total_pago is not None else pago_calc
 
     periodo_txt = f"{_formatar_data_curta(inicio)} a {_formatar_data_curta(fim)}"
-
+    canal = _obter_canal_financas(guild)
     canal_id = CANAIS.get("CANAL_FINANCAS") or 0
-    canal = guild.get_channel(canal_id) if canal_id else None
 
     texto_solicitacao = montar_texto_solicitacao_area(
         chave_area=chave_area,
@@ -231,40 +269,34 @@ async def processar_fechamento_ranking(
     )
 
     if canal is not None:
-        try:
-            await canal.send(
-                content=texto_solicitacao,
-                view=ViewBotaoPagamentoFinancas(ja_pago=False),
-            )
-            await canal.send(
-                content=texto_lista,
-                view=ViewBotaoPagamentoFinancas(ja_pago=False),
-            )
-            logger.info(
-                "Finanças: solicitação + lista %s postadas em #%s",
-                chave_area,
-                canal.name,
-            )
-        except discord.HTTPException as erro:
-            logger.exception("Falha ao postar finanças %s: %s", chave_area, erro)
-    else:
-        logger.warning(
-            "CANAL_FINANCAS não encontrado — fechamento %s sem post", chave_area
+        await canal.send(
+            content=texto_solicitacao,
+            view=ViewBotaoPagamentoFinancas(ja_pago=False),
         )
+        await canal.send(
+            content=texto_lista,
+            view=ViewBotaoPagamentoFinancas(ja_pago=False),
+        )
+        logger.info(
+            "Finanças: solicitação + lista %s postadas em #%s",
+            chave_area,
+            getattr(canal, "name", canal_id),
+        )
+    else:
+        logger.warning("CANAL_FINANCAS ausente — fechamento %s sem post", chave_area)
 
     for diretor_id in DIRETOR_CONTROLE_FINANCEIRO_IDS:
         try:
             usuario = await bot.fetch_user(int(diretor_id))
-            view_dm = discord.ui.LayoutView(timeout=None)
-            view_dm.add_item(
-                discord.ui.Container(
-                    discord.ui.TextDisplay(texto_dm),
-                    accent_color=discord.Color.dark_gold(),
-                )
-            )
-            await usuario.send(view=view_dm)
+            await usuario.send(content=texto_dm)
         except (discord.Forbidden, discord.HTTPException) as erro:
             logger.warning("DM controle financeiro %s falhou: %s", diretor_id, erro)
+            await enviar_erro_para_log_erros(
+                guild,
+                f"DM controle financeiro falhou (id={diretor_id})",
+                erro,
+                contexto="processar_fechamento_ranking DM",
+            )
 
 
 async def publicar_solicitacao_troca_moedas(
@@ -278,9 +310,17 @@ async def publicar_solicitacao_troca_moedas(
     """Publica troca de moedas no canal de finanças com botão de confirmação."""
     from src.plantao.plantao_service import montar_texto_solicitacao_troca_moedas
 
-    canal_id = CANAIS.get("CANAL_FINANCAS") or 0
-    canal = guild.get_channel(canal_id) if canal_id else None
+    canal = _obter_canal_financas(guild)
     if canal is None:
+        await enviar_erro_para_log_erros(
+            guild,
+            "Troca de moedas — canal finanças não encontrado",
+            RuntimeError(
+                f"CANAL_FINANCAS={CANAIS.get('CANAL_FINANCAS')} não resolvido na guild"
+            ),
+            contexto="publicar_solicitacao_troca_moedas",
+            usuario=membro,
+        )
         return False
 
     texto = montar_texto_solicitacao_troca_moedas(
@@ -289,5 +329,20 @@ async def publicar_solicitacao_troca_moedas(
         quantidade_moedas=quantidade_moedas,
         valor_ingame=valor_ingame,
     )
-    await canal.send(content=texto, view=ViewBotaoPagamentoFinancas(ja_pago=False))
-    return True
+
+    try:
+        await canal.send(
+            content=texto,
+            view=ViewBotaoPagamentoFinancas(ja_pago=False),
+        )
+        return True
+    except Exception as erro:
+        logger.exception("Falha ao postar troca de moedas em finanças")
+        await enviar_erro_para_log_erros(
+            guild,
+            "Troca de moedas — falha ao postar no canal de finanças",
+            erro,
+            contexto="publicar_solicitacao_troca_moedas.send",
+            usuario=membro,
+        )
+        return False
