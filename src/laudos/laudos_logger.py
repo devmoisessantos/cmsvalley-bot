@@ -39,22 +39,20 @@ async def publicar_laudo_nos_canais(
         else:
             url_thumbnail = psicologo.display_avatar.url
 
+        rodape = f"-# **{guild.name}** · Registro `#{laudo.id}` · Consulta `#{laudo.consulta_id}`"
         # Section aceita *strings/TextDisplay*, NÃO tuple — isso gerava TypeError
         cabecalho = discord.ui.Section(
-            "# 📋 **LAUDO PSICOLÓGICO** — CMS Valley\n"
-            "> Avaliação para porte de arma de fogo.",
+            "# 📋 CMS Valley — LAUDO PSICOLÓGICO",
+            ("> 📌 **Finalidade:** Avaliação para porte de arma de fogo."),
             accessory=discord.ui.Thumbnail(url_thumbnail),
         )
 
         layout.add_item(
             discord.ui.Container(
                 cabecalho,
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(texto_laudo),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                discord.ui.TextDisplay(
-                    f"-# Registro `#{laudo.id}` · Consulta `#{laudo.consulta_id}` · {guild.name}"
-                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.TextDisplay(rodape),
                 accent_color=cor,
             )
         )

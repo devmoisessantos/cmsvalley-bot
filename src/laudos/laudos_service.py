@@ -160,18 +160,17 @@ def montar_texto_laudo(
     parecer: str,
     motivo: str,
 ) -> str:
-    emoji_parecer = "✅ APROVADO" if parecer == "APROVADO" else "❌ REPROVADO"
+    emoji_parecer = "✅ **APROVADO**" if parecer == "APROVADO" else "❌ **REPROVADO**"
     return (
-        "👤 **Identificação do Avaliado**\n"
-        f"• Nome: <@{discord_id_paciente}>\n"
-        f"• Passaporte: `{id_fivem_paciente}`\n\n"
-        "🥼 **Psicólogo Responsável**\n"
-        f"• Nome: <@{discord_id_psicologo}>\n"
-        f"• Passaporte: `{id_fivem_psicologo}`\n"
-        f"• Registro Profissional: `{registro_profissional}`\n\n"
-        "📊 **Resultado da Avaliação**\n"
-        f"• **Parecer Final:** {emoji_parecer}\n"
-        f"• Motivo: {motivo}"
+        "### `👤` **Identificação do Paciente:**\n"
+        f"> - **Nome:** <@{discord_id_paciente}> · **Passaporte:** `{id_fivem_paciente}`\n\n"
+        "### `🥼` **Psicólogo Responsável:**\n"
+        f"> - **Nome:** <@{discord_id_psicologo}>\n"
+        f"> - **Passaporte:** `{id_fivem_psicologo}`\n"
+        f"> - **Registro Profissional:** `{registro_profissional}`\n\n"
+        "### `📊` **Resultado da Avaliação:**\n"
+        f"> - **Parecer Final:** {emoji_parecer}\n"
+        f"> - **Motivo:** {motivo}"
     )
 
 
