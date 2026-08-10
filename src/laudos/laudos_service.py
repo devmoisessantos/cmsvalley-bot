@@ -4,14 +4,23 @@ Regras de negócio das consultas e laudos psicológicos.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 
 import discord
-from sqlalchemy import func, select
+from sqlalchemy import (
+    func,
+    select,
+)
 
 from src.config import CARGOS
 from src.database.connection import async_session
-from src.database.models import ConsultaLaudo, Laudo
+from src.database.models import (
+    ConsultaLaudo,
+    Laudo,
+)
 from src.recrutamento.recrutamento_service import resolver_id_fivem
 
 NOMES_CARGOS_PSICOLOGO = (
@@ -24,9 +33,7 @@ def membro_e_psicologo(membro: discord.Member) -> bool:
     """True se o membro tem cargo de psicólogo ou responsável."""
     if membro.guild_permissions.administrator:
         return True
-    ids_permitidos = {
-        CARGOS[nome] for nome in NOMES_CARGOS_PSICOLOGO if nome in CARGOS
-    }
+    ids_permitidos = {CARGOS[nome] for nome in NOMES_CARGOS_PSICOLOGO if nome in CARGOS}
     return any(cargo.id in ids_permitidos for cargo in membro.roles)
 
 
@@ -119,7 +126,11 @@ async def iniciar_consulta(
                 nova_consulta,
             )
     except Exception as erro:
-        return False, f"Falha ao gravar a consulta no banco: `{type(erro).__name__}`.", None
+        return (
+            False,
+            f"Falha ao gravar a consulta no banco: `{type(erro).__name__}`.",
+            None,
+        )
 
 
 async def cancelar_consulta_aberta(discord_id_psicologo: int) -> tuple[bool, str]:
@@ -165,28 +176,76 @@ def montar_texto_laudo(
     )
 
 
+def montar_yaml_para_copiar(
+    *,
+    discord_id_paciente: int,
+    id_fivem_paciente: str,
+    discord_id_psicologo: int,
+    id_fivem_psicologo: str,
+    registro_profissional: str,
+    parecer: str,
+    motivo: str,
+) -> str:
+    """
+    Texto para o responsável copiar e colar no servidor Valley Roleplay.
+    Só vai na ephemeral — o canal de laudos continua com o card formatado.
+    """
+    emoji_parecer = "✅ APROVADO" if parecer == "APROVADO" else "❌ REPROVADO"
+    corpo = (
+        "📋 **LAUDO PSICOLÓGICO — AVALIAÇÃO PARA PORTE DE ARMA DE FOGO**"
+        "\n\n"
+        "👤 **Identificação do Avaliado**"
+        "\n"
+        f"• Nome: <@{discord_id_paciente}>"
+        "\n"
+        f"• Passaporte: {id_fivem_paciente}"
+        "\n\n"
+        "🥼 **Psicólogo Responsável**"
+        "\n"
+        f"• Nome: <@{discord_id_psicologo}>"
+        "\n"
+        f"• Passaporte: {id_fivem_psicologo}"
+        "\n"
+        f"• Registro Profissional: {registro_profissional}"
+        "\n\n"
+        "📊 **Resultado da Avaliação**"
+        "\n"
+        f"• **Parecer Final:** {emoji_parecer}"
+        "\n"
+        f"• Motivo: {motivo}"
+    )
+    return corpo
+
+
 async def gerar_laudo(
     *,
     psicologo: discord.Member,
     parecer: str,
     motivo: str,
-) -> tuple[bool, str, Laudo | None, str | None]:
+) -> tuple[bool, str, Laudo | None, str | None, str | None]:
     """
     Finaliza a consulta aberta e cria o laudo.
-    Retorna (ok, mensagem_ui, laudo, texto_publicado).
+    Retorna (ok, mensagem_ui, laudo, texto_publicado, texto_yaml_copiar).
     """
     if not membro_e_psicologo(psicologo):
-        return False, "Apenas psicólogos autorizados podem gerar laudo.", None, None
+        return (
+            False,
+            "Apenas psicólogos autorizados podem gerar laudo.",
+            None,
+            None,
+            None,
+        )
 
     parecer_normalizado = parecer.strip().upper()
     if parecer_normalizado not in ("APROVADO", "REPROVADO"):
-        return False, "Parecer inválido. Use APROVADO ou REPROVADO.", None, None
+        return False, "Parecer inválido. Use APROVADO ou REPROVADO.", None, None, None
 
     motivo_limpo = (motivo or "").strip()
     if len(motivo_limpo) < 10:
         return (
             False,
             "Descreva o motivo com pelo menos 10 caracteres.",
+            None,
             None,
             None,
         )
@@ -198,13 +257,15 @@ async def gerar_laudo(
             "Você precisa **Iniciar Consulta** antes de gerar o laudo.",
             None,
             None,
+            None,
         )
 
     ano = datetime.now(timezone.utc).year
-    id_ref = consulta.id_fivem_psicologo or str(psicologo.id)[-5:]
-    registro_profissional = f"CRP/{id_ref} {ano}"
+    # 5 primeiros dígitos do Discord ID do psicólogo → CRP/(85910) 2026
+    primeiros_cinco_discord = str(psicologo.id)[:5]
+    registro_profissional = f"CRP/({primeiros_cinco_discord}) {ano}"
 
-    texto_laudo = montar_texto_laudo(
+    dados_texto = dict(
         discord_id_paciente=consulta.discord_id_paciente,
         id_fivem_paciente=consulta.id_fivem_paciente or "—",
         discord_id_psicologo=consulta.discord_id_psicologo,
@@ -213,6 +274,8 @@ async def gerar_laudo(
         parecer=parecer_normalizado,
         motivo=motivo_limpo,
     )
+    texto_laudo = montar_texto_laudo(**dados_texto)
+    texto_yaml = montar_yaml_para_copiar(**dados_texto)
 
     try:
         async with async_session() as sessao:
@@ -221,6 +284,7 @@ async def gerar_laudo(
                 return (
                     False,
                     "A consulta aberta não foi encontrada (pode ter sido finalizada por outro fluxo).",
+                    None,
                     None,
                     None,
                 )
@@ -246,11 +310,13 @@ async def gerar_laudo(
                 f"Laudo **#{novo_laudo.id}** gerado ({parecer_normalizado}).",
                 novo_laudo,
                 texto_laudo,
+                texto_yaml,
             )
     except Exception as erro:
         return (
             False,
             f"Falha ao gravar o laudo no banco: `{type(erro).__name__}`.",
+            None,
             None,
             None,
         )

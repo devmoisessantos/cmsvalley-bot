@@ -12,14 +12,15 @@ from src.laudos.laudos_service import (
     iniciar_consulta,
     membro_e_psicologo,
 )
-from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
+from src.utils.error_handling import (
+    LoggingModalMixin,
+    LoggingViewMixin,
+)
 from src.utils.mensagens import (
+    responder_aviso,
     responder_erro,
     responder_sucesso,
-    responder_aviso,
-    responder_info,
 )
-
 
 TEXTO_PAINEL = (
     "# 🧠 Painel de Avaliação Psicológica\n\n"
@@ -282,7 +283,7 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
 
         await interacao.response.defer(ephemeral=True)
 
-        ok, mensagem, laudo, texto_laudo = await gerar_laudo(
+        ok, mensagem, laudo, texto_laudo, texto_yaml = await gerar_laudo(
             psicologo=interacao.user,
             parecer=self.parecer_input.value,
             motivo=self.motivo_input.value,
@@ -317,12 +318,19 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
             )
             return
 
+        # Ephemeral: resumo + bloco para copiar no Valley Roleplay
+        bloco_copiar = (
+            f"```yaml\n{texto_yaml}\n```" if texto_yaml else "_Sem texto para copiar._"
+        )
         await responder_sucesso(
             interacao,
             titulo="Laudo publicado",
             linhas=[
                 mensagem,
                 "O documento foi enviado ao canal de laudos e ao log interno.",
+                "—",
+                "**Copie o bloco abaixo** para colar no servidor Valley Roleplay:",
+                bloco_copiar,
             ],
-            delay=20,
+            delay=120,
         )
