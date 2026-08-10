@@ -11,6 +11,10 @@ from discord.ext import (
     tasks,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import (
+    DBAPIError,
+    OperationalError,
+)
 
 from src.config import (
     AFK_AVISO_MINUTOS,
@@ -23,7 +27,10 @@ from src.config import (
     LEMBRETE_3_MINUTOS,
     PENALIDADE_AFK_MOEDAS,
 )
-from src.database.connection import async_session
+from src.database.connection import (
+    async_session,
+    reiniciar_pool_se_preciso,
+)
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_logger import registrar_evento_plantao
 from src.plantao.plantao_service import (
@@ -165,6 +172,7 @@ class PlantaoTasks(commands.Cog):
     @verificar_ociosos.error
     async def verificar_ociosos_error(self, error):
         logger.error("Loop ociosos quebrou: %s", error, exc_info=True)
+        await self._recuperar_pool_se_conexao_morta(error)
 
     @verificar_ociosos.before_loop
     async def antes_de_comecar(self):
@@ -289,6 +297,25 @@ class PlantaoTasks(commands.Cog):
     @verificar_afk.error
     async def verificar_afk_error(self, error):
         logger.error("Loop AFK quebrou: %s", error, exc_info=True)
+        await self._recuperar_pool_se_conexao_morta(error)
+
+    async def _recuperar_pool_se_conexao_morta(self, error: BaseException) -> None:
+        """Reinicia o pool se a falha for conexão fechada pelo servidor."""
+        texto = str(error)
+        e_conexao = isinstance(error, (DBAPIError, OperationalError)) or (
+            "ConnectionDoesNotExist" in texto
+            or "connection was closed" in texto.lower()
+            or "ConnectionDoesNotExistError" in texto
+        )
+        if not e_conexao:
+            return
+        try:
+            await reiniciar_pool_se_preciso()
+            logger.warning(
+                "Pool PostgreSQL reiniciado após conexão fechada no meio da operação"
+            )
+        except Exception as erro_pool:
+            logger.error("Falha ao reiniciar pool: %s", erro_pool)
 
     @verificar_afk.before_loop
     async def antes_de_comecar_afk(self):
