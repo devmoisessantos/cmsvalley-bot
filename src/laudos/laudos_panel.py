@@ -20,7 +20,6 @@ from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
     responder_sucesso,
-    responder_view,
 )
 
 TEXTO_PAINEL = (
@@ -110,13 +109,11 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         return True
 
     async def _ao_iniciar_consulta(self, interacao: discord.Interaction):
-        """Abre o seletor de paciente. Resposta imediata para evitar 10062."""
         try:
             if not await self._checar_psicologo(interacao):
                 return
-            await responder_view(
-                interacao,
-                ViewSelecionarPaciente(interacao.user.id),
+            await interacao.response.send_message(
+                view=ViewSelecionarPaciente(interacao.user.id),
                 ephemeral=True,
             )
         except discord.NotFound:
@@ -192,27 +189,33 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
             print(f"⚠️ [laudos] cancelar consulta HTTP: {erro_http}")
 
 
-class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.View):
-    """
-    Select efêmero para escolher o paciente.
-
-    Usa View clássica (não LayoutView) de propósito:
-    UserSelect em resposta ephemeral é mais estável assim e evita
-    interação expirar / 10062 na abertura do seletor.
-    """
+class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
+    """Select efêmero para escolher o paciente da consulta."""
 
     def __init__(self, id_do_psicologo: int):
         super().__init__(timeout=180)
         self.id_do_psicologo = id_do_psicologo
 
-        # Sem custom_id fixo: view efêmera, não precisa sobreviver a restart
         seletor = discord.ui.UserSelect(
             placeholder="Selecione o paciente avaliado…",
             min_values=1,
             max_values=1,
+            custom_id="laudos:select_paciente",
         )
         seletor.callback = self._ao_escolher_paciente
-        self.add_item(seletor)
+        linha = discord.ui.ActionRow()
+        linha.add_item(seletor)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# 🩺 Iniciar consulta\n"
+                    "Escolha o **membro** que será avaliado nesta consulta."
+                ),
+                linha,
+                accent_color=discord.Color.blurple(),
+            )
+        )
 
     async def _ao_escolher_paciente(self, interacao: discord.Interaction):
         if interacao.user.id != self.id_do_psicologo:
