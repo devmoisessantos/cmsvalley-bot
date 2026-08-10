@@ -15,15 +15,22 @@ from datetime import (
 import discord
 from sqlalchemy import (
     func,
+    or_,
     select,
 )
 
+from src.bau.bau_service import STATUS_ABERTOS_BAU
 from src.database.connection import async_session
 from src.database.models import (
+    AdvertenciaVerbalBau,
+    CasoBau,
     Chamada,
     EstadoPlantao,
     FaltaChamada,
+    HistoricoCargo,
+    Laudo,
     LogPlantao,
+    Punicao,
     Recrutamento,
     Usuario,
 )
@@ -64,6 +71,39 @@ async def resolver_id_fivem_do_membro(discord_id: int) -> str | None:
         )
         valor = resultado.scalar_one_or_none()
         return str(valor) if valor else None
+
+
+async def resolver_discord_id_por_fivem(id_fivem: str) -> int | None:
+    """Resolve Discord ID a partir do passaporte FiveM."""
+    id_texto = str(id_fivem).strip()
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(EstadoPlantao.discord_id)
+            .where(EstadoPlantao.id_fivem == id_texto)
+            .limit(1)
+        )
+        valor = resultado.scalar_one_or_none()
+        if valor:
+            return int(valor)
+
+        resultado = await sessao.execute(
+            select(Usuario.discord_id).where(Usuario.id_fivem == id_texto).limit(1)
+        )
+        valor = resultado.scalar_one_or_none()
+        if valor:
+            return int(valor)
+
+        resultado = await sessao.execute(
+            select(Recrutamento.discord_id_candidato)
+            .where(
+                Recrutamento.id_fivem == id_texto,
+                Recrutamento.discord_id_candidato.is_not(None),
+            )
+            .order_by(Recrutamento.id.desc())
+            .limit(1)
+        )
+        valor = resultado.scalar_one_or_none()
+        return int(valor) if valor else None
 
 
 async def buscar_estado_plantao(discord_id: int) -> EstadoPlantao | None:
@@ -166,7 +206,7 @@ async def tempo_total_segundos_plantao(discord_id: int) -> int:
         return int(resultado.scalar_one() or 0)
 
 
-async def ultimos_logs_plantao(discord_id: int, limite: int = 6) -> list[LogPlantao]:
+async def ultimos_logs_plantao(discord_id: int, limite: int = 8) -> list[LogPlantao]:
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(LogPlantao)
@@ -175,6 +215,151 @@ async def ultimos_logs_plantao(discord_id: int, limite: int = 6) -> list[LogPlan
             .limit(limite)
         )
         return list(resultado.scalars().all())
+
+
+async def listar_punicoes(
+    discord_id: int,
+    *,
+    so_ativas: bool | None = None,
+    limite: int = 10,
+) -> list[Punicao]:
+    async with async_session() as sessao:
+        consulta = select(Punicao).where(Punicao.discord_id == discord_id)
+        if so_ativas is True:
+            consulta = consulta.where(Punicao.ativa.is_(True))
+        elif so_ativas is False:
+            consulta = consulta.where(Punicao.ativa.is_(False))
+        consulta = consulta.order_by(Punicao.criada_em.desc()).limit(limite)
+        resultado = await sessao.execute(consulta)
+        return list(resultado.scalars().all())
+
+
+async def contar_punicoes_ativas(discord_id: int) -> int:
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(func.count())
+            .select_from(Punicao)
+            .where(Punicao.discord_id == discord_id, Punicao.ativa.is_(True))
+        )
+        return int(resultado.scalar_one() or 0)
+
+
+async def listar_historico_cargos(
+    discord_id: int,
+    limite: int = 12,
+) -> list[HistoricoCargo]:
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(HistoricoCargo)
+            .where(HistoricoCargo.discord_id == discord_id)
+            .order_by(HistoricoCargo.data_hora.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_casos_bau_membro(
+    *,
+    discord_id: int | None,
+    id_fivem: str | None,
+    so_abertos: bool = True,
+    limite: int = 8,
+) -> list[CasoBau]:
+    async with async_session() as sessao:
+        filtros = []
+        if discord_id:
+            filtros.append(CasoBau.discord_id == discord_id)
+        if id_fivem:
+            filtros.append(CasoBau.id_fivem == str(id_fivem))
+        if not filtros:
+            return []
+        consulta = select(CasoBau).where(or_(*filtros))
+        if so_abertos:
+            consulta = consulta.where(CasoBau.status.in_(STATUS_ABERTOS_BAU))
+        consulta = consulta.order_by(CasoBau.id.desc()).limit(limite)
+        resultado = await sessao.execute(consulta)
+        return list(resultado.scalars().all())
+
+
+async def listar_verbais_bau(
+    *,
+    discord_id: int | None,
+    id_fivem: str | None,
+    limite: int = 8,
+) -> list[AdvertenciaVerbalBau]:
+    async with async_session() as sessao:
+        filtros = []
+        if discord_id:
+            filtros.append(AdvertenciaVerbalBau.discord_id == discord_id)
+        if id_fivem:
+            filtros.append(AdvertenciaVerbalBau.id_fivem == str(id_fivem))
+        if not filtros:
+            return []
+        resultado = await sessao.execute(
+            select(AdvertenciaVerbalBau)
+            .where(or_(*filtros))
+            .order_by(AdvertenciaVerbalBau.criada_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_laudos_como_paciente(
+    discord_id: int,
+    limite: int = 8,
+) -> list[Laudo]:
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Laudo)
+            .where(Laudo.discord_id_paciente == discord_id)
+            .order_by(Laudo.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_laudos_como_psicologo(
+    discord_id: int,
+    limite: int = 8,
+) -> list[Laudo]:
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Laudo)
+            .where(Laudo.discord_id_psicologo == discord_id)
+            .order_by(Laudo.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def contagens_resumo_ficha(
+    discord_id: int, id_fivem: str | None
+) -> dict[str, int]:
+    """Contagens rápidas para o resumo da ficha (badges nos blocos)."""
+    punicoes_ativas = await contar_punicoes_ativas(discord_id)
+    casos_bau = await listar_casos_bau_membro(
+        discord_id=discord_id, id_fivem=id_fivem, so_abertos=True, limite=50
+    )
+    verbais = await listar_verbais_bau(
+        discord_id=discord_id, id_fivem=id_fivem, limite=50
+    )
+    laudos_pac = await listar_laudos_como_paciente(discord_id, limite=50)
+    laudos_psi = await listar_laudos_como_psicologo(discord_id, limite=50)
+    hist_cargos = await listar_historico_cargos(discord_id, limite=50)
+    faltas_n, doutor_n = await estatisticas_chamadas(discord_id)
+    total_rec, _, _ = await estatisticas_como_recrutador(discord_id)
+
+    return {
+        "punicoes_ativas": punicoes_ativas,
+        "casos_bau_abertos": len(casos_bau),
+        "verbais_bau": len(verbais),
+        "laudos_paciente": len(laudos_pac),
+        "laudos_psicologo": len(laudos_psi),
+        "historico_cargos": len(hist_cargos),
+        "faltas_chamada": faltas_n,
+        "chamadas_doutor": doutor_n,
+        "recrutamentos": total_rec,
+    }
 
 
 def formatar_cargos_do_membro(membro: discord.Member) -> str:
@@ -198,3 +383,11 @@ def formatar_timestamp(dt: datetime | None) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return f"<t:{int(dt.timestamp())}:d>"
+
+
+def formatar_timestamp_relativo(dt: datetime | None) -> str:
+    if dt is None:
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return f"<t:{int(dt.timestamp())}:R>"
