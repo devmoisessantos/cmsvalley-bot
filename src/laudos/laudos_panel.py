@@ -203,19 +203,47 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
             custom_id="laudos:select_paciente",
         )
         seletor.callback = self._ao_escolher_paciente
-        linha = discord.ui.ActionRow()
-        linha.add_item(seletor)
+        linha_select = discord.ui.ActionRow()
+        linha_select.add_item(seletor)
+
+        botao_por_id = discord.ui.Button(
+            label="Buscar por Discord ID",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔎",
+            custom_id="laudos:buscar_discord_id",
+        )
+        botao_por_id.callback = self._ao_buscar_por_discord_id
+        linha_botao = discord.ui.ActionRow()
+        linha_botao.add_item(botao_por_id)
 
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# 🩺 Iniciar consulta\n"
-                    "Escolha o **membro** que será avaliado nesta consulta."
+                    "Escolha o **membro** no select **ou** busque pelo Discord ID."
                 ),
-                linha,
+                linha_select,
+                linha_botao,
                 accent_color=discord.Color.blurple(),
             )
         )
+
+    async def _ao_buscar_por_discord_id(self, interacao: discord.Interaction):
+        if interacao.user.id != self.id_do_psicologo:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Este botão não é seu."],
+            )
+            return
+        try:
+            await interacao.response.send_modal(
+                ModalBuscarPacientePorDiscordId(id_do_psicologo=self.id_do_psicologo)
+            )
+        except discord.NotFound:
+            return
+        except discord.HTTPException as erro_http:
+            print(f"⚠️ [laudos] modal buscar ID HTTP: {erro_http}")
 
     async def _ao_escolher_paciente(self, interacao: discord.Interaction):
         if interacao.user.id != self.id_do_psicologo:
@@ -235,64 +263,118 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
-        id_paciente = int(valores[0])
-        guilda = interacao.guild
-        if guilda is None:
-            await responder_erro(
-                interacao,
-                titulo="Servidor ausente",
-                linhas=["Não foi possível resolver o servidor."],
-            )
-            return
-
-        paciente = guilda.get_member(id_paciente)
-        if paciente is None:
-            try:
-                paciente = await guilda.fetch_member(id_paciente)
-            except discord.HTTPException:
-                paciente = None
-        if paciente is None:
-            await responder_erro(
-                interacao,
-                titulo="Paciente não encontrado",
-                linhas=["O membro selecionado não está no servidor."],
-            )
-            return
-
-        if not isinstance(interacao.user, discord.Member):
-            await responder_erro(
-                interacao,
-                titulo="Contexto inválido",
-                linhas=["Use o painel dentro do servidor."],
-            )
-            return
-
-        # Defer antes do banco — evita 10062 se a gravação demorar
-        if not interacao.response.is_done():
-            try:
-                await interacao.response.defer(ephemeral=True)
-            except discord.NotFound:
-                return
-            except discord.HTTPException:
-                return
-
-        ok, mensagem, consulta = await iniciar_consulta(
-            psicologo=interacao.user,
-            paciente=paciente,
+        await _finalizar_inicio_consulta_com_id(
+            interacao,
+            id_do_psicologo=self.id_do_psicologo,
+            id_paciente=int(valores[0]),
         )
-        if ok:
-            await responder_sucesso(
-                interacao,
-                titulo="Consulta iniciada",
-                linhas=[mensagem],
-                delay=20,
-            )
-        else:
+
+
+async def _finalizar_inicio_consulta_com_id(
+    interacao: discord.Interaction,
+    *,
+    id_do_psicologo: int,
+    id_paciente: int,
+) -> None:
+    """Resolve o membro e chama iniciar_consulta (select ou modal de Discord ID)."""
+    if interacao.user.id != id_do_psicologo:
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Esta ação não é sua."],
+        )
+        return
+
+    guilda = interacao.guild
+    if guilda is None:
+        await responder_erro(
+            interacao,
+            titulo="Servidor ausente",
+            linhas=["Não foi possível resolver o servidor."],
+        )
+        return
+
+    paciente = guilda.get_member(id_paciente)
+    if paciente is None:
+        try:
+            paciente = await guilda.fetch_member(id_paciente)
+        except discord.HTTPException:
+            paciente = None
+    if paciente is None:
+        await responder_erro(
+            interacao,
+            titulo="Paciente não encontrado",
+            linhas=[
+                f"Não há membro com Discord ID `{id_paciente}` neste servidor.",
+            ],
+        )
+        return
+
+    if not isinstance(interacao.user, discord.Member):
+        await responder_erro(
+            interacao,
+            titulo="Contexto inválido",
+            linhas=["Use o painel dentro do servidor."],
+        )
+        return
+
+    if not interacao.response.is_done():
+        try:
+            await interacao.response.defer(ephemeral=True)
+        except discord.NotFound:
+            return
+        except discord.HTTPException:
+            return
+
+    ok, mensagem, _consulta = await iniciar_consulta(
+        psicologo=interacao.user,
+        paciente=paciente,
+    )
+    if ok:
+        await responder_sucesso(
+            interacao,
+            titulo="Consulta iniciada",
+            linhas=[mensagem],
+            delay=20,
+        )
+    else:
+        await responder_erro(
+            interacao,
+            titulo="Não foi possível iniciar",
+            linhas=[mensagem],
+        )
+
+
+class ModalBuscarPacientePorDiscordId(
+    LoggingModalMixin, discord.ui.Modal, title="🔎 Buscar por Discord ID"
+):
+    discord_id_input = discord.ui.TextInput(
+        label="Discord ID do paciente",
+        placeholder="Ex: 859100649366356000",
+        required=True,
+        min_length=15,
+        max_length=20,
+    )
+
+    def __init__(self, *, id_do_psicologo: int):
+        super().__init__()
+        self.id_do_psicologo = id_do_psicologo
+
+    async def on_submit(self, interacao: discord.Interaction):
+        texto = self.discord_id_input.value.strip()
+        if not texto.isdigit():
             await responder_erro(
                 interacao,
-                titulo="Não foi possível iniciar",
-                linhas=[mensagem],
+                titulo="ID inválido",
+                linhas=["Informe apenas números do Discord ID."],
             )
+            return
+
+        await _finalizar_inicio_consulta_com_id(
+            interacao,
+            id_do_psicologo=self.id_do_psicologo,
+            id_paciente=int(texto),
+        )
 
 
 class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Laudo"):
