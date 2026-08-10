@@ -17,7 +17,10 @@ from src.config import (
 from src.database.connection import async_session
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_logger import registrar_evento_plantao
-from src.utils.formatacao import formatar_dinheiro
+from src.utils.formatacao import (
+    formatar_dinheiro,
+    formatar_reais,
+)
 
 
 def garantir_aware(dt: datetime) -> datetime:
@@ -354,6 +357,53 @@ async def solicitar_troca_moedas(
     )
 
 
+def montar_corpo_solicitacao_troca_moedas(
+    *,
+    membro: discord.Member,
+    id_fivem: str | None,
+    quantidade_moedas: int,
+    valor_ingame: int,
+) -> tuple[str, str]:
+    """
+    Corpo Components V2 da solicitação de troca de moedas.
+    Retorna (titulo, corpo_markdown) — o rodapé fica na view.
+    """
+    from datetime import (
+        datetime,
+        timezone,
+    )
+    from zoneinfo import ZoneInfo
+
+    from src.config import (
+        MESES_ABREV,
+        TIMEZONE_LOCAL,
+    )
+
+    fid = id_fivem or "—"
+    agora_local = datetime.now(timezone.utc).astimezone(ZoneInfo(TIMEZONE_LOCAL))
+    data_txt = (
+        f"{agora_local.day} de {MESES_ABREV[agora_local.month]} "
+        f"{agora_local.year} {agora_local.strftime('%H:%M')}"
+    )
+    valor_unitario_txt = formatar_reais(VALOR_MOEDA_INGAME)
+    valor_total_txt = formatar_reais(valor_ingame)
+
+    titulo = "🏥 PAGAMENTO — TROCA DE MOEDAS"
+    corpo = (
+        f"👨‍⚕️ {membro.mention}　·　🆔 **FID:** `{fid}`\n"
+        f"> - `🎯` **Origem:** Plantão\n"
+        f"> - `💎` **Moedas:** x{quantidade_moedas} moedas\n"
+        f"> - `💵` **Conversão:** {valor_unitario_txt} cada\n"
+        f"> - `📅` **Data da Solicitação:** {data_txt}\n\n"
+        f"• 💰 **Valor Total:** **{valor_total_txt}**\n"
+        f"• 🧾 **Observações (se houver):** "
+        f"_Troca de **{quantidade_moedas}** moeda(s) de plantão por dinheiro in-game "
+        f"({valor_unitario_txt} cada). Discord `{membro.id}`._"
+    )
+    return titulo, corpo
+
+
+# Alias legado (se algum import antigo ainda chamar o nome anterior)
 def montar_texto_solicitacao_troca_moedas(
     *,
     membro: discord.Member,
@@ -361,28 +411,13 @@ def montar_texto_solicitacao_troca_moedas(
     quantidade_moedas: int,
     valor_ingame: int,
 ) -> str:
-    """Template do canal de finanças para troca de moedas de plantão."""
-    fid = id_fivem or "—"
-    from datetime import (
-        datetime,
-        timezone,
+    titulo, corpo = montar_corpo_solicitacao_troca_moedas(
+        membro=membro,
+        id_fivem=id_fivem,
+        quantidade_moedas=quantidade_moedas,
+        valor_ingame=valor_ingame,
     )
-
-    agora = datetime.now(timezone.utc)
-    periodo = agora.strftime("%d/%m/%Y")
-    return (
-        "# 💰・SOLICITAÇÃO - PAGAMENTO DE ÁREA\n"
-        "**=============================**\n"
-        f"• 👨‍⚕️ **Responsável:** {membro.mention}\n"
-        f"• 🆔 **FID:** {fid}\n"
-        f"• 🎯 **Área Médica:** Plantão (troca de moedas)\n"
-        f"• 💰 **Valor Semanal:** {formatar_dinheiro(valor_ingame)}\n"
-        f"• 📅 **Período:** {periodo}\n"
-        f"• 🧾 **Observações (se houver):** "
-        f"_Troca de **{quantidade_moedas}** moeda(s) de plantão por dinheiro in-game "
-        f"({formatar_dinheiro(VALOR_MOEDA_INGAME)} cada). Discord `{membro.id}`._\n"
-        "**=============================**"
-    )
+    return f"# {titulo}\n{corpo}"
 
 
 async def admin_forcar_desligar(discord_id: int) -> bool:

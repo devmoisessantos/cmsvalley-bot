@@ -17,7 +17,10 @@ from src.config import (
     DIRETOR_CONTROLE_FINANCEIRO_IDS,
     VALOR_UNITARIO_RANKING,
 )
-from src.financas.financas_views import ViewBotaoPagamentoFinancas
+from src.financas.financas_views import (
+    ViewBotaoPagamentoFinancas,
+    ViewSolicitacaoFinancasCard,
+)
 from src.membros.membros_service import resolver_id_fivem_do_membro
 from src.utils.error_handling import enviar_erro_para_log_erros
 from src.utils.formatacao import formatar_reais
@@ -269,6 +272,7 @@ async def _processar_fechamento_ranking_interno(
     )
 
     if canal is not None:
+        # Ranking ainda usa texto em content + botão (lista longa / agrupamentos)
         await canal.send(
             content=texto_solicitacao,
             view=ViewBotaoPagamentoFinancas(ja_pago=False),
@@ -307,8 +311,8 @@ async def publicar_solicitacao_troca_moedas(
     quantidade_moedas: int,
     valor_ingame: int,
 ) -> bool:
-    """Publica troca de moedas no canal de finanças com botão de confirmação."""
-    from src.plantao.plantao_service import montar_texto_solicitacao_troca_moedas
+    """Publica troca de moedas no canal de finanças (Card V2 + botão)."""
+    from src.plantao.plantao_service import montar_corpo_solicitacao_troca_moedas
 
     canal = _obter_canal_financas(guild)
     if canal is None:
@@ -323,18 +327,23 @@ async def publicar_solicitacao_troca_moedas(
         )
         return False
 
-    texto = montar_texto_solicitacao_troca_moedas(
+    titulo, corpo = montar_corpo_solicitacao_troca_moedas(
         membro=membro,
         id_fivem=id_fivem,
         quantidade_moedas=quantidade_moedas,
         valor_ingame=valor_ingame,
     )
 
+    view_card = ViewSolicitacaoFinancasCard(
+        titulo=titulo,
+        corpo=corpo,
+        guild=guild,
+        cor=discord.Color.dark_gold(),
+        ja_pago=False,
+    )
+
     try:
-        await canal.send(
-            content=texto,
-            view=ViewBotaoPagamentoFinancas(ja_pago=False),
-        )
+        await canal.send(view=view_card)
         return True
     except Exception as erro:
         logger.exception("Falha ao postar troca de moedas em finanças")
