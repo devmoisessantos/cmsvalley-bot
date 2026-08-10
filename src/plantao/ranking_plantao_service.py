@@ -15,11 +15,22 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import discord
-from sqlalchemy import func, select
+from sqlalchemy import (
+    func,
+    select,
+)
 
-from src.config import MESES_ABREV, TIMEZONE_LOCAL
+from src.config import (
+    MESES_ABREV,
+    TIMEZONE_LOCAL,
+)
 from src.database.connection import async_session
-from src.database.models import Chamada, LogPlantao, RankingHistorico, agora
+from src.database.models import (
+    Chamada,
+    LogPlantao,
+    RankingHistorico,
+    agora,
+)
 from src.recrutamento.ranking_service import (
     obter_periodo_ciclo_mensal,
     obter_periodo_ciclo_semanal,

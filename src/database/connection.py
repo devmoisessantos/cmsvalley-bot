@@ -9,7 +9,7 @@ Conexão assíncrona com o PostgreSQL.
 Pool:
   pool_pre_ping  → testa a conexão antes de usar (descarta mortas)
   pool_recycle   → renova conexões antigas antes do servidor cortá-las
-  Isso evita ConnectionDoesNotExistError em tasks de background.
+  connect timeout → evita travar slash commands por tempo demais
 """
 
 from sqlalchemy.ext.asyncio import (
@@ -26,10 +26,16 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    pool_recycle=1800,  # 30 minutos
+    pool_recycle=1800,
     pool_size=5,
     max_overflow=10,
-    pool_timeout=30,
+    pool_timeout=15,
+    connect_args={
+        # asyncpg: timeout de estabelecimento da conexão (segundos)
+        "timeout": 10,
+        # timeout por comando SQL (evita hang infinito em /historico etc.)
+        "command_timeout": 20,
+    },
 )
 
 # expire_on_commit=False evita que os objetos "expirem" depois do commit

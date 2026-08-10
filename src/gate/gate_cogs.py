@@ -338,7 +338,33 @@ class GateCog(commands.Cog):
         interacao: discord.Interaction,
         quantidade: app_commands.Range[int, 1, 15] = 8,
     ):
-        eventos = await listar_ultimos_eventos(limite=quantidade)
+        # Defer imediato — a consulta ao banco pode demorar se o pool estiver frio
+        if not interacao.response.is_done():
+            try:
+                await interacao.response.defer(ephemeral=True)
+            except discord.NotFound:
+                return
+            except discord.HTTPException:
+                return
+
+        try:
+            eventos = await listar_ultimos_eventos(limite=quantidade)
+        except Exception as erro_db:
+            from src.database.connection import reiniciar_pool_se_preciso
+
+            try:
+                await reiniciar_pool_se_preciso()
+            except Exception:
+                pass
+            await responder_aviso(
+                interacao,
+                titulo="Histórico GATE",
+                linhas=[
+                    "Não foi possível consultar o banco agora.",
+                    f"Detalhe: `{type(erro_db).__name__}` — tente de novo em instantes.",
+                ],
+            )
+            return
 
         if not eventos:
             await responder_aviso(

@@ -139,7 +139,13 @@ class ManutencaoCog(commands.Cog):
         interacao: discord.Interaction,
         nome: app_commands.Choice[str],
     ):
-        await interacao.response.defer(thinking=True, ephemeral=True)
+        try:
+            await interacao.response.defer(ephemeral=True, thinking=True)
+        except discord.NotFound:
+            # Interação expirou (>3s) — bot lento ou pool de DB travado
+            return
+        except discord.HTTPException:
+            return
 
         resultado = await recriar_painel(self.bot, nome.value)
 
@@ -165,7 +171,13 @@ class ManutencaoCog(commands.Cog):
     )
     @apenas_administrador()
     async def paineis_recriar_todos(self, interacao: discord.Interaction):
-        await interacao.response.defer(thinking=True, ephemeral=True)
+        try:
+            await interacao.response.defer(ephemeral=True, thinking=True)
+        except discord.NotFound:
+            # Interação expirou (>3s) — bot lento ou pool de DB travado
+            return
+        except discord.HTTPException:
+            return
 
         resultados = await recriar_todos_os_paineis(self.bot)
 
@@ -193,7 +205,13 @@ class ManutencaoCog(commands.Cog):
     )
     @apenas_administrador()
     async def sincronizar_comandos(self, interacao: discord.Interaction):
-        await interacao.response.defer(thinking=True, ephemeral=True)
+        try:
+            await interacao.response.defer(ephemeral=True, thinking=True)
+        except discord.NotFound:
+            # Interação expirou (>3s) — bot lento ou pool de DB travado
+            return
+        except discord.HTTPException:
+            return
 
         try:
             guild_object = discord.Object(id=GUILD_ID)
@@ -258,7 +276,13 @@ class ManutencaoCog(commands.Cog):
     )
     @apenas_administrador()
     async def keepalive_ping(self, interacao: discord.Interaction):
-        await interacao.response.defer(thinking=True, ephemeral=True)
+        try:
+            await interacao.response.defer(ephemeral=True, thinking=True)
+        except discord.NotFound:
+            # Interação expirou (>3s) — bot lento ou pool de DB travado
+            return
+        except discord.HTTPException:
+            return
 
         sucesso, detalhe = await ping_api_keepalive()
         self.ultimo_keepalive_ok = sucesso

@@ -11,7 +11,10 @@ from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import (
+    commands,
+    tasks,
+)
 
 from src.config import (
     CANAIS,
@@ -214,8 +217,28 @@ class RankingPlantaoTasks(commands.Cog):
         interaction: discord.Interaction,
         limite: app_commands.Range[int, 1, 25] = 10,
     ):
-        await interaction.response.defer(ephemeral=True)
-        regs = await listar_historico_plantao("chamada", limite=limite)
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except discord.NotFound:
+                return
+            except discord.HTTPException:
+                return
+        try:
+            regs = await listar_historico_plantao("chamada", limite=limite)
+        except Exception as erro_db:
+            from src.database.connection import reiniciar_pool_se_preciso
+
+            try:
+                await reiniciar_pool_se_preciso()
+            except Exception:
+                pass
+            await interaction.followup.send(
+                f"❌ Banco indisponível no momento (`{type(erro_db).__name__}`). "
+                "Tente novamente em alguns segundos.",
+                ephemeral=True,
+            )
+            return
         await interaction.followup.send(
             view=_lista_historico(
                 regs, interaction.guild, titulo="🩺 HISTÓRICO — CHAMADAS"
@@ -308,8 +331,28 @@ class RankingPlantaoTasks(commands.Cog):
         interaction: discord.Interaction,
         limite: app_commands.Range[int, 1, 25] = 10,
     ):
-        await interaction.response.defer(ephemeral=True)
-        regs = await listar_historico_plantao("horas", limite=limite)
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except discord.NotFound:
+                return
+            except discord.HTTPException:
+                return
+        try:
+            regs = await listar_historico_plantao("horas", limite=limite)
+        except Exception as erro_db:
+            from src.database.connection import reiniciar_pool_se_preciso
+
+            try:
+                await reiniciar_pool_se_preciso()
+            except Exception:
+                pass
+            await interaction.followup.send(
+                f"❌ Banco indisponível no momento (`{type(erro_db).__name__}`). "
+                "Tente novamente em alguns segundos.",
+                ephemeral=True,
+            )
+            return
         await interaction.followup.send(
             view=_lista_historico(
                 regs,
