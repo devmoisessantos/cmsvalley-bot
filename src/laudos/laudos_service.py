@@ -263,7 +263,7 @@ async def gerar_laudo(
     ano = datetime.now(timezone.utc).year
     # 5 primeiros dígitos do Discord ID do psicólogo → CRP/(85910) 2026
     primeiros_cinco_discord = str(psicologo.id)[:5]
-    registro_profissional = f"CRP/({primeiros_cinco_discord}) {ano}"
+    registro_profissional = f"CRP-{ano}/{primeiros_cinco_discord}"
 
     dados_texto = dict(
         discord_id_paciente=consulta.discord_id_paciente,
