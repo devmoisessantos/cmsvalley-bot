@@ -29,6 +29,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import (
@@ -523,7 +524,11 @@ class ContadorItemBau(Base):
 
 
 class CasoBau(Base):
-    """Caso de excesso de baú — sobrevive a reset de ciclo até ser resolvido."""
+    """
+    Caso de excesso de baú — um por passaporte enquanto aberto.
+    Sobrevive a reset de ciclo até ser resolvido.
+    itens_json guarda a dívida agregada: {"roupas": 30, "radio": 13, ...}
+    """
 
     __tablename__ = "casos_bau"
 
@@ -533,9 +538,14 @@ class CasoBau(Base):
     discord_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True, index=True
     )
-    item_canonico: Mapped[str] = mapped_column(String(40), index=True)
-    quantidade_atual: Mapped[int] = mapped_column(Integer, default=0)
-    # AGUARDANDO | GRAVE | RESOLVIDO | IGNORADO | PUNIDO
+    # Legado / resumo: "agregado" nos casos novos; item único em registros antigos
+    item_canonico: Mapped[str] = mapped_column(
+        String(40), index=True, default="agregado"
+    )
+    quantidade_atual: Mapped[int] = mapped_column(Integer, default=0)  # soma dos itens
+    # JSON: {"item": quantidade, ...} — dívida que precisa ser devolvida
+    itens_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # AGUARDANDO | GRAVE | PRAZO_ESTOURADO | RESOLVIDO | IGNORADO | PUNIDO
     status: Mapped[str] = mapped_column(String(20), default="AGUARDANDO", index=True)
     e_grave: Mapped[bool] = mapped_column(Boolean, default=False)
     dm_falhou: Mapped[bool] = mapped_column(Boolean, default=False)

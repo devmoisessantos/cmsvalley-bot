@@ -34,36 +34,35 @@ class BauListener(commands.Cog):
         await self.bot.wait_until_ready()
         try:
             from sqlalchemy import select
+
+            from src.bau.bau_views import ViewCasoBau
+            from src.config import GUILD_ID
             from src.database.connection import async_session
             from src.database.models import CasoBau
-            from src.bau.bau_views import ViewCasoBau
-            from src.config import LIMITES_BAU_CAMADA_1, LIMITES_BAU_CAMADA_2, GUILD_ID
 
             async with async_session() as sessao:
                 resultado = await sessao.execute(
                     select(CasoBau).where(
-                        CasoBau.status.in_(("AGUARDANDO", "GRAVE", "PUNIDO"))
+                        CasoBau.status.in_(
+                            ("AGUARDANDO", "GRAVE", "PRAZO_ESTOURADO", "PUNIDO")
+                        )
                     )
                 )
                 casos = list(resultado.scalars().all())
 
             guilda = self.bot.get_guild(int(GUILD_ID))
             for caso in casos:
-                view = ViewCasoBau.montar_layout_alerta(
-                    caso,
-                    guild=guilda,
-                    limite_1=LIMITES_BAU_CAMADA_1.get(caso.item_canonico, 0),
-                    limite_2=LIMITES_BAU_CAMADA_2.get(caso.item_canonico),
-                )
+                view = ViewCasoBau.montar_layout_alerta(caso, guild=guilda)
                 self.bot.add_view(view, message_id=caso.canal_alerta_message_id)
             logger.info("Views de %s casos de baú re-registradas", len(casos))
         except Exception as erro:
             logger.warning("Não re-registrou views de baú: %s", erro)
 
-
     @commands.Cog.listener()
     async def on_message(self, mensagem: discord.Message):
-        if mensagem.author.bot and mensagem.author.id == getattr(self.bot.user, "id", None):
+        if mensagem.author.bot and mensagem.author.id == getattr(
+            self.bot.user, "id", None
+        ):
             # ignora as próprias mensagens do bot
             pass
 
@@ -107,9 +106,38 @@ class BauListener(commands.Cog):
                     await log_item_desconhecido(
                         guilda, evento["nome"], evento["id_fivem"]
                     )
+                elif tipo == "caso_resolvido_auto":
+                    # Itens devolvidos → fecha caso e desativa botões no alerta
+                    from src.config import (
+                        LIMITES_BAU_CAMADA_1,
+                        LIMITES_BAU_CAMADA_2,
+                    )
+                    from src.database.connection import async_session
+                    from src.database.models import CasoBau
+
+                    async with async_session() as sessao:
+                        caso_resolvido = await sessao.get(CasoBau, evento["caso_id"])
+                    if caso_resolvido is None:
+                        continue
+                    if caso_resolvido.canal_alerta_message_id:
+                        await publicar_alerta_caso(
+                            guilda,
+                            caso_resolvido,
+                            limite_1=LIMITES_BAU_CAMADA_1.get(
+                                caso_resolvido.item_canonico, 0
+                            ),
+                            limite_2=LIMITES_BAU_CAMADA_2.get(
+                                caso_resolvido.item_canonico
+                            ),
+                            atualizar_mensagem_id=caso_resolvido.canal_alerta_message_id,
+                        )
                 elif tipo in ("caso_novo", "caso_atualizado"):
                     caso = evento["caso"]
-                    msg_id = caso.canal_alerta_message_id if tipo == "caso_atualizado" else None
+                    msg_id = (
+                        caso.canal_alerta_message_id
+                        if tipo == "caso_atualizado"
+                        else None
+                    )
                     mensagem_alerta = await publicar_alerta_caso(
                         guilda,
                         caso,

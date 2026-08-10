@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import (
     datetime,
     timedelta,
@@ -36,6 +37,9 @@ from src.database.models import (
     ConfigBau,
     ContadorItemBau,
 )
+
+# Status em que o caso ainda está aberto (botões ativos conforme regras)
+STATUS_ABERTOS_BAU = ("AGUARDANDO", "GRAVE", "PRAZO_ESTOURADO")
 
 # Lock por id_fivem para não corromper contador em logs simultâneos
 _travas_por_id: dict[str, asyncio.Lock] = {}
@@ -204,19 +208,123 @@ async def aplicar_movimento_item(
         return nova
 
 
-async def buscar_caso_aberto(id_fivem: str, item_canonico: str) -> CasoBau | None:
+def ler_itens_do_caso(caso: CasoBau | None) -> dict[str, int]:
+    """Lê a dívida agregada do caso (JSON → dict item→quantidade)."""
+    if caso is None or not caso.itens_json:
+        # Compatibilidade com casos antigos (um item só)
+        if caso is not None and caso.item_canonico and caso.item_canonico != "agregado":
+            return {caso.item_canonico: int(caso.quantidade_atual or 0)}
+        return {}
+    try:
+        bruto = json.loads(caso.itens_json)
+        if not isinstance(bruto, dict):
+            return {}
+        return {
+            str(chave): int(valor) for chave, valor in bruto.items() if int(valor) > 0
+        }
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def serializar_itens(mapa_itens: dict[str, int]) -> str:
+    limpo = {chave: int(valor) for chave, valor in mapa_itens.items() if int(valor) > 0}
+    return json.dumps(limpo, ensure_ascii=False, sort_keys=True)
+
+
+def formatar_bloco_itens_yaml(mapa_itens: dict[str, int]) -> str:
+    """Bloco para o card: + ITEM: x30 roupas ..."""
+    if not mapa_itens:
+        return "```yaml\n(sem itens)\n```"
+    linhas = [
+        f"+ ITEM: x{quantidade} {item}"
+        for item, quantidade in sorted(mapa_itens.items())
+    ]
+    return "```yaml\n" + "\n".join(linhas) + "\n```"
+
+
+def caso_tem_item_grave(mapa_itens: dict[str, int], limites_2: dict[str, int]) -> bool:
+    for item, quantidade in mapa_itens.items():
+        limite_2 = limites_2.get(item)
+        if limite_2 is not None and quantidade >= limite_2:
+            return True
+    return False
+
+
+async def buscar_caso_aberto_por_passaporte(id_fivem: str) -> CasoBau | None:
+    """Um único caso aberto por passaporte (agregado de todos os itens)."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(CasoBau)
             .where(
                 CasoBau.id_fivem == id_fivem,
-                CasoBau.item_canonico == item_canonico,
-                CasoBau.status.in_(("AGUARDANDO", "GRAVE")),
+                CasoBau.status.in_(STATUS_ABERTOS_BAU),
             )
             .order_by(CasoBau.id.desc())
             .limit(1)
         )
         return resultado.scalar_one_or_none()
+
+
+# Alias legado — evita quebrar imports antigos
+async def buscar_caso_aberto(
+    id_fivem: str, item_canonico: str | None = None
+) -> CasoBau | None:
+    return await buscar_caso_aberto_por_passaporte(id_fivem)
+
+
+async def abrir_ou_atualizar_caso_agregado(
+    *,
+    id_fivem: str,
+    nome_cidade: str,
+    discord_id: int | None,
+    mapa_itens: dict[str, int],
+    e_grave: bool,
+) -> tuple[CasoBau, bool]:
+    """
+    Um caso por passaporte. Atualiza a lista de itens (dívida).
+    O prazo de 30 min só é definido na criação — não reinicia a cada retirada.
+    """
+    existente = await buscar_caso_aberto_por_passaporte(id_fivem)
+    prazo = datetime.now(timezone.utc) + timedelta(minutes=PRAZO_DEVOLUCAO_BAU_MINUTOS)
+    soma = sum(mapa_itens.values())
+    itens_texto = serializar_itens(mapa_itens)
+
+    async with async_session() as sessao:
+        if existente is not None:
+            caso = await sessao.get(CasoBau, existente.id)
+            caso.itens_json = itens_texto
+            caso.quantidade_atual = soma
+            caso.item_canonico = "agregado"
+            caso.nome_cidade = nome_cidade or caso.nome_cidade
+            if discord_id:
+                caso.discord_id = discord_id
+            if e_grave:
+                caso.e_grave = True
+                # Não rebaixa PRAZO_ESTOURADO → mantém status se já estourou
+                if caso.status != "PRAZO_ESTOURADO":
+                    caso.status = "GRAVE"
+            caso.atualizado_em = datetime.now(timezone.utc)
+            await sessao.commit()
+            await sessao.refresh(caso)
+            return caso, False
+
+        caso = CasoBau(
+            id_fivem=id_fivem,
+            nome_cidade=nome_cidade,
+            discord_id=discord_id,
+            item_canonico="agregado",
+            quantidade_atual=soma,
+            itens_json=itens_texto,
+            status="GRAVE" if e_grave else "AGUARDANDO",
+            e_grave=e_grave,
+            expira_em=prazo,
+            criado_em=datetime.now(timezone.utc),
+            atualizado_em=datetime.now(timezone.utc),
+        )
+        sessao.add(caso)
+        await sessao.commit()
+        await sessao.refresh(caso)
+        return caso, True
 
 
 async def abrir_ou_atualizar_caso(
@@ -228,44 +336,14 @@ async def abrir_ou_atualizar_caso(
     quantidade: int,
     e_grave: bool,
 ) -> tuple[CasoBau, bool]:
-    """
-    Retorna (caso, criado_agora).
-    Se já existe caso aberto do mesmo ID+item, só atualiza quantidade/grave.
-    """
-    existente = await buscar_caso_aberto(id_fivem, item_canonico)
-    prazo = datetime.now(timezone.utc) + timedelta(minutes=PRAZO_DEVOLUCAO_BAU_MINUTOS)
-
-    async with async_session() as sessao:
-        if existente is not None:
-            caso = await sessao.get(CasoBau, existente.id)
-            caso.quantidade_atual = quantidade
-            caso.nome_cidade = nome_cidade or caso.nome_cidade
-            if discord_id:
-                caso.discord_id = discord_id
-            if e_grave:
-                caso.e_grave = True
-                caso.status = "GRAVE"
-            caso.atualizado_em = datetime.now(timezone.utc)
-            await sessao.commit()
-            await sessao.refresh(caso)
-            return caso, False
-
-        caso = CasoBau(
-            id_fivem=id_fivem,
-            nome_cidade=nome_cidade,
-            discord_id=discord_id,
-            item_canonico=item_canonico,
-            quantidade_atual=quantidade,
-            status="GRAVE" if e_grave else "AGUARDANDO",
-            e_grave=e_grave,
-            expira_em=prazo,
-            criado_em=datetime.now(timezone.utc),
-            atualizado_em=datetime.now(timezone.utc),
-        )
-        sessao.add(caso)
-        await sessao.commit()
-        await sessao.refresh(caso)
-        return caso, True
+    """Compatibilidade: redireciona para o fluxo agregado."""
+    return await abrir_ou_atualizar_caso_agregado(
+        id_fivem=id_fivem,
+        nome_cidade=nome_cidade,
+        discord_id=discord_id,
+        mapa_itens={item_canonico: quantidade},
+        e_grave=e_grave,
+    )
 
 
 async def marcar_dm_resultado(caso_id: int, *, falhou: bool) -> None:
@@ -325,20 +403,24 @@ async def contar_verbais(id_fivem: str) -> int:
 
 async def aplicar_verbal_automatica(caso: CasoBau) -> tuple[str, AdvertenciaVerbalBau]:
     """
-    Aplica verbal. Na 3ª, registra escalada ADV1 e retorna tipo aplicado.
-    Retorna (tipo_aplicado, registro).
+    Aplica verbal ao estourar o prazo.
+    Status vira PRAZO_ESTOURADO (não fecha o caso — libera ocorrência Valley).
+    Na 3ª verbal, registra escalada ADV1.
     """
     qtd_verbais = await contar_verbais(caso.id_fivem)
-    tipo = "VERBAL"
-    motivo = (
-        f"Excesso de baú — item `{caso.item_canonico}` "
-        f"qtd {caso.quantidade_atual} — prazo de devolução esgotado."
+    mapa_itens = ler_itens_do_caso(caso)
+    resumo_itens = (
+        ", ".join(f"{item} x{qtd}" for item, qtd in sorted(mapa_itens.items()))
+        or caso.item_canonico
     )
+
+    tipo = "VERBAL"
+    motivo = f"Excesso de baú — prazo de devolução esgotado. Itens: {resumo_itens}."
 
     if qtd_verbais + 1 >= VERBAIS_PARA_ADV1_BAU:
         tipo = "ADV1_ESCALADA"
         motivo = (
-            f"3ª advertência verbal de baú (item `{caso.item_canonico}`). "
+            f"3ª advertência verbal de baú ({resumo_itens}). "
             "Escalada automática para ADV 1 — diretoria deve avaliar."
         )
 
@@ -348,7 +430,7 @@ async def aplicar_verbal_automatica(caso: CasoBau) -> tuple[str, AdvertenciaVerb
             discord_id=caso.discord_id,
             nome_cidade=caso.nome_cidade,
             caso_id=caso.id,
-            item_canonico=caso.item_canonico,
+            item_canonico="agregado",
             motivo=motivo[:500],
             tipo=tipo,
             automatica=True,
@@ -357,7 +439,8 @@ async def aplicar_verbal_automatica(caso: CasoBau) -> tuple[str, AdvertenciaVerb
         sessao.add(registro)
         caso_db = await sessao.get(CasoBau, caso.id)
         if caso_db is not None:
-            caso_db.status = "PUNIDO"
+            # Mantém aberto: libera botão Valley; diretoria decide o restante
+            caso_db.status = "PRAZO_ESTOURADO"
             caso_db.atualizado_em = datetime.now(timezone.utc)
         await sessao.commit()
         await sessao.refresh(registro)
@@ -365,6 +448,7 @@ async def aplicar_verbal_automatica(caso: CasoBau) -> tuple[str, AdvertenciaVerb
 
 
 async def listar_casos_expirados() -> list[CasoBau]:
+    """Casos ainda no prazo (AGUARDANDO/GRAVE) com expira_em vencido."""
     agora_utc = datetime.now(timezone.utc)
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -383,7 +467,10 @@ async def liberar_limite_manual(
     item_canonico: str,
     executor_id: int,
 ) -> str:
-    """Zera contador do item no ciclo e resolve casos abertos desse item."""
+    """
+    Zera contador do item no ciclo e remove esse item da dívida do caso.
+    Se o caso ficar sem itens, encerra como IGNORADO.
+    """
     ciclo = chave_ciclo_atual()
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -401,15 +488,24 @@ async def liberar_limite_manual(
         casos = await sessao.execute(
             select(CasoBau).where(
                 CasoBau.id_fivem == id_fivem,
-                CasoBau.item_canonico == item_canonico,
-                CasoBau.status.in_(("AGUARDANDO", "GRAVE")),
+                CasoBau.status.in_(STATUS_ABERTOS_BAU),
             )
         )
         for caso in casos.scalars().all():
-            caso.status = "IGNORADO"
-            caso.motivo_ignore = f"Liberação manual por <@{executor_id}>"
-            caso.resolvido_por = executor_id
-            caso.resolvido_em = datetime.now(timezone.utc)
+            mapa = ler_itens_do_caso(caso)
+            if item_canonico in mapa:
+                del mapa[item_canonico]
+            if not mapa:
+                caso.status = "IGNORADO"
+                caso.motivo_ignore = f"Liberação manual por <@{executor_id}>"
+                caso.resolvido_por = executor_id
+                caso.resolvido_em = datetime.now(timezone.utc)
+                caso.itens_json = "{}"
+                caso.quantidade_atual = 0
+            else:
+                caso.itens_json = serializar_itens(mapa)
+                caso.quantidade_atual = sum(mapa.values())
+                caso.atualizado_em = datetime.now(timezone.utc)
 
         await sessao.commit()
     return (
@@ -422,8 +518,10 @@ async def processar_log_parseado(
     log: LogBauParseado,
 ) -> list[dict]:
     """
-    Aplica movimentos e devolve lista de eventos para o listener reagir
-    (avisos a abrir, itens desconhecidos, casos atualizados).
+    Aplica movimentos e mantém **um caso agregado por passaporte**.
+    - PEGOU acima do teto → inclui/atualiza item na dívida do caso
+    - GUARDOU → reduz dívida; se zerar todos os itens, resolve o caso
+    - Dívida (itens_json) sobrevive ao reset de ciclo
     """
     eventos: list[dict] = []
     if log.acao == "DESCONHECIDA":
@@ -435,6 +533,13 @@ async def processar_log_parseado(
     delta_sinal = 1 if log.acao == "PEGOU" else -1
 
     async with _trava_do_id(log.id_fivem):
+        limites_1 = await obter_limites_camada_1()
+        limites_2 = await obter_limites_camada_2()
+        tolerancia = await obter_tolerancia_extra()
+
+        caso_aberto = await buscar_caso_aberto_por_passaporte(log.id_fivem)
+        mapa_divida = ler_itens_do_caso(caso_aberto)
+
         for item in log.itens:
             if item.item_canonico is None:
                 eventos.append(
@@ -446,8 +551,11 @@ async def processar_log_parseado(
                 )
                 continue
 
+            if item.item_canonico not in limites_1:
+                continue
+
             delta = delta_sinal * item.quantidade
-            quantidade = await aplicar_movimento_item(
+            quantidade_ciclo = await aplicar_movimento_item(
                 id_fivem=log.id_fivem,
                 nome_cidade=log.nome_cidade,
                 item_canonico=item.item_canonico,
@@ -455,60 +563,63 @@ async def processar_log_parseado(
                 ciclo=ciclo,
             )
 
-            limites_1 = await obter_limites_camada_1()
-            limites_2 = await obter_limites_camada_2()
-            tolerancia = await obter_tolerancia_extra()
-            limite_1 = limites_1.get(item.item_canonico)
-            limite_2 = limites_2.get(item.item_canonico)
-            if limite_1 is None:
-                continue
-
-            # Máximo sem alerta = limite diário + tolerância (ex.: 1+1=2)
+            limite_1 = limites_1[item.item_canonico]
             teto_sem_alerta = limite_1 + tolerancia
 
-            # Devolução que volta ao teto ou abaixo → fecha caso aberto
-            if delta < 0 and quantidade <= teto_sem_alerta:
-                caso_aberto = await buscar_caso_aberto(log.id_fivem, item.item_canonico)
-                if caso_aberto is not None:
-                    await resolver_caso(
-                        caso_aberto.id,
-                        por_discord_id=None,
-                        status="RESOLVIDO",
-                    )
-                    eventos.append(
-                        {
-                            "tipo": "caso_resolvido_auto",
-                            "caso_id": caso_aberto.id,
-                            "item": item.item_canonico,
-                            "quantidade": quantidade,
-                        }
-                    )
+            if delta < 0:
+                # Devolução: reduz a dívida do caso (mesmo após reset de ciclo)
+                if item.item_canonico in mapa_divida:
+                    nova_divida = mapa_divida[item.item_canonico] - item.quantidade
+                    if nova_divida <= teto_sem_alerta:
+                        mapa_divida.pop(item.item_canonico, None)
+                    else:
+                        mapa_divida[item.item_canonico] = nova_divida
                 continue
 
-            # Só alerta acima de limite + tolerância
-            if not quantidade_dispara_alerta(quantidade, limite_1, tolerancia):
-                continue
+            # Retirada: se passou do teto, atualiza dívida com a qtd líquida do ciclo
+            # (ou mantém a maior dívida já registrada no caso)
+            if quantidade_dispara_alerta(quantidade_ciclo, limite_1, tolerancia):
+                divida_anterior = mapa_divida.get(item.item_canonico, 0)
+                mapa_divida[item.item_canonico] = max(divida_anterior, quantidade_ciclo)
 
-            e_grave = limite_2 is not None and quantidade >= limite_2
-            caso, criado = await abrir_ou_atualizar_caso(
-                id_fivem=log.id_fivem,
-                nome_cidade=log.nome_cidade,
-                discord_id=discord_id,
-                item_canonico=item.item_canonico,
-                quantidade=quantidade,
-                e_grave=e_grave,
-            )
-            eventos.append(
-                {
-                    "tipo": "caso_novo" if criado else "caso_atualizado",
-                    "caso": caso,
-                    "quantidade": quantidade,
-                    "limite_1": limite_1,
-                    "limite_2": limite_2,
-                    "e_grave": e_grave,
-                    "discord_id": discord_id,
-                }
-            )
+        # Sem dívida restante → resolve caso aberto
+        if not mapa_divida:
+            if caso_aberto is not None:
+                await resolver_caso(
+                    caso_aberto.id,
+                    por_discord_id=None,
+                    status="RESOLVIDO",
+                )
+                eventos.append(
+                    {
+                        "tipo": "caso_resolvido_auto",
+                        "caso_id": caso_aberto.id,
+                        "item": "agregado",
+                        "quantidade": 0,
+                    }
+                )
+            return eventos
+
+        e_grave = caso_tem_item_grave(mapa_divida, limites_2)
+        caso, criado = await abrir_ou_atualizar_caso_agregado(
+            id_fivem=log.id_fivem,
+            nome_cidade=log.nome_cidade,
+            discord_id=discord_id,
+            mapa_itens=mapa_divida,
+            e_grave=e_grave,
+        )
+        eventos.append(
+            {
+                "tipo": "caso_novo" if criado else "caso_atualizado",
+                "caso": caso,
+                "quantidade": caso.quantidade_atual,
+                "limite_1": 0,
+                "limite_2": None,
+                "e_grave": e_grave,
+                "discord_id": discord_id,
+                "mapa_itens": mapa_divida,
+            }
+        )
 
     return eventos
 

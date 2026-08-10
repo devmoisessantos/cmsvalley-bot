@@ -217,7 +217,7 @@ class PainelAdminBauView(LoggingViewMixin, discord.ui.LayoutView):
         async with async_session() as sessao:
             resultado = await sessao.execute(
                 select(CasoBau)
-                .where(CasoBau.status.in_(("AGUARDANDO", "GRAVE")))
+                .where(CasoBau.status.in_(("AGUARDANDO", "GRAVE", "PRAZO_ESTOURADO")))
                 .order_by(CasoBau.id.desc())
                 .limit(15)
             )
@@ -228,7 +228,7 @@ class PainelAdminBauView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         linhas = [
-            f"• `#{c.id}` · `{c.id_fivem}` · **{c.item_canonico}** x{c.quantidade_atual} · `{c.status}`"
+            f"• `#{c.id}` · `{c.id_fivem}` · **{c.quantidade_atual}** un. · `{c.status}`"
             for c in casos
         ]
         await responder_info(

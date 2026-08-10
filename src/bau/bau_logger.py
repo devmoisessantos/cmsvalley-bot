@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import discord
 
-from src.bau.bau_views import ViewCasoBau, ViewDmDevolucao
+from src.bau.bau_views import (
+    ViewCasoBau,
+    ViewDmDevolucao,
+)
 from src.config import CANAIS
 from src.database.models import CasoBau
 from src.utils.log_container import LogContainerView
@@ -84,17 +87,24 @@ async def log_verbal_aplicada(
     caso: CasoBau,
     tipo: str,
 ) -> None:
+    from src.bau.bau_service import (
+        formatar_bloco_itens_yaml,
+        ler_itens_do_caso,
+    )
+
     canal = guild.get_channel(CANAIS.get("CANAL_ALERTA_BAU") or 0)
     if canal is None:
         return
+    mapa_itens = ler_itens_do_caso(caso)
     view = LogContainerView(
-        titulo=f"Baú — {tipo} aplicada",
+        titulo=f"Baú — {tipo} · prazo estourado",
         linhas=(
             f"- **Caso:** `#{caso.id}`\n"
             f"- **FiveM:** `{caso.id_fivem}`\n"
-            f"- **Item:** `{caso.item_canonico}` x{caso.quantidade_atual}\n"
+            f"- **Itens:**\n{formatar_bloco_itens_yaml(mapa_itens)}\n"
             f"- **Membro:** "
             + (f"<@{caso.discord_id}>" if caso.discord_id else "_sem discord_")
+            + "\n- Botão **Ocorrência Valley** liberado no card."
         ),
         guild=guild,
         cor=discord.Color.red(),
