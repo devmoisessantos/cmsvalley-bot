@@ -13,7 +13,11 @@ from src.laudos.laudos_service import (
     membro_e_psicologo,
 )
 from src.utils.formatacao import formatar_data_hora_local
-from src.utils.mensagens import responder_erro, responder_info, responder_sucesso
+from src.utils.mensagens import (
+    responder_erro,
+    responder_info,
+    responder_sucesso,
+)
 from src.utils.permissions import apenas_administrador
 
 
@@ -80,7 +84,9 @@ class LaudosCog(commands.Cog):
             return
         ok, mensagem = await cancelar_consulta_aberta(interacao.user.id)
         if ok:
-            await responder_sucesso(interacao, titulo="Consulta cancelada", linhas=[mensagem])
+            await responder_sucesso(
+                interacao, titulo="Consulta cancelada", linhas=[mensagem]
+            )
         else:
             await responder_erro(interacao, titulo="Não cancelado", linhas=[mensagem])
 
@@ -111,7 +117,9 @@ class LaudosCog(commands.Cog):
     )
     @app_commands.describe(membro="Psicólogo")
     @apenas_administrador()
-    async def laudos_total(self, interacao: discord.Interaction, membro: discord.Member):
+    async def laudos_total(
+        self, interacao: discord.Interaction, membro: discord.Member
+    ):
         total = await contar_laudos_psicologo(membro.id)
         await responder_info(
             interacao,
