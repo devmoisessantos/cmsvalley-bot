@@ -1,6 +1,11 @@
-"""Botões e selects do domínio de cursos."""
+"""Painéis e botões do fluxo de cursos (solicitar → agendar → aceitar → decidir)."""
 
 from __future__ import annotations
+
+from datetime import (
+    datetime,
+    timezone,
+)
 
 import discord
 
@@ -9,43 +14,124 @@ from src.config import (
     VALOR_MOEDA_INGAME,
 )
 from src.cursos.cursos_service import (
-    consultar_saldo_moedas,
+    aceitar_agendamento,
+    conceder_cargos_dos_cursos,
+    creditar_moedas_instrutor,
     debitar_moedas_curso,
+    decidir_curso,
     listar_cursos_ordenados,
+    marcar_mensagem_solicitacao_curso,
     membro_tem_curso,
-    moedas_necessarias_para_curso,
+    menção_cargo_curso,
+    moedas_necessarias_para_pacote,
+    montar_linhas_corpo_pedido,
     obter_curso,
-    registrar_solicitacao_curso,
+    parse_chaves_json,
+    registrar_solicitacao_pacote,
     rotulo_curso,
-    texto_resumo_pagamento,
+    soma_valor_ingame,
 )
 from src.plantao.permissoes import e_diretoria
 from src.utils.error_handling import (
+    LoggingModalMixin,
     LoggingViewMixin,
     enviar_erro_para_log_erros,
 )
 from src.utils.formatacao import formatar_reais
+from src.utils.log_container import LogContainerView
 from src.utils.mensagens import (
-    COR_INFO,
+    COR_ERRO,
     COR_SUCESSO,
     responder_aviso,
     responder_erro,
     responder_sucesso,
 )
-from src.utils.log_container import LogContainerView
+from src.utils.notificacao import enviar_dm_card
 
-CUSTOM_ID_SELECT_CURSO = "cursos:select_solicitar"
-CUSTOM_ID_PAGAR_MOEDAS = "cursos:pagar_moedas:"
-CUSTOM_ID_PAGAR_INGAME = "cursos:pagar_ingame:"
-CUSTOM_ID_CANCELAR = "cursos:cancelar"
+CUSTOM_ID_BOTAO_SELECIONAR = "cursos:botao_selecionar"
+CUSTOM_ID_SELECT_MULTI = "cursos:select_multi"
+CUSTOM_ID_ACEITAR = "cursos:aceitar:"
+CUSTOM_ID_APROVAR = "cursos:aprovar:"
+CUSTOM_ID_REPROVAR = "cursos:reprovar:"
+CUSTOM_ID_CONFIRMA_APROVAR = "cursos:confirma_aprovar:"
+CUSTOM_ID_CONFIRMA_REPROVAR = "cursos:confirma_reprovar:"
+CUSTOM_ID_CANCELA_DECISAO = "cursos:cancela_decisao:"
+
+
+def _instrutor_ou_diretoria(membro: discord.Member) -> bool:
+    if e_diretoria(membro):
+        return True
+    # Instrutores: qualquer cargo cujo nome contenha Instrutor
+    for cargo in membro.roles:
+        nome = (cargo.name or "").lower()
+        if "instrutor" in nome:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Painel persistente
+# ---------------------------------------------------------------------------
 
 
 class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
-    """Painel persistente — solicitar curso."""
+    """Painel fixo: botão Selecionar cursos (não abre o select direto)."""
 
     def __init__(self, guild: discord.Guild | None = None):
         super().__init__(timeout=None)
-        self.guild_ref = guild
+        linha = discord.ui.ActionRow()
+        botao = discord.ui.Button(
+            label="Selecionar cursos",
+            style=discord.ButtonStyle.primary,
+            emoji="📚",
+            custom_id=CUSTOM_ID_BOTAO_SELECIONAR,
+        )
+        botao.callback = self._ao_abrir_selecao
+        linha.add_item(botao)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# 📚 Solicitar Curso\n"
+                    "1. Clique em **Selecionar cursos** e marque um ou mais.\n"
+                    "2. Informe data/horário (ou deixe em branco).\n"
+                    "3. Confirme o pagamento (moedas ou in-game).\n"
+                    "O pedido vai para o canal de **agendamentos**.\n"
+                    "-# Curso concluído = cargo correspondente no Discord."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                linha,
+                accent_color=discord.Color.dark_teal(),
+            )
+        )
+
+    async def _ao_abrir_selecao(self, interacao: discord.Interaction):
+        try:
+            await interacao.response.send_message(
+                view=SeletorMultiCursosView(interacao.user.id),
+                ephemeral=True,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao abrir seletor de cursos",
+                erro,
+                contexto="PainelCursosLayout._ao_abrir_selecao",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Não foi possível abrir a seleção de cursos."],
+            )
+
+
+class SeletorMultiCursosView(LoggingViewMixin, discord.ui.LayoutView):
+    """Select efêmero: um ou vários cursos."""
+
+    def __init__(self, solicitante_id: int):
+        super().__init__(timeout=180)
+        self.solicitante_id = solicitante_id
 
         opcoes: list[discord.SelectOption] = []
         for chave, dados in listar_cursos_ordenados():
@@ -63,79 +149,162 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
                     emoji=dados.get("emoji") or None,
                 )
             )
-
-        # Discord limita Select a 25 opções
         opcoes = opcoes[:25]
+
         linha = discord.ui.ActionRow()
         seletor = discord.ui.Select(
-            placeholder="Escolha o curso que deseja solicitar…",
+            placeholder="Marque um ou mais cursos…",
             options=opcoes,
-            custom_id=CUSTOM_ID_SELECT_CURSO,
             min_values=1,
-            max_values=1,
+            max_values=min(10, len(opcoes)),
+            custom_id=CUSTOM_ID_SELECT_MULTI,
         )
-        seletor.callback = self._ao_escolher_curso
+        seletor.callback = self._ao_confirmar_selecao
         linha.add_item(seletor)
 
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    "# 📚 Solicitar Curso\n"
-                    "Escolha o curso no menu. Você verá o **valor** e poderá pagar "
-                    "com **moedas de plantão** ou registrar pagamento **in-game**.\n"
-                    "-# Curso concluído = cargo correspondente no Discord."
+                    "### Escolha os cursos\n"
+                    "Você pode marcar **vários**. Depois abre o formulário de observação."
                 ),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha,
                 accent_color=discord.Color.dark_teal(),
             )
         )
 
-    async def _ao_escolher_curso(self, interacao: discord.Interaction):
-        try:
-            valores = interacao.data.get("values") if interacao.data else None
-            if not valores:
-                await responder_erro(
-                    interacao,
-                    titulo="Seleção inválida",
-                    linhas=["Nenhum curso selecionado."],
-                )
-                return
-            chave = valores[0]
-            await enviar_confirmacao_curso(interacao, chave)
-        except Exception as erro:
-            await enviar_erro_para_log_erros(
-                interacao.guild,
-                "Erro ao escolher curso",
-                erro,
-                contexto="PainelCursosLayout._ao_escolher_curso",
-                usuario=interacao.user,
-            )
+    async def _ao_confirmar_selecao(self, interacao: discord.Interaction):
+        if interacao.user.id != self.solicitante_id:
             await responder_erro(
                 interacao,
-                titulo="Erro inesperado",
-                linhas=["Falha ao abrir o curso. A equipe foi notificada."],
+                titulo="Não é sua seleção",
+                linhas=["Só quem abriu o painel pode continuar."],
+            )
+            return
+        valores = interacao.data.get("values") if interacao.data else None
+        if not valores:
+            await responder_erro(
+                interacao,
+                titulo="Nada selecionado",
+                linhas=["Escolha pelo menos um curso."],
+            )
+            return
+
+        membro = interacao.user
+        if not isinstance(membro, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Apenas no servidor",
+                linhas=["Use o painel dentro do Discord do hospital."],
+            )
+            return
+
+        chaves_validas: list[str] = []
+        ja_tem: list[str] = []
+        for chave in valores:
+            if membro_tem_curso(membro, chave):
+                ja_tem.append(rotulo_curso(chave))
+            else:
+                chaves_validas.append(chave)
+
+        if not chaves_validas:
+            await responder_aviso(
+                interacao,
+                titulo="Você já concluiu esses cursos",
+                linhas=[
+                    "Nenhum curso novo na seleção.",
+                    *([f"Já possui: {', '.join(ja_tem)}"] if ja_tem else []),
+                ],
+                delay=15,
+            )
+            return
+
+        await interacao.response.send_modal(
+            ModalObservacaoAluno(
+                chaves=chaves_validas,
+                solicitante_id=self.solicitante_id,
+                avisos_ja_tem=ja_tem,
+            )
+        )
+
+
+class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
+    """Data/horário livre — vazio = sem observação."""
+
+    def __init__(
+        self,
+        *,
+        chaves: list[str],
+        solicitante_id: int,
+        avisos_ja_tem: list[str] | None = None,
+    ):
+        super().__init__(title="Observação do pedido")
+        self.chaves = chaves
+        self.solicitante_id = solicitante_id
+        self.avisos_ja_tem = avisos_ja_tem or []
+        self.campo_observacao = discord.ui.TextInput(
+            label="Data / horário ou observação",
+            style=discord.TextStyle.paragraph,
+            placeholder="Ex.: Sábado 14h na call de cursos — ou deixe em branco",
+            required=False,
+            max_length=500,
+        )
+        self.add_item(self.campo_observacao)
+
+    async def on_submit(self, interacao: discord.Interaction):
+        if interacao.user.id != self.solicitante_id:
+            await responder_erro(
+                interacao,
+                titulo="Não é seu pedido",
+                linhas=["Só quem iniciou a solicitação pode confirmar."],
+            )
+            return
+        observacao = (self.campo_observacao.value or "").strip()
+        view = ConfirmacaoPagamentoPacoteView(
+            chaves=self.chaves,
+            solicitante_id=self.solicitante_id,
+            observacao_aluno=observacao,
+        )
+        await interacao.response.send_message(view=view, ephemeral=True)
+        if self.avisos_ja_tem:
+            await responder_aviso(
+                interacao,
+                titulo="Alguns cursos já concluídos foram ignorados",
+                linhas=[", ".join(self.avisos_ja_tem)],
+                delay=12,
             )
 
 
-class ConfirmacaoCursoView(LoggingViewMixin, discord.ui.LayoutView):
-    """Card efêmero de confirmação de pagamento."""
+class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
+    """Confirma pagamento do pacote (moedas ou in-game)."""
 
-    def __init__(self, chave_curso: str, solicitante_id: int):
+    def __init__(
+        self,
+        *,
+        chaves: list[str],
+        solicitante_id: int,
+        observacao_aluno: str,
+    ):
         super().__init__(timeout=180)
-        self.chave_curso = chave_curso
+        self.chaves = chaves
         self.solicitante_id = solicitante_id
-        dados = obter_curso(chave_curso) or {}
-        valor = int(dados.get("valor_ingame") or 0)
-        moedas = moedas_necessarias_para_curso(chave_curso)
+        self.observacao_aluno = observacao_aluno
+
+        valor_total = soma_valor_ingame(chaves)
+        moedas = moedas_necessarias_para_pacote(chaves)
+
+        lista = "\n".join(
+            f"• {rotulo_curso(chave)} — {formatar_reais(int((obter_curso(chave) or {}).get('valor_ingame') or 0))}"
+            for chave in chaves
+        )
+        obs_txt = observacao_aluno if observacao_aluno else "_Sem observação_"
 
         linha = discord.ui.ActionRow()
-        if valor > 0:
+        if valor_total > 0:
             botao_moedas = discord.ui.Button(
                 label=f"Pagar com moedas ({moedas})",
                 style=discord.ButtonStyle.success,
                 emoji="🪙",
-                custom_id=f"{CUSTOM_ID_PAGAR_MOEDAS}{chave_curso}",
             )
             botao_moedas.callback = self._ao_pagar_moedas
             linha.add_item(botao_moedas)
@@ -144,7 +313,6 @@ class ConfirmacaoCursoView(LoggingViewMixin, discord.ui.LayoutView):
                 label="Pagar in-game",
                 style=discord.ButtonStyle.primary,
                 emoji="💵",
-                custom_id=f"{CUSTOM_ID_PAGAR_INGAME}{chave_curso}",
             )
             botao_ingame.callback = self._ao_pagar_ingame
             linha.add_item(botao_ingame)
@@ -160,30 +328,23 @@ class ConfirmacaoCursoView(LoggingViewMixin, discord.ui.LayoutView):
         botao_cancelar = discord.ui.Button(
             label="Cancelar",
             style=discord.ButtonStyle.secondary,
-            custom_id=CUSTOM_ID_CANCELAR,
         )
         botao_cancelar.callback = self._ao_cancelar
         linha.add_item(botao_cancelar)
 
-        texto_valor = (
-            formatar_reais(valor) if valor > 0 else "Sem valor fixo / a combinar"
-        )
-        texto_moedas = (
-            f"Equivale a **{moedas}** moeda(s) de plantão "
-            f"(1 moeda = {formatar_reais(VALOR_MOEDA_INGAME)})."
-            if valor > 0
-            else "Este curso não debita moedas automaticamente."
-        )
-
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    f"# Confirmar · {rotulo_curso(chave_curso)}\n"
-                    f"• **Valor in-game:** {texto_valor}\n"
-                    f"• {texto_moedas}\n"
-                    f"• **Nível:** `{dados.get('nivel', '—')}`\n\n"
-                    "O pagamento com moedas debita **agora**. "
-                    "O instrutor ainda precisa **aplicar** o curso (liberar o cargo)."
+                    "# Confirmar pedido de curso\n"
+                    f"{lista}\n\n"
+                    f"**Total in-game:** {formatar_reais(valor_total)}\n"
+                    + (
+                        f"**Moedas necessárias:** `{moedas}` "
+                        f"(1 moeda = {formatar_reais(VALOR_MOEDA_INGAME)})\n"
+                        if valor_total > 0
+                        else ""
+                    )
+                    + f"**Observação:** {obs_txt}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha,
@@ -196,7 +357,7 @@ class ConfirmacaoCursoView(LoggingViewMixin, discord.ui.LayoutView):
             await responder_erro(
                 interacao,
                 titulo="Não é seu pedido",
-                linhas=["Só quem abriu a confirmação pode concluir o pagamento."],
+                linhas=["Só quem montou o pedido pode pagar."],
             )
             return False
         return True
@@ -204,251 +365,752 @@ class ConfirmacaoCursoView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_pagar_moedas(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
-        try:
-            await processar_pagamento_moedas(interacao, self.chave_curso)
-        except Exception as erro:
-            await enviar_erro_para_log_erros(
-                interacao.guild,
-                "Erro pagamento curso (moedas)",
-                erro,
-                contexto="ConfirmacaoCursoView._ao_pagar_moedas",
-                usuario=interacao.user,
-            )
-            await responder_erro(
-                interacao,
-                titulo="Erro no pagamento",
-                linhas=["Não foi possível debitar. A equipe foi notificada."],
-            )
+        await finalizar_pedido(
+            interacao,
+            chaves=self.chaves,
+            forma="MOEDAS",
+            observacao_aluno=self.observacao_aluno,
+        )
 
     async def _ao_pagar_ingame(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
-        try:
-            await processar_pagamento_ingame(interacao, self.chave_curso)
-        except Exception as erro:
-            await enviar_erro_para_log_erros(
-                interacao.guild,
-                "Erro pagamento curso (in-game)",
-                erro,
-                contexto="ConfirmacaoCursoView._ao_pagar_ingame",
-                usuario=interacao.user,
-            )
-            await responder_erro(
-                interacao,
-                titulo="Erro na solicitação",
-                linhas=["Falha ao registrar. A equipe foi notificada."],
-            )
+        await finalizar_pedido(
+            interacao,
+            chaves=self.chaves,
+            forma="IN_GAME",
+            observacao_aluno=self.observacao_aluno,
+        )
 
     async def _ao_gratuito(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
-        try:
-            await processar_pagamento_ingame(
-                interacao, self.chave_curso, forma="GRATUITO"
-            )
-        except Exception as erro:
-            await enviar_erro_para_log_erros(
-                interacao.guild,
-                "Erro solicitação curso gratuita",
-                erro,
-                contexto="ConfirmacaoCursoView._ao_gratuito",
-                usuario=interacao.user,
-            )
-            await responder_erro(
-                interacao,
-                titulo="Erro na solicitação",
-                linhas=["Falha ao registrar. A equipe foi notificada."],
-            )
+        await finalizar_pedido(
+            interacao,
+            chaves=self.chaves,
+            forma="GRATUITO",
+            observacao_aluno=self.observacao_aluno,
+        )
 
     async def _ao_cancelar(self, interacao: discord.Interaction):
         await responder_aviso(
             interacao,
             titulo="Cancelado",
-            linhas=["Solicitação de curso cancelada."],
+            linhas=["Pedido de curso cancelado."],
             delay=8,
         )
 
 
-async def enviar_confirmacao_curso(
+async def finalizar_pedido(
     interacao: discord.Interaction,
-    chave: str,
+    *,
+    chaves: list[str],
+    forma: str,
+    observacao_aluno: str,
 ) -> None:
-    dados = obter_curso(chave)
-    if dados is None:
-        await responder_erro(
-            interacao,
-            titulo="Curso desconhecido",
-            linhas=[f"Chave `{chave}` não está no catálogo."],
-        )
-        return
-
     membro = interacao.user
     if not isinstance(membro, discord.Member):
         await responder_erro(
             interacao,
             titulo="Apenas no servidor",
-            linhas=["Use este painel dentro do Discord do hospital."],
+            linhas=["Use o painel no Discord do hospital."],
         )
         return
 
-    if membro_tem_curso(membro, chave):
-        await responder_aviso(
+    try:
+        await interacao.response.defer(ephemeral=True)
+        moedas = 0
+        saldo_restante = None
+        if forma == "MOEDAS":
+            moedas = moedas_necessarias_para_pacote(chaves)
+            ok, saldo_restante, erro_txt = await debitar_moedas_curso(membro.id, moedas)
+            if not ok:
+                await responder_erro(
+                    interacao,
+                    titulo="Saldo insuficiente",
+                    linhas=[erro_txt],
+                )
+                return
+
+        registro = await registrar_solicitacao_pacote(
+            discord_id=membro.id,
+            chaves=chaves,
+            forma_pagamento=forma,
+            moedas_debitadas=moedas,
+            observacao_aluno=observacao_aluno,
+        )
+
+        ok_post = await publicar_no_agendamentos(
+            interacao.guild,
+            membro=membro,
+            registro=registro,
+            saldo_restante=saldo_restante,
+        )
+        if not ok_post:
+            await responder_erro(
+                interacao,
+                titulo="Pedido salvo, falha no canal",
+                linhas=[
+                    f"Pedido `#{registro.id}` gravado, mas não postou em agendamentos.",
+                    "A equipe foi notificada no log de erros.",
+                ],
+            )
+            return
+
+        await responder_sucesso(
             interacao,
-            titulo="Curso já concluído",
+            titulo="Pedido enviado ao agendamento",
             linhas=[
-                f"Você já possui {rotulo_curso(chave)}.",
-                "Não é necessário solicitar de novo.",
+                f"Pedido `#{registro.id}` publicado.",
+                f"Forma: `{forma}`"
+                + (
+                    f" · Moedas: `{moedas}` · Saldo: `{saldo_restante}`"
+                    if moedas
+                    else ""
+                ),
+                "Aguarde um instrutor **aceitar** a solicitação.",
             ],
-            delay=12,
+            delay=25,
         )
-        return
-
-    view = ConfirmacaoCursoView(chave, membro.id)
-    await interacao.response.send_message(view=view, ephemeral=True)
-
-
-async def processar_pagamento_moedas(
-    interacao: discord.Interaction,
-    chave: str,
-) -> None:
-    dados = obter_curso(chave)
-    if dados is None:
-        await responder_erro(
-            interacao, titulo="Curso inválido", linhas=["Catálogo desatualizado."]
+    except Exception as erro:
+        await enviar_erro_para_log_erros(
+            interacao.guild,
+            "Erro ao finalizar pedido de curso",
+            erro,
+            contexto="finalizar_pedido",
+            usuario=membro,
         )
-        return
-
-    membro = interacao.user
-    assert isinstance(membro, discord.Member)
-    moedas = moedas_necessarias_para_curso(chave)
-    valor = int(dados.get("valor_ingame") or 0)
-
-    ok, saldo, erro_txt = await debitar_moedas_curso(membro.id, moedas)
-    if not ok:
         await responder_erro(
             interacao,
-            titulo="Saldo insuficiente",
-            linhas=[erro_txt, f"Valor do curso: {formatar_reais(valor)}."],
+            titulo="Erro inesperado",
+            linhas=["Falha ao registrar o pedido. A equipe foi notificada."],
         )
-        return
-
-    registro = await registrar_solicitacao_curso(
-        discord_id=membro.id,
-        chave_curso=chave,
-        forma_pagamento="MOEDAS",
-        moedas_debitadas=moedas,
-        valor_ingame=valor,
-    )
-
-    await _publicar_pedido_no_canal_cursos(
-        interacao,
-        membro=membro,
-        chave=chave,
-        registro_id=registro.id,
-        forma="MOEDAS",
-        moedas=moedas,
-        saldo_restante=saldo,
-    )
-
-    await responder_sucesso(
-        interacao,
-        titulo="Pagamento registrado",
-        linhas=texto_resumo_pagamento(chave, "MOEDAS", moedas, saldo),
-        delay=20,
-    )
 
 
-async def processar_pagamento_ingame(
-    interacao: discord.Interaction,
-    chave: str,
-    forma: str = "IN_GAME",
-) -> None:
-    dados = obter_curso(chave)
-    if dados is None:
-        await responder_erro(
-            interacao, titulo="Curso inválido", linhas=["Catálogo desatualizado."]
+# ---------------------------------------------------------------------------
+# Cards de canal
+# ---------------------------------------------------------------------------
+
+
+def _rodape(guilda: discord.Guild | None) -> str:
+    momento = int(datetime.now(timezone.utc).timestamp())
+    nome = guilda.name if guilda else "CENTRO MÉDICO SUL VALLEY"
+    return f"-# {nome} • <t:{momento}:f>"
+
+
+class ViewAceitarAgendamento(LoggingViewMixin, discord.ui.LayoutView):
+    """Mensagem em CANAL_AGENDAMENTOS — botão único Aceitar."""
+
+    def __init__(
+        self,
+        *,
+        titulo: str,
+        corpo: str,
+        guild: discord.Guild,
+        solicitacao_id: int,
+        url_avatar: str | None,
+        ja_aceito: bool = False,
+    ):
+        super().__init__(timeout=None)
+        self.solicitacao_id = solicitacao_id
+
+        componentes: list = [
+            discord.ui.TextDisplay(f"# {titulo}"),
+        ]
+        if url_avatar:
+            componentes.append(
+                discord.ui.Section(
+                    corpo,
+                    accessory=discord.ui.Thumbnail(url=url_avatar),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(corpo))
+
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        linha = discord.ui.ActionRow()
+        botao = discord.ui.Button(
+            label="Aceitar Solicitação" if not ja_aceito else "Aceito ✓",
+            style=(
+                discord.ButtonStyle.success
+                if not ja_aceito
+                else discord.ButtonStyle.secondary
+            ),
+            emoji="✅",
+            custom_id=f"{CUSTOM_ID_ACEITAR}{solicitacao_id}",
+            disabled=ja_aceito,
         )
-        return
+        botao.callback = self._ao_aceitar
+        linha.add_item(botao)
+        componentes.append(linha)
+        componentes.append(discord.ui.TextDisplay(_rodape(guild)))
 
-    membro = interacao.user
-    assert isinstance(membro, discord.Member)
-    valor = int(dados.get("valor_ingame") or 0)
+        self.add_item(
+            discord.ui.Container(
+                *componentes,
+                accent_color=(
+                    discord.Color.green() if ja_aceito else discord.Color.dark_gold()
+                ),
+            )
+        )
 
-    registro = await registrar_solicitacao_curso(
-        discord_id=membro.id,
-        chave_curso=chave,
-        forma_pagamento=forma,
-        moedas_debitadas=0,
-        valor_ingame=valor,
-    )
-
-    await _publicar_pedido_no_canal_cursos(
-        interacao,
-        membro=membro,
-        chave=chave,
-        registro_id=registro.id,
-        forma=forma,
-        moedas=0,
-        saldo_restante=None,
-    )
-
-    await responder_sucesso(
-        interacao,
-        titulo="Solicitação registrada",
-        linhas=texto_resumo_pagamento(chave, forma, 0),
-        delay=20,
-    )
+    async def _ao_aceitar(self, interacao: discord.Interaction):
+        membro = interacao.user
+        if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(
+            membro
+        ):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Apenas **Instrutor** ou **Diretoria** pode aceitar."],
+            )
+            return
+        await interacao.response.send_modal(
+            ModalObservacaoInstrutor(
+                solicitacao_id=self.solicitacao_id,
+                instrutor_id=membro.id,
+                mensagem_agendamento=interacao.message,
+            )
+        )
 
 
-async def _publicar_pedido_no_canal_cursos(
-    interacao: discord.Interaction,
+class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
+    def __init__(
+        self,
+        *,
+        solicitacao_id: int,
+        instrutor_id: int,
+        mensagem_agendamento: discord.Message | None,
+    ):
+        super().__init__(title="Aceitar agendamento")
+        self.solicitacao_id = solicitacao_id
+        self.instrutor_id = instrutor_id
+        self.mensagem_agendamento = mensagem_agendamento
+        self.campo = discord.ui.TextInput(
+            label="Observação do instrutor (opcional)",
+            style=discord.TextStyle.paragraph,
+            placeholder="Ex.: Confirmado sábado 15h na call de cursos",
+            required=False,
+            max_length=500,
+        )
+        self.add_item(self.campo)
+
+    async def on_submit(self, interacao: discord.Interaction):
+        try:
+            await interacao.response.defer(ephemeral=True)
+            obs = (self.campo.value or "").strip()
+            registro = await aceitar_agendamento(
+                solicitacao_id=self.solicitacao_id,
+                instrutor_id=self.instrutor_id,
+                observacao_instrutor=obs,
+            )
+            if registro is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Pedido não encontrado",
+                    linhas=[f"ID `#{self.solicitacao_id}`."],
+                )
+                return
+            if registro.status != "ACEITO":
+                await responder_aviso(
+                    interacao,
+                    titulo="Já processado",
+                    linhas=[f"Status atual: `{registro.status}`."],
+                    delay=10,
+                )
+                return
+
+            guilda = interacao.guild
+            aluno = guilda.get_member(registro.discord_id) if guilda else None
+            titulo, corpo = montar_linhas_corpo_pedido(
+                membro=aluno or interacao.user,  # type: ignore[arg-type]
+                registro=registro,
+            )
+            if obs:
+                corpo += f"\n\n### 📌 Observação do instrutor\n> {obs}"
+            corpo += f"\n**Instrutor:** {interacao.user.mention}"
+
+            # Desativa botão no agendamento
+            if self.mensagem_agendamento is not None and guilda is not None:
+                url_avatar = (
+                    aluno.display_avatar.url
+                    if aluno is not None
+                    else interacao.user.display_avatar.url
+                )
+                try:
+                    await self.mensagem_agendamento.edit(
+                        view=ViewAceitarAgendamento(
+                            titulo=titulo,
+                            corpo=corpo + "\n\n-# ✅ **Solicitação aceita**",
+                            guild=guilda,
+                            solicitacao_id=registro.id,
+                            url_avatar=url_avatar,
+                            ja_aceito=True,
+                        )
+                    )
+                except discord.HTTPException as erro:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Falha ao desativar botão de agendamento",
+                        erro,
+                        contexto="ModalObservacaoInstrutor.edit",
+                        usuario=interacao.user,
+                    )
+
+            # Publica em aprovar/reprovar
+            await publicar_para_decisao(guilda, registro=registro, aluno=aluno)
+
+            # DM do aluno
+            if aluno is not None:
+                await enviar_dm_card(
+                    aluno,
+                    titulo="Agendamento de curso aceito",
+                    linhas=[
+                        f"Seu pedido `#{registro.id}` foi **aceito**.",
+                        f"Instrutor: {interacao.user.mention}",
+                        f"Observação: {obs or '_Sem observação_'}",
+                        "Aguarde a **aprovação final** após a aplicação do curso.",
+                    ],
+                    cor=COR_SUCESSO,
+                )
+
+            await responder_sucesso(
+                interacao,
+                titulo="Solicitação aceita",
+                linhas=[
+                    f"Pedido `#{registro.id}` aceito.",
+                    "O aluno foi notificado na DM (se aberta).",
+                    "Card enviado ao canal de **aprovar/reprovar**.",
+                ],
+                delay=15,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao aceitar agendamento de curso",
+                erro,
+                contexto="ModalObservacaoInstrutor.on_submit",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Falha ao aceitar. Veja LOG_ERROS."],
+            )
+
+
+class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
+    """Canal aprovar/reprovar — com confirmação em dois cliques."""
+
+    def __init__(
+        self,
+        *,
+        titulo: str,
+        corpo: str,
+        guild: discord.Guild,
+        solicitacao_id: int,
+        url_avatar: str | None,
+        modo: str = "normal",
+        desabilitada: bool = False,
+    ):
+        """
+        modo: normal | confirma_aprovar | confirma_reprovar | final
+        """
+        super().__init__(timeout=None)
+        self.solicitacao_id = solicitacao_id
+        self.titulo = titulo
+        self.corpo = corpo
+        self.guild_ref = guild
+        self.url_avatar = url_avatar
+
+        componentes: list = [discord.ui.TextDisplay(f"# {titulo}")]
+        if url_avatar:
+            componentes.append(
+                discord.ui.Section(
+                    corpo, accessory=discord.ui.Thumbnail(url=url_avatar)
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(corpo))
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        linha = discord.ui.ActionRow()
+        if desabilitada or modo == "final":
+            botao = discord.ui.Button(
+                label="Decisão registrada",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+            )
+            linha.add_item(botao)
+        elif modo == "confirma_aprovar":
+            botao_sim = discord.ui.Button(
+                label="Confirmar aprovação",
+                style=discord.ButtonStyle.success,
+                emoji="✅",
+                custom_id=f"{CUSTOM_ID_CONFIRMA_APROVAR}{solicitacao_id}",
+            )
+            botao_sim.callback = self._ao_confirma_aprovar
+            botao_nao = discord.ui.Button(
+                label="Cancelar",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"{CUSTOM_ID_CANCELA_DECISAO}{solicitacao_id}",
+            )
+            botao_nao.callback = self._ao_cancelar_confirmacao
+            linha.add_item(botao_sim)
+            linha.add_item(botao_nao)
+        elif modo == "confirma_reprovar":
+            botao_sim = discord.ui.Button(
+                label="Confirmar reprovação",
+                style=discord.ButtonStyle.danger,
+                emoji="❌",
+                custom_id=f"{CUSTOM_ID_CONFIRMA_REPROVAR}{solicitacao_id}",
+            )
+            botao_sim.callback = self._ao_confirma_reprovar
+            botao_nao = discord.ui.Button(
+                label="Cancelar",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"{CUSTOM_ID_CANCELA_DECISAO}{solicitacao_id}",
+            )
+            botao_nao.callback = self._ao_cancelar_confirmacao
+            linha.add_item(botao_sim)
+            linha.add_item(botao_nao)
+        else:
+            botao_ok = discord.ui.Button(
+                label="Aprovar",
+                style=discord.ButtonStyle.success,
+                emoji="✅",
+                custom_id=f"{CUSTOM_ID_APROVAR}{solicitacao_id}",
+            )
+            botao_ok.callback = self._ao_pedir_confirma_aprovar
+            botao_nao = discord.ui.Button(
+                label="Reprovar",
+                style=discord.ButtonStyle.danger,
+                emoji="❌",
+                custom_id=f"{CUSTOM_ID_REPROVAR}{solicitacao_id}",
+            )
+            botao_nao.callback = self._ao_pedir_confirma_reprovar
+            linha.add_item(botao_ok)
+            linha.add_item(botao_nao)
+
+        componentes.append(linha)
+        componentes.append(discord.ui.TextDisplay(_rodape(guild)))
+        cor = discord.Color.dark_gold()
+        if modo == "final":
+            cor = discord.Color.green()
+        self.add_item(discord.ui.Container(*componentes, accent_color=cor))
+
+    async def _checar_perm(self, interacao: discord.Interaction) -> bool:
+        membro = interacao.user
+        if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(
+            membro
+        ):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Apenas **Instrutor** ou **Diretoria**."],
+            )
+            return False
+        return True
+
+    async def _ao_pedir_confirma_aprovar(self, interacao: discord.Interaction):
+        if not await self._checar_perm(interacao):
+            return
+        await interacao.response.edit_message(
+            view=ViewDecisaoCurso(
+                titulo=self.titulo,
+                corpo=self.corpo
+                + "\n\n-# Confirme a **aprovação** (evita clique errado).",
+                guild=self.guild_ref,
+                solicitacao_id=self.solicitacao_id,
+                url_avatar=self.url_avatar,
+                modo="confirma_aprovar",
+            )
+        )
+
+    async def _ao_pedir_confirma_reprovar(self, interacao: discord.Interaction):
+        if not await self._checar_perm(interacao):
+            return
+        await interacao.response.edit_message(
+            view=ViewDecisaoCurso(
+                titulo=self.titulo,
+                corpo=self.corpo
+                + "\n\n-# Confirme a **reprovação** (evita clique errado).",
+                guild=self.guild_ref,
+                solicitacao_id=self.solicitacao_id,
+                url_avatar=self.url_avatar,
+                modo="confirma_reprovar",
+            )
+        )
+
+    async def _ao_cancelar_confirmacao(self, interacao: discord.Interaction):
+        if not await self._checar_perm(interacao):
+            return
+        await interacao.response.edit_message(
+            view=ViewDecisaoCurso(
+                titulo=self.titulo,
+                corpo=self.corpo,
+                guild=self.guild_ref,
+                solicitacao_id=self.solicitacao_id,
+                url_avatar=self.url_avatar,
+                modo="normal",
+            )
+        )
+
+    async def _ao_confirma_aprovar(self, interacao: discord.Interaction):
+        await self._finalizar(interacao, aprovado=True)
+
+    async def _ao_confirma_reprovar(self, interacao: discord.Interaction):
+        await self._finalizar(interacao, aprovado=False)
+
+    async def _finalizar(self, interacao: discord.Interaction, *, aprovado: bool):
+        if not await self._checar_perm(interacao):
+            return
+        membro = interacao.user
+        assert isinstance(membro, discord.Member)
+        try:
+            await interacao.response.defer(ephemeral=True)
+            registro = await decidir_curso(
+                solicitacao_id=self.solicitacao_id,
+                aprovado=aprovado,
+                instrutor_id=membro.id,
+            )
+            if registro is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Pedido não encontrado",
+                    linhas=[f"`#{self.solicitacao_id}`"],
+                )
+                return
+            if registro.status not in ("APROVADO", "REPROVADO"):
+                await responder_aviso(
+                    interacao,
+                    titulo="Estado inesperado",
+                    linhas=[f"Status: `{registro.status}`"],
+                    delay=10,
+                )
+                return
+
+            guilda = interacao.guild or self.guild_ref
+            aluno = guilda.get_member(registro.discord_id) if guilda else None
+            chaves = parse_chaves_json(
+                registro.chaves_cursos_json, registro.chave_curso
+            )
+
+            if aprovado and aluno is not None:
+                ok, detalhe = await conceder_cargos_dos_cursos(aluno, chaves)
+                if not ok:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Curso aprovado mas falha ao dar cargo",
+                        RuntimeError(detalhe),
+                        contexto="ViewDecisaoCurso.conceder",
+                        usuario=membro,
+                    )
+                if registro.forma_pagamento == "MOEDAS" and registro.moedas_debitadas:
+                    await creditar_moedas_instrutor(
+                        membro.id, int(registro.moedas_debitadas)
+                    )
+
+            await publicar_resultado_final(
+                guilda,
+                registro=registro,
+                aluno=aluno,
+                staff=membro,
+                aprovado=aprovado,
+            )
+
+            try:
+                await interacao.message.edit(
+                    view=ViewDecisaoCurso(
+                        titulo=self.titulo,
+                        corpo=self.corpo
+                        + (
+                            "\n\n-# ✅ **APROVADO**"
+                            if aprovado
+                            else "\n\n-# ❌ **REPROVADO**"
+                        ),
+                        guild=guilda,
+                        solicitacao_id=registro.id,
+                        url_avatar=self.url_avatar,
+                        modo="final",
+                        desabilitada=True,
+                    )
+                )
+            except discord.HTTPException:
+                pass
+
+            await responder_sucesso(
+                interacao,
+                titulo="Curso aprovado" if aprovado else "Curso reprovado",
+                linhas=[f"Pedido `#{registro.id}` finalizado."],
+                delay=12,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao decidir curso",
+                erro,
+                contexto="ViewDecisaoCurso._finalizar",
+                usuario=membro,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Falha na decisão. Veja LOG_ERROS."],
+            )
+
+
+async def publicar_no_agendamentos(
+    guilda: discord.Guild | None,
     *,
     membro: discord.Member,
-    chave: str,
-    registro_id: int,
-    forma: str,
-    moedas: int,
+    registro,
     saldo_restante: int | None,
-) -> None:
-    guilda = interacao.guild
+) -> bool:
     if guilda is None:
-        return
-    canal_id = CANAIS.get("CANAL_PAINEL_SOLICITAR_CURSOS") or CANAIS.get(
-        "SOLICITAR_CURSO_RESGATE"
-    )
+        return False
+    canal_id = CANAIS.get("CANAL_AGENDAMENTOS_DE_CURSO")
     canal = guilda.get_channel(int(canal_id)) if canal_id else None
     if canal is None:
         await enviar_erro_para_log_erros(
             guilda,
-            "Canal de cursos não encontrado ao publicar pedido",
-            RuntimeError(f"canal_id={canal_id}"),
-            contexto="_publicar_pedido_no_canal_cursos",
+            "CANAL_AGENDAMENTOS_DE_CURSO não encontrado",
+            RuntimeError(f"id={canal_id}"),
+            contexto="publicar_no_agendamentos",
             usuario=membro,
+        )
+        return False
+
+    titulo, corpo = montar_linhas_corpo_pedido(
+        membro=membro,
+        registro=registro,
+        saldo_restante=saldo_restante,
+    )
+    view = ViewAceitarAgendamento(
+        titulo=titulo,
+        corpo=corpo,
+        guild=guilda,
+        solicitacao_id=registro.id,
+        url_avatar=membro.display_avatar.url,
+    )
+    try:
+        mensagem = await canal.send(view=view)
+        await marcar_mensagem_solicitacao_curso(registro.id, canal.id, mensagem.id)
+        return True
+    except discord.HTTPException as erro:
+        await enviar_erro_para_log_erros(
+            guilda,
+            "Falha ao postar agendamento de curso",
+            erro,
+            contexto="publicar_no_agendamentos.send",
+            usuario=membro,
+        )
+        return False
+
+
+async def publicar_para_decisao(
+    guilda: discord.Guild | None,
+    *,
+    registro,
+    aluno: discord.Member | None,
+) -> None:
+    if guilda is None:
+        return
+    canal_id = CANAIS.get("CANAL_APROVAR_REPROVAR_CURSO")
+    canal = guilda.get_channel(int(canal_id)) if canal_id else None
+    if canal is None:
+        await enviar_erro_para_log_erros(
+            guilda,
+            "CANAL_APROVAR_REPROVAR_CURSO não encontrado",
+            RuntimeError(f"id={canal_id}"),
+            contexto="publicar_para_decisao",
         )
         return
 
-    linhas = (
-        f"👤 {membro.mention} (`{membro.id}`)\n"
-        f"📋 Pedido `#{registro_id}`\n"
-        + "\n".join(texto_resumo_pagamento(chave, forma, moedas, saldo_restante))
-        + "\n-# Instrutor: aplique o curso e conceda o cargo correspondente."
+    membro_ref = aluno or guilda.get_member(registro.discord_id)
+    if membro_ref is None:
+        # Member fake impossível — monta texto mínimo
+        class _Fake:
+            mention = f"<@{registro.discord_id}>"
+            id = registro.discord_id
+            display_avatar = type("A", (), {"url": None})()
+
+        membro_ref = _Fake()  # type: ignore
+
+    titulo, corpo = montar_linhas_corpo_pedido(
+        membro=membro_ref,  # type: ignore[arg-type]
+        registro=registro,
     )
+    if registro.observacao_instrutor:
+        corpo += (
+            f"\n\n### 📌 Observação do instrutor\n> {registro.observacao_instrutor}"
+        )
+    url = getattr(getattr(membro_ref, "display_avatar", None), "url", None)
     try:
         await canal.send(
-            view=LogContainerView(
-                titulo=f"Pedido de curso · {rotulo_curso(chave)}",
-                linhas=linhas,
+            view=ViewDecisaoCurso(
+                titulo=titulo,
+                corpo=corpo,
                 guild=guilda,
-                cor=COR_SUCESSO if forma == "MOEDAS" else COR_INFO,
+                solicitacao_id=registro.id,
+                url_avatar=url,
+                modo="normal",
             )
         )
     except discord.HTTPException as erro:
         await enviar_erro_para_log_erros(
             guilda,
-            "Falha ao postar pedido de curso",
+            "Falha ao postar decisão de curso",
             erro,
-            contexto="_publicar_pedido_no_canal_cursos.send",
-            usuario=membro,
+            contexto="publicar_para_decisao.send",
+        )
+
+
+async def publicar_resultado_final(
+    guilda: discord.Guild | None,
+    *,
+    registro,
+    aluno: discord.Member | None,
+    staff: discord.Member,
+    aprovado: bool,
+) -> None:
+    if guilda is None:
+        return
+    canal_id = (
+        CANAIS.get("CANAL_APROVADOS_CURSOS")
+        if aprovado
+        else CANAIS.get("CANAL_REPROVADOS_CURSOS")
+    )
+    canal = guilda.get_channel(int(canal_id)) if canal_id else None
+    if canal is None:
+        return
+    chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+    lista = ", ".join(menção_cargo_curso(c) for c in chaves) or registro.chave_curso
+    titulo = "Curso aprovado" if aprovado else "Curso reprovado"
+    linhas = (
+        f"👤 {aluno.mention if aluno else f'<@{registro.discord_id}>'}\n"
+        f"📋 Pedido `#{registro.id}`\n"
+        f"**Cursos:** {lista}\n"
+        f"**Forma:** `{registro.forma_pagamento}`\n"
+        f"Staff: {staff.mention}"
+    )
+    try:
+        await canal.send(
+            view=LogContainerView(
+                titulo=titulo,
+                linhas=linhas,
+                guild=guilda,
+                cor=COR_SUCESSO if aprovado else COR_ERRO,
+            )
+        )
+    except discord.HTTPException as erro:
+        await enviar_erro_para_log_erros(
+            guilda,
+            "Falha ao postar resultado de curso",
+            erro,
+            contexto="publicar_resultado_final",
+            usuario=staff,
         )
 
 

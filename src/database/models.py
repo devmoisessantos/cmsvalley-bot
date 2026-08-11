@@ -609,19 +609,28 @@ class ConfigBau(Base):
 
 
 class SolicitacaoCurso(Base):
-    """Pedido de curso (pagamento pendente ou pago; aguarda aplicação pelo instrutor)."""
+    """
+    Pedido de um ou mais cursos.
+    Fluxo: AGENDADO → ACEITO → APROVADO | REPROVADO
+    """
 
     __tablename__ = "solicitacoes_curso"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # Legado / resumo: primeira chave ou "pacote"
     chave_curso: Mapped[str] = mapped_column(String(40), index=True)
+    # JSON: ["alpinista", "arcanjo", ...]
+    chaves_cursos_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     valor_ingame: Mapped[int] = mapped_column(Integer, default=0)
     moedas_debitadas: Mapped[int] = mapped_column(Integer, default=0)
     # MOEDAS | IN_GAME | GRATUITO
     forma_pagamento: Mapped[str] = mapped_column(String(20), default="MOEDAS")
-    # PENDENTE | PAGO | APLICADO | CANCELADO
-    status: Mapped[str] = mapped_column(String(20), default="PENDENTE", index=True)
+    # AGENDADO | ACEITO | APROVADO | REPROVADO | CANCELADO
+    status: Mapped[str] = mapped_column(String(20), default="AGENDADO", index=True)
+    observacao_aluno: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observacao_instrutor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    instrutor_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     aplicado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     mensagem_canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     mensagem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
