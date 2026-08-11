@@ -11,6 +11,8 @@ from src.config import (
     DISCORD_TOKEN,
     GUILD_ID,
 )
+from src.cursos.cursos_setup import garantir_painel_cursos
+from src.cursos.cursos_views import PainelCursosLayout
 from src.database.connection import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
 from src.gate.gate_panel import PainelEventosGate
@@ -42,6 +44,8 @@ from src.panels.setup_paineis import (
 from src.plantao.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
 from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.plantao.plantao_tasks import executar_housekeeping_plantao
+from src.promocoes.promocoes_setup import garantir_painel_promocao
+from src.promocoes.promocoes_views import PainelPromocaoLayout
 from src.punicoes.cogs import garantir_painel_punicoes
 from src.punicoes.panel import PainelPunicoesLayout
 from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
@@ -102,6 +106,8 @@ class CmsValleyBot(commands.Bot):
             "src.bau.bau_tasks",
             "src.bau.bau_listener",
             "src.financas.financas_cogs",
+            "src.cursos.cursos_cogs",
+            "src.promocoes.promocoes_cogs",
         ]
 
         total = len(cogs)
@@ -187,6 +193,8 @@ class CmsValleyBot(commands.Bot):
             self.painel_punicoes_view = PainelPunicoesLayout(guild=guild)
             self.painel_laudos_view = PainelLaudosLayout(guild)
             self.painel_bau_view = PainelBauLayout(guild)
+            self.painel_promocoes_view = PainelPromocaoLayout(guild=guild)
+            self.painel_cursos_view = PainelCursosLayout(guild=guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -207,6 +215,8 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_fazer_chamada_view)
         self.add_view(self.painel_gerenciar_membros_view)
         self.add_view(self.painel_punicoes_view)
+        self.add_view(self.painel_cursos_view)
+        self.add_view(self.painel_promocoes_view)
 
         # painéis de presença têm custom_id dinâmico por evento — sempre
         # precisa reconstruir e re-registrar, um por evento aberto
@@ -232,6 +242,8 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_punicoes(self)
         await garantir_painel_laudos(self)
         await garantir_painel_bau(self)
+        await garantir_painel_cursos(self)
+        await garantir_painel_promocao(self)
 
         fim_deploy()
 

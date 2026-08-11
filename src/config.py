@@ -210,9 +210,7 @@ RANKING_DIA_POST_MENSAL = 1
 # DMs de controle financeiro (IDs Discord, separados por vírgula no .env)
 DIRETOR_CONTROLE_FINANCEIRO_IDS = [
     int(parte.strip())
-    for parte in os.getenv(
-        "DIRETOR_CONTROLE_FINANCEIRO_IDS", "859100649366356000"
-    ).split(",")
+    for parte in os.getenv("DIRETOR_CONTROLE_FINANCEIRO_IDS", "").split(",")
     if parte.strip().isdigit()
 ]
 
@@ -314,6 +312,14 @@ CANAIS = {
     "LOG_ERROS": 1526596982066380990,
     "LOG_GATE": 1533997859790127345,
     "LOG_BACKUP": 1523367341096697996,
+    # Promoções e cursos
+    "CANAL_PROMOVIDOS": 1486369132071878816,
+    "CANAL_NAO_PROMOVIDOS": 1486369133594415194,
+    "CANAL_REBAIXADOS": 1486369097649492079,
+    "CANAL_PAINEL_SOLICITAR_PROMOCAO": 1486369195028517026,
+    "CANAL_PAINEL_SOLICITAR_CURSOS": 1486369193787134064,
+    "LOG_PROMOVIDOS": 1536641482952278078,  # promovidos e não promovidos
+    "LOG_REBAIXAMENTOS": 1536641973736317029,
 }
 
 # URLs de imagens da MediaGallery do painel de boas-vindas (até 10).
@@ -700,3 +706,169 @@ ALIASES_ITENS_BAU = {
     "mascara": "mascara",
     "mascaras": "mascaras",
 }
+
+# ---------------------------------------------------------------------------
+# Cursos (cargo Discord = comprovante de conclusão)
+# valor_ingame: preço em R$ in-game (pagamento ao instrutor)
+# moedas necessárias = ceil(valor_ingame / VALOR_MOEDA_INGAME)
+# ---------------------------------------------------------------------------
+
+CURSOS = {
+    "resgate": {
+        "nome": "Curso Resgate",
+        "emoji": "🚑",
+        "cargo_id": 1522578759037747361,
+        "nivel": "1.0",
+        "valor_ingame": 120_000,
+        "pratico": True,
+    },
+    "arcanjo": {
+        "nome": "Curso Arcanjo",
+        "emoji": "🚁",
+        "cargo_id": 1486368775543590994,
+        "nivel": "1.0",
+        "valor_ingame": 180_000,
+        "pratico": True,
+    },
+    "mergulhador": {
+        "nome": "Curso Mergulhador",
+        "emoji": "🤿",
+        "cargo_id": 1522578825513275482,
+        "nivel": "1.0",
+        "valor_ingame": 150_000,
+        "pratico": True,
+    },
+    "alpinista": {
+        "nome": "Curso Alpinista",
+        "emoji": "🌄",
+        "cargo_id": 1486368777728823468,
+        "nivel": "1.0",
+        "valor_ingame": 150_000,
+        "pratico": True,
+    },
+    "paraquedista": {
+        "nome": "Curso Paraquedista",
+        "emoji": "🪂",
+        "cargo_id": 1522578874234568814,
+        "nivel": "1.0",
+        "valor_ingame": 180_000,
+        "pratico": True,
+    },
+    "arcanjo_2": {
+        "nome": "Curso Arcanjo 2.0",
+        "emoji": "🚁",
+        "cargo_id": 1486368774582964394,
+        "nivel": "2.0",
+        "valor_ingame": 270_000,
+        "pratico": True,
+    },
+    "mergulhador_2": {
+        "nome": "Curso Mergulhador 2.0",
+        "emoji": "🤿",
+        "cargo_id": 1522578950323175424,
+        "nivel": "2.0",
+        "valor_ingame": 210_000,
+        "pratico": True,
+    },
+    "alpinista_2": {
+        "nome": "Curso Alpinista 2.0",
+        "emoji": "🌄",
+        "cargo_id": 1486368776646561834,
+        "nivel": "2.0",
+        "valor_ingame": 180_000,
+        "pratico": True,
+    },
+    "paraquedista_2": {
+        "nome": "Curso Paraquedista 2.0",
+        "emoji": "🪂",
+        "cargo_id": 1522578990743683203,
+        "nivel": "2.0",
+        "valor_ingame": 240_000,
+        "pratico": True,
+    },
+    "doutor": {
+        "nome": "Curso Doutor",
+        "emoji": "🩺",
+        "cargo_id": 1486368771860856882,
+        "nivel": "funcao",
+        "valor_ingame": 0,
+        "pratico": False,
+    },
+    "psicologo": {
+        "nome": "Curso Psicólogo",
+        "emoji": "🧠",
+        "cargo_id": 1486368771017805996,
+        "nivel": "funcao",
+        "valor_ingame": 0,
+        "pratico": False,
+    },
+    "instrutor": {
+        "nome": "Curso Instrutor",
+        "emoji": "👨‍🏫",
+        "cargo_id": 1522579028526239744,
+        "nivel": "funcao",
+        "valor_ingame": 0,
+        "pratico": False,
+    },
+    "diretoria": {
+        "nome": "Curso Diretoria",
+        "emoji": "💎",
+        "cargo_id": 1486368756606304388,
+        "nivel": "diretoria",
+        "valor_ingame": 0,
+        "pratico": False,
+    },
+    "diretoria_geral": {
+        "nome": "Curso Diretoria Geral",
+        "emoji": "👑",
+        "cargo_id": 1496189276365258873,
+        "nivel": "diretoria",
+        "valor_ingame": 0,
+        "pratico": False,
+    },
+}
+
+# Trilhas de promoção (MVP — validação de cursos + cargo atual + adv)
+# Horas/produção entram em etapas seguintes com os contadores já existentes.
+TRILHAS_PROMOCAO = [
+    {
+        "chave": "enfermeiro_paramedico",
+        "rotulo": "Enfermeiro → Paramédico",
+        "de_cargo": "🔰・Enfermeiro (a)",
+        "para_cargo": "🚑・Paramédico",
+        "cursos_obrigatorios": [],
+        "observacao": "2h serviço ativo + 2h call INTERNA 12 + boa conduta (horas validadas na etapa 2).",
+    },
+    {
+        "chave": "paramedico_doutor",
+        "rotulo": "Paramédico → Doutor",
+        "de_cargo": "🚑・Paramédico",
+        "para_cargo": "🥼・Doutor",
+        "cursos_obrigatorios": ["arcanjo", "alpinista", "paraquedista", "mergulhador"],
+        "observacao": "Cursos práticos 1.0 obrigatórios. Cada prático reduz 1h da carga de call.",
+    },
+    {
+        "chave": "doutor_psicologo",
+        "rotulo": "Doutor → Psicólogo",
+        "de_cargo": "🥼・Doutor",
+        "para_cargo": "🩺・Psicólogo",
+        "cursos_obrigatorios": ["doutor", "psicologo"],
+        "observacao": "Práticos 1.0 todos + metas de call/chamadas (etapa 2).",
+    },
+    {
+        "chave": "psicologo_recrutador",
+        "rotulo": "Psicólogo → Recrutador",
+        "de_cargo": "🩺・Psicólogo",
+        "para_cargo": "✈️・Recrutador",
+        "cursos_obrigatorios": ["psicologo"],
+        "observacao": "Curso Recrutador + práticos 1.0/2.0 (cadastro do cargo Recrutador quando houver ID).",
+    },
+    {
+        "chave": "recrutador_instrutor",
+        "rotulo": "Recrutador → Instrutor",
+        "de_cargo": "✈️・Recrutador",
+        "para_cargo": "🥼・Instrutor",
+        "cursos_obrigatorios": ["instrutor"],
+        "observacao": "Libera área de Instrutores. Práticos 1.0/2.0 + metas de produção (etapa 2).",
+    },
+]

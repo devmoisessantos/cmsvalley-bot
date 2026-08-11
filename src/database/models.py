@@ -601,3 +601,71 @@ class ConfigBau(Base):
         DateTime(timezone=True), default=agora
     )
     atualizado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Cursos e promoções
+# ---------------------------------------------------------------------------
+
+
+class SolicitacaoCurso(Base):
+    """Pedido de curso (pagamento pendente ou pago; aguarda aplicação pelo instrutor)."""
+
+    __tablename__ = "solicitacoes_curso"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    chave_curso: Mapped[str] = mapped_column(String(40), index=True)
+    valor_ingame: Mapped[int] = mapped_column(Integer, default=0)
+    moedas_debitadas: Mapped[int] = mapped_column(Integer, default=0)
+    # MOEDAS | IN_GAME | GRATUITO
+    forma_pagamento: Mapped[str] = mapped_column(String(20), default="MOEDAS")
+    # PENDENTE | PAGO | APLICADO | CANCELADO
+    status: Mapped[str] = mapped_column(String(20), default="PENDENTE", index=True)
+    aplicado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mensagem_canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mensagem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+
+
+class SolicitacaoPromocao(Base):
+    """Pedido de promoção aguardando diretoria."""
+
+    __tablename__ = "solicitacoes_promocao"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    chave_trilha: Mapped[str] = mapped_column(String(60), index=True)
+    cargo_de: Mapped[str] = mapped_column(String(80))
+    cargo_para: Mapped[str] = mapped_column(String(80))
+    # PENDENTE | APROVADA | REPROVADA | CANCELADA
+    status: Mapped[str] = mapped_column(String(20), default="PENDENTE", index=True)
+    resumo_checklist: Mapped[str | None] = mapped_column(Text, nullable=True)
+    motivo_reprovacao: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    analisado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mensagem_canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mensagem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+
+
+class HistoricoPromocao(Base):
+    """Registro permanente de promoção ou rebaixamento."""
+
+    __tablename__ = "historico_promocoes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # PROMOCAO | REBAIXAMENTO | NAO_PROMOVIDO
+    tipo: Mapped[str] = mapped_column(String(20), index=True)
+    cargo_de: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    cargo_para: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    motivo: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    executado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    solicitacao_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
