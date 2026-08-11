@@ -22,6 +22,8 @@ from src.database.models import (
     SolicitacaoPromocao,
     agora,
 )
+from src.plantao.ranking_plantao_service import obter_segundos_plantao_totais
+from src.utils.formatacao import formatar_hms
 
 logger = logging.getLogger(__name__)
 
@@ -115,10 +117,13 @@ def membro_tem_advertencia_bloqueante(membro: discord.Member) -> list[str]:
 def montar_checklist_trilha(
     membro: discord.Member,
     trilha: dict,
+    *,
+    segundos_plantao: int | None = None,
 ) -> dict:
     """
-    Avalia requisitos da trilha (MVP: cargo atual, adv, cursos).
-    Retorna dict com ok, linhas, cursos_faltando, pode_enviar.
+    Avalia requisitos da trilha: adv, cargo, cursos e horas de plantão.
+
+    segundos_plantao: total do banco log_plantao (passe via montar_checklist_trilha_async).
     """
     linhas: list[str] = []
     pode_enviar = True
@@ -167,33 +172,92 @@ def montar_checklist_trilha(
             "Cada curso tem valor próprio (moedas ou in-game)."
         )
 
+    # Banco de horas do plantão (interligado com src/plantao)
+    segundos_minimos = int(trilha.get("segundos_minimos_plantao") or 0)
+    if segundos_minimos > 0:
+        total_seg = int(segundos_plantao or 0)
+        if total_seg >= segundos_minimos:
+            linhas.append(
+                f"✅ **Horas de plantão:** {formatar_hms(total_seg)} "
+                f"(mínimo {formatar_hms(segundos_minimos)}) — "
+                "você já possui as horas necessárias."
+            )
+        else:
+            pode_enviar = False
+            falta = max(0, segundos_minimos - total_seg)
+            linhas.append(
+                f"❌ **Horas de plantão insuficientes:** {formatar_hms(total_seg)} "
+                f"de {formatar_hms(segundos_minimos)} necessárias."
+            )
+            linhas.append(
+                f"Faltam **{formatar_hms(falta)}** em call com o plantão ligado. "
+                "Fique em call válida até completar o tempo."
+            )
+    elif segundos_plantao is not None:
+        linhas.append(
+            f"ℹ️ **Banco de horas (plantão):** {formatar_hms(int(segundos_plantao))} registradas."
+        )
+
+    if pode_enviar:
+        linhas.append(
+            "✅ **Todos os requisitos checados.** Você pode seguir com a solicitação."
+        )
+
     observacao = trilha.get("observacao") or ""
     if observacao:
         linhas.append(f"-# {observacao}")
 
     return {
         "ok": pode_enviar,
+        "pode_enviar": pode_enviar,
         "linhas": linhas,
         "cursos_faltando": faltando,
         "cargo_de": cargo_de,
         "cargo_para": cargo_para,
         "chave": trilha["chave"],
         "rotulo": trilha.get("rotulo") or trilha["chave"],
+        "segundos_plantao": int(segundos_plantao or 0),
     }
+
+
+async def montar_checklist_trilha_async(
+    membro: discord.Member,
+    trilha: dict,
+) -> dict:
+    """Checklist completo consultando o banco de horas do plantão."""
+    segundos = await obter_segundos_plantao_totais(membro.id)
+    return montar_checklist_trilha(
+        membro,
+        trilha,
+        segundos_plantao=segundos,
+    )
 
 
 async def criar_solicitacao_promocao(
     *,
     discord_id: int,
-    trilha: dict,
     resumo_checklist: str,
+    trilha: dict | None = None,
+    chave_trilha: str | None = None,
+    cargo_de: str | None = None,
+    cargo_para: str | None = None,
 ) -> SolicitacaoPromocao:
+    """Aceita trilha completa ou campos soltos (compatível com o painel)."""
+    if trilha is not None:
+        chave = trilha["chave"]
+        de = trilha["de_cargo"]
+        para = trilha["para_cargo"]
+    else:
+        chave = chave_trilha or ""
+        de = cargo_de or ""
+        para = cargo_para or ""
+
     async with async_session() as sessao:
         registro = SolicitacaoPromocao(
             discord_id=discord_id,
-            chave_trilha=trilha["chave"],
-            cargo_de=trilha["de_cargo"],
-            cargo_para=trilha["para_cargo"],
+            chave_trilha=chave,
+            cargo_de=de,
+            cargo_para=para,
             status="PENDENTE",
             resumo_checklist=resumo_checklist[:4000],
             criado_em=agora(),

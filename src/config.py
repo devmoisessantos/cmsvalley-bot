@@ -227,6 +227,20 @@ PREMIOS_RANKING_HORAS = [
 ]
 NOME_PAINEL_RANKING_HORAS_TEMPO_REAL = "ranking_horas_tempo_real"
 
+# Quem NÃO entra no ranking de horas (IDs Discord e cargos por nome em CARGOS)
+RANKING_HORAS_IDS_EXCLUIDOS: list[int] = [
+    859100649366356000,  # exemplos: 123456789012345678,
+    1527878483911512064,
+    466874911059869698,
+]
+# Nomes exatamente como em CARGOS (diretoria / staff fora da disputa)
+RANKING_HORAS_CARGOS_EXCLUIDOS: list[str] = [
+    "🚫┇Adv 01",
+    "🚫┇Adv 02",
+    "🚫┇Adv 03",
+    "🚫┇Exonerado",
+]
+
 # DMs de controle financeiro (IDs Discord, separados por vírgula no .env)
 DIRETOR_CONTROLE_FINANCEIRO_IDS = [
     int(parte.strip())
@@ -869,7 +883,8 @@ TRILHAS_PROMOCAO = [
         "de_cargo": "🔰・Enfermeiro (a)",
         "para_cargo": "🚑・Paramédico",
         "cursos_obrigatorios": [],
-        "observacao": "2h serviço ativo + 2h call INTERNA 12 + boa conduta (horas validadas na etapa 2).",
+        "segundos_minimos_plantao": 2 * 3600,  # 2h em call (banco log_plantao)
+        "observacao": "Mínimo 2h de plantão em call (banco de horas). Boa conduta e sem adv.",
     },
     {
         "chave": "paramedico_doutor",
@@ -877,7 +892,8 @@ TRILHAS_PROMOCAO = [
         "de_cargo": "🚑・Paramédico",
         "para_cargo": "🥼・Doutor",
         "cursos_obrigatorios": ["arcanjo", "alpinista", "paraquedista", "mergulhador"],
-        "observacao": "Cursos práticos 1.0 obrigatórios. Cada prático reduz 1h da carga de call.",
+        "segundos_minimos_plantao": 2 * 3600,
+        "observacao": "Cursos práticos 1.0 + mínimo 2h de plantão registradas no plantão.",
     },
     {
         "chave": "doutor_psicologo",
@@ -885,7 +901,7 @@ TRILHAS_PROMOCAO = [
         "de_cargo": "🥼・Doutor",
         "para_cargo": "🩺・Psicólogo",
         "cursos_obrigatorios": ["doutor", "psicologo"],
-        "observacao": "Práticos 1.0 todos + metas de call/chamadas (etapa 2).",
+        "observacao": "Práticos 1.0 todos + metas de call/chamadas .",
     },
     {
         "chave": "psicologo_recrutador",
@@ -893,7 +909,7 @@ TRILHAS_PROMOCAO = [
         "de_cargo": "🩺・Psicólogo",
         "para_cargo": "✈️・Recrutador",
         "cursos_obrigatorios": ["psicologo"],
-        "observacao": "Curso Recrutador + práticos 1.0/2.0 (cadastro do cargo Recrutador quando houver ID).",
+        "observacao": "Curso Recrutador + práticos 1.0/2.0 .",
     },
     {
         "chave": "recrutador_instrutor",
@@ -901,6 +917,6 @@ TRILHAS_PROMOCAO = [
         "de_cargo": "✈️・Recrutador",
         "para_cargo": "🥼・Instrutor",
         "cursos_obrigatorios": ["instrutor"],
-        "observacao": "Libera área de Instrutores. Práticos 1.0/2.0 + metas de produção (etapa 2).",
+        "observacao": "Libera área de Instrutores. Práticos 1.0/2.0 + metas de produção .",
     },
 ]

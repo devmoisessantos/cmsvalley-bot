@@ -13,7 +13,7 @@ from src.promocoes.promocoes_service import (
     criar_solicitacao_promocao,
     decidir_solicitacao,
     listar_cargos_destino,
-    montar_checklist_trilha,
+    montar_checklist_trilha_async,
     obter_solicitacao,
     obter_trilha,
     obter_trilha_por_destino_e_origem,
@@ -243,7 +243,7 @@ class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
                     "Não há promoção cadastrada partindo dos cargos que você possui agora.",
                     "Você ainda pode escolher um **cargo pretendido** no menu acima.",
                 ],
-                delay=18,
+                delay=60,
             )
             return
         await interacao.response.edit_message(
@@ -505,7 +505,7 @@ async def processar_escolha_trilha(
         if not interacao.response.is_done():
             await interacao.response.defer(ephemeral=True)
 
-        checklist = montar_checklist_trilha(membro, trilha)
+        checklist = await montar_checklist_trilha_async(membro, trilha)
         if not checklist.get("pode_enviar"):
             linhas = list(checklist.get("linhas") or [])
             faltando = checklist.get("cursos_faltando") or []
@@ -520,7 +520,7 @@ async def processar_escolha_trilha(
                 interacao,
                 titulo="Requisitos incompletos",
                 linhas=linhas or ["Não foi possível enviar a solicitação."],
-                delay=25,
+                delay=60,
             )
             return
 
@@ -588,9 +588,9 @@ async def processar_escolha_trilha(
             linhas=[
                 f"Pedido `#{registro.id}` · **{trilha['rotulo']}**",
                 "A diretoria vai analisar Aprovar / Reprovar no canal de promoções.",
-                *(checklist.get("linhas") or [])[:4],
+                *(checklist.get("linhas") or [])[:6],
             ],
-            delay=25,
+            delay=60,
         )
     except Exception as erro:
         await enviar_erro_para_log_erros(

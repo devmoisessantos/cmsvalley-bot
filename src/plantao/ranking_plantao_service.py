@@ -21,8 +21,11 @@ from sqlalchemy import (
 )
 
 from src.config import (
+    CARGOS,
     MESES_ABREV,
     PREMIOS_RANKING_HORAS,
+    RANKING_HORAS_CARGOS_EXCLUIDOS,
+    RANKING_HORAS_IDS_EXCLUIDOS,
     TIMEZONE_LOCAL,
 )
 from src.database.connection import async_session
@@ -97,8 +100,17 @@ async def buscar_chamadas_por_doutor(
 async def buscar_horas_por_membro(
     inicio_utc: datetime,
     fim_utc: datetime,
+    *,
+    guild: discord.Guild | None = None,
 ) -> dict[int, int]:
-    """{discord_id: segundos_totais} a partir de log_plantao.duracao_segundos."""
+    """
+    {discord_id: segundos_totais} a partir de log_plantao.duracao_segundos.
+
+    Exclui:
+    - IDs em RANKING_HORAS_IDS_EXCLUIDOS
+    - membros com cargos em RANKING_HORAS_CARGOS_EXCLUIDOS
+    - quem não está mais no servidor (quando guild é informada)
+    """
     async with async_session() as session:
         resultado = await session.execute(
             select(
@@ -113,7 +125,51 @@ async def buscar_horas_por_membro(
             )
             .group_by(LogPlantao.discord_id)
         )
-        return {int(did): int(segs) for did, segs in resultado.all() if int(segs) > 0}
+        bruto = {int(did): int(segs) for did, segs in resultado.all() if int(segs) > 0}
+
+    return filtrar_participantes_ranking_horas(bruto, guild=guild)
+
+
+def filtrar_participantes_ranking_horas(
+    contagem: dict[int, int],
+    *,
+    guild: discord.Guild | None = None,
+) -> dict[int, int]:
+    """Aplica exclusões de ID, cargo e saída do servidor."""
+    ids_bloqueados = {int(x) for x in (RANKING_HORAS_IDS_EXCLUIDOS or [])}
+    cargos_bloqueados: set[int] = set()
+    for nome in RANKING_HORAS_CARGOS_EXCLUIDOS or []:
+        cargo_id = CARGOS.get(nome)
+        if cargo_id is not None:
+            cargos_bloqueados.add(int(cargo_id))
+
+    filtrado: dict[int, int] = {}
+    for discord_id, segundos in contagem.items():
+        if int(discord_id) in ids_bloqueados:
+            continue
+        if guild is not None:
+            membro = guild.get_member(int(discord_id))
+            if membro is None:
+                # Saiu do hospital / servidor → fora do ranking
+                continue
+            if any(cargo.id in cargos_bloqueados for cargo in membro.roles):
+                continue
+        filtrado[int(discord_id)] = int(segundos)
+    return filtrado
+
+
+async def obter_segundos_plantao_totais(discord_id: int) -> int:
+    """Soma de todas as durações de plantão do membro (banco de horas)."""
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
+                LogPlantao.discord_id == int(discord_id),
+                LogPlantao.duracao_segundos.is_not(None),
+                LogPlantao.duracao_segundos > 0,
+            )
+        )
+        valor = resultado.scalar_one()
+        return int(valor or 0)
 
 
 # ── Montagem de ranking genérico (valor numérico decrescente) ─────────────
@@ -433,7 +489,7 @@ async def gerar_view_ranking_horas(
     modo_postagem: bool = False,
 ) -> tuple[discord.ui.LayoutView, dict[int, int], datetime, datetime, int]:
     inicio, fim, periodo_view = _periodos("horas", periodo, referencia, modo_postagem)
-    contagem = await buscar_horas_por_membro(inicio, fim)
+    contagem = await buscar_horas_por_membro(inicio, fim, guild=guild)
     view, total = montar_view_ranking_horas(
         contagem, inicio, fim, periodo=periodo_view, guild=guild
     )
