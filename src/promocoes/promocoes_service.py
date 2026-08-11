@@ -22,7 +22,6 @@ from src.database.models import (
     SolicitacaoPromocao,
     agora,
 )
-from src.utils.error_handling import enviar_erro_para_log_erros
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +29,64 @@ CARGOS_ADV_BLOQUEIAM = ("🚫┇Adv 01", "🚫┇Adv 02")
 
 
 def listar_trilhas() -> list[dict]:
+    """Todas as trilhas cadastradas em TRILHAS_PROMOCAO."""
     return list(TRILHAS_PROMOCAO)
 
 
 def obter_trilha(chave: str) -> dict | None:
+    """Busca uma trilha pela chave (ex.: enfermeiro_paramedico)."""
     for trilha in TRILHAS_PROMOCAO:
         if trilha["chave"] == chave:
             return trilha
     return None
+
+
+def listar_cargos_destino() -> list[str]:
+    """
+    Cargos-alvo únicos das trilhas (ordem de cadastro).
+    Usado no select de “cargo pretendido” do painel.
+    """
+    vistos: set[str] = set()
+    lista: list[str] = []
+    for trilha in TRILHAS_PROMOCAO:
+        destino = trilha.get("para_cargo") or ""
+        if destino and destino not in vistos:
+            vistos.add(destino)
+            lista.append(destino)
+    return lista
+
+
+def trilhas_para_cargo_destino(nome_cargo: str) -> list[dict]:
+    """Trilhas que terminam no cargo informado."""
+    return [
+        trilha for trilha in TRILHAS_PROMOCAO if trilha.get("para_cargo") == nome_cargo
+    ]
+
+
+def trilhas_a_partir_do_membro(membro: discord.Member) -> list[dict]:
+    """Trilhas cujo cargo de origem o membro possui agora (botão Seguir trilha)."""
+    disponiveis: list[dict] = []
+    for trilha in TRILHAS_PROMOCAO:
+        if membro_tem_cargo_nome(membro, trilha["de_cargo"]):
+            disponiveis.append(trilha)
+    return disponiveis
+
+
+def obter_trilha_por_destino_e_origem(
+    cargo_para: str,
+    membro: discord.Member,
+) -> dict | None:
+    """
+    Escolhe a trilha que leva ao cargo pretendido,
+    preferindo a que combina com o cargo atual do membro.
+    """
+    candidatas = trilhas_para_cargo_destino(cargo_para)
+    if not candidatas:
+        return None
+    for trilha in candidatas:
+        if membro_tem_cargo_nome(membro, trilha["de_cargo"]):
+            return trilha
+    return candidatas[0]
 
 
 def id_cargo_por_nome(nome: str) -> int | None:
@@ -106,14 +155,12 @@ def montar_checklist_trilha(
         linhas.append("✅ Nenhum curso obrigatório nesta trilha")
     elif not faltando:
         linhas.append(
-            "✅ Cursos obrigatórios: "
-            + ", ".join(rotulo_curso(c) for c in cursos)
+            "✅ Cursos obrigatórios: " + ", ".join(rotulo_curso(c) for c in cursos)
         )
     else:
         pode_enviar = False
         linhas.append(
-            "❌ **Cursos faltando:** "
-            + ", ".join(rotulo_curso(c) for c in faltando)
+            "❌ **Cursos faltando:** " + ", ".join(rotulo_curso(c) for c in faltando)
         )
         linhas.append(
             "Use o painel de **Solicitar Cursos** para adquirir o que falta. "
