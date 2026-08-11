@@ -14,6 +14,7 @@ import discord
 from sqlalchemy import select
 
 from src.bau.bau_setup import garantir_painel_bau
+from src.cursos.cursos_setup import garantir_painel_cursos
 from src.database.connection import async_session
 from src.database.models import PainelPostado
 from src.guia.guia_setup import (
@@ -33,6 +34,7 @@ from src.panels.setup_paineis import (
     garantir_painel_recrutamento,
     garantir_painel_whitelist,
 )
+from src.promocoes.promocoes_setup import garantir_painel_promocao
 from src.punicoes.cogs import garantir_painel_punicoes
 
 # nome_no_banco → função que posta o painel se não existir registro
@@ -50,6 +52,8 @@ FUNCOES_GARANTIR_PAINEL = {
     "punicoes": garantir_painel_punicoes,
     "laudos": garantir_painel_laudos,
     "bau": garantir_painel_bau,
+    "cursos": garantir_painel_cursos,
+    "promocao": garantir_painel_promocao,
 }
 
 NOMES_DOS_PAINEIS = list(FUNCOES_GARANTIR_PAINEL.keys())

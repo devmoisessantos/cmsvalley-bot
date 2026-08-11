@@ -95,17 +95,26 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
         if guild is not None and guild.icon is not None:
             url_icone = guild.icon.url
 
+        texto_titulo = (
+            "Solicite um ou mais cursos do hospital.\n\n"
+            "O pedido segue para **agendamentos**; um instrutor aceita, "
+            "aplica o curso e a diretoria/instrutor finaliza a aprovação."
+        )
+        # Section + Thumbnail só com ícone — accessory=None quebra o LayoutView
+        if url_icone:
+            bloco_topo = discord.ui.Section(
+                "# 📚 Painel de Cursos",
+                texto_titulo,
+                accessory=discord.ui.Thumbnail(url_icone),
+            )
+        else:
+            bloco_topo = discord.ui.TextDisplay(
+                "# 📚 Painel de Cursos\n" + texto_titulo
+            )
+
         self.add_item(
             discord.ui.Container(
-                discord.ui.Section(
-                    "# 📚 Painel de Cursos",
-                    (
-                        "Solicite um ou mais cursos do hospital.\n\n"
-                        "O pedido segue para **agendamentos**; um instrutor aceita, "
-                        "aplica o curso e a diretoria/instrutor finaliza a aprovação."
-                    ),
-                    accessory=(discord.ui.Thumbnail(url_icone) if url_icone else None),
-                ),
+                bloco_topo,
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 discord.ui.TextDisplay(
                     "## 📌 Antes de solicitar\n\n"
