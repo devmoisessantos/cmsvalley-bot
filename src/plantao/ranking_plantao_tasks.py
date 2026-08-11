@@ -1,6 +1,10 @@
 """Tasks e comandos: ranking de chamadas + ranking de horas de plantão.
 
-Auto: sábado 11h (semanal) e dia 1 às 11h (mensal) — mesmos horários dos demais rankings.
+Auto:
+- Ranking de horas TEMPO REAL: mensagem persistente no canal, atualiza a cada 1 min
+- Sábado 11h00: fecha ciclo (apaga tempo real, envia ganhadores às finanças, posta semanal)
+- Sábado 11h05: publica novo ranking tempo real (novo ciclo)
+- Dia 1 às 11h: ranking mensal
 """
 
 from __future__ import annotations
@@ -15,21 +19,32 @@ from discord.ext import (
     commands,
     tasks,
 )
+from sqlalchemy import select
 
 from src.config import (
     CANAIS,
     GUILD_ID,
+    NOME_PAINEL_RANKING_HORAS_TEMPO_REAL,
     RANKING_DIA_POST_MENSAL,
     RANKING_HORA_POST,
+    RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO,
     TIMEZONE_LOCAL,
 )
+from src.database.connection import async_session
+from src.database.models import PainelPostado
 from src.plantao.ranking_plantao_service import (
     gerar_view_ranking_chamadas,
     gerar_view_ranking_horas,
     listar_historico_plantao,
+    montar_lista_premiados,
     salvar_historico_plantao,
 )
-from src.utils.formatacao import formatar_hms
+from src.utils.formatacao import (
+    formatar_hms,
+    formatar_reais,
+)
+from src.utils.log_container import LogContainerView
+from src.utils.mensagens import COR_SUCESSO
 from src.utils.permissions import is_authorized
 
 logger = logging.getLogger(__name__)
@@ -42,37 +57,273 @@ class RankingPlantaoTasks(commands.Cog):
     )
     ranking_horas = app_commands.Group(
         name="ranking-horas",
-        description="Ranking de horas de plantão (relatório, sem premiação)",
+        description="Ranking de horas de plantão (com premiação no top)",
     )
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._post_semanal: set[str] = set()
         self._post_mensal: set[str] = set()
+        self._reinicio_tempo_real: set[str] = set()
         self.loop_rankings.start()
-        logger.info("🏆 RankingPlantaoTasks (chamadas + horas) inicializado")
+        self.loop_tempo_real_horas.start()
+        logger.info(
+            "🏆 RankingPlantaoTasks (chamadas + horas + tempo real) inicializado"
+        )
 
     def cog_unload(self):
         self.loop_rankings.cancel()
+        self.loop_tempo_real_horas.cancel()
 
-    # ── Auto post ────────────────────────────────────────────────────────
+    # ── Tempo real a cada 1 minuto ────────────────────────────────────────
+
+    @tasks.loop(minutes=1)
+    async def loop_tempo_real_horas(self):
+        try:
+            await self._atualizar_ou_criar_tempo_real_horas()
+        except Exception as erro:
+            logger.exception("Loop tempo real horas: %s", erro)
+
+    @loop_tempo_real_horas.before_loop
+    async def before_tempo_real(self):
+        await self.bot.wait_until_ready()
+        logger.info("✅ Loop ranking HORAS tempo real (1 min) ativo")
+
+    async def _buscar_registro_tempo_real(self) -> PainelPostado | None:
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(PainelPostado).where(
+                    PainelPostado.nome_painel == NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
+                )
+            )
+            return resultado.scalar_one_or_none()
+
+    async def _salvar_registro_tempo_real(self, canal_id: int, message_id: int) -> None:
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(PainelPostado).where(
+                    PainelPostado.nome_painel == NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
+                )
+            )
+            registro = resultado.scalar_one_or_none()
+            if registro is None:
+                registro = PainelPostado(
+                    nome_painel=NOME_PAINEL_RANKING_HORAS_TEMPO_REAL,
+                    canal_id=canal_id,
+                    message_id=message_id,
+                )
+                sessao.add(registro)
+            else:
+                registro.canal_id = canal_id
+                registro.message_id = message_id
+            await sessao.commit()
+
+    async def _apagar_registro_tempo_real(self) -> None:
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(PainelPostado).where(
+                    PainelPostado.nome_painel == NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
+                )
+            )
+            registro = resultado.scalar_one_or_none()
+            if registro is not None:
+                await sessao.delete(registro)
+                await sessao.commit()
+
+    async def _atualizar_ou_criar_tempo_real_horas(self) -> None:
+        guild = self.bot.get_guild(int(GUILD_ID))
+        if guild is None:
+            return
+        canal_id = CANAIS.get("RANKING_HORAS_PLANTAO") or 0
+        canal = guild.get_channel(int(canal_id)) if canal_id else None
+        if canal is None:
+            return
+
+        # Janela de fechamento no sábado 11h00–11h04: não recria o card
+        # (só volta às 11h05 via loop_rankings).
+        agora_local = datetime.now(ZoneInfo(TIMEZONE_LOCAL))
+        if (
+            agora_local.weekday() == 5
+            and agora_local.hour == RANKING_HORA_POST
+            and agora_local.minute < RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO
+        ):
+            registro = await self._buscar_registro_tempo_real()
+            if registro is None:
+                return
+
+        view, contagem, inicio, fim, total = await gerar_view_ranking_horas(
+            "tempo_real", guild=guild, modo_postagem=False
+        )
+
+        registro = await self._buscar_registro_tempo_real()
+        if registro is not None:
+            try:
+                mensagem = await canal.fetch_message(int(registro.message_id))
+                await mensagem.edit(view=view)
+                return
+            except (discord.NotFound, discord.HTTPException):
+                logger.warning("Mensagem tempo real horas sumiu — republicando")
+                await self._apagar_registro_tempo_real()
+
+        mensagem = await canal.send(view=view)
+        await self._salvar_registro_tempo_real(canal.id, mensagem.id)
+        logger.info("Ranking HORAS tempo real publicado em #%s", canal.name)
+
+    async def _fechar_ciclo_semanal_horas(self, referencia: datetime) -> None:
+        """
+        Sábado 11h:
+        1) apaga card tempo real
+        2) envia ganhadores + valores ao canal de finanças
+        3) posta ranking semanal oficial
+        """
+        guild = self.bot.get_guild(int(GUILD_ID))
+        if guild is None:
+            return
+
+        canal_id = CANAIS.get("RANKING_HORAS_PLANTAO") or 0
+        canal = guild.get_channel(int(canal_id)) if canal_id else None
+
+        # Dados do ciclo que fecha (modo postagem = semana completa)
+        view, contagem, inicio, fim, total = await gerar_view_ranking_horas(
+            "semanal", guild=guild, referencia=referencia, modo_postagem=True
+        )
+        premiados = montar_lista_premiados(contagem)
+
+        # 1) Apaga tempo real
+        registro = await self._buscar_registro_tempo_real()
+        if registro is not None and canal is not None:
+            try:
+                mensagem = await canal.fetch_message(int(registro.message_id))
+                await mensagem.delete()
+            except (discord.NotFound, discord.HTTPException) as erro:
+                logger.warning("Não apagou tempo real horas: %s", erro)
+            await self._apagar_registro_tempo_real()
+
+        # 2) Finanças
+        await self._enviar_premiacao_financas(
+            guild,
+            premiados=premiados,
+            inicio=inicio,
+            fim=fim,
+            total_segundos=total,
+        )
+
+        # 3) Ranking semanal oficial
+        if canal is not None:
+            try:
+                msg = await canal.send(view=view)
+                await salvar_historico_plantao(
+                    tipo="horas_semanal",
+                    inicio=inicio,
+                    fim=fim,
+                    contagem=contagem,
+                    total=total,
+                    channel_id=canal.id,
+                    message_id=msg.id,
+                )
+                logger.info("Ranking HORAS semanal oficial postado em #%s", canal.name)
+            except discord.HTTPException as erro:
+                logger.exception("Falha ao postar ranking horas semanal: %s", erro)
+
+    async def _enviar_premiacao_financas(
+        self,
+        guild: discord.Guild,
+        *,
+        premiados: list[tuple[int, int, int, int]],
+        inicio: datetime,
+        fim: datetime,
+        total_segundos: int,
+    ) -> None:
+        canal_id = CANAIS.get("CANAL_FINANCAS") or 0
+        canal = guild.get_channel(int(canal_id)) if canal_id else None
+        if canal is None:
+            logger.warning("CANAL_FINANCAS ausente — premiação horas não postada")
+            return
+
+        from src.plantao.ranking_plantao_service import _formatar_data_curta
+
+        if not premiados:
+            linhas = (
+                "_Nenhum participante com tempo registrado neste ciclo._\n"
+                f"Período: **{_formatar_data_curta(inicio)}** até "
+                f"**{_formatar_data_curta(fim)}**"
+            )
+        else:
+            blocos = []
+            soma_premios = 0
+            for posicao, discord_id, segundos, premio in premiados:
+                medalha = {1: "🥇", 2: "🥈", 3: "🥉"}.get(posicao, "🏅")
+                soma_premios += premio
+                blocos.append(
+                    f"{medalha} **#{posicao}** <@{discord_id}>\n"
+                    f"↳ Tempo: **{formatar_hms(segundos)}** · "
+                    f"Prêmio: **{formatar_reais(premio)}**"
+                )
+            linhas = (
+                f"**Período:** {_formatar_data_curta(inicio)} até "
+                f"{_formatar_data_curta(fim)}\n"
+                f"**Tempo total da equipe:** {formatar_hms(total_segundos)}\n"
+                f"**Total a repassar:** **{formatar_reais(soma_premios)}**\n\n"
+                + "\n\n".join(blocos)
+            )
+
+        try:
+            await canal.send(
+                view=LogContainerView(
+                    titulo="🏆 Premiação — Ranking de Horas (Plantão)",
+                    linhas=linhas,
+                    guild=guild,
+                    cor=COR_SUCESSO,
+                )
+            )
+            logger.info("Premiação horas enviada ao CANAL_FINANCAS")
+        except discord.HTTPException as erro:
+            logger.exception("Falha ao postar premiação horas em finanças: %s", erro)
+
+    # ── Auto post semanal / mensal ────────────────────────────────────────
 
     @tasks.loop(minutes=1)
     async def loop_rankings(self):
         tz = ZoneInfo(TIMEZONE_LOCAL)
         agora = datetime.now(tz)
-        if agora.hour != RANKING_HORA_POST or agora.minute != 0:
-            return
 
-        if agora.weekday() == 5:
+        # Sábado 11h00 — fecha horas + ranking semanal chamadas/horas
+        if (
+            agora.weekday() == 5
+            and agora.hour == RANKING_HORA_POST
+            and agora.minute == 0
+        ):
             chave = f"semanal:{agora.strftime('%Y-%m-%d')}"
             if chave not in self._post_semanal:
+                await self._fechar_ciclo_semanal_horas(agora)
                 ok_c = await self._postar("chamada", "semanal", agora)
-                ok_h = await self._postar("horas", "semanal", agora)
-                if ok_c or ok_h:
-                    self._post_semanal.add(chave)
+                # horas semanal já postado em _fechar_ciclo
+                if ok_c:
+                    pass
+                self._post_semanal.add(chave)
 
-        if agora.day == RANKING_DIA_POST_MENSAL:
+        # Sábado 11h05 — novo card tempo real
+        if (
+            agora.weekday() == 5
+            and agora.hour == RANKING_HORA_POST
+            and agora.minute == RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO
+        ):
+            chave_r = f"reinicio_tr:{agora.strftime('%Y-%m-%d')}"
+            if chave_r not in self._reinicio_tempo_real:
+                try:
+                    await self._apagar_registro_tempo_real()
+                    await self._atualizar_ou_criar_tempo_real_horas()
+                    self._reinicio_tempo_real.add(chave_r)
+                    logger.info("Novo ciclo RANKING HORAS tempo real iniciado")
+                except Exception as erro:
+                    logger.exception("Reinício tempo real horas: %s", erro)
+
+        # Dia 1 às 11h — mensal
+        if (
+            agora.day == RANKING_DIA_POST_MENSAL
+            and agora.hour == RANKING_HORA_POST
+            and agora.minute == 0
+        ):
             chave = f"mensal:{agora.strftime('%Y-%m')}"
             if chave not in self._post_mensal:
                 ok_c = await self._postar("chamada", "mensal", agora)
@@ -83,7 +334,7 @@ class RankingPlantaoTasks(commands.Cog):
     @loop_rankings.before_loop
     async def before_loop(self):
         await self.bot.wait_until_ready()
-        logger.info("✅ Loop ranking chamadas/horas ativo")
+        logger.info("✅ Loop ranking chamadas/horas (sábado/mensal) ativo")
 
     async def _postar(
         self,
@@ -106,11 +357,11 @@ class RankingPlantaoTasks(commands.Cog):
 
         canal_id = CANAIS.get(canal_key) or 0
         if not canal_id:
-            logger.warning(f"⚠️ CANAIS['{canal_key}'] não configurado")
+            logger.warning("⚠️ CANAIS['%s'] não configurado", canal_key)
             return False
         canal = guild.get_channel(canal_id)
         if canal is None:
-            logger.error(f"❌ Canal {canal_key}={canal_id} não encontrado")
+            logger.error("❌ Canal %s=%s não encontrado", canal_key, canal_id)
             return False
 
         try:
@@ -127,7 +378,6 @@ class RankingPlantaoTasks(commands.Cog):
                 channel_id=canal.id,
                 message_id=msg.id,
             )
-            # Só chamadas geram pagamento unitário (horas = moedas no bot)
             if categoria == "chamada":
                 try:
                     from src.config import VALOR_UNITARIO_RANKING
@@ -148,10 +398,10 @@ class RankingPlantaoTasks(commands.Cog):
                 except Exception as erro_fin:
                     logger.exception("Fechamento financeiro chamadas: %s", erro_fin)
 
-            logger.info(f"✅ Ranking {tipo_hist} postado em #{canal.name}")
+            logger.info("✅ Ranking %s postado em #%s", tipo_hist, canal.name)
             return True
         except Exception as e:
-            logger.exception(f"❌ Ranking {categoria}/{periodo}: {e}")
+            logger.exception("❌ Ranking %s/%s: %s", categoria, periodo, e)
             return False
 
     # ── /ranking-chamadas ────────────────────────────────────────────────

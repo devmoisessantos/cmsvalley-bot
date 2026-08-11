@@ -22,6 +22,7 @@ from sqlalchemy import (
 
 from src.config import (
     MESES_ABREV,
+    PREMIOS_RANKING_HORAS,
     TIMEZONE_LOCAL,
 )
 from src.database.connection import async_session
@@ -37,7 +38,10 @@ from src.recrutamento.ranking_service import (
     obter_periodo_postagem_mensal,
     obter_periodo_postagem_semanal,
 )
-from src.utils.formatacao import formatar_hms
+from src.utils.formatacao import (
+    formatar_hms,
+    formatar_reais,
+)
 
 
 def _tz() -> ZoneInfo:
@@ -227,6 +231,78 @@ def montar_view_ranking_chamadas(
     return view, total
 
 
+def ordenar_ranking_individual(contagem: dict[int, int]) -> list[tuple[int, int]]:
+    """Lista (discord_id, valor) ordenada do maior para o menor (desempate por id)."""
+    return sorted(
+        ((int(uid), int(val)) for uid, val in contagem.items() if int(val) > 0),
+        key=lambda par: (-par[1], par[0]),
+    )
+
+
+def premio_por_posicao(posicao: int) -> int:
+    """Posição 1-based → valor do prêmio (0 se fora do top)."""
+    if posicao < 1 or posicao > len(PREMIOS_RANKING_HORAS):
+        return 0
+    return int(PREMIOS_RANKING_HORAS[posicao - 1])
+
+
+def total_premios_configurados() -> int:
+    return sum(int(v) for v in PREMIOS_RANKING_HORAS)
+
+
+def montar_lista_premiados(
+    contagem: dict[int, int],
+) -> list[tuple[int, int, int, int]]:
+    """
+    Retorna lista de (posicao, discord_id, segundos, premio).
+    Só quem entra no top de premiação (1..len PREMIOS).
+    """
+    ordenados = ordenar_ranking_individual(contagem)
+    resultado: list[tuple[int, int, int, int]] = []
+    for indice, (discord_id, segundos) in enumerate(ordenados):
+        posicao = indice + 1
+        premio = premio_por_posicao(posicao)
+        if premio <= 0:
+            break
+        resultado.append((posicao, discord_id, segundos, premio))
+    return resultado
+
+
+def _montar_corpo_horas_com_premios(contagem: dict[int, int]) -> tuple[str, int]:
+    """
+    Corpo do ranking de horas com medalha, tempo e prêmio no top.
+    total = soma dos segundos de todos.
+    """
+    ordenados = ordenar_ranking_individual(contagem)
+    if not ordenados:
+        return (
+            "_Nenhum tempo de plantão registrado neste período._\n\n"
+            "# 📌 **TOTAL GERAL**\n"
+            "⏱️ **Tempo total da equipe**: **0**",
+            0,
+        )
+
+    blocos: list[str] = []
+    total = 0
+    for indice, (discord_id, segundos) in enumerate(ordenados):
+        posicao = indice + 1
+        medalha = _medalha(posicao)
+        premio = premio_por_posicao(posicao)
+        total += segundos
+        linha_tempo = f"↳ **{formatar_hms(segundos)}**"
+        if premio > 0:
+            linha_tempo += f" · 🏆 `{formatar_reais(premio)}`"
+        blocos.append(f"{medalha} <@{discord_id}>\n{linha_tempo}")
+
+    corpo = (
+        "\n\n".join(blocos)
+        + "\n\n"
+        + "# 📌 **TOTAL GERAL**\n"
+        + f"⏱️ **Tempo total da equipe**: **{formatar_hms(total)}**"
+    )
+    return corpo, total
+
+
 def montar_view_ranking_horas(
     contagem_segundos: dict[int, int],
     inicio_utc: datetime,
@@ -236,6 +312,12 @@ def montar_view_ranking_horas(
     guild: discord.Guild | None = None,
     titulo_override: str | None = None,
 ) -> tuple[discord.ui.LayoutView, int]:
+    total_premios = total_premios_configurados()
+    linha_premio = (
+        f"🏆 **Premiação configurada** · "
+        f"**{formatar_reais(total_premios)}** em prêmios (Top 1 ao Top {len(PREMIOS_RANKING_HORAS)})"
+    )
+
     if periodo == "mensal":
         titulo = titulo_override or "⏱️ **RANKING MENSAL DE HORAS — PLANTÃO**"
         sub = (
@@ -243,34 +325,27 @@ def montar_view_ranking_horas(
             f"({_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)})"
         )
         cor = discord.Color.green()
+        # Mensal: só relatório (sem foco em premiação semanal)
+        linha_extra = "📊 Relatório mensal de tempo em call"
     elif periodo == "tempo_real":
         titulo = titulo_override or "⏱️ **RANKING DE HORAS — TEMPO REAL**"
         sub = (
             f"**Ciclo atual:** **{_formatar_data_curta(inicio_utc)} até "
-            f"{_formatar_data_curta(fim_utc)}** _(parcial)_"
+            f"{_formatar_data_curta(fim_utc)}** _(parcial · atualiza a cada 1 min)_"
         )
         cor = discord.Color.dark_green()
+        linha_extra = linha_premio
     else:
         titulo = titulo_override or "⏱️ **RANKING SEMANAL DE HORAS — PLANTÃO**"
-        sub = f"**Início:** **{_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)}**"
+        sub = (
+            f"**Início:** **{_formatar_data_curta(inicio_utc)} até "
+            f"{_formatar_data_curta(fim_utc)}**"
+        )
         cor = discord.Color.brand_green()
+        linha_extra = linha_premio
 
-    cabecalho = (
-        f"# {titulo}\n"
-        f"# 📅 **Período**\n"
-        f"{sub}\n"
-        f"📊 Relatório de tempo em call · **sem pagamento / premiação**"
-    )
-    corpo, total = _montar_corpo_por_valor(
-        contagem_segundos,
-        formatar_valor=formatar_hms,
-        label_singular="",
-        label_plural="",
-        vazio_msg="_Nenhum tempo de plantão registrado neste período._",
-        total_label="⏱️ **Tempo total da equipe**",
-    )
-    # remove espaços duplos deixados pelo label vazio
-    corpo = corpo.replace("  ", " ").replace(" \n", "\n")
+    cabecalho = f"# {titulo}\n# 📅 **Período**\n{sub}\n{linha_extra}"
+    corpo, total = _montar_corpo_horas_com_premios(contagem_segundos)
 
     agora_ts = int(datetime.now(ZoneInfo("UTC")).timestamp())
     rodape = (
@@ -278,19 +353,31 @@ def montar_view_ranking_horas(
         if guild
         else f"-# Relatório • <t:{agora_ts}:f>"
     )
-    icon_url = guild.icon.url if guild.icon else None
+    icon_url = guild.icon.url if guild and guild.icon else None
 
-    view = discord.ui.LayoutView(timeout=None)
-    view.add_item(
-        discord.ui.Container(
+    componentes: list = []
+    if icon_url:
+        componentes.append(
             discord.ui.Section(
                 cabecalho,
-                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
-            ),
+                accessory=discord.ui.Thumbnail(icon_url),
+            )
+        )
+    else:
+        componentes.append(discord.ui.TextDisplay(cabecalho))
+    componentes.extend(
+        [
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(corpo),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(rodape),
+        ]
+    )
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(
+        discord.ui.Container(
+            *componentes,
             accent_color=cor,
         )
     )

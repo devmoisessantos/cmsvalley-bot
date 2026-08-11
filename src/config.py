@@ -203,9 +203,29 @@ NOTA_MINIMA_APROVACAO = 70
 # Rankings que geram pagamento (mesmo valor unitário)
 VALOR_UNITARIO_RANKING = 100_000  # laudo, recrutamento, chamada
 VALOR_POR_RECRUTAMENTO = VALOR_UNITARIO_RANKING  # alias legado
-RANKING_HORA_POST = 11  # sábado 11h — postagem do ranking
-RANKING_HORA_INICIO_CICLO = 12  # sábado 12h — início do novo ciclo
+RANKING_HORA_POST = 11  # sábado 11h — fecha ciclo + ranking semanal oficial
+RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO = 5  # sábado 11h05 — novo card tempo real
+RANKING_HORA_INICIO_CICLO = (
+    12  # legado (ciclo semanal de dados continua via ranking_service)
+)
 RANKING_DIA_POST_MENSAL = 1
+
+# Premiação do ranking de HORAS (plantão) — valores em R$ in-game
+# Top 1 → 10: 10M, 6M, 5M, 4M, 3M, 2M, 1M, 1M, 1M, 1M  (total 34M)
+# Texto de vitrine usa ~33–34 milhões conforme configuração.
+PREMIOS_RANKING_HORAS = [
+    10_000_000,  # 1º
+    6_000_000,  # 2º
+    5_000_000,  # 3º
+    4_000_000,  # 4º
+    3_000_000,  # 5º
+    2_000_000,  # 6º
+    1_000_000,  # 7º
+    1_000_000,  # 8º
+    1_000_000,  # 9º
+    1_000_000,  # 10º
+]
+NOME_PAINEL_RANKING_HORAS_TEMPO_REAL = "ranking_horas_tempo_real"
 
 # DMs de controle financeiro (IDs Discord, separados por vírgula no .env)
 DIRETOR_CONTROLE_FINANCEIRO_IDS = [
