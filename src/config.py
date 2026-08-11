@@ -795,7 +795,7 @@ CURSOS = {
         "emoji": "🩺",
         "cargo_id": 1486368771860856882,
         "nivel": "funcao",
-        "valor_ingame": 0,
+        "valor_ingame": 350_000,
         "pratico": False,
     },
     "psicologo": {
@@ -803,7 +803,15 @@ CURSOS = {
         "emoji": "🧠",
         "cargo_id": 1486368771017805996,
         "nivel": "funcao",
-        "valor_ingame": 0,
+        "valor_ingame": 400_000,
+        "pratico": False,
+    },
+    "recrutador": {
+        "nome": "Curso Recrutador",
+        "emoji": "🫂",
+        "cargo_id": 1522579072197197966,
+        "nivel": "funcao",
+        "valor_ingame": 550_000,
         "pratico": False,
     },
     "instrutor": {
@@ -811,7 +819,7 @@ CURSOS = {
         "emoji": "👨‍🏫",
         "cargo_id": 1522579028526239744,
         "nivel": "funcao",
-        "valor_ingame": 0,
+        "valor_ingame": 750_000,
         "pratico": False,
     },
     "diretoria": {
@@ -819,7 +827,7 @@ CURSOS = {
         "emoji": "💎",
         "cargo_id": 1486368756606304388,
         "nivel": "diretoria",
-        "valor_ingame": 0,
+        "valor_ingame": 2_000_000,
         "pratico": False,
     },
     "diretoria_geral": {

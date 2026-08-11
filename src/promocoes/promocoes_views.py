@@ -9,14 +9,16 @@ from src.cursos.cursos_service import rotulo_curso
 from src.plantao.permissoes import e_diretoria
 from src.promocoes.promocoes_service import (
     aplicar_promocao_cargos,
+    atualizar_mensagem_solicitacao,
     criar_solicitacao_promocao,
     decidir_solicitacao,
-    listar_trilhas,
+    listar_cargos_destino,
     montar_checklist_trilha,
     obter_solicitacao,
     obter_trilha,
+    obter_trilha_por_destino_e_origem,
     registrar_historico,
-    atualizar_mensagem_solicitacao,
+    trilhas_a_partir_do_membro,
 )
 from src.utils.error_handling import (
     LoggingViewMixin,
@@ -25,23 +27,236 @@ from src.utils.error_handling import (
 from src.utils.log_container import LogContainerView
 from src.utils.mensagens import (
     COR_ERRO,
-    COR_INFO,
     COR_SUCESSO,
     responder_aviso,
     responder_erro,
     responder_sucesso,
 )
 
+CUSTOM_ID_BOTAO_SOLICITAR = "promocoes:botao_solicitar"
+CUSTOM_ID_SELECT_CARGO = "promocoes:select_cargo"
+CUSTOM_ID_BOTAO_TRILHA = "promocoes:botao_trilha"
 CUSTOM_ID_SELECT_TRILHA = "promocoes:select_trilha"
 CUSTOM_ID_APROVAR = "promocoes:aprovar:"
 CUSTOM_ID_REPROVAR = "promocoes:reprovar:"
 
 
 class PainelPromocaoLayout(LoggingViewMixin, discord.ui.LayoutView):
-    """Painel persistente — solicitar promoção."""
+    """Painel persistente no padrão do recrutamento."""
 
     def __init__(self, guild: discord.Guild | None = None):
         super().__init__(timeout=None)
+
+        linha = discord.ui.ActionRow()
+        botao = discord.ui.Button(
+            label="Solicitar promoção",
+            style=discord.ButtonStyle.success,
+            emoji="⬆️",
+            custom_id=CUSTOM_ID_BOTAO_SOLICITAR,
+        )
+        botao.callback = self._ao_solicitar
+        linha.add_item(botao)
+
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
+
+        texto = (
+            "Peça avanço de cargo conforme a hierarquia do hospital.\n\n"
+            "O bot confere **advertências**, **cargo atual** e **cursos** "
+            "antes de enviar à diretoria."
+        )
+        if url_icone:
+            bloco_topo = discord.ui.Section(
+                "# ⬆️ Painel de Promoções",
+                texto,
+                accessory=discord.ui.Thumbnail(url_icone),
+            )
+        else:
+            bloco_topo = discord.ui.TextDisplay("# ⬆️ Painel de Promoções\n" + texto)
+
+        self.add_item(
+            discord.ui.Container(
+                bloco_topo,
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.TextDisplay(
+                    "## 📌 Antes de solicitar\n\n"
+                    "✅ Não possua **Adv 01** ou **Adv 02** ativa.\n"
+                    "✅ Tenha o cargo de origem da promoção desejada.\n"
+                    "✅ Conclua os **cursos obrigatórios** da trilha.\n"
+                    "✅ Use **cargo pretendido** para escolher o destino direto.\n"
+                    "✅ Use **Seguir trilha** para ver só o que parte do seu cargo atual."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                linha,
+                accent_color=discord.Color.blurple(),
+            )
+        )
+
+    async def _ao_solicitar(self, interacao: discord.Interaction):
+        membro = interacao.user
+        if not isinstance(membro, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Apenas no servidor",
+                linhas=["Use o painel dentro do Discord do hospital."],
+            )
+            return
+        try:
+            await interacao.response.send_message(
+                view=ViewEscolhaPromocao(membro),
+                ephemeral=True,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao abrir solicitação de promoção",
+                erro,
+                contexto="PainelPromocaoLayout._ao_solicitar",
+                usuario=membro,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Não foi possível abrir a solicitação."],
+            )
+
+
+class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
+    """Select de cargos-destino + botão Seguir trilha (opcional)."""
+
+    def __init__(self, membro: discord.Member):
+        super().__init__(timeout=180)
+        self.solicitante_id = membro.id
+
+        destinos = listar_cargos_destino()
+        opcoes = [
+            discord.SelectOption(
+                label=nome[:100],
+                value=nome,
+                description="Cargo pretendido",
+            )
+            for nome in destinos[:25]
+        ]
+        if not opcoes:
+            opcoes = [
+                discord.SelectOption(
+                    label="Nenhum cargo cadastrado",
+                    value="_vazio",
+                )
+            ]
+
+        linha_select = discord.ui.ActionRow()
+        seletor = discord.ui.Select(
+            placeholder="Selecione o cargo pretendido…",
+            options=opcoes,
+            min_values=1,
+            max_values=1,
+            custom_id=CUSTOM_ID_SELECT_CARGO,
+        )
+        seletor.callback = self._ao_escolher_cargo
+        linha_select.add_item(seletor)
+
+        linha_botao = discord.ui.ActionRow()
+        botao_trilha = discord.ui.Button(
+            label="Seguir trilha",
+            style=discord.ButtonStyle.primary,
+            emoji="🛤️",
+            custom_id=CUSTOM_ID_BOTAO_TRILHA,
+        )
+        botao_trilha.callback = self._ao_seguir_trilha
+        linha_botao.add_item(botao_trilha)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# Solicitar promoção\n"
+                    "Escolha o **cargo pretendido** na lista **ou** "
+                    "use **Seguir trilha** para ver só as opções a partir do seu cargo atual."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                linha_select,
+                linha_botao,
+                accent_color=discord.Color.blurple(),
+            )
+        )
+
+    async def _ao_escolher_cargo(self, interacao: discord.Interaction):
+        if interacao.user.id != self.solicitante_id:
+            await responder_erro(
+                interacao,
+                titulo="Não é sua solicitação",
+                linhas=["Só quem abriu o painel pode continuar."],
+            )
+            return
+        valores = interacao.data.get("values") if interacao.data else None
+        if not valores or valores[0] == "_vazio":
+            await responder_erro(
+                interacao,
+                titulo="Seleção inválida",
+                linhas=["Escolha um cargo pretendido."],
+            )
+            return
+        membro = interacao.user
+        if not isinstance(membro, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Apenas no servidor",
+                linhas=["Use o painel no servidor."],
+            )
+            return
+        trilha = obter_trilha_por_destino_e_origem(valores[0], membro)
+        if trilha is None:
+            await responder_erro(
+                interacao,
+                titulo="Trilha não encontrada",
+                linhas=[
+                    f"Não há promoção cadastrada para `{valores[0]}`.",
+                    "Fale com a diretoria ou use **Seguir trilha**.",
+                ],
+            )
+            return
+        await processar_escolha_trilha(interacao, trilha["chave"])
+
+    async def _ao_seguir_trilha(self, interacao: discord.Interaction):
+        if interacao.user.id != self.solicitante_id:
+            await responder_erro(
+                interacao,
+                titulo="Não é sua solicitação",
+                linhas=["Só quem abriu o painel pode continuar."],
+            )
+            return
+        membro = interacao.user
+        if not isinstance(membro, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Apenas no servidor",
+                linhas=["Use o painel no servidor."],
+            )
+            return
+        disponiveis = trilhas_a_partir_do_membro(membro)
+        if not disponiveis:
+            await responder_aviso(
+                interacao,
+                titulo="Nenhuma trilha a partir do seu cargo",
+                linhas=[
+                    "Não há promoção cadastrada partindo dos cargos que você possui agora.",
+                    "Você ainda pode escolher um **cargo pretendido** no menu acima.",
+                ],
+                delay=18,
+            )
+            return
+        await interacao.response.edit_message(
+            view=ViewSelectTrilha(membro, disponiveis)
+        )
+
+
+class ViewSelectTrilha(LoggingViewMixin, discord.ui.LayoutView):
+    """Lista só as trilhas a partir do cargo atual do membro."""
+
+    def __init__(self, membro: discord.Member, trilhas: list[dict]):
+        super().__init__(timeout=180)
+        self.solicitante_id = membro.id
 
         opcoes = [
             discord.SelectOption(
@@ -49,29 +264,26 @@ class PainelPromocaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 value=trilha["chave"],
                 description=(trilha.get("observacao") or "")[:100],
             )
-            for trilha in listar_trilhas()
-        ][:25]
-
+            for trilha in trilhas[:25]
+        ]
         linha = discord.ui.ActionRow()
         seletor = discord.ui.Select(
-            placeholder="Escolha a promoção desejada…",
+            placeholder="Trilha a partir do seu cargo…",
             options=opcoes,
-            custom_id=CUSTOM_ID_SELECT_TRILHA,
             min_values=1,
             max_values=1,
+            custom_id=CUSTOM_ID_SELECT_TRILHA,
         )
-        seletor.callback = self._ao_escolher_trilha
+        seletor.callback = self._ao_escolher
         linha.add_item(seletor)
 
+        lista_txt = "\n".join(f"• **{t['rotulo']}**" for t in trilhas)
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    "# ⬆️ Solicitar Promoção\n"
-                    "Escolha a trilha. O bot verifica **advertências**, "
-                    "**cargo atual** e **cursos obrigatórios**.\n"
-                    "Se faltar curso, a solicitação **não** segue para a diretoria — "
-                    "você recebe o que falta e pode ir ao painel de cursos.\n"
-                    "-# Não promovemos com Adv 01 ou Adv 02 ativa."
+                    "# 🛤️ Seguir trilha\n"
+                    "Opções a partir do **seu cargo atual**:\n"
+                    f"{lista_txt}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha,
@@ -79,30 +291,23 @@ class PainelPromocaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
-    async def _ao_escolher_trilha(self, interacao: discord.Interaction):
-        try:
-            valores = interacao.data.get("values") if interacao.data else None
-            if not valores:
-                await responder_erro(
-                    interacao,
-                    titulo="Seleção inválida",
-                    linhas=["Nenhuma trilha selecionada."],
-                )
-                return
-            await processar_escolha_trilha(interacao, valores[0])
-        except Exception as erro:
-            await enviar_erro_para_log_erros(
-                interacao.guild,
-                "Erro ao processar trilha de promoção",
-                erro,
-                contexto="PainelPromocaoLayout._ao_escolher_trilha",
-                usuario=interacao.user,
-            )
+    async def _ao_escolher(self, interacao: discord.Interaction):
+        if interacao.user.id != self.solicitante_id:
             await responder_erro(
                 interacao,
-                titulo="Erro inesperado",
-                linhas=["Falha na solicitação. A equipe foi notificada."],
+                titulo="Não é sua solicitação",
+                linhas=["Só quem abriu o painel pode continuar."],
             )
+            return
+        valores = interacao.data.get("values") if interacao.data else None
+        if not valores:
+            await responder_erro(
+                interacao,
+                titulo="Seleção inválida",
+                linhas=["Escolha uma trilha."],
+            )
+            return
+        await processar_escolha_trilha(interacao, valores[0])
 
 
 class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
@@ -208,7 +413,6 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                         titulo="Aprovado no sistema, falha nos cargos",
                         linhas=[detalhe, "Ajuste os cargos manualmente se preciso."],
                     )
-                    # ainda registra histórico
                 await registrar_historico(
                     discord_id=registro.discord_id,
                     tipo="PROMOCAO",
@@ -247,7 +451,6 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                     solicitacao_id=registro.id,
                 )
 
-            # Desativa botões na mensagem
             try:
                 await interacao.message.edit(
                     view=ViewDecisaoPromocao(self.solicitacao_id, desabilitada=True)
@@ -258,10 +461,7 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
             await responder_sucesso(
                 interacao,
                 titulo="Promoção aprovada" if aprovada else "Promoção reprovada",
-                linhas=[
-                    f"Pedido `#{registro.id}` marcado como "
-                    f"**{'APROVADA' if aprovada else 'REPROVADA'}**."
-                ],
+                linhas=[f"Pedido `#{registro.id}` finalizado."],
                 delay=12,
             )
         except Exception as erro:
@@ -275,7 +475,7 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
             await responder_erro(
                 interacao,
                 titulo="Erro inesperado",
-                linhas=["Falha ao processar a decisão. Veja LOG_ERROS."],
+                linhas=["Falha na decisão. Veja LOG_ERROS."],
             )
 
 
@@ -283,113 +483,128 @@ async def processar_escolha_trilha(
     interacao: discord.Interaction,
     chave_trilha: str,
 ) -> None:
-    trilha = obter_trilha(chave_trilha)
-    if trilha is None:
-        await responder_erro(
-            interacao,
-            titulo="Trilha inválida",
-            linhas=[f"`{chave_trilha}` não existe no regulamento configurado."],
-        )
-        return
-
     membro = interacao.user
     if not isinstance(membro, discord.Member):
         await responder_erro(
             interacao,
             titulo="Apenas no servidor",
-            linhas=["Use o painel dentro do Discord do hospital."],
+            linhas=["Use o painel no Discord do hospital."],
         )
         return
 
-    checklist = montar_checklist_trilha(membro, trilha)
-
-    if not checklist["ok"]:
-        linhas = list(checklist["linhas"])
-        faltando = checklist.get("cursos_faltando") or []
-        if faltando:
-            linhas.append(
-                "Cursos pendentes: "
-                + ", ".join(f"`{rotulo_curso(c)}`" for c in faltando)
-            )
-            canal_cursos = CANAIS.get("CANAL_PAINEL_SOLICITAR_CURSOS")
-            if canal_cursos:
-                linhas.append(f"Abra <#{canal_cursos}> para solicitar o curso.")
+    trilha = obter_trilha(chave_trilha)
+    if trilha is None:
         await responder_erro(
             interacao,
-            titulo=f"Não pode solicitar · {checklist['rotulo']}",
-            linhas=linhas,
+            titulo="Trilha inválida",
+            linhas=[f"Chave `{chave_trilha}` não cadastrada."],
         )
         return
 
-    resumo = "\n".join(checklist["linhas"])
-    registro = await criar_solicitacao_promocao(
-        discord_id=membro.id,
-        trilha=trilha,
-        resumo_checklist=resumo,
-    )
+    try:
+        if not interacao.response.is_done():
+            await interacao.response.defer(ephemeral=True)
 
-    guilda = interacao.guild
-    canal_dest_id = (
-        CANAIS.get("CANAL_PROMOVIDOS")
-        or CANAIS.get("LOG_PROMOVIDOS")
-    )
-    # Pedidos pendentes: usamos CANAL_PROMOVIDOS como fila da diretoria
-    # (ou LOG). Se preferir canal só de fila, ajuste no config depois.
-    canal = guilda.get_channel(int(canal_dest_id)) if guilda and canal_dest_id else None
-
-    corpo = (
-        f"👤 {membro.mention} (`{membro.id}`)\n"
-        f"📋 Pedido `#{registro.id}`\n"
-        f"**Trilha:** {checklist['rotulo']}\n"
-        f"**De:** `{checklist['cargo_de']}` → **Para:** `{checklist['cargo_para']}`\n\n"
-        f"{resumo}"
-    )
-
-    if canal is not None:
-        try:
-            view_pedido = _ViewPedidoPromocao(
-                titulo=f"Solicitação de promoção · #{registro.id}",
-                corpo=corpo,
-                guild=guilda,
-                solicitacao_id=registro.id,
-            )
-            mensagem = await canal.send(view=view_pedido)
-            await atualizar_mensagem_solicitacao(
-                registro.id, canal.id, mensagem.id
-            )
-        except discord.HTTPException as erro:
-            await enviar_erro_para_log_erros(
-                guilda,
-                "Falha ao postar pedido de promoção",
-                erro,
-                contexto="processar_escolha_trilha.send",
-                usuario=membro,
-            )
-            await responder_erro(
+        checklist = montar_checklist_trilha(membro, trilha)
+        if not checklist.get("pode_enviar"):
+            linhas = list(checklist.get("linhas") or [])
+            faltando = checklist.get("cursos_faltando") or []
+            if faltando:
+                linhas.append(
+                    "Cursos faltando: " + ", ".join(rotulo_curso(c) for c in faltando)
+                )
+                linhas.append(
+                    "Vá ao painel de **Solicitar cursos** e conclua o que falta."
+                )
+            await responder_aviso(
                 interacao,
-                titulo="Falha ao enviar à diretoria",
-                linhas=["Pedido salvo no banco, mas não postou no canal. Veja LOG_ERROS."],
+                titulo="Requisitos incompletos",
+                linhas=linhas or ["Não foi possível enviar a solicitação."],
+                delay=25,
             )
             return
-    else:
+
+        registro = await criar_solicitacao_promocao(
+            discord_id=membro.id,
+            chave_trilha=chave_trilha,
+            cargo_de=trilha["de_cargo"],
+            cargo_para=trilha["para_cargo"],
+            resumo_checklist="\n".join(checklist.get("linhas") or []),
+        )
+
+        guilda = interacao.guild
+        canal_dest_id = CANAIS.get("CANAL_PROMOVIDOS")
+        canal = (
+            guilda.get_channel(int(canal_dest_id)) if guilda and canal_dest_id else None
+        )
+
+        resumo = "\n".join(checklist.get("linhas") or [])
+        corpo = (
+            f"👤 {membro.mention} (`{membro.id}`)\n"
+            f"📋 Pedido `#{registro.id}`\n"
+            f"**Trilha:** {checklist.get('rotulo', trilha['rotulo'])}\n"
+            f"**De:** `{trilha['de_cargo']}` → **Para:** `{trilha['para_cargo']}`\n\n"
+            f"{resumo}"
+        )
+
+        if canal is not None:
+            try:
+                view_pedido = _ViewPedidoPromocao(
+                    titulo=f"Solicitação de promoção · #{registro.id}",
+                    corpo=corpo,
+                    guild=guilda,
+                    solicitacao_id=registro.id,
+                )
+                mensagem = await canal.send(view=view_pedido)
+                await atualizar_mensagem_solicitacao(registro.id, canal.id, mensagem.id)
+            except discord.HTTPException as erro:
+                await enviar_erro_para_log_erros(
+                    guilda,
+                    "Falha ao postar pedido de promoção",
+                    erro,
+                    contexto="processar_escolha_trilha.send",
+                    usuario=membro,
+                )
+                await responder_erro(
+                    interacao,
+                    titulo="Falha ao enviar à diretoria",
+                    linhas=[
+                        "Pedido salvo no banco, mas não postou no canal. Veja LOG_ERROS."
+                    ],
+                )
+                return
+        else:
+            await enviar_erro_para_log_erros(
+                guilda,
+                "Canal de promoções não configurado",
+                RuntimeError("CANAL_PROMOVIDOS ausente"),
+                contexto="processar_escolha_trilha",
+                usuario=membro,
+            )
+
+        await responder_sucesso(
+            interacao,
+            titulo="Solicitação enviada",
+            linhas=[
+                f"Pedido `#{registro.id}` · **{trilha['rotulo']}**",
+                "A diretoria vai analisar Aprovar / Reprovar no canal de promoções.",
+                *(checklist.get("linhas") or [])[:4],
+            ],
+            delay=25,
+        )
+    except Exception as erro:
         await enviar_erro_para_log_erros(
-            guilda,
-            "Canal de promoções não configurado",
-            RuntimeError("CANAL_PROMOVIDOS ausente"),
+            interacao.guild,
+            "Erro ao processar promoção",
+            erro,
             contexto="processar_escolha_trilha",
             usuario=membro,
         )
-
-    await responder_sucesso(
-        interacao,
-        titulo="Solicitação enviada",
-        linhas=[
-            f"Pedido `#{registro.id}` · **{checklist['rotulo']}**",
-            "A diretoria vai analisar Aprovar / Reprovar no canal de promoções.",
-            *checklist["linhas"][:4],
-        ],
-        delay=25,
-    )
+        await responder_erro(
+            interacao,
+            titulo="Erro inesperado",
+            linhas=["Falha na solicitação. A equipe foi notificada."],
+        )
 
 
 class _ViewPedidoPromocao(LoggingViewMixin, discord.ui.LayoutView):
@@ -402,6 +617,16 @@ class _ViewPedidoPromocao(LoggingViewMixin, discord.ui.LayoutView):
         solicitacao_id: int,
     ):
         super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"# {titulo}"),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(corpo),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                accent_color=discord.Color.gold(),
+            )
+        )
+        # Botões de decisão (mesma mensagem)
         linha = discord.ui.ActionRow()
         botao_ok = discord.ui.Button(
             label="Aprovar",
@@ -409,39 +634,35 @@ class _ViewPedidoPromocao(LoggingViewMixin, discord.ui.LayoutView):
             emoji="✅",
             custom_id=f"{CUSTOM_ID_APROVAR}{solicitacao_id}",
         )
-        botao_ok.callback = self._make_cb(solicitacao_id, True)
         botao_nao = discord.ui.Button(
             label="Reprovar",
             style=discord.ButtonStyle.danger,
             emoji="❌",
             custom_id=f"{CUSTOM_ID_REPROVAR}{solicitacao_id}",
         )
-        botao_nao.callback = self._make_cb(solicitacao_id, False)
+        # Reutiliza callbacks da ViewDecisaoPromocao
+        decisao = ViewDecisaoPromocao(solicitacao_id)
+        botao_ok.callback = decisao._ao_aprovar
+        botao_nao.callback = decisao._ao_reprovar
+        # Garante self.solicitacao_id no callback
+        botao_ok.callback = _bind_decidir(solicitacao_id, True)
+        botao_nao.callback = _bind_decidir(solicitacao_id, False)
         linha.add_item(botao_ok)
         linha.add_item(botao_nao)
-
-        from datetime import datetime, timezone
-
-        momento = int(datetime.now(timezone.utc).timestamp())
-        rodape = f"-# {guild.name} • <t:{momento}:f>"
-
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(f"# {titulo}"),
-                discord.ui.TextDisplay(corpo),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha,
-                discord.ui.TextDisplay(rodape),
-                accent_color=discord.Color.gold(),
+                accent_color=discord.Color.dark_gold(),
             )
         )
 
-    def _make_cb(self, solicitacao_id: int, aprovada: bool):
-        async def _cb(interacao: discord.Interaction):
-            proxy = ViewDecisaoPromocao(solicitacao_id)
-            await proxy._decidir(interacao, aprovada=aprovada)
 
-        return _cb
+def _bind_decidir(solicitacao_id: int, aprovada: bool):
+    async def _callback(interacao: discord.Interaction):
+        view = ViewDecisaoPromocao(solicitacao_id)
+        await view._decidir(interacao, aprovada=aprovada)
+
+    return _callback
 
 
 async def _postar_resultado_publico(
@@ -456,40 +677,47 @@ async def _postar_resultado_publico(
 ) -> None:
     if guilda is None:
         return
-    canal_id = CANAIS.get("LOG_PROMOVIDOS") or CANAIS.get("CANAL_PROMOVIDOS")
-    if not aprovada:
-        canal_id = (
-            CANAIS.get("CANAL_NAO_PROMOVIDOS")
-            or CANAIS.get("LOG_PROMOVIDOS")
-            or canal_id
-        )
-    canal = guilda.get_channel(int(canal_id)) if canal_id else None
-    if canal is None:
-        return
-    titulo = "Promoção aprovada" if aprovada else "Promoção não aprovada"
+    canal_id = (
+        CANAIS.get("CANAL_PROMOVIDOS")
+        if aprovada
+        else CANAIS.get("CANAL_NAO_PROMOVIDOS")
+    )
+    # Log dedicado se existir
+    log_id = CANAIS.get("LOG_PROMOVIDOS")
+    canais = []
+    if canal_id:
+        canais.append(int(canal_id))
+    if log_id and int(log_id) not in canais:
+        canais.append(int(log_id))
+
+    titulo = "Membro promovido" if aprovada else "Promoção não aprovada"
     linhas = (
         f"👤 <@{alvo_id}>\n"
         f"📋 Pedido `#{solicitacao_id}`\n"
-        f"**{cargo_de}** → **{cargo_para}**\n"
+        f"**De:** `{cargo_de}` → **Para:** `{cargo_para}`\n"
         f"Staff: {staff.mention}"
     )
-    try:
-        await canal.send(
-            view=LogContainerView(
-                titulo=titulo,
-                linhas=linhas,
-                guild=guilda,
-                cor=COR_SUCESSO if aprovada else COR_ERRO,
+    for cid in canais:
+        canal = guilda.get_channel(cid)
+        if canal is None:
+            continue
+        try:
+            await canal.send(
+                view=LogContainerView(
+                    titulo=titulo,
+                    linhas=linhas,
+                    guild=guilda,
+                    cor=COR_SUCESSO if aprovada else COR_ERRO,
+                )
             )
-        )
-    except discord.HTTPException as erro:
-        await enviar_erro_para_log_erros(
-            guilda,
-            "Falha ao postar resultado de promoção",
-            erro,
-            contexto="_postar_resultado_publico",
-            usuario=staff,
-        )
+        except discord.HTTPException as erro:
+            await enviar_erro_para_log_erros(
+                guilda,
+                "Falha ao postar resultado de promoção",
+                erro,
+                contexto="_postar_resultado_publico",
+                usuario=staff,
+            )
 
 
 def view_persistente_promocao() -> PainelPromocaoLayout:
