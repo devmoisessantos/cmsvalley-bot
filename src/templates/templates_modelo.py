@@ -55,12 +55,10 @@ MESES_PT = (
 
 
 def formatar_data_hora_rodape(momento: datetime | None = None) -> str:
-    """Ex.: 15 jul de 2028 • 22:54"""
-    momento = momento or datetime.now()
-    return (
-        f"{momento.day} {MESES_PT[momento.month - 1]} de {momento.year} "
-        f"• {momento.strftime('%H:%M')}"
-    )
+    """Ex.: 15 jul de 2028 • 22:54 — sempre horário de Brasília."""
+    from src.utils.formatacao import formatar_data_hora_rodape as _rodape_brasilia
+
+    return _rodape_brasilia(momento)
 
 
 def mapa_de_cores() -> dict[str, discord.Color]:
@@ -599,7 +597,8 @@ def gerar_codigo_mensagem(
         if rascunho.rodape_data_hora:
             linhas.extend(
                 [
-                    "    agora = datetime.now()",
+                    "    from zoneinfo import ZoneInfo",
+                    "    agora = datetime.now(ZoneInfo('America/Sao_Paulo'))",
                     "    meses = ('jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez')",
                     "    partes.append(f\"{agora.day} {meses[agora.month-1]} de {agora.year} • {agora.strftime('%H:%M')}\")",
                 ]

@@ -368,23 +368,10 @@ def montar_corpo_solicitacao_troca_moedas(
     Corpo Components V2 da solicitação de troca de moedas.
     Retorna (titulo, corpo_markdown) — o rodapé fica na view.
     """
-    from datetime import (
-        datetime,
-        timezone,
-    )
-    from zoneinfo import ZoneInfo
-
-    from src.config import (
-        MESES_ABREV,
-        TIMEZONE_LOCAL,
-    )
+    from src.utils.formatacao import formatar_data_solicitacao
 
     fid = id_fivem or "—"
-    agora_local = datetime.now(timezone.utc).astimezone(ZoneInfo(TIMEZONE_LOCAL))
-    data_txt = (
-        f"{agora_local.day} de {MESES_ABREV[agora_local.month]} "
-        f"{agora_local.year} {agora_local.strftime('%H:%M')}"
-    )
+    data_txt = formatar_data_solicitacao()
     valor_unitario_txt = formatar_reais(VALOR_MOEDA_INGAME)
     valor_total_txt = formatar_reais(valor_ingame)
 

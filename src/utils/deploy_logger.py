@@ -26,7 +26,9 @@ class Cores:
 
 def _horario_atual() -> str:
     """Retorna o horário atual no formato HH:MM:SS."""
-    return datetime.datetime.now().strftime("%H:%M:%S")
+    from zoneinfo import ZoneInfo
+
+    return datetime.datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M:%S")
 
 
 def _formatar(mensagem: str, cor: str, emoji: str = "") -> str:

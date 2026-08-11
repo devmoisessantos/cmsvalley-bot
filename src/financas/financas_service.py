@@ -33,10 +33,9 @@ def _medalha(posicao: int) -> str:
 
 
 def _formatar_data_curta(dt: datetime) -> str:
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    local = dt.astimezone()
-    return f"{local.day:02d}/{local.month:02d}"
+    from src.utils.formatacao import formatar_data_curta
+
+    return formatar_data_curta(dt)
 
 
 def _formatar_ids_fivem(ids: list[str]) -> str:

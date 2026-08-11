@@ -14,7 +14,6 @@ Padrão:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 import discord
 
@@ -22,6 +21,7 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
+from src.utils.formatacao import agora_brasilia
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +302,7 @@ async def notificar_dm_advertencia(
     msg_log: discord.Message | None = None,
 ) -> bool:
     """DM ao advertido com resumo + botão para o registro público."""
-    data_str = datetime.now().strftime("%d/%m/%Y, %H:%M")
+    data_str = agora_brasilia().strftime("%d/%m/%Y, %H:%M")
     linhas = [
         f"> **ID FiveM:** `{id_fivem}`",
         "",
@@ -343,7 +343,7 @@ async def notificar_dm_exoneracao(
     msg_log: discord.Message | None = None,
 ) -> bool:
     """DM de exoneração (manual ou automática pela 3ª advertência)."""
-    data_str = datetime.now().strftime("%d/%m/%Y, %H:%M")
+    data_str = agora_brasilia().strftime("%d/%m/%Y, %H:%M")
     origem = "Automática — 3ª advertência formal" if automatica else "Manual"
 
     linhas = [

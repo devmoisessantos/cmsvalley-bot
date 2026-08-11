@@ -323,7 +323,9 @@ def validar_data(valor: str) -> tuple[bool, str]:
             "Data inválida. Use o formato `DD/MM/AAAA` (ex: `15/06/2026`).",
         )
 
-    data_de_hoje = datetime.now().date()
+    from src.utils.formatacao import agora_brasilia
+
+    data_de_hoje = agora_brasilia().date()
     if data_informada.date() < data_de_hoje:
         return (
             False,
