@@ -513,7 +513,7 @@ class ViewAceitarAgendamento(LoggingViewMixin, discord.ui.LayoutView):
     ):
         super().__init__(timeout=None)
         self.solicitacao_id = solicitacao_id
-
+        self.url_avatar = url_avatar
         componentes: list = [
             discord.ui.TextDisplay(f"# {titulo}"),
         ]
@@ -521,7 +521,7 @@ class ViewAceitarAgendamento(LoggingViewMixin, discord.ui.LayoutView):
             componentes.append(
                 discord.ui.Section(
                     corpo,
-                    accessory=discord.ui.Thumbnail(url=url_avatar),
+                    accessory=discord.ui.Thumbnail(url=self.url_avatar),
                 )
             )
         else:
