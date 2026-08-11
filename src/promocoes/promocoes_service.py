@@ -24,6 +24,8 @@ from src.database.models import (
 )
 from src.plantao.ranking_plantao_service import obter_segundos_plantao_totais
 from src.utils.formatacao import formatar_hms
+from src.utils.logger import log_mudanca_cargo
+from src.utils.nickname import aplicar_prefixo
 
 logger = logging.getLogger(__name__)
 
@@ -350,8 +352,12 @@ async def aplicar_promocao_cargos(
     membro: discord.Member,
     cargo_de_nome: str,
     cargo_para_nome: str,
+    *,
+    executor: discord.abc.User | None = None,
 ) -> tuple[bool, str]:
-    """Troca cargo de → para. Não remove outros cargos."""
+    """
+    Troca cargo de → para, atualiza prefixo do nick e registra log de cargos.
+    """
     guilda = membro.guild
     id_de = id_cargo_por_nome(cargo_de_nome)
     id_para = id_cargo_por_nome(cargo_para_nome)
@@ -361,16 +367,46 @@ async def aplicar_promocao_cargos(
     if cargo_para is None:
         return False, f"Cargo destino id `{id_para}` não existe na guilda."
 
+    removidos: list[str] = []
+    adicionados: list[str] = []
+
     try:
         if id_de:
             cargo_de = guilda.get_role(id_de)
             if cargo_de is not None and cargo_de in membro.roles:
                 await membro.remove_roles(cargo_de, reason="Promoção aprovada")
+                removidos.append(cargo_de_nome)
         if cargo_para not in membro.roles:
             await membro.add_roles(cargo_para, reason="Promoção aprovada")
+            adicionados.append(cargo_para_nome)
     except discord.Forbidden:
         return False, "Sem permissão para alterar cargos deste membro."
     except discord.HTTPException as erro:
         return False, f"Erro Discord ao alterar cargos: {erro}"
 
-    return True, "Cargos atualizados."
+    # Prefixo do nickname conforme PREFIXOS_NICKNAME
+    try:
+        nick_atual = membro.nick or membro.display_name or membro.name
+        novo_nick = aplicar_prefixo(nick_atual, cargo_para_nome)
+        if novo_nick and novo_nick != membro.nick:
+            await membro.edit(nick=novo_nick[:32], reason="Prefixo após promoção")
+    except discord.Forbidden:
+        logger.warning(
+            "Promoção OK mas sem permissão para editar nick de %s", membro.id
+        )
+    except discord.HTTPException as erro:
+        logger.warning("Falha ao editar nick na promoção de %s: %s", membro.id, erro)
+
+    # Log de mudança de cargo
+    try:
+        await log_mudanca_cargo(
+            guilda,
+            candidato=membro,
+            executor=executor or membro,
+            cargos_adicionados=adicionados or None,
+            cargos_removidos=removidos or None,
+        )
+    except Exception as erro:
+        logger.warning("Falha ao logar mudança de cargo na promoção: %s", erro)
+
+    return True, "Cargos e prefixo atualizados."

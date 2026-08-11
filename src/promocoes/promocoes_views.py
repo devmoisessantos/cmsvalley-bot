@@ -24,7 +24,6 @@ from src.utils.error_handling import (
     LoggingViewMixin,
     enviar_erro_para_log_erros,
 )
-from src.utils.log_container import LogContainerView
 from src.utils.mensagens import (
     COR_ERRO,
     COR_SUCESSO,
@@ -398,7 +397,10 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
 
             if aprovada and alvo is not None:
                 ok, detalhe = await aplicar_promocao_cargos(
-                    alvo, registro.cargo_de, registro.cargo_para
+                    alvo,
+                    registro.cargo_de,
+                    registro.cargo_para,
+                    executor=membro,
                 )
                 if not ok:
                     await enviar_erro_para_log_erros(
@@ -533,27 +535,30 @@ async def processar_escolha_trilha(
         )
 
         guilda = interacao.guild
-        canal_dest_id = CANAIS.get("CANAL_PROMOVIDOS")
+        canal_dest_id = CANAIS.get("CANAL_APROVAR_RECUSAR_PROMO") or CANAIS.get(
+            "CANAL_PROMOVIDOS"
+        )
         canal = (
             guilda.get_channel(int(canal_dest_id)) if guilda and canal_dest_id else None
         )
 
         resumo = "\n".join(checklist.get("linhas") or [])
         corpo = (
-            f"👤 {membro.mention} (`{membro.id}`)\n"
-            f"📋 Pedido `#{registro.id}`\n"
-            f"**Trilha:** {checklist.get('rotulo', trilha['rotulo'])}\n"
-            f"**De:** `{trilha['de_cargo']}` → **Para:** `{trilha['para_cargo']}`\n\n"
-            f"{resumo}"
+            f"> - **👤 Membro:** {membro.mention} (`{membro.id}`)\n"
+            f"> - **📋 Solicitação:** `#{registro.id}`\n"
+            f"> - **🛤️ Trilha:** {checklist.get('rotulo', trilha['rotulo'])}\n"
+            f"> - **🎯 De:** `{trilha['de_cargo']}` → **Para:** `{trilha['para_cargo']}`\n\n"
+            f"**Checklist:**\n{resumo}"
         )
 
         if canal is not None:
             try:
                 view_pedido = _ViewPedidoPromocao(
-                    titulo=f"Solicitação de promoção · #{registro.id}",
+                    titulo=f"📋 Solicitação de promoção · #{registro.id}",
                     corpo=corpo,
                     guild=guilda,
                     solicitacao_id=registro.id,
+                    url_avatar=membro.display_avatar.url,
                 )
                 mensagem = await canal.send(view=view_pedido)
                 await atualizar_mensagem_solicitacao(registro.id, canal.id, mensagem.id)
@@ -577,7 +582,7 @@ async def processar_escolha_trilha(
             await enviar_erro_para_log_erros(
                 guilda,
                 "Canal de promoções não configurado",
-                RuntimeError("CANAL_PROMOVIDOS ausente"),
+                RuntimeError("CANAL_APROVAR_RECUSAR_PROMO ausente"),
                 contexto="processar_escolha_trilha",
                 usuario=membro,
             )
@@ -608,6 +613,8 @@ async def processar_escolha_trilha(
 
 
 class _ViewPedidoPromocao(LoggingViewMixin, discord.ui.LayoutView):
+    """Card no canal de aprovar/recusar — padrão Components V2."""
+
     def __init__(
         self,
         *,
@@ -615,18 +622,23 @@ class _ViewPedidoPromocao(LoggingViewMixin, discord.ui.LayoutView):
         corpo: str,
         guild: discord.Guild,
         solicitacao_id: int,
+        url_avatar: str | None = None,
     ):
         super().__init__(timeout=None)
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(f"# {titulo}"),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                discord.ui.TextDisplay(corpo),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                accent_color=discord.Color.gold(),
+
+        componentes: list = [discord.ui.TextDisplay(f"# {titulo}")]
+        if url_avatar:
+            componentes.append(
+                discord.ui.Section(
+                    corpo,
+                    accessory=discord.ui.Thumbnail(url_avatar),
+                )
             )
-        )
-        # Botões de decisão (mesma mensagem)
+        else:
+            componentes.append(discord.ui.TextDisplay(corpo))
+
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
         linha = discord.ui.ActionRow()
         botao_ok = discord.ui.Button(
             label="Aprovar",
@@ -640,19 +652,24 @@ class _ViewPedidoPromocao(LoggingViewMixin, discord.ui.LayoutView):
             emoji="❌",
             custom_id=f"{CUSTOM_ID_REPROVAR}{solicitacao_id}",
         )
-        # Reutiliza callbacks da ViewDecisaoPromocao
-        decisao = ViewDecisaoPromocao(solicitacao_id)
-        botao_ok.callback = decisao._ao_aprovar
-        botao_nao.callback = decisao._ao_reprovar
-        # Garante self.solicitacao_id no callback
         botao_ok.callback = _bind_decidir(solicitacao_id, True)
         botao_nao.callback = _bind_decidir(solicitacao_id, False)
         linha.add_item(botao_ok)
         linha.add_item(botao_nao)
+        componentes.append(linha)
+
+        momento = int(
+            __import__("datetime")
+            .datetime.now(__import__("datetime").timezone.utc)
+            .timestamp()
+        )
+        nome = guild.name if guild else "CENTRO MÉDICO SUL VALLEY"
+        componentes.append(discord.ui.TextDisplay(f"-# 🏥 {nome} • <t:{momento}:f>"))
+
         self.add_item(
             discord.ui.Container(
-                linha,
-                accent_color=discord.Color.dark_gold(),
+                *componentes,
+                accent_color=discord.Color.gold(),
             )
         )
 
@@ -675,6 +692,7 @@ async def _postar_resultado_publico(
     staff: discord.Member,
     solicitacao_id: int,
 ) -> None:
+    """Publica em CANAL_PROMOVIDOS ou CANAL_NAO_PROMOVIDOS no padrão visual pedido."""
     if guilda is None:
         return
     canal_id = (
@@ -682,34 +700,60 @@ async def _postar_resultado_publico(
         if aprovada
         else CANAIS.get("CANAL_NAO_PROMOVIDOS")
     )
-    # Log dedicado se existir
     log_id = CANAIS.get("LOG_PROMOVIDOS")
-    canais = []
+    canais_ids: list[int] = []
     if canal_id:
-        canais.append(int(canal_id))
-    if log_id and int(log_id) not in canais:
-        canais.append(int(log_id))
+        canais_ids.append(int(canal_id))
+    if log_id and int(log_id) not in canais_ids:
+        canais_ids.append(int(log_id))
 
-    titulo = "Membro promovido" if aprovada else "Promoção não aprovada"
-    linhas = (
-        f"👤 <@{alvo_id}>\n"
-        f"📋 Pedido `#{solicitacao_id}`\n"
-        f"**De:** `{cargo_de}` → **Para:** `{cargo_para}`\n"
-        f"Staff: {staff.mention}"
+    alvo = guilda.get_member(alvo_id)
+    url_avatar = alvo.display_avatar.url if alvo is not None else None
+    mencao_alvo = alvo.mention if alvo is not None else f"<@{alvo_id}>"
+
+    if aprovada:
+        titulo = "🚨 Membro Promovido"
+        cor = COR_SUCESSO
+    else:
+        titulo = "🚫 Promoção não aprovada"
+        cor = COR_ERRO
+
+    corpo = (
+        f"> - **👤 Membro:** {mencao_alvo}\n"
+        f"> - **📋 Solicitação:** `#{solicitacao_id}`\n"
+        f"> - **🎯 De:** `{cargo_de}` → **Para:** `{cargo_para}`\n"
+        f"> - **👮 Responsável pela {'aprovação' if aprovada else 'reprovação'}:** {staff.mention}"
     )
-    for cid in canais:
+
+    from datetime import (
+        datetime,
+        timezone,
+    )
+
+    momento = int(datetime.now(timezone.utc).timestamp())
+    rodape = f"-# 🏥 {guilda.name} • <t:{momento}:f>"
+
+    for cid in canais_ids:
         canal = guilda.get_channel(cid)
         if canal is None:
             continue
-        try:
-            await canal.send(
-                view=LogContainerView(
-                    titulo=titulo,
-                    linhas=linhas,
-                    guild=guilda,
-                    cor=COR_SUCESSO if aprovada else COR_ERRO,
+        componentes: list = [discord.ui.TextDisplay(f"# {titulo}")]
+        if url_avatar:
+            componentes.append(
+                discord.ui.Section(
+                    corpo,
+                    accessory=discord.ui.Thumbnail(url_avatar),
                 )
             )
+        else:
+            componentes.append(discord.ui.TextDisplay(corpo))
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(discord.ui.TextDisplay(rodape))
+
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(*componentes, accent_color=cor))
+        try:
+            await canal.send(view=view)
         except discord.HTTPException as erro:
             await enviar_erro_para_log_erros(
                 guilda,
