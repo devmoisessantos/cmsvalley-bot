@@ -206,6 +206,115 @@ async def obter_solicitacao_curso(solicitacao_id: int) -> SolicitacaoCurso | Non
         return resultado.scalar_one_or_none()
 
 
+async def buscar_pedido_aberto(discord_id: int) -> SolicitacaoCurso | None:
+    """Pedido ainda em andamento (agendado ou aceito) do aluno."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso)
+            .where(SolicitacaoCurso.discord_id == discord_id)
+            .where(SolicitacaoCurso.status.in_(("AGENDADO", "ACEITO")))
+            .order_by(SolicitacaoCurso.id.asc())
+            .limit(1)
+        )
+        return resultado.scalar_one_or_none()
+
+
+async def mesclar_cursos_no_pedido(
+    *,
+    solicitacao_id: int,
+    novas_chaves: list[str],
+    forma_pagamento: str,
+    moedas_extra: int,
+    observacao_aluno: str | None,
+) -> SolicitacaoCurso | None:
+    """
+    Acrescenta cursos a um pedido aberto.
+    Só adiciona chaves que ainda não estavam no pacote.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return None
+        if registro.status not in ("AGENDADO", "ACEITO"):
+            return registro
+
+        atuais = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+        unidas: list[str] = []
+        for chave in atuais + list(novas_chaves):
+            if chave not in unidas:
+                unidas.append(chave)
+
+        registro.chaves_cursos_json = json.dumps(unidas, ensure_ascii=False)
+        registro.chave_curso = unidas[0] if len(unidas) == 1 else "pacote"
+        registro.valor_ingame = soma_valor_ingame(unidas)
+        registro.moedas_debitadas = int(registro.moedas_debitadas or 0) + int(
+            moedas_extra
+        )
+        # Mantém forma já paga em moedas se já havia débito
+        if forma_pagamento == "MOEDAS" or int(registro.moedas_debitadas or 0) > 0:
+            if int(registro.moedas_debitadas or 0) > 0:
+                registro.forma_pagamento = "MOEDAS"
+        elif forma_pagamento:
+            registro.forma_pagamento = forma_pagamento
+
+        if observacao_aluno and observacao_aluno.strip():
+            anterior = (registro.observacao_aluno or "").strip()
+            nova = observacao_aluno.strip()
+            if anterior and nova not in anterior:
+                registro.observacao_aluno = f"{anterior}\n---\n{nova}"
+            elif not anterior:
+                registro.observacao_aluno = nova
+
+        registro.atualizado_em = agora()
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
+async def decidir_cursos_parciais(
+    *,
+    solicitacao_id: int,
+    chaves_aprovadas: list[str],
+    chaves_reprovadas: list[str],
+    instrutor_id: int,
+) -> SolicitacaoCurso | None:
+    """
+    Fecha o pedido com listas de aprovados/reprovados.
+    Status final: APROVADO se houver ao menos um aprovado; senão REPROVADO.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return None
+        if registro.status not in ("ACEITO", "AGENDADO"):
+            return registro
+
+        # Guarda decisão no campo de observação do instrutor (resumo)
+        texto_aprovados = ", ".join(chaves_aprovadas) or "—"
+        texto_reprovados = ", ".join(chaves_reprovadas) or "—"
+        resumo = f"Aprovados: {texto_aprovados}\nReprovados: {texto_reprovados}"
+        anterior = (registro.observacao_instrutor or "").strip()
+        if anterior:
+            registro.observacao_instrutor = f"{anterior}\n{resumo}"
+        else:
+            registro.observacao_instrutor = resumo
+        registro.aplicado_por = instrutor_id
+        registro.status = "APROVADO" if chaves_aprovadas else "REPROVADO"
+        # Se parcial, marca como APROVADO_PARCIAL no texto — status APROVADO se algum ok
+        if chaves_aprovadas and chaves_reprovadas:
+            registro.status = "APROVADO"
+        registro.atualizado_em = agora()
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
 async def marcar_mensagem_solicitacao_curso(
     solicitacao_id: int,
     canal_id: int,
@@ -365,8 +474,7 @@ def montar_linhas_corpo_pedido(
     )
     if registro.moedas_debitadas:
         corpo += f"**Moedas debitadas:** `{registro.moedas_debitadas}`\n"
-    if saldo_restante is not None and forma == "MOEDAS":
-        corpo += f"**Saldo restante:** `{saldo_restante} moedas`\n"
+    # Saldo restante NÃO aparece no canal — só o aluno vê no card efêmero
     corpo += f"\n{nota_instrutor}"
 
     return titulo, corpo
