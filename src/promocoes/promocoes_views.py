@@ -737,7 +737,10 @@ async def _postar_resultado_publico(
         canal = guilda.get_channel(cid)
         if canal is None:
             continue
-        componentes: list = [discord.ui.TextDisplay(f"# {titulo}")]
+        # Título + quebra de linha antes do corpo (padrão pedido)
+        componentes: list = [
+            discord.ui.TextDisplay(f"# {titulo}\n"),
+        ]
         if url_avatar:
             componentes.append(
                 discord.ui.Section(

@@ -114,7 +114,7 @@ class RecrutamentoCog(commands.Cog):
             linhas.append(
                 f"`#{registro.id}` · **{registro.status}** · "
                 f"FiveM `{registro.id_fivem or '—'}` · "
-                f"Formulário `{'aberto' if registro.formulario_aberto else 'fechado'}` · "
+                f"form. `{'aberto' if registro.formulario_aberto else 'fechado'}` · "
                 f"`{formatar_data_hora_local(registro.data_inicio)}`"
             )
 
@@ -308,8 +308,13 @@ class RecrutamentoCog(commands.Cog):
             session.add(novo_recrutamento)
             await session.commit()
 
+        cargos_manual = [cargo_role]
+        if cargo.value == "PARAMEDICO":
+            cargo_enfermeiro = guild.get_role(CARGOS.get("🔰・Enfermeiro (a)", 0) or 0)
+            if cargo_enfermeiro is not None:
+                cargos_manual.append(cargo_enfermeiro)
         await membro.add_roles(
-            cargo_role,
+            *cargos_manual,
             reason=f"Recrutamento manual registrado por {interaction.user}",
         )
 

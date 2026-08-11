@@ -5,10 +5,6 @@ from datetime import (
 )
 
 import discord
-from src.database.models import (
-    Recrutamento,
-    Usuario,
-)
 from sqlalchemy import select
 
 from src.config import (
@@ -16,6 +12,10 @@ from src.config import (
     CARGOS,
 )
 from src.database.connection import async_session
+from src.database.models import (
+    Recrutamento,
+    Usuario,
+)
 from src.recrutamento.recrutamento_class import NovoRecrutamento
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.logger import (
@@ -301,10 +301,19 @@ class EscolherCargoView(LoggingViewMixin, discord.ui.View):
                 *cargos_remover, reason=f"Aprovado por {self.aprovador}"
             )
 
+        cargos_adicionar = [cargo_final, cargo_hp, cargo_aprovado]
+        # Paramédico entra com Enfermeiro(a) junto (hierarquia base)
+        if cargo_escolhido == "🚑・Paramédico":
+            cargo_enfermeiro = guild.get_role(CARGOS.get("🔰・Enfermeiro (a)", 0) or 0)
+            if (
+                cargo_enfermeiro is not None
+                and cargo_enfermeiro not in cargos_adicionar
+            ):
+                cargos_adicionar.append(cargo_enfermeiro)
+
+        cargos_adicionar = [c for c in cargos_adicionar if c is not None]
         await candidato.add_roles(
-            cargo_final,
-            cargo_hp,
-            cargo_aprovado,
+            *cargos_adicionar,
             reason=f"Aprovado por {self.aprovador}",
         )
 
@@ -313,11 +322,7 @@ class EscolherCargoView(LoggingViewMixin, discord.ui.View):
             candidato=candidato,
             executor=self.aprovador,
             cargos_removidos=[c.mention for c in cargos_remover],
-            cargos_adicionados=[
-                cargo_final.mention,
-                cargo_hp.mention,
-                cargo_aprovado.mention,
-            ],
+            cargos_adicionados=[c.mention for c in cargos_adicionar],
         )
 
         novo_nickname = aplicar_prefixo(candidato.display_name, cargo_escolhido)

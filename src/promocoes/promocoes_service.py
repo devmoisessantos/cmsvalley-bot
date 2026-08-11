@@ -94,7 +94,36 @@ def obter_trilha_por_destino_e_origem(
 
 
 def id_cargo_por_nome(nome: str) -> int | None:
-    return CARGOS.get(nome)
+    if not nome:
+        return None
+    if nome in CARGOS:
+        return CARGOS.get(nome)
+    # tolerância a espaços / variação de grafia
+    alvo = "".join(str(nome).split()).lower()
+    for chave, valor in CARGOS.items():
+        if "".join(str(chave).split()).lower() == alvo:
+            return valor
+    return None
+
+
+def _nomes_cargo_equivalentes(a: str, b: str) -> bool:
+    return "".join(str(a).split()).lower() == "".join(str(b).split()).lower()
+
+
+def resolver_cargo_na_guilda(
+    guilda: discord.Guild,
+    nome_cargo: str,
+) -> discord.Role | None:
+    """Resolve Role pelo config CARGOS ou pelo nome na guilda."""
+    cargo_id = id_cargo_por_nome(nome_cargo)
+    if cargo_id is not None:
+        cargo = guilda.get_role(int(cargo_id))
+        if cargo is not None:
+            return cargo
+    for cargo in guilda.roles:
+        if _nomes_cargo_equivalentes(cargo.name, nome_cargo):
+            return cargo
+    return None
 
 
 def membro_tem_cargo_nome(membro: discord.Member, nome_cargo: str) -> bool:
@@ -359,28 +388,46 @@ async def aplicar_promocao_cargos(
     Troca cargo de → para, atualiza prefixo do nick e registra log de cargos.
     """
     guilda = membro.guild
-    id_de = id_cargo_por_nome(cargo_de_nome)
-    id_para = id_cargo_por_nome(cargo_para_nome)
-    if id_para is None:
-        return False, f"Cargo destino `{cargo_para_nome}` não encontrado no config."
-    cargo_para = guilda.get_role(id_para)
+    cargo_para = resolver_cargo_na_guilda(guilda, cargo_para_nome)
     if cargo_para is None:
-        return False, f"Cargo destino id `{id_para}` não existe na guilda."
+        return (
+            False,
+            f"Cargo destino `{cargo_para_nome}` não encontrado no config/guilda.",
+        )
 
+    cargo_de = resolver_cargo_na_guilda(guilda, cargo_de_nome)
     removidos: list[str] = []
     adicionados: list[str] = []
 
     try:
-        if id_de:
-            cargo_de = guilda.get_role(id_de)
-            if cargo_de is not None and cargo_de in membro.roles:
-                await membro.remove_roles(cargo_de, reason="Promoção aprovada")
-                removidos.append(cargo_de_nome)
+        # Remove o cargo de origem (obrigatório na promoção)
+        cargos_para_remover: list[discord.Role] = []
+        if cargo_de is not None and cargo_de in membro.roles:
+            cargos_para_remover.append(cargo_de)
+        else:
+            # fallback: qualquer role do membro com o mesmo nome
+            for cargo in membro.roles:
+                if _nomes_cargo_equivalentes(cargo.name, cargo_de_nome):
+                    cargos_para_remover.append(cargo)
+
+        if cargos_para_remover:
+            await membro.remove_roles(
+                *cargos_para_remover,
+                reason="Promoção aprovada — remove cargo anterior",
+            )
+            removidos.extend(c.name for c in cargos_para_remover)
+
         if cargo_para not in membro.roles:
-            await membro.add_roles(cargo_para, reason="Promoção aprovada")
+            await membro.add_roles(
+                cargo_para,
+                reason="Promoção aprovada — novo cargo",
+            )
             adicionados.append(cargo_para_nome)
     except discord.Forbidden:
-        return False, "Sem permissão para alterar cargos deste membro."
+        return False, (
+            "Sem permissão para alterar cargos deste membro "
+            "(hierarquia do bot abaixo do cargo?)."
+        )
     except discord.HTTPException as erro:
         return False, f"Erro Discord ao alterar cargos: {erro}"
 
