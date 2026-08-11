@@ -76,32 +76,48 @@ def _instrutor_ou_diretoria(membro: discord.Member) -> bool:
 
 
 class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
-    """Painel fixo: botão Selecionar cursos (não abre o select direto)."""
+    """Painel fixo no padrão do recrutamento (Section + checklist + botão)."""
 
     def __init__(self, guild: discord.Guild | None = None):
         super().__init__(timeout=None)
-        linha = discord.ui.ActionRow()
+
+        linha_botoes = discord.ui.ActionRow()
         botao = discord.ui.Button(
             label="Selecionar cursos",
-            style=discord.ButtonStyle.primary,
+            style=discord.ButtonStyle.success,
             emoji="📚",
             custom_id=CUSTOM_ID_BOTAO_SELECIONAR,
         )
         botao.callback = self._ao_abrir_selecao
-        linha.add_item(botao)
+        linha_botoes.add_item(botao)
+
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# 📚 Solicitar Curso\n"
-                    "1. Clique em **Selecionar cursos** e marque um ou mais.\n"
-                    "2. Informe data/horário (ou deixe em branco).\n"
-                    "3. Confirme o pagamento (moedas ou in-game).\n"
-                    "O pedido vai para o canal de **agendamentos**.\n"
-                    "-# Curso concluído = cargo correspondente no Discord."
+                discord.ui.Section(
+                    "# 📚 Painel de Cursos",
+                    (
+                        "Solicite um ou mais cursos do hospital.\n\n"
+                        "O pedido segue para **agendamentos**; um instrutor aceita, "
+                        "aplica o curso e a diretoria/instrutor finaliza a aprovação."
+                    ),
+                    accessory=(discord.ui.Thumbnail(url_icone) if url_icone else None),
                 ),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-                linha,
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.TextDisplay(
+                    "## 📌 Antes de solicitar\n\n"
+                    "✅ Veja os **valores** dos cursos antes de pagar.\n"
+                    "✅ Você pode marcar **vários** cursos de uma vez.\n"
+                    "✅ Informe data/horário se quiser (ou deixe em branco).\n"
+                    "✅ Pague com **moedas de plantão** ou registre **in-game**.\n"
+                    "✅ Curso concluído = você recebe o **cargo** correspondente.\n"
+                    "✅ Se já tiver um pedido aberto, novos cursos **entram no mesmo card**."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                linha_botoes,
                 accent_color=discord.Color.dark_teal(),
             )
         )
@@ -128,7 +144,7 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
 
 
 class SeletorMultiCursosView(LoggingViewMixin, discord.ui.LayoutView):
-    """Select efêmero: um ou vários cursos."""
+    """Select efêmero: um ou vários cursos (texto mínimo)."""
 
     def __init__(self, solicitante_id: int):
         super().__init__(timeout=180)
@@ -140,7 +156,7 @@ class SeletorMultiCursosView(LoggingViewMixin, discord.ui.LayoutView):
             desc = (
                 f"{dados.get('nivel', '—')} · {formatar_reais(valor)}"
                 if valor > 0
-                else f"{dados.get('nivel', '—')} · grátis / a combinar"
+                else f"{dados.get('nivel', '—')} · a combinar"
             )
             opcoes.append(
                 discord.SelectOption(
@@ -166,9 +182,10 @@ class SeletorMultiCursosView(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    "### Escolha os cursos\n"
-                    "Você pode marcar **vários**. Depois abre o formulário de observação."
+                    "# Escolha os cursos\n"
+                    "Marque e confirme. Em seguida informe data/horário (opcional)."
                 ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha,
                 accent_color=discord.Color.dark_teal(),
             )
@@ -220,11 +237,17 @@ class SeletorMultiCursosView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
+        # Modal consome a response; a mensagem do select fica órfã —
+        # guardamos o id para apagar depois no on_submit do modal.
+        id_mensagem_seletor = (
+            interacao.message.id if interacao.message is not None else None
+        )
         await interacao.response.send_modal(
             ModalObservacaoAluno(
                 chaves=chaves_validas,
                 solicitante_id=self.solicitante_id,
                 avisos_ja_tem=ja_tem,
+                id_mensagem_seletor=id_mensagem_seletor,
             )
         )
 
@@ -238,11 +261,13 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
         chaves: list[str],
         solicitante_id: int,
         avisos_ja_tem: list[str] | None = None,
+        id_mensagem_seletor: int | None = None,
     ):
         super().__init__(title="Observação do pedido")
         self.chaves = chaves
         self.solicitante_id = solicitante_id
         self.avisos_ja_tem = avisos_ja_tem or []
+        self.id_mensagem_seletor = id_mensagem_seletor
         self.campo_observacao = discord.ui.TextInput(
             label="Data / horário ou observação",
             style=discord.TextStyle.paragraph,
@@ -266,14 +291,15 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
             solicitante_id=self.solicitante_id,
             observacao_aluno=observacao,
         )
+        # Uma única mensagem efêmera de confirmação (substitui o fluxo anterior)
         await interacao.response.send_message(view=view, ephemeral=True)
-        if self.avisos_ja_tem:
-            await responder_aviso(
-                interacao,
-                titulo="Alguns cursos já concluídos foram ignorados",
-                linhas=[", ".join(self.avisos_ja_tem)],
-                delay=12,
-            )
+
+        # Tenta apagar a mensagem do select (reduz spam)
+        if self.id_mensagem_seletor is not None:
+            try:
+                await interacao.followup.delete_message(self.id_mensagem_seletor)
+            except (discord.HTTPException, discord.NotFound):
+                pass
 
 
 class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
@@ -548,12 +574,32 @@ async def finalizar_pedido(
             )
             return
 
-        await responder_sucesso(
-            interacao,
-            titulo=titulo_ok,
-            linhas=linhas_ok,
-            delay=25,
-        )
+        # Substitui o card de confirmação pela resposta final (menos spam)
+        if interacao.message is not None:
+            try:
+                texto_final = "\n".join(f"• {linha}" for linha in linhas_ok)
+                view_final = discord.ui.LayoutView(timeout=60)
+                view_final.add_item(
+                    discord.ui.Container(
+                        discord.ui.TextDisplay(f"# ✅ {titulo_ok}\n{texto_final}"),
+                        accent_color=discord.Color.green(),
+                    )
+                )
+                await interacao.message.edit(view=view_final)
+            except discord.HTTPException:
+                await responder_sucesso(
+                    interacao,
+                    titulo=titulo_ok,
+                    linhas=linhas_ok,
+                    delay=25,
+                )
+        else:
+            await responder_sucesso(
+                interacao,
+                titulo=titulo_ok,
+                linhas=linhas_ok,
+                delay=25,
+            )
     except Exception as erro:
         await enviar_erro_para_log_erros(
             interacao.guild,

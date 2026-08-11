@@ -447,17 +447,19 @@ def montar_linhas_corpo_pedido(
 
     if forma == "MOEDAS":
         nota_instrutor = (
-            "> 🔧 **Instrutor:** aplique o curso e as moedas serão "
-            "creditadas após a finalização."
+            "> 🪙 **Pagamento em MOEDAS:** já debitado do aluno.\n"
+            "> Após aplicar e **aprovar**, as moedas são creditadas a você."
         )
     elif forma == "IN_GAME":
         nota_instrutor = (
-            "> 🔧 **Instrutor:** confirme o pagamento **in-game** com o aluno "
-            "antes de aprovar. As moedas de plantão **não** foram debitadas."
+            "> 💵 **Pagamento IN-GAME (jogo):** as moedas de plantão **não** foram usadas.\n"
+            "> Confira o valor com o aluno **no jogo** antes da aula.\n"
+            "> Só **aprove** depois de receber o pagamento in-game."
         )
     else:
         nota_instrutor = (
-            "> 🔧 **Instrutor:** solicitação sem cobrança automática de moedas."
+            "> 📋 **Sem cobrança automática de moedas.** "
+            "Combine o valor (se houver) com o aluno."
         )
 
     bloco_obs = ""
@@ -472,7 +474,7 @@ def montar_linhas_corpo_pedido(
         f"{corpo_cursos}\n"
         f"**Forma de pagamento:** `{forma}`\n"
     )
-    if registro.moedas_debitadas:
+    if forma == "MOEDAS" and registro.moedas_debitadas:
         corpo += f"**Moedas debitadas:** `{registro.moedas_debitadas}`\n"
     # Saldo restante NÃO aparece no canal — só o aluno vê no card efêmero
     corpo += f"\n{nota_instrutor}"
