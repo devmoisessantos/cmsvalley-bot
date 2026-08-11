@@ -363,11 +363,22 @@ def montar_preview(
     rascunho: RascunhoTemplate,
     guilda: discord.Guild | None = None,
 ) -> discord.ui.LayoutView:
-    """LayoutView pronta para preview efêmero."""
+    """LayoutView de preview (timeout=None — reutilizável em post persistente)."""
     componentes = montar_componentes_do_container(rascunho, guilda)
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(*componentes, accent_color=rascunho.cor))
     return view
+
+
+def montar_mensagem_persistente(
+    rascunho: RascunhoTemplate,
+    guilda: discord.Guild | None = None,
+) -> discord.ui.LayoutView:
+    """
+    LayoutView para postar de forma permanente em um canal.
+    Mesma montagem do preview; timeout=None para a mensagem permanecer.
+    """
+    return montar_preview(rascunho, guilda)
 
 
 def resumo_dos_blocos(rascunho: RascunhoTemplate) -> str:

@@ -20,6 +20,7 @@ from src.templates.templates_modelo import (
     gerar_codigo_modal,
     limpar_rascunho,
     mapa_de_cores,
+    montar_mensagem_persistente,
     montar_preview,
     montar_texto_do_rodape,
     obter_rascunho,
@@ -35,6 +36,7 @@ from src.utils.mensagens import (
     COR_SUCESSO,
     enviar_card,
     responder_erro,
+    responder_sucesso,
 )
 from src.utils.permissions import apenas_administrador
 
@@ -201,10 +203,11 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         seletor_cor.callback = self._ao_escolher_cor
         linha_cor.add_item(seletor_cor)
 
-        # Preview | Resetar | Ajuda
+        # Preview | Postar | Resetar | Ajuda
         linha_acoes = discord.ui.ActionRow()
         for rotulo, emoji, estilo, callback in (
             ("Preview", "👁️", discord.ButtonStyle.success, self._ao_clicar_preview),
+            ("Postar", "📢", discord.ButtonStyle.success, self._ao_clicar_postar),
             ("Resetar", "♻️", discord.ButtonStyle.secondary, self._ao_clicar_resetar),
             ("Ajuda", "❓", discord.ButtonStyle.primary, self._ao_clicar_ajuda_api),
         ):
@@ -486,6 +489,22 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         guilda = interacao.guild or self.guilda
         preview = montar_preview(obter_rascunho(self.id_do_usuario), guilda)
         await interacao.response.send_message(view=preview, ephemeral=True)
+
+    async def _ao_clicar_postar(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        rascunho = obter_rascunho(self.id_do_usuario)
+        if not rascunho.blocos:
+            await responder_erro(
+                interacao,
+                titulo="Rascunho vazio",
+                linhas=["Adicione pelo menos um bloco antes de postar."],
+            )
+            return
+        await interacao.response.send_message(
+            view=SeletorCanalPostarView(self.id_do_usuario),
+            ephemeral=True,
+        )
 
     async def _ao_clicar_codigo(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
@@ -1259,6 +1278,134 @@ class ModalRodape(LoggingModalMixin, discord.ui.Modal, title="Rodapé"):
 # ---------------------------------------------------------------------------
 
 
+class SeletorCanalPostarView(LoggingViewMixin, discord.ui.LayoutView):
+    """Escolhe o canal e posta o rascunho atual de forma persistente."""
+
+    def __init__(self, id_do_usuario: int):
+        super().__init__(timeout=180)
+        self.id_do_usuario = id_do_usuario
+
+        linha = discord.ui.ActionRow()
+        if TEM_CHANNEL_SELECT:
+            seletor = discord.ui.ChannelSelect(
+                placeholder="Escolha o canal para postar o card…",
+                channel_types=[
+                    discord.ChannelType.text,
+                    discord.ChannelType.news,
+                    discord.ChannelType.public_thread,
+                    discord.ChannelType.private_thread,
+                ],
+                min_values=1,
+                max_values=1,
+            )
+            seletor.callback = self._ao_escolher_canal
+            linha.add_item(seletor)
+        else:
+            botao = discord.ui.Button(
+                label="Use /templates postar #canal",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+            )
+            linha.add_item(botao)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# 📢 Postar card no canal\n"
+                    "A mensagem será **persistente** (não some sozinha).\n"
+                    "Use o seletor abaixo para escolher o destino."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                linha,
+                accent_color=discord.Color.dark_teal(),
+            )
+        )
+
+    async def _ao_escolher_canal(self, interacao: discord.Interaction):
+        if interacao.user.id != self.id_do_usuario:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Só quem abriu o painel pode postar este rascunho."],
+            )
+            return
+
+        valores = interacao.data.get("values") if interacao.data else None
+        if not valores:
+            await responder_erro(
+                interacao,
+                titulo="Canal inválido",
+                linhas=["Nenhum canal selecionado."],
+            )
+            return
+
+        canal_id = int(valores[0])
+        canal = interacao.guild.get_channel(canal_id) if interacao.guild else None
+        if canal is None:
+            try:
+                canal = await interacao.client.fetch_channel(canal_id)
+            except (discord.NotFound, discord.HTTPException):
+                canal = None
+
+        if canal is None:
+            await responder_erro(
+                interacao,
+                titulo="Canal não encontrado",
+                linhas=["Não foi possível resolver o canal escolhido."],
+            )
+            return
+
+        await interacao.response.defer(ephemeral=True)
+        ok, detalhe = await postar_rascunho_no_canal(
+            canal=canal,
+            id_do_usuario=self.id_do_usuario,
+            guilda=interacao.guild,
+        )
+        if ok:
+            await responder_sucesso(
+                interacao,
+                titulo="Card postado",
+                linhas=[
+                    f"Mensagem publicada em {canal.mention}.",
+                    "Ela permanece no canal (não é efêmera).",
+                    detalhe,
+                ],
+                delay=20,
+            )
+        else:
+            await responder_erro(
+                interacao,
+                titulo="Falha ao postar",
+                linhas=[detalhe],
+            )
+
+
+async def postar_rascunho_no_canal(
+    *,
+    canal: discord.abc.Messageable,
+    id_do_usuario: int,
+    guilda: discord.Guild | None,
+) -> tuple[bool, str]:
+    """
+    Envia o rascunho do usuário como mensagem persistente no canal.
+    Retorna (ok, mensagem_detalhe).
+    """
+    rascunho = obter_rascunho(id_do_usuario)
+    if not rascunho.blocos:
+        return False, "Rascunho vazio — adicione blocos no `/templates abrir`."
+
+    view = montar_mensagem_persistente(rascunho, guilda)
+    try:
+        mensagem = await canal.send(view=view)
+    except discord.Forbidden:
+        return False, "Sem permissão para enviar mensagem nesse canal."
+    except discord.HTTPException as erro:
+        return False, f"Erro do Discord: `{type(erro).__name__}: {erro}`"
+
+    link = getattr(mensagem, "jump_url", None) or "—"
+    return True, f"ID da mensagem: `{mensagem.id}` · [abrir]({link})"
+
+
 class TemplatesCog(commands.Cog):
     """Comandos /templates — construtor visual do Bot UI Kit."""
 
@@ -1292,6 +1439,41 @@ class TemplatesCog(commands.Cog):
         )
         painel.mensagem_preview = mensagem_preview
 
+    @grupo.command(
+        name="postar",
+        description="Posta o rascunho atual como card persistente em um canal",
+    )
+    @app_commands.describe(canal="Canal onde o card será publicado (não efêmero)")
+    @apenas_administrador()
+    async def postar(
+        self,
+        interacao: discord.Interaction,
+        canal: discord.TextChannel,
+    ):
+        await interacao.response.defer(ephemeral=True)
+        ok, detalhe = await postar_rascunho_no_canal(
+            canal=canal,
+            id_do_usuario=interacao.user.id,
+            guilda=interacao.guild,
+        )
+        if ok:
+            await responder_sucesso(
+                interacao,
+                titulo="Card postado",
+                linhas=[
+                    f"Mensagem publicada em {canal.mention}.",
+                    "Ela permanece no canal (não é efêmera).",
+                    detalhe,
+                ],
+                delay=20,
+            )
+        else:
+            await responder_erro(
+                interacao,
+                titulo="Falha ao postar",
+                linhas=[detalhe],
+            )
+
     @grupo.command(name="preview-dm", description="Envia o preview na sua DM")
     @apenas_administrador()
     async def preview_dm(self, interacao: discord.Interaction):
@@ -1318,13 +1500,14 @@ class TemplatesCog(commands.Cog):
             interacao,
             titulo="🧩 Ajuda · Templates / Bot UI Kit",
             linhas=[
-                "`/templates abrir` — painel completo.",
+                "`/templates abrir` — painel completo (editor + preview efêmeros).",
+                "`/templates postar #canal` — publica o rascunho **persistente** no canal.",
+                "No painel: botão **Postar** → escolhe o canal e envia.",
                 "**Mensagem:** TextDisplay, Separator, Section+Thumbnail/Button,",
                 "MediaGallery, File, ActionRow (Button / Select string|user|role|channel).",
                 "**Modal (código):** Label, TextInput, FileUpload, RadioGroup, CheckboxGroup.",
-                "**Rodapé:** texto + servidor + `15 jul de 2028 • 22:54`.",
+                "**Rodapé:** texto + servidor + data/hora.",
                 "Botão **Ajuda API** no painel mostra hierarquia e limites.",
-                "Docs: discordpy.readthedocs.io → Bot UI Kit.",
             ],
             cor=COR_INFO,
             delay=60,
