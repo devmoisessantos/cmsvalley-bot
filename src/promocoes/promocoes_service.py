@@ -227,7 +227,7 @@ def montar_checklist_trilha(
             "> 💡 Acesse o painel **Solicitar Cursos** para adquiri-los."
         )
         bloco_cursos.append(
-            "> Cada curso possui um custo próprio (moedas ou itens in-game)."
+            "> Cada curso possui um custo próprio (moedas ou dinheiro in-game)."
         )
         quantidade_faltando = len(faltando)
         pendencias.append(
@@ -278,7 +278,6 @@ def montar_checklist_trilha(
     bloco_resumo: list[str] = ["## 🎯 Resumo"]
     if pode_enviar:
         bloco_resumo.append("- ✅ **Todos os pré-requisitos foram atendidos.**")
-        bloco_resumo.append("- Você pode **enviar a solicitação** de promoção.")
     else:
         bloco_resumo.append("## 🎯 Resumo das Pendências")
         # remove header duplicate - rebuild
@@ -467,7 +466,7 @@ async def aplicar_promocao_cargos(
         if cargo_para not in membro.roles:
             await membro.add_roles(
                 cargo_para,
-                reason="Promoção aprovada — adiciona novo cargo (mantém o anterior)",
+                reason="Promoção aprovada — adicionado novo cargo",
             )
             adicionados.append(cargo_para_nome)
     except discord.Forbidden:

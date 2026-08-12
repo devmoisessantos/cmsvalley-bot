@@ -714,7 +714,7 @@ async def _postar_resultado_publico(
         titulo = "🚨 Membro Promovido"
         cor = COR_SUCESSO
     else:
-        titulo = "🚫 Promoção não aprovada"
+        titulo = "🚫 Promoção recusada"
         cor = COR_ERRO
 
     corpo = (
