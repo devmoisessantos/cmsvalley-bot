@@ -16,11 +16,15 @@ from src.backup.recuperacao_logs_service import (
     id_canal_log,
     id_canal_log_plantao,
     importar_log_aprovacoes_do_canal,
+    importar_log_cargos_do_canal,
     importar_log_chamadas_do_canal,
+    importar_log_laudos_do_canal,
     importar_log_plantao_do_canal,
+    importar_log_promocoes_do_canal,
     importar_log_punicoes_do_canal,
     importar_log_recrutamentos_do_canal,
     importar_log_reprovacoes_do_canal,
+    importar_log_whitelist_do_canal,
 )
 from src.utils.mensagens import (
     responder_erro,
@@ -32,8 +36,6 @@ logger = logging.getLogger(__name__)
 
 
 class RecuperacaoLogsCog(commands.Cog):
-    """Importa histórico dos canais de log para o banco (pós-perda de dados)."""
-
     grupo = app_commands.Group(
         name="recuperar",
         description="Recuperar dados a partir dos canais de LOG (admin)",
@@ -83,7 +85,6 @@ class RecuperacaoLogsCog(commands.Cog):
         )
 
         apenas_bot = self.bot.user.id if so_bot and self.bot.user else None
-
         try:
             resultado = await importador(
                 canal,
@@ -98,12 +99,11 @@ class RecuperacaoLogsCog(commands.Cog):
             )
             return
 
-        atualizadas = resultado.get("atualizadas", 0)
         resumo = (
             f"**{titulo} concluída**\n"
             f"• Mensagens lidas: **{resultado['lidas']}**\n"
             f"• Criadas: **{resultado['importadas']}**\n"
-            f"• Atualizadas: **{atualizadas}**\n"
+            f"• Atualizadas: **{resultado.get('atualizadas', 0)}**\n"
             f"• Já existiam: **{resultado['ja_existiam']}**\n"
             f"• Ignoradas (sem parse): **{resultado['ignoradas']}**\n"
             f"• Erros: **{resultado['erros']}**"
@@ -115,7 +115,7 @@ class RecuperacaoLogsCog(commands.Cog):
                 await interacao.channel.send(f"{interacao.user.mention}\n{resumo}")
 
     @grupo.command(name="plantao", description="LOG_PLANTAO → log_plantao")
-    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só mensagens do bot")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
     @is_authorized()
     async def recuperar_plantao(
         self,
@@ -133,11 +133,8 @@ class RecuperacaoLogsCog(commands.Cog):
             so_bot=so_bot,
         )
 
-    @grupo.command(
-        name="recrutamentos",
-        description="LOG_RECRUTAMENTOS → inícios (ESTUDANDO + FID)",
-    )
-    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só mensagens do bot")
+    @grupo.command(name="recrutamentos", description="LOG_RECRUTAMENTOS → inícios")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
     @is_authorized()
     async def recuperar_recrutamentos(
         self,
@@ -156,10 +153,9 @@ class RecuperacaoLogsCog(commands.Cog):
         )
 
     @grupo.command(
-        name="aprovacoes",
-        description="LOG_APROVACOES → APROVADO + ENFERMEIRO/PARAMEDICO + nota",
+        name="aprovacoes", description="LOG_APROVACOES → APROVADO + cargo + nota"
     )
-    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só mensagens do bot")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
     @is_authorized()
     async def recuperar_aprovacoes(
         self,
@@ -177,11 +173,8 @@ class RecuperacaoLogsCog(commands.Cog):
             so_bot=so_bot,
         )
 
-    @grupo.command(
-        name="reprovacoes",
-        description="LOG_REPROVACOES → REPROVADO + nota",
-    )
-    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só mensagens do bot")
+    @grupo.command(name="reprovacoes", description="LOG_REPROVACOES → REPROVADO + nota")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
     @is_authorized()
     async def recuperar_reprovacoes(
         self,
@@ -200,7 +193,7 @@ class RecuperacaoLogsCog(commands.Cog):
         )
 
     @grupo.command(name="punicoes", description="LOG_PUNICOES → punicoes")
-    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só mensagens do bot")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
     @is_authorized()
     async def recuperar_punicoes(
         self,
@@ -219,7 +212,7 @@ class RecuperacaoLogsCog(commands.Cog):
         )
 
     @grupo.command(name="chamadas", description="LOG_CHAMADAS → chamadas")
-    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só mensagens do bot")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
     @is_authorized()
     async def recuperar_chamadas(
         self,
@@ -233,6 +226,82 @@ class RecuperacaoLogsCog(commands.Cog):
             chave_canal="LOG_CHAMADAS",
             canal_id=id_canal_log("LOG_CHAMADAS"),
             importador=importar_log_chamadas_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo.command(name="whitelist", description="LOG_WHITELIST → usuarios")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @is_authorized()
+    async def recuperar_whitelist(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_importacao(
+            interacao,
+            titulo="Recuperação LOG_WHITELIST",
+            chave_canal="LOG_WHITELIST",
+            canal_id=id_canal_log("LOG_WHITELIST"),
+            importador=importar_log_whitelist_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo.command(name="cargos", description="LOG_CARGOS → historico_cargos")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @is_authorized()
+    async def recuperar_cargos(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_importacao(
+            interacao,
+            titulo="Recuperação LOG_CARGOS",
+            chave_canal="LOG_CARGOS",
+            canal_id=id_canal_log("LOG_CARGOS"),
+            importador=importar_log_cargos_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo.command(name="laudos", description="LOG_LAUDO → consultas + laudos")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @is_authorized()
+    async def recuperar_laudos(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_importacao(
+            interacao,
+            titulo="Recuperação LOG_LAUDO",
+            chave_canal="LOG_LAUDO",
+            canal_id=id_canal_log("LOG_LAUDO"),
+            importador=importar_log_laudos_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo.command(name="promocoes", description="LOG_PROMOVIDOS → historico_promocoes")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @is_authorized()
+    async def recuperar_promocoes(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_importacao(
+            interacao,
+            titulo="Recuperação LOG_PROMOVIDOS",
+            chave_canal="LOG_PROMOVIDOS",
+            canal_id=id_canal_log("LOG_PROMOVIDOS"),
+            importador=importar_log_promocoes_do_canal,
             limite=limite,
             so_bot=so_bot,
         )

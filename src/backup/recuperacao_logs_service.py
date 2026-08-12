@@ -25,6 +25,10 @@ from src.config import (
 from src.database.connection import async_session
 from src.database.models import (
     Chamada,
+    ConsultaLaudo,
+    HistoricoCargo,
+    HistoricoPromocao,
+    Laudo,
     LogPlantao,
     Punicao,
     Recrutamento,
@@ -945,3 +949,513 @@ async def importar_log_chamadas_do_canal(
 def id_canal_log(chave: str) -> int | None:
     valor = CANAIS.get(chave)
     return int(valor) if valor else None
+
+
+# ── LOG_WHITELIST ────────────────────────────────────────────────────────
+
+
+def parsear_mensagem_whitelist(mensagem: discord.Message) -> dict | None:
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return None
+    lower = texto.lower()
+    if (
+        "liberação" not in lower
+        and "liberacao" not in lower
+        and "whitelist" not in lower
+    ):
+        if (
+            "identificador" not in lower
+            and "usuário" not in lower
+            and "usuario" not in lower
+        ):
+            return None
+
+    discord_id = _id_backtick_apos("Usuário", texto) or _id_backtick_apos(
+        "Usuario", texto
+    )
+    if discord_id is None:
+        ids = _ids_no_texto(texto)
+        discord_id = ids[0] if ids else None
+    if discord_id is None:
+        return None
+
+    id_fivem = _campo_backtick("Identificador", texto) or _campo_backtick(
+        "ID FiveM", texto
+    )
+    if id_fivem:
+        id_fivem = str(id_fivem)[:20]
+
+    nome = _campo_backtick("Nome", texto)
+    sobrenome = _campo_backtick("Sobrenome", texto)
+    nick = None
+    if nome and sobrenome:
+        nick = f"{nome} {sobrenome}"[:100]
+    elif nome:
+        nick = nome[:100]
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    return {
+        "discord_id": int(discord_id),
+        "id_fivem": id_fivem,
+        "nickname_atual": nick,
+        "criado_em": criado_em,
+        "message_id": mensagem.id,
+    }
+
+
+async def importar_log_whitelist_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    lidas = importadas = atualizadas = ignoradas = ja_existiam = erros = 0
+
+    async for mensagem in canal.history(limit=limite, oldest_first=True):
+        lidas += 1
+        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
+            ignoradas += 1
+            continue
+        try:
+            dados = parsear_mensagem_whitelist(mensagem)
+            if dados is None:
+                ignoradas += 1
+                continue
+            async with async_session() as sessao:
+                resultado = await sessao.execute(
+                    select(Usuario).where(Usuario.discord_id == dados["discord_id"])
+                )
+                usuario = resultado.scalar_one_or_none()
+                if usuario is None:
+                    sessao.add(
+                        Usuario(
+                            discord_id=dados["discord_id"],
+                            id_fivem=dados.get("id_fivem"),
+                            nickname_atual=dados.get("nickname_atual"),
+                            status="VISITANTE",
+                            ja_foi_aprovado=False,
+                        )
+                    )
+                    await sessao.commit()
+                    importadas += 1
+                else:
+                    mudou = False
+                    if dados.get("id_fivem") and not usuario.id_fivem:
+                        usuario.id_fivem = dados["id_fivem"]
+                        mudou = True
+                    if dados.get("nickname_atual") and not usuario.nickname_atual:
+                        usuario.nickname_atual = dados["nickname_atual"]
+                        mudou = True
+                    if mudou:
+                        await sessao.commit()
+                        atualizadas += 1
+                    else:
+                        ja_existiam += 1
+        except Exception as erro:
+            erros += 1
+            logger.exception("import whitelist msg %s: %s", mensagem.id, erro)
+
+    return {
+        "lidas": lidas,
+        "importadas": importadas,
+        "atualizadas": atualizadas,
+        "ignoradas": ignoradas,
+        "ja_existiam": ja_existiam,
+        "erros": erros,
+        "canal_id": canal.id,
+    }
+
+
+# ── LOG_CARGOS → historico_cargos ────────────────────────────────────────
+
+
+def parsear_mensagem_cargo(mensagem: discord.Message) -> list[dict]:
+    """Uma mensagem pode gerar vários registros (adicionados + removidos)."""
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return []
+    if (
+        "alteração de cargo" not in texto.lower()
+        and "alteracao de cargo" not in texto.lower()
+    ):
+        if "Adicionados:" not in texto and "Removidos:" not in texto:
+            return []
+
+    membro = _id_backtick_apos("Membro", texto)
+    if membro is None:
+        ids = _ids_no_texto(texto)
+        membro = ids[0] if ids else None
+    if membro is None:
+        return []
+
+    executores = _ids_no_texto(texto)
+    executor = (
+        executores[-1] if len(executores) >= 2 else (executores[0] if executores else 0)
+    )
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    registros: list[dict] = []
+
+    def _extrair_lista(rotulo: str) -> list[str]:
+        match = re.search(rf"{rotulo}:\*\*\s*(.+?)(?:\n|$)", texto, re.I)
+        if not match:
+            match = re.search(rf"{rotulo}:\s*(.+?)(?:\n|$)", texto, re.I)
+        if not match:
+            return []
+        bruto = match.group(1)
+        # menções de cargo ou texto separado por vírgula
+        nomes = re.findall(r"<@&(\d+)>", bruto)
+        if nomes:
+            return [f"role:{n}"[:50] for n in nomes]
+        partes = [p.strip() for p in re.split(r"[,|]", bruto) if p.strip()]
+        return [p[:50] for p in partes]
+
+    for nome in _extrair_lista("Adicionados"):
+        registros.append(
+            {
+                "discord_id": int(membro),
+                "cargo": nome,
+                "acao": "ADICIONADO",
+                "executor_id": int(executor or 0),
+                "data_hora": criado_em,
+            }
+        )
+    for nome in _extrair_lista("Removidos"):
+        registros.append(
+            {
+                "discord_id": int(membro),
+                "cargo": nome,
+                "acao": "REMOVIDO",
+                "executor_id": int(executor or 0),
+                "data_hora": criado_em,
+            }
+        )
+    return registros
+
+
+async def importar_log_cargos_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    lidas = importadas = ignoradas = ja_existiam = erros = 0
+    atualizadas = 0
+
+    async for mensagem in canal.history(limit=limite, oldest_first=True):
+        lidas += 1
+        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
+            ignoradas += 1
+            continue
+        try:
+            registros = parsear_mensagem_cargo(mensagem)
+            if not registros:
+                ignoradas += 1
+                continue
+            async with async_session() as sessao:
+                for reg in registros:
+                    await _garantir_usuario(
+                        sessao, reg["discord_id"], status="VISITANTE"
+                    )
+                    # anti-duplicata grosseira
+                    existente = await sessao.execute(
+                        select(HistoricoCargo.id)
+                        .where(
+                            HistoricoCargo.discord_id == reg["discord_id"],
+                            HistoricoCargo.cargo == reg["cargo"],
+                            HistoricoCargo.acao == reg["acao"],
+                            HistoricoCargo.data_hora == reg["data_hora"],
+                        )
+                        .limit(1)
+                    )
+                    if existente.scalar_one_or_none() is not None:
+                        ja_existiam += 1
+                        continue
+                    sessao.add(
+                        HistoricoCargo(
+                            discord_id=reg["discord_id"],
+                            cargo=reg["cargo"],
+                            acao=reg["acao"],
+                            executor_id=reg["executor_id"],
+                            data_hora=reg["data_hora"],
+                        )
+                    )
+                    importadas += 1
+                await sessao.commit()
+        except Exception as erro:
+            erros += 1
+            logger.exception("import cargos msg %s: %s", mensagem.id, erro)
+
+    return {
+        "lidas": lidas,
+        "importadas": importadas,
+        "atualizadas": atualizadas,
+        "ignoradas": ignoradas,
+        "ja_existiam": ja_existiam,
+        "erros": erros,
+        "canal_id": canal.id,
+    }
+
+
+# ── LOG_LAUDO → consultas_laudo + laudos ──────────────────────────────────
+
+
+def parsear_mensagem_laudo(mensagem: discord.Message) -> dict | None:
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return None
+    if "laudo" not in texto.lower():
+        return None
+
+    ids = _ids_no_texto(texto)
+    # Paciente primeiro, psicólogo depois (ordem do template)
+    paciente = None
+    psicologo = None
+    match_p = re.search(r"Paciente:\*\*\s*<@!?(\d+)>", texto)
+    if not match_p:
+        match_p = re.search(r"Paciente:\s*<@!?(\d+)>", texto)
+    if match_p:
+        paciente = int(match_p.group(1))
+    match_s = re.search(r"Psic[oó]logo:\*\*\s*<@!?(\d+)>", texto)
+    if not match_s:
+        match_s = re.search(r"Psic[oó]logo:\s*<@!?(\d+)>", texto)
+    if match_s:
+        psicologo = int(match_s.group(1))
+    if paciente is None and ids:
+        paciente = ids[0]
+    if psicologo is None and len(ids) >= 2:
+        psicologo = ids[1]
+    if paciente is None or psicologo is None:
+        return None
+
+    fivem_pac = None
+    fivem_psi = None
+    match = re.search(r"Paciente:.*?passaporte\s*`([^`]+)`", texto, re.I | re.S)
+    if match:
+        fivem_pac = match.group(1).strip()[:20]
+        if fivem_pac in ("—", "-", "N/A"):
+            fivem_pac = None
+    match = re.search(r"Psic[oó]logo:.*?passaporte\s*`([^`]+)`", texto, re.I | re.S)
+    if match:
+        fivem_psi = match.group(1).strip()[:20]
+        if fivem_psi in ("—", "-", "N/A"):
+            fivem_psi = None
+
+    parecer = "APROVADO" if "APROVADO" in texto.upper() else "REPROVADO"
+    # se cor/texto explícito
+    match = re.search(r"Parecer:\*\*\s*`([^`]+)`", texto, re.I)
+    if not match:
+        match = re.search(r"Parecer:\s*`([^`]+)`", texto, re.I)
+    if match:
+        p = match.group(1).strip().upper()
+        if "APROV" in p:
+            parecer = "APROVADO"
+        elif "REPROV" in p:
+            parecer = "REPROVADO"
+
+    crp = _campo_backtick("CRP", texto) or "IMPORTADO"
+    crp = str(crp)[:80]
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    return {
+        "discord_id_paciente": int(paciente),
+        "discord_id_psicologo": int(psicologo),
+        "id_fivem_paciente": fivem_pac,
+        "id_fivem_psicologo": fivem_psi,
+        "parecer": parecer,
+        "registro_profissional": crp,
+        "motivo": f"import_log:{mensagem.id}",
+        "criado_em": criado_em,
+        "message_id": mensagem.id,
+    }
+
+
+async def importar_log_laudos_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    lidas = importadas = ignoradas = ja_existiam = erros = 0
+    atualizadas = 0
+
+    async for mensagem in canal.history(limit=limite, oldest_first=True):
+        lidas += 1
+        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
+            ignoradas += 1
+            continue
+        try:
+            dados = parsear_mensagem_laudo(mensagem)
+            if dados is None:
+                ignoradas += 1
+                continue
+            marca = dados["motivo"]
+            async with async_session() as sessao:
+                existe = await sessao.execute(
+                    select(Laudo.id).where(Laudo.motivo == marca).limit(1)
+                )
+                if existe.scalar_one_or_none() is not None:
+                    ja_existiam += 1
+                    continue
+
+                consulta = ConsultaLaudo(
+                    discord_id_psicologo=dados["discord_id_psicologo"],
+                    discord_id_paciente=dados["discord_id_paciente"],
+                    id_fivem_psicologo=dados.get("id_fivem_psicologo"),
+                    id_fivem_paciente=dados.get("id_fivem_paciente"),
+                    status="FINALIZADA",
+                    iniciada_em=dados["criado_em"],
+                    finalizada_em=dados["criado_em"],
+                )
+                sessao.add(consulta)
+                await sessao.flush()
+
+                sessao.add(
+                    Laudo(
+                        consulta_id=consulta.id,
+                        discord_id_psicologo=dados["discord_id_psicologo"],
+                        discord_id_paciente=dados["discord_id_paciente"],
+                        id_fivem_psicologo=dados.get("id_fivem_psicologo"),
+                        id_fivem_paciente=dados.get("id_fivem_paciente"),
+                        parecer=dados["parecer"],
+                        motivo=marca[:1500],
+                        registro_profissional=dados["registro_profissional"],
+                        canal_laudo_message_id=dados["message_id"],
+                        criado_em=dados["criado_em"],
+                    )
+                )
+                await sessao.commit()
+            importadas += 1
+        except Exception as erro:
+            erros += 1
+            logger.exception("import laudo msg %s: %s", mensagem.id, erro)
+
+    return {
+        "lidas": lidas,
+        "importadas": importadas,
+        "atualizadas": atualizadas,
+        "ignoradas": ignoradas,
+        "ja_existiam": ja_existiam,
+        "erros": erros,
+        "canal_id": canal.id,
+    }
+
+
+# ── LOG_PROMOVIDOS → historico_promocoes ─────────────────────────────────
+
+
+def parsear_mensagem_promocao(mensagem: discord.Message) -> dict | None:
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return None
+    lower = texto.lower()
+
+    if "membro promovido" in lower:
+        tipo = "PROMOCAO"
+    elif "não aprovada" in lower or "nao aprovada" in lower or "não promovido" in lower:
+        tipo = "NAO_PROMOVIDO"
+    elif "rebaix" in lower:
+        tipo = "REBAIXAMENTO"
+    else:
+        return None
+
+    ids = _ids_no_texto(texto)
+    alvo = ids[0] if ids else None
+    if alvo is None:
+        return None
+    staff = ids[1] if len(ids) >= 2 else None
+
+    cargo_de = None
+    cargo_para = None
+    match = re.search(
+        r"De:\*\*\s*`([^`]+)`\s*→\s*\*\*Para:\*\*\s*`([^`]+)`",
+        texto,
+    )
+    if not match:
+        match = re.search(
+            r"De:\s*`([^`]+)`\s*→\s*\*?\*?Para:\*?\*?\s*`([^`]+)`",
+            texto,
+        )
+    if match:
+        cargo_de = match.group(1).strip()[:80]
+        cargo_para = match.group(2).strip()[:80]
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    return {
+        "discord_id": int(alvo),
+        "tipo": tipo,
+        "cargo_de": cargo_de,
+        "cargo_para": cargo_para,
+        "executado_por": int(staff) if staff else None,
+        "motivo": f"import_log:{mensagem.id}",
+        "criado_em": criado_em,
+    }
+
+
+async def importar_log_promocoes_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    lidas = importadas = ignoradas = ja_existiam = erros = 0
+    atualizadas = 0
+
+    async for mensagem in canal.history(limit=limite, oldest_first=True):
+        lidas += 1
+        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
+            ignoradas += 1
+            continue
+        try:
+            dados = parsear_mensagem_promocao(mensagem)
+            if dados is None:
+                ignoradas += 1
+                continue
+            async with async_session() as sessao:
+                existe = await sessao.execute(
+                    select(HistoricoPromocao.id)
+                    .where(HistoricoPromocao.motivo == dados["motivo"])
+                    .limit(1)
+                )
+                if existe.scalar_one_or_none() is not None:
+                    ja_existiam += 1
+                    continue
+                sessao.add(
+                    HistoricoPromocao(
+                        discord_id=dados["discord_id"],
+                        tipo=dados["tipo"],
+                        cargo_de=dados.get("cargo_de"),
+                        cargo_para=dados.get("cargo_para"),
+                        motivo=dados["motivo"][:500],
+                        executado_por=dados.get("executado_por"),
+                        criado_em=dados["criado_em"],
+                    )
+                )
+                await sessao.commit()
+            importadas += 1
+        except Exception as erro:
+            erros += 1
+            logger.exception("import promocao msg %s: %s", mensagem.id, erro)
+
+    return {
+        "lidas": lidas,
+        "importadas": importadas,
+        "atualizadas": atualizadas,
+        "ignoradas": ignoradas,
+        "ja_existiam": ja_existiam,
+        "erros": erros,
+        "canal_id": canal.id,
+    }
