@@ -32,9 +32,9 @@ engine = create_async_engine(
     pool_timeout=15,
     connect_args={
         # asyncpg: timeout de estabelecimento da conexão (segundos)
-        "timeout": 10,
+        "timeout": 30,
         # timeout por comando SQL (evita hang infinito em /historico etc.)
-        "command_timeout": 20,
+        "command_timeout": 30,
     },
 )
 
