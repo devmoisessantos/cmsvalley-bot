@@ -385,28 +385,44 @@ def parsear_mensagem_recrutamento(mensagem: discord.Message) -> dict | None:
         "discord_id_candidato": int(candidato),
         "discord_id_recrutador": int(recrutador),
         "id_fivem": (id_fivem or None),
-        "cargo_final": (str(cargo)[:50] if cargo else f"import_log:{mensagem.id}"),
+        "cargo_final": (str(cargo) if cargo else "IMPORTADO"),
         "status": status,
         "criado_em": criado_em,
         "message_id": mensagem.id,
     }
 
 
-async def recrutamento_ja_importado(message_id: int) -> bool:
-    marca = f"import_log:{message_id}"
+async def recrutamento_ja_importado(
+    discord_id_candidato: int,
+    criado_em: datetime,
+) -> bool:
+    """Evita duplicar: mesmo candidato + mesmo timestamp da mensagem."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
-            select(Recrutamento.id).where(Recrutamento.cargo_final == marca).limit(1)
-        )
-        if resultado.scalar_one_or_none() is not None:
-            return True
-        # também se cargo_final contém a marca no fim
-        resultado = await sessao.execute(
             select(Recrutamento.id)
-            .where(Recrutamento.cargo_final.contains(marca))
+            .where(
+                Recrutamento.discord_id_candidato == int(discord_id_candidato),
+                Recrutamento.data_inicio == criado_em,
+            )
             .limit(1)
         )
         return resultado.scalar_one_or_none() is not None
+
+
+def _normalizar_cargo_final(cargo_bruto: str | None) -> str:
+    """cargo_final no banco é VARCHAR(30)."""
+    if not cargo_bruto:
+        return "IMPORTADO"
+    texto = str(cargo_bruto).strip()
+    lower = texto.lower()
+    if "param" in lower:
+        return "PARAMEDICO"
+    if "enferm" in lower:
+        return "ENFERMEIRO"
+    # ID numérico de cargo → genérico curto
+    if texto.isdigit():
+        return "IMPORTADO"
+    return texto[:30]
 
 
 async def importar_log_recrutamentos_do_canal(
@@ -423,36 +439,39 @@ async def importar_log_recrutamentos_do_canal(
             ignoradas += 1
             continue
         try:
-            if await recrutamento_ja_importado(mensagem.id):
-                ja_existiam += 1
-                continue
             dados = parsear_mensagem_recrutamento(mensagem)
             if dados is None:
                 ignoradas += 1
                 continue
 
-            marca = f"import_log:{mensagem.id}"
-            cargo_final = dados["cargo_final"]
-            if not cargo_final.startswith("import_log:"):
-                cargo_final = f"{cargo_final}|{marca}"[:50]
+            if await recrutamento_ja_importado(
+                dados["discord_id_candidato"],
+                dados["criado_em"],
+            ):
+                ja_existiam += 1
+                continue
+
+            cargo_final = _normalizar_cargo_final(dados.get("cargo_final"))
+            id_fivem = dados.get("id_fivem")
+            if id_fivem:
+                id_fivem = str(id_fivem)[:20]
+            status = str(dados["status"])[:30]
 
             async with async_session() as sessao:
                 await _garantir_usuario(
                     sessao,
                     dados["discord_id_candidato"],
-                    id_fivem=dados["id_fivem"],
-                    status="APROVADO" if dados["status"] == "APROVADO" else "ESTUDANDO",
+                    id_fivem=id_fivem,
+                    status="APROVADO" if status == "APROVADO" else "ESTUDANDO",
                 )
                 sessao.add(
                     Recrutamento(
-                        id_fivem=dados["id_fivem"],
+                        id_fivem=id_fivem,
                         discord_id_candidato=dados["discord_id_candidato"],
                         discord_id_recrutador=dados["discord_id_recrutador"],
                         data_inicio=dados["criado_em"],
-                        data_fim=dados["criado_em"]
-                        if dados["status"] == "APROVADO"
-                        else None,
-                        status=dados["status"],
+                        data_fim=dados["criado_em"] if status == "APROVADO" else None,
+                        status=status,
                         cargo_final=cargo_final,
                     )
                 )
