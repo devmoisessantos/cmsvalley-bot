@@ -14,7 +14,7 @@ from src.config import (
 )
 from src.cursos.cursos_service import (
     listar_cursos_que_faltam,
-    rotulo_curso,
+    menção_cargo_curso,
 )
 from src.database.connection import async_session
 from src.database.models import (
@@ -211,23 +211,25 @@ def montar_checklist_trilha(
     if not cursos:
         bloco_cursos.append("- ✅ Nenhum curso obrigatório nesta trilha")
     elif not faltando:
-        lista_ok = "\n".join(f"  {rotulo_curso(c)}" for c in cursos)
         bloco_cursos.append("- ✅ **Cursos concluídos:**")
-        bloco_cursos.append(lista_ok)
+        for chave_curso in cursos:
+            bloco_cursos.append(f"  {menção_cargo_curso(chave_curso)}")
     else:
         pode_enviar = False
-        lista_falta = "\n".join(f"  {rotulo_curso(c)}" for c in faltando)
         bloco_cursos.append("- ❌ **Cursos pendentes:**")
-        bloco_cursos.append(lista_falta)
+        for chave_curso in faltando:
+            bloco_cursos.append(f"  {menção_cargo_curso(chave_curso)}")
         bloco_cursos.append(
             "> 💡 Acesse o painel **Solicitar Cursos** para adquiri-los."
         )
         bloco_cursos.append(
             "> Cada curso possui um custo próprio (moedas ou itens in-game)."
         )
-        n = len(faltando)
+        quantidade_faltando = len(faltando)
         pendencias.append(
-            f"Concluir os {n} curso{'s' if n != 1 else ''} listado{'s' if n != 1 else ''}"
+            f"Concluir os {quantidade_faltando} "
+            f"curso{'s' if quantidade_faltando != 1 else ''} "
+            f"listado{'s' if quantidade_faltando != 1 else ''}"
         )
 
     # ── Plantão ────────────────────────────────────────────────────
@@ -302,7 +304,7 @@ def montar_checklist_trilha(
         "rotulo": trilha.get("rotulo") or trilha["chave"],
         "segundos_plantao": total_seg,
         "titulo_card": (
-            "Requisitos completos" if pode_enviar else "Requisitos incompletos"
+            "📋 Requisitos completos" if pode_enviar else "📋 Requisitos incompletos"
         ),
     }
 
