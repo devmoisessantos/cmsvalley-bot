@@ -452,11 +452,12 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                     solicitacao_id=registro.id,
                 )
 
+            # Após a decisão o card some do canal de aprovar/recusar —
+            # o resultado público já foi (ou será) para promovidos / não promovidos.
             try:
-                await interacao.message.edit(
-                    view=ViewDecisaoPromocao(self.solicitacao_id, desabilitada=True)
-                )
-            except discord.HTTPException:
+                if interacao.message is not None:
+                    await interacao.message.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 pass
 
             await responder_sucesso(

@@ -447,7 +447,11 @@ async def aplicar_promocao_cargos(
     executor: discord.abc.User | None = None,
 ) -> tuple[bool, str]:
     """
-    Troca cargo de → para, atualiza prefixo do nick e registra log de cargos.
+    Adiciona o cargo de destino da promoção (não remove o cargo anterior).
+    Atualiza o prefixo do nick e registra log de cargos.
+
+    O parâmetro cargo_de_nome fica só para contexto/histórico — a regra
+    de toda a trilha é manter os cargos anteriores e só somar o novo.
     """
     guilda = membro.guild
     cargo_para = resolver_cargo_na_guilda(guilda, cargo_para_nome)
@@ -457,32 +461,13 @@ async def aplicar_promocao_cargos(
             f"Cargo destino `{cargo_para_nome}` não encontrado no config/guilda.",
         )
 
-    cargo_de = resolver_cargo_na_guilda(guilda, cargo_de_nome)
-    removidos: list[str] = []
     adicionados: list[str] = []
 
     try:
-        # Remove o cargo de origem (obrigatório na promoção)
-        cargos_para_remover: list[discord.Role] = []
-        if cargo_de is not None and cargo_de in membro.roles:
-            cargos_para_remover.append(cargo_de)
-        else:
-            # fallback: qualquer role do membro com o mesmo nome
-            for cargo in membro.roles:
-                if _nomes_cargo_equivalentes(cargo.name, cargo_de_nome):
-                    cargos_para_remover.append(cargo)
-
-        if cargos_para_remover:
-            await membro.remove_roles(
-                *cargos_para_remover,
-                reason="Promoção aprovada — remove cargo anterior",
-            )
-            removidos.extend(c.name for c in cargos_para_remover)
-
         if cargo_para not in membro.roles:
             await membro.add_roles(
                 cargo_para,
-                reason="Promoção aprovada — novo cargo",
+                reason="Promoção aprovada — adiciona novo cargo (mantém o anterior)",
             )
             adicionados.append(cargo_para_nome)
     except discord.Forbidden:
@@ -493,7 +478,7 @@ async def aplicar_promocao_cargos(
     except discord.HTTPException as erro:
         return False, f"Erro Discord ao alterar cargos: {erro}"
 
-    # Prefixo do nickname conforme PREFIXOS_NICKNAME
+    # Prefixo do nickname conforme PREFIXOS_NICKNAME (cargo novo)
     try:
         nick_atual = membro.nick or membro.display_name or membro.name
         novo_nick = aplicar_prefixo(nick_atual, cargo_para_nome)
@@ -506,16 +491,21 @@ async def aplicar_promocao_cargos(
     except discord.HTTPException as erro:
         logger.warning("Falha ao editar nick na promoção de %s: %s", membro.id, erro)
 
-    # Log de mudança de cargo
+    # Log de mudança de cargo (somente adições)
     try:
         await log_mudanca_cargo(
             guilda,
             candidato=membro,
             executor=executor or membro,
             cargos_adicionados=adicionados or None,
-            cargos_removidos=removidos or None,
+            cargos_removidos=None,
         )
     except Exception as erro:
         logger.warning("Falha ao logar mudança de cargo na promoção: %s", erro)
 
-    return True, "Cargos e prefixo atualizados."
+    if adicionados:
+        return (
+            True,
+            f"Cargo `{cargo_para_nome}` adicionado (origem `{cargo_de_nome}` mantida).",
+        )
+    return True, f"Membro já possuía `{cargo_para_nome}`; nenhum cargo removido."
