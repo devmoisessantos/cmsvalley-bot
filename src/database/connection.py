@@ -25,16 +25,14 @@ from src.database.models import Base
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_pre_ping=True,
-    pool_recycle=1800,
     pool_size=5,
     max_overflow=10,
-    pool_timeout=15,
+    pool_pre_ping=True,
+    pool_recycle=3600,
     connect_args={
-        # asyncpg: timeout de estabelecimento da conexão (segundos)
         "timeout": 30,
-        # timeout por comando SQL (evita hang infinito em /historico etc.)
-        "command_timeout": 30,
+        "command_timeout": 60,
+        "server_settings": {"application_name": "discord-bot"},
     },
 )
 
