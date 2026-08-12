@@ -211,14 +211,18 @@ def montar_checklist_trilha(
     if not cursos:
         bloco_cursos.append("- ✅ Nenhum curso obrigatório nesta trilha")
     elif not faltando:
-        bloco_cursos.append("- ✅ **Cursos concluídos:**")
-        for chave_curso in cursos:
-            bloco_cursos.append(f"  {menção_cargo_curso(chave_curso)}")
+        # Uma menção por linha (padrão cursos: "> <@&id>")
+        lista_concluidos = "\n".join(
+            f"> {menção_cargo_curso(chave_curso)}" for chave_curso in cursos
+        )
+        bloco_cursos.append(f"- ✅ **Cursos concluídos:**\n{lista_concluidos}")
     else:
         pode_enviar = False
-        bloco_cursos.append("- ❌ **Cursos pendentes:**")
-        for chave_curso in faltando:
-            bloco_cursos.append(f"  {menção_cargo_curso(chave_curso)}")
+        # Uma menção por linha — o prefixo "> " evita o Discord colar tudo
+        lista_pendentes = "\n".join(
+            f"> {menção_cargo_curso(chave_curso)}" for chave_curso in faltando
+        )
+        bloco_cursos.append(f"- ❌ **Cursos pendentes:**\n{lista_pendentes}")
         bloco_cursos.append(
             "> 💡 Acesse o painel **Solicitar Cursos** para adquiri-los."
         )
