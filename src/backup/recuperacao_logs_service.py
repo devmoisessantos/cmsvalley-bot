@@ -9,14 +9,23 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 
 import discord
 from sqlalchemy import select
 
 from src.config import CANAIS
 from src.database.connection import async_session
-from src.database.models import LogPlantao
+from src.database.models import (
+    Chamada,
+    LogPlantao,
+    Punicao,
+    Recrutamento,
+    Usuario,
+)
 from src.plantao.plantao_logger import EVENTOS_PLANTAO
 
 logger = logging.getLogger(__name__)
@@ -253,4 +262,452 @@ async def importar_log_plantao_do_canal(
 
 def id_canal_log_plantao() -> int | None:
     valor = CANAIS.get("LOG_PLANTAO")
+    return int(valor) if valor else None
+
+
+# ── Helpers genéricos ────────────────────────────────────────────────────
+
+
+def _ids_no_texto(texto: str) -> list[int]:
+    return [int(x) for x in re.findall(r"<@!?(\d{15,25})>", texto)]
+
+
+def _id_backtick_apos(rotulo: str, texto: str) -> int | None:
+    """Procura `123` perto de um rótulo (ex.: Membro recrutado)."""
+    padrao = rf"{rotulo}[^`\n]*`(\d{{15,25}})`"
+    match = re.search(padrao, texto, re.I)
+    return int(match.group(1)) if match else None
+
+
+def _campo_backtick(rotulo: str, texto: str) -> str | None:
+    padrao = rf"{rotulo}[^`\n]*`([^`]+)`"
+    match = re.search(padrao, texto, re.I)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+async def _garantir_usuario(
+    sessao,
+    discord_id: int,
+    *,
+    id_fivem: str | None = None,
+    status: str = "APROVADO",
+) -> None:
+    resultado = await sessao.execute(
+        select(Usuario).where(Usuario.discord_id == int(discord_id))
+    )
+    usuario = resultado.scalar_one_or_none()
+    if usuario is None:
+        sessao.add(
+            Usuario(
+                discord_id=int(discord_id),
+                id_fivem=id_fivem,
+                status=status,
+                ja_foi_aprovado=status == "APROVADO",
+            )
+        )
+    else:
+        if id_fivem and not usuario.id_fivem:
+            usuario.id_fivem = id_fivem
+        if status == "APROVADO":
+            usuario.status = "APROVADO"
+            usuario.ja_foi_aprovado = True
+
+
+# ── LOG_RECRUTAMENTOS ────────────────────────────────────────────────────
+
+
+def parsear_mensagem_recrutamento(mensagem: discord.Message) -> dict | None:
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return None
+
+    lower = texto.lower()
+    # só conclusões / manuais / realizados — não só "iniciado" sem aprovação
+    if (
+        "recrutamento iniciado" in lower
+        and "realizado" not in lower
+        and "manual" not in lower
+    ):
+        # ainda importa como ESTUDANDO? melhor só APROVADO
+        status = "ESTUDANDO"
+    elif "manual" in lower or "realizado" in lower or "recrutamento" in lower:
+        status = "APROVADO"
+    else:
+        return None
+
+    if (
+        "novo recrutamento" not in lower
+        and "recrutamento manual" not in lower
+        and "recrutamento realizado" not in lower
+    ):
+        # aceita se tiver os campos típicos
+        if "membro recrutado" not in lower:
+            return None
+
+    candidato = _id_backtick_apos("Membro recrutado", texto)
+    if candidato is None:
+        ids = _ids_no_texto(texto)
+        candidato = ids[0] if ids else None
+    if candidato is None:
+        return None
+
+    recrutador = _id_backtick_apos("Recrutado por", texto)
+    if recrutador is None:
+        ids = _ids_no_texto(texto)
+        if len(ids) >= 2:
+            recrutador = ids[1]
+    if recrutador is None:
+        recrutador = 0
+
+    id_fivem = _campo_backtick("ID FiveM", texto)
+    if id_fivem and id_fivem.upper() in ("N/A", "NA", "-"):
+        id_fivem = None
+
+    cargo = _campo_backtick("Cargo", texto)
+    # cargo às vezes é menção de role <@&id>
+    if not cargo:
+        match = re.search(r"Cargo:\*\*\s*<@&(\d+)>", texto)
+        if not match:
+            match = re.search(r"Cargo:\s*<@&(\d+)>", texto)
+        cargo = match.group(1) if match else None
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    # títulos "Iniciado" → não marcar APROVADO
+    if "iniciado" in lower and "manual" not in lower and "realizado" not in lower:
+        status = "ESTUDANDO"
+
+    return {
+        "discord_id_candidato": int(candidato),
+        "discord_id_recrutador": int(recrutador),
+        "id_fivem": (id_fivem or None),
+        "cargo_final": (str(cargo)[:50] if cargo else f"import_log:{mensagem.id}"),
+        "status": status,
+        "criado_em": criado_em,
+        "message_id": mensagem.id,
+    }
+
+
+async def recrutamento_ja_importado(message_id: int) -> bool:
+    marca = f"import_log:{message_id}"
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Recrutamento.id).where(Recrutamento.cargo_final == marca).limit(1)
+        )
+        if resultado.scalar_one_or_none() is not None:
+            return True
+        # também se cargo_final contém a marca no fim
+        resultado = await sessao.execute(
+            select(Recrutamento.id)
+            .where(Recrutamento.cargo_final.contains(marca))
+            .limit(1)
+        )
+        return resultado.scalar_one_or_none() is not None
+
+
+async def importar_log_recrutamentos_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    lidas = importadas = ignoradas = ja_existiam = erros = 0
+
+    async for mensagem in canal.history(limit=limite, oldest_first=True):
+        lidas += 1
+        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
+            ignoradas += 1
+            continue
+        try:
+            if await recrutamento_ja_importado(mensagem.id):
+                ja_existiam += 1
+                continue
+            dados = parsear_mensagem_recrutamento(mensagem)
+            if dados is None:
+                ignoradas += 1
+                continue
+
+            marca = f"import_log:{mensagem.id}"
+            cargo_final = dados["cargo_final"]
+            if not cargo_final.startswith("import_log:"):
+                cargo_final = f"{cargo_final}|{marca}"[:50]
+
+            async with async_session() as sessao:
+                await _garantir_usuario(
+                    sessao,
+                    dados["discord_id_candidato"],
+                    id_fivem=dados["id_fivem"],
+                    status="APROVADO" if dados["status"] == "APROVADO" else "ESTUDANDO",
+                )
+                sessao.add(
+                    Recrutamento(
+                        id_fivem=dados["id_fivem"],
+                        discord_id_candidato=dados["discord_id_candidato"],
+                        discord_id_recrutador=dados["discord_id_recrutador"],
+                        data_inicio=dados["criado_em"],
+                        data_fim=dados["criado_em"]
+                        if dados["status"] == "APROVADO"
+                        else None,
+                        status=dados["status"],
+                        cargo_final=cargo_final,
+                    )
+                )
+                await sessao.commit()
+            importadas += 1
+        except Exception as erro:
+            erros += 1
+            logger.exception("import recrutamento msg %s: %s", mensagem.id, erro)
+
+    return {
+        "lidas": lidas,
+        "importadas": importadas,
+        "ignoradas": ignoradas,
+        "ja_existiam": ja_existiam,
+        "erros": erros,
+        "canal_id": canal.id,
+    }
+
+
+# ── LOG_PUNICOES ─────────────────────────────────────────────────────────
+
+
+def parsear_mensagem_punicao(mensagem: discord.Message) -> dict | None:
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return None
+    lower = texto.lower()
+    if (
+        "novo registro de punição" not in lower
+        and "novo registro de punicao" not in lower
+    ):
+        return None  # ignora remoções nesta fase
+
+    alvo = _id_backtick_apos("Membro", texto)
+    if alvo is None:
+        ids = _ids_no_texto(texto)
+        alvo = ids[0] if ids else None
+    if alvo is None:
+        return None
+
+    executor = _id_backtick_apos("Responsável", texto) or _id_backtick_apos(
+        "Responsavel", texto
+    )
+    if executor is None:
+        ids = _ids_no_texto(texto)
+        executor = ids[1] if len(ids) >= 2 else 0
+
+    id_fivem = _campo_backtick("ID FiveM", texto)
+    if id_fivem and id_fivem.upper() in ("N/A", "NA", "-", "—"):
+        id_fivem = None
+
+    motivo_match = re.search(r"Motivo:\*\*\s*(.+?)(?:\n|$)", texto)
+    if not motivo_match:
+        motivo_match = re.search(r"Motivo:\s*(.+?)(?:\n|$)", texto)
+    motivo = (motivo_match.group(1).strip() if motivo_match else "Importado do log")[
+        :1500
+    ]
+
+    cargo_id = 0
+    cargo_nome = "Punição (importada)"
+    match_role = re.search(r"Puni[cç][aã]o:\*\*\s*<@&(\d+)>", texto)
+    if not match_role:
+        match_role = re.search(r"Puni[cç][aã]o:\s*<@&(\d+)>", texto)
+    if match_role:
+        cargo_id = int(match_role.group(1))
+        cargo_nome = f"role:{cargo_id}"
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    return {
+        "discord_id": int(alvo),
+        "executor_id": int(executor),
+        "id_fivem": id_fivem,
+        "motivo": motivo,
+        "cargo_id": cargo_id,
+        "cargo_nome": cargo_nome[:80],
+        "criado_em": criado_em,
+        "message_id": mensagem.id,
+        "channel_id": mensagem.channel.id if mensagem.channel else None,
+    }
+
+
+async def punicao_ja_importada(message_id: int) -> bool:
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Punicao.id).where(Punicao.message_id == int(message_id)).limit(1)
+        )
+        return resultado.scalar_one_or_none() is not None
+
+
+async def importar_log_punicoes_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    lidas = importadas = ignoradas = ja_existiam = erros = 0
+
+    async for mensagem in canal.history(limit=limite, oldest_first=True):
+        lidas += 1
+        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
+            ignoradas += 1
+            continue
+        try:
+            if await punicao_ja_importada(mensagem.id):
+                ja_existiam += 1
+                continue
+            dados = parsear_mensagem_punicao(mensagem)
+            if dados is None:
+                ignoradas += 1
+                continue
+            async with async_session() as sessao:
+                sessao.add(
+                    Punicao(
+                        discord_id=dados["discord_id"],
+                        id_fivem=dados["id_fivem"],
+                        cargo_id=dados["cargo_id"],
+                        cargo_nome=dados["cargo_nome"],
+                        motivo=dados["motivo"],
+                        executor_id=dados["executor_id"],
+                        ativa=True,
+                        channel_id=dados["channel_id"],
+                        message_id=dados["message_id"],
+                        criada_em=dados["criado_em"],
+                    )
+                )
+                await sessao.commit()
+            importadas += 1
+        except Exception as erro:
+            erros += 1
+            logger.exception("import punicao msg %s: %s", mensagem.id, erro)
+
+    return {
+        "lidas": lidas,
+        "importadas": importadas,
+        "ignoradas": ignoradas,
+        "ja_existiam": ja_existiam,
+        "erros": erros,
+        "canal_id": canal.id,
+    }
+
+
+# ── LOG_CHAMADAS ─────────────────────────────────────────────────────────
+
+
+def parsear_mensagem_chamada(mensagem: discord.Message) -> dict | None:
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return None
+    if (
+        "registro de chamada" not in texto.lower()
+        and "chamada realizada" not in texto.lower()
+    ):
+        return None
+
+    doutor = None
+    match = re.search(r"Respons[aá]vel:\s*<@!?(\d+)>", texto)
+    if match:
+        doutor = int(match.group(1))
+    if doutor is None:
+        ids = _ids_no_texto(texto)
+        doutor = ids[0] if ids else None
+    if doutor is None:
+        return None
+
+    def _int_campo(*nomes: str) -> int:
+        for nome in nomes:
+            match = re.search(rf"{nome}[^0-9]*(\d+)", texto, re.I)
+            if match:
+                return int(match.group(1))
+        return 0
+
+    total_ems = _int_campo(r"Total\s*`?/ems`?", r"Total /ems")
+    total_toggle = _int_campo("Toggle")
+    total_presentes = _int_campo("Presentes")
+    total_ausentes = _int_campo("Faltas", "Ausentes")
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    return {
+        "doutor_id": int(doutor),
+        "total_medicos_ems": total_ems,
+        "total_toggle_ligado": total_toggle,
+        "total_presentes": total_presentes,
+        "total_ausentes": total_ausentes,
+        "criado_em": criado_em,
+        "message_id": mensagem.id,
+    }
+
+
+async def chamada_ja_importada(doutor_id: int, criado_em: datetime) -> bool:
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Chamada.id)
+            .where(
+                Chamada.doutor_id == int(doutor_id),
+                Chamada.criada_em == criado_em,
+            )
+            .limit(1)
+        )
+        return resultado.scalar_one_or_none() is not None
+
+
+async def importar_log_chamadas_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    lidas = importadas = ignoradas = ja_existiam = erros = 0
+
+    async for mensagem in canal.history(limit=limite, oldest_first=True):
+        lidas += 1
+        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
+            ignoradas += 1
+            continue
+        try:
+            dados = parsear_mensagem_chamada(mensagem)
+            if dados is None:
+                ignoradas += 1
+                continue
+            if await chamada_ja_importada(dados["doutor_id"], dados["criado_em"]):
+                ja_existiam += 1
+                continue
+            async with async_session() as sessao:
+                sessao.add(
+                    Chamada(
+                        doutor_id=dados["doutor_id"],
+                        total_medicos_ems=dados["total_medicos_ems"],
+                        total_toggle_ligado=dados["total_toggle_ligado"],
+                        total_presentes=dados["total_presentes"],
+                        total_ausentes=dados["total_ausentes"],
+                        criada_em=dados["criado_em"],
+                    )
+                )
+                await sessao.commit()
+            importadas += 1
+        except Exception as erro:
+            erros += 1
+            logger.exception("import chamada msg %s: %s", mensagem.id, erro)
+
+    return {
+        "lidas": lidas,
+        "importadas": importadas,
+        "ignoradas": ignoradas,
+        "ja_existiam": ja_existiam,
+        "erros": erros,
+        "canal_id": canal.id,
+    }
+
+
+def id_canal_log(chave: str) -> int | None:
+    valor = CANAIS.get(chave)
     return int(valor) if valor else None

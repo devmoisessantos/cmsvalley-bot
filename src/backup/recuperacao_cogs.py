@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import (
+    Awaitable,
+    Callable,
+)
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from src.backup.recuperacao_logs_service import (
+    id_canal_log,
     id_canal_log_plantao,
+    importar_log_chamadas_do_canal,
     importar_log_plantao_do_canal,
+    importar_log_punicoes_do_canal,
+    importar_log_recrutamentos_do_canal,
 )
 from src.utils.mensagens import (
     responder_erro,
@@ -32,29 +40,24 @@ class RecuperacaoLogsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @grupo.command(
-        name="plantao",
-        description="Importa mensagens do LOG_PLANTAO para a tabela log_plantao",
-    )
-    @app_commands.describe(
-        limite="Máximo de mensagens a ler (vazio = todas que a API permitir)",
-        so_bot="Se True, só mensagens do próprio bot",
-    )
-    @is_authorized()
-    async def recuperar_plantao(
+    async def _rodar_importacao(
         self,
         interacao: discord.Interaction,
-        limite: int | None = None,
-        so_bot: bool = True,
-    ):
+        *,
+        titulo: str,
+        chave_canal: str,
+        canal_id: int | None,
+        importador: Callable[..., Awaitable[dict]],
+        limite: int | None,
+        so_bot: bool,
+    ) -> None:
         await interacao.response.defer(ephemeral=True)
 
-        canal_id = id_canal_log_plantao()
         if not canal_id:
             await responder_erro(
                 interacao,
                 titulo="Canal não configurado",
-                linhas=["`CANAIS['LOG_PLANTAO']` não está definido no config."],
+                linhas=[f"`CANAIS['{chave_canal}']` não está definido no config."],
             )
             return
 
@@ -69,11 +72,10 @@ class RecuperacaoLogsCog(commands.Cog):
 
         await responder_sucesso(
             interacao,
-            titulo="Recuperação iniciada",
+            titulo=f"{titulo} — iniciada",
             linhas=[
                 f"Lendo <#{canal_id}>…",
-                "Isso pode levar vários minutos se o histórico for grande.",
-                "Não rode o comando de novo até terminar.",
+                "Pode levar vários minutos. Não rode de novo até terminar.",
             ],
             delay=20,
         )
@@ -81,31 +83,131 @@ class RecuperacaoLogsCog(commands.Cog):
         apenas_bot = self.bot.user.id if so_bot and self.bot.user else None
 
         try:
-            resultado = await importar_log_plantao_do_canal(
+            resultado = await importador(
                 canal,
                 limite=limite,
                 apenas_bot_id=apenas_bot,
             )
         except Exception as erro:
-            logger.exception("recuperar plantao: %s", erro)
+            logger.exception("%s: %s", titulo, erro)
             await interacao.followup.send(
                 f"❌ Falha na importação: `{erro}`",
                 ephemeral=True,
             )
             return
 
-        await interacao.followup.send(
-            content=(
-                "**Recuperação LOG_PLANTAO concluída**\n"
-                f"• Mensagens lidas: **{resultado['lidas']}**\n"
-                f"• Importadas: **{resultado['importadas']}**\n"
-                f"• Já existiam: **{resultado['ja_existiam']}**\n"
-                f"• Ignoradas (sem parse): **{resultado['ignoradas']}**\n"
-                f"• Erros: **{resultado['erros']}**\n\n"
-                "Horas de plantão passam a contar no ranking / promoção "
-                "a partir desses registros."
-            ),
-            ephemeral=True,
+        resumo = (
+            f"**{titulo} concluída**\n"
+            f"• Mensagens lidas: **{resultado['lidas']}**\n"
+            f"• Importadas: **{resultado['importadas']}**\n"
+            f"• Já existiam: **{resultado['ja_existiam']}**\n"
+            f"• Ignoradas (sem parse): **{resultado['ignoradas']}**\n"
+            f"• Erros: **{resultado['erros']}**"
+        )
+        try:
+            await interacao.followup.send(content=resumo, ephemeral=True)
+        except discord.HTTPException:
+            if interacao.channel:
+                await interacao.channel.send(f"{interacao.user.mention}\n{resumo}")
+
+    @grupo.command(
+        name="plantao",
+        description="Importa LOG_PLANTAO → log_plantao",
+    )
+    @app_commands.describe(
+        limite="Máximo de mensagens (vazio = todas)",
+        so_bot="Só mensagens do bot",
+    )
+    @is_authorized()
+    async def recuperar_plantao(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_importacao(
+            interacao,
+            titulo="Recuperação LOG_PLANTAO",
+            chave_canal="LOG_PLANTAO",
+            canal_id=id_canal_log_plantao(),
+            importador=importar_log_plantao_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo.command(
+        name="recrutamentos",
+        description="Importa LOG_RECRUTAMENTOS → recrutamentos + usuarios",
+    )
+    @app_commands.describe(
+        limite="Máximo de mensagens (vazio = todas)",
+        so_bot="Só mensagens do bot",
+    )
+    @is_authorized()
+    async def recuperar_recrutamentos(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_importacao(
+            interacao,
+            titulo="Recuperação LOG_RECRUTAMENTOS",
+            chave_canal="LOG_RECRUTAMENTOS",
+            canal_id=id_canal_log("LOG_RECRUTAMENTOS"),
+            importador=importar_log_recrutamentos_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo.command(
+        name="punicoes",
+        description="Importa LOG_PUNICOES → punicoes (só registros novos)",
+    )
+    @app_commands.describe(
+        limite="Máximo de mensagens (vazio = todas)",
+        so_bot="Só mensagens do bot",
+    )
+    @is_authorized()
+    async def recuperar_punicoes(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_importacao(
+            interacao,
+            titulo="Recuperação LOG_PUNICOES",
+            chave_canal="LOG_PUNICOES",
+            canal_id=id_canal_log("LOG_PUNICOES"),
+            importador=importar_log_punicoes_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo.command(
+        name="chamadas",
+        description="Importa LOG_CHAMADAS → chamadas (ranking de chamadas)",
+    )
+    @app_commands.describe(
+        limite="Máximo de mensagens (vazio = todas)",
+        so_bot="Só mensagens do bot",
+    )
+    @is_authorized()
+    async def recuperar_chamadas(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_importacao(
+            interacao,
+            titulo="Recuperação LOG_CHAMADAS",
+            chave_canal="LOG_CHAMADAS",
+            canal_id=id_canal_log("LOG_CHAMADAS"),
+            importador=importar_log_chamadas_do_canal,
+            limite=limite,
+            so_bot=so_bot,
         )
 
 
