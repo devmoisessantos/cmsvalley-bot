@@ -40,10 +40,14 @@ class CardView(discord.ui.LayoutView):
         cor: discord.Color = COR_INFO,
         timeout: int | None = 180,
         extra_row: discord.ui.ActionRow | None = None,
+        com_marcador: bool = True,
     ):
         super().__init__(timeout=timeout)
 
-        texto_das_linhas = "\n".join(f"`•` {linha}" for linha in linhas)
+        if com_marcador:
+            texto_das_linhas = "\n".join(f"`•` {linha}" for linha in linhas)
+        else:
+            texto_das_linhas = "\n".join(linhas)
 
         componentes = [
             discord.ui.TextDisplay(f"# {titulo}"),
@@ -129,6 +133,7 @@ async def enviar_card(
     extra_row: discord.ui.ActionRow | None = None,
     delay: int | None = 10,
     ephemeral: bool = True,
+    com_marcador: bool = True,
 ) -> discord.Message:
     """
     Envia um CardView para a interação.
@@ -147,6 +152,7 @@ async def enviar_card(
         cor=cor,
         timeout=None,
         extra_row=extra_row,
+        com_marcador=com_marcador,
     )
 
     interacao_ja_foi_respondida = interacao.response.is_done()
@@ -179,6 +185,7 @@ async def responder_sucesso(
     titulo: str,
     linhas: list[str],
     extra_row: discord.ui.ActionRow | None = None,
+    com_marcador: bool = True,
     delay: int | None = 10,
 ) -> discord.Message:
     """Responde com card verde de sucesso."""
@@ -189,6 +196,7 @@ async def responder_sucesso(
         cor=COR_SUCESSO,
         extra_row=extra_row,
         delay=delay,
+        com_marcador=com_marcador,
     )
 
 
@@ -197,6 +205,7 @@ async def responder_erro(
     titulo: str,
     linhas: list[str],
     extra_row: discord.ui.ActionRow | None = None,
+    com_marcador: bool = True,
     delay: int | None = 15,
 ) -> discord.Message:
     """Responde com card vermelho de erro. Delay um pouco maior para dar tempo de ler."""
@@ -207,6 +216,7 @@ async def responder_erro(
         cor=COR_ERRO,
         extra_row=extra_row,
         delay=delay,
+        com_marcador=com_marcador,
     )
 
 
@@ -215,6 +225,7 @@ async def responder_aviso(
     titulo: str,
     linhas: list[str],
     extra_row: discord.ui.ActionRow | None = None,
+    com_marcador: bool = True,
     delay: int | None = 12,
 ) -> discord.Message:
     """Responde com card laranja de aviso."""
@@ -225,6 +236,7 @@ async def responder_aviso(
         cor=COR_AVISO,
         extra_row=extra_row,
         delay=delay,
+        com_marcador=com_marcador,
     )
 
 
@@ -233,6 +245,7 @@ async def responder_info(
     titulo: str,
     linhas: list[str],
     extra_row: discord.ui.ActionRow | None = None,
+    com_marcador: bool = True,
     delay: int | None = 10,
 ) -> discord.Message:
     """Responde com card azul (blurple) de informação neutra."""
@@ -243,6 +256,7 @@ async def responder_info(
         cor=COR_INFO,
         extra_row=extra_row,
         delay=delay,
+        com_marcador=com_marcador,
     )
 
 
@@ -257,6 +271,7 @@ async def responder_card(
     linhas: list[str],
     cor: discord.Color = COR_INFO,
     extra_row: discord.ui.ActionRow | None = None,
+    com_marcador: bool = True,
     delay: int | None = 10,
 ) -> discord.Message:
     """
@@ -272,6 +287,7 @@ async def responder_card(
         cor=cor,
         extra_row=extra_row,
         delay=delay,
+        com_marcador=com_marcador,
     )
 
 

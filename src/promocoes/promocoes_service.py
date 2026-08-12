@@ -145,6 +145,20 @@ def membro_tem_advertencia_bloqueante(membro: discord.Member) -> list[str]:
     return bloqueios
 
 
+def _formatar_falta_legivel(segundos: int) -> str:
+    """Ex.: 1h14min20s"""
+    segundos = max(0, int(segundos))
+    horas, resto = divmod(segundos, 3600)
+    minutos, segs = divmod(resto, 60)
+    partes: list[str] = []
+    if horas:
+        partes.append(f"{horas}h")
+    if minutos or horas:
+        partes.append(f"{minutos:02d}min" if horas else f"{minutos}min")
+    partes.append(f"{segs:02d}s")
+    return "".join(partes) if horas else f"{minutos}min{segs:02d}s"
+
+
 def montar_checklist_trilha(
     membro: discord.Member,
     trilha: dict,
@@ -152,22 +166,24 @@ def montar_checklist_trilha(
     segundos_plantao: int | None = None,
 ) -> dict:
     """
-    Avalia requisitos da trilha: adv, cargo, cursos e horas de plantão.
-
-    segundos_plantao: total do banco log_plantao (passe via montar_checklist_trilha_async).
+    Avalia requisitos e monta o corpo do CardView em seções.
+    (Situação atual → Cursos → Plantão → Resumo)
     """
-    linhas: list[str] = []
     pode_enviar = True
+    pendencias: list[str] = []
+
+    # ── Situação atual ─────────────────────────────────────────────
+    bloco_situacao: list[str] = ["## 📌 Situação Atual"]
 
     advs = membro_tem_advertencia_bloqueante(membro)
     if advs:
         pode_enviar = False
-        linhas.append(
-            f"❌ **Advertência ativa:** {', '.join(f'`{a}`' for a in advs)} — "
-            "regularize antes de solicitar promoção."
+        bloco_situacao.append(
+            f"- ❌ **Advertência ativa:** {', '.join(f'`{a}`' for a in advs)}"
         )
+        pendencias.append("Regularizar advertência (Adv 01 / Adv 02)")
     else:
-        linhas.append("✅ Sem Adv 01 / Adv 02 ativa")
+        bloco_situacao.append("- ✅ Sem advertências (Adv 01 / Adv 02) ativas")
 
     cargo_de = trilha["de_cargo"]
     cargo_para = trilha["para_cargo"]
@@ -176,67 +192,104 @@ def montar_checklist_trilha(
 
     if tem_para:
         pode_enviar = False
-        linhas.append(f"⚠️ Você **já possui** o cargo `{cargo_para}`.")
+        bloco_situacao.append(f"- ⚠️ Você **já possui** o cargo `{cargo_para}`")
+        pendencias.append(f"Cargo destino `{cargo_para}` já atribuído")
     elif tem_de:
-        linhas.append(f"✅ Cargo atual exigido: `{cargo_de}`")
+        bloco_situacao.append(f"- ✅ Cargo atual: `{cargo_de}`")
     else:
         pode_enviar = False
-        linhas.append(
-            f"❌ É necessário ter o cargo `{cargo_de}` para solicitar `{cargo_para}`."
+        bloco_situacao.append(
+            f"- ❌ Cargo atual exigido: `{cargo_de}` (você não possui)"
         )
+        pendencias.append(f"Obter o cargo `{cargo_de}`")
 
+    # ── Cursos ─────────────────────────────────────────────────────
+    bloco_cursos: list[str] = ["## 📚 Cursos Obrigatórios"]
     cursos = list(trilha.get("cursos_obrigatorios") or [])
     faltando = listar_cursos_que_faltam(membro, cursos)
+
     if not cursos:
-        linhas.append("✅ Nenhum curso obrigatório nesta trilha")
+        bloco_cursos.append("- ✅ Nenhum curso obrigatório nesta trilha")
     elif not faltando:
-        linhas.append(
-            "✅ Cursos obrigatórios: " + ", ".join(rotulo_curso(c) for c in cursos)
-        )
+        lista_ok = "\n".join(f"  {rotulo_curso(c)}" for c in cursos)
+        bloco_cursos.append("- ✅ **Cursos concluídos:**")
+        bloco_cursos.append(lista_ok)
     else:
         pode_enviar = False
-        linhas.append(
-            "❌ **Cursos faltando:** " + ", ".join(rotulo_curso(c) for c in faltando)
+        lista_falta = "\n".join(f"  {rotulo_curso(c)}" for c in faltando)
+        bloco_cursos.append("- ❌ **Cursos pendentes:**")
+        bloco_cursos.append(lista_falta)
+        bloco_cursos.append(
+            "> 💡 Acesse o painel **Solicitar Cursos** para adquiri-los."
         )
-        linhas.append(
-            "Use o painel de **Solicitar Cursos** para adquirir o que falta. "
-            "Cada curso tem valor próprio (moedas ou in-game)."
+        bloco_cursos.append(
+            "> Cada curso possui um custo próprio (moedas ou itens in-game)."
+        )
+        n = len(faltando)
+        pendencias.append(
+            f"Concluir os {n} curso{'s' if n != 1 else ''} listado{'s' if n != 1 else ''}"
         )
 
-    # Banco de horas do plantão (interligado com src/plantao)
+    # ── Plantão ────────────────────────────────────────────────────
+    bloco_plantao: list[str] = ["## ⏱️ Horas de Plantão"]
     segundos_minimos = int(trilha.get("segundos_minimos_plantao") or 0)
+    total_seg = int(segundos_plantao or 0)
+
     if segundos_minimos > 0:
-        total_seg = int(segundos_plantao or 0)
         if total_seg >= segundos_minimos:
-            linhas.append(
-                f"✅ **Horas de plantão:** {formatar_hms(total_seg)} "
-                f"(mínimo {formatar_hms(segundos_minimos)}) — "
-                "você já possui as horas necessárias."
+            bloco_plantao.append(
+                f"- ✅ **Plantão completo:** `{formatar_hms(total_seg)}` "
+                f"(mínimo `{formatar_hms(segundos_minimos)}`)"
             )
         else:
             pode_enviar = False
             falta = max(0, segundos_minimos - total_seg)
-            linhas.append(
-                f"❌ **Horas de plantão insuficientes:** {formatar_hms(total_seg)} "
-                f"de {formatar_hms(segundos_minimos)} necessárias."
+            bloco_plantao.append(
+                f"- ❌ **Plantão incompleto:** `{formatar_hms(total_seg)}` de "
+                f"`{formatar_hms(segundos_minimos)}` exigidas"
             )
-            linhas.append(
-                f"Faltam **{formatar_hms(falta)}** em call com o plantão ligado. "
-                "Fique em call válida até completar o tempo."
+            bloco_plantao.append(
+                f"- ⚠️ Tempo restante: **{_formatar_falta_legivel(falta)}** "
+                "em chamada com plantão ativo"
             )
-    elif segundos_plantao is not None:
-        linhas.append(
-            f"ℹ️ **Banco de horas (plantão):** {formatar_hms(int(segundos_plantao))} registradas."
+            bloco_plantao.append(
+                "> 🔔 Permaneça em call válida até atingir o tempo mínimo."
+            )
+            pendencias.append(
+                f"Completar o tempo de plantão (faltam **{_formatar_falta_legivel(falta)}**)"
+            )
+    else:
+        bloco_plantao.append(
+            f"- ℹ️ Banco de horas registrado: `{formatar_hms(total_seg)}` "
+            "(sem mínimo nesta trilha)"
         )
 
-    if pode_enviar:
-        linhas.append(
-            "✅ **Todos os requisitos checados.** Você pode seguir com a solicitação."
-        )
-
-    observacao = trilha.get("observacao") or ""
+    observacao = (trilha.get("observacao") or "").strip()
     if observacao:
-        linhas.append(f"-# {observacao}")
+        bloco_plantao.append(f"> 📌 *{observacao}*")
+
+    # ── Resumo ─────────────────────────────────────────────────────
+    bloco_resumo: list[str] = ["## 🎯 Resumo"]
+    if pode_enviar:
+        bloco_resumo.append("- ✅ **Todos os pré-requisitos foram atendidos.**")
+        bloco_resumo.append("- Você pode **enviar a solicitação** de promoção.")
+    else:
+        bloco_resumo.append("## 🎯 Resumo das Pendências")
+        # remove header duplicate - rebuild
+        bloco_resumo = ["## 🎯 Resumo das Pendências"]
+        for indice, item in enumerate(pendencias, start=1):
+            bloco_resumo.append(f"{indice}. {item}")
+        if len(pendencias) > 1:
+            bloco_resumo.append(
+                f"{len(pendencias) + 0}. Todos os pré-requisitos devem ser "
+                "atendidos para avançar"
+            )
+
+    linhas: list[str] = []
+    for bloco in (bloco_situacao, bloco_cursos, bloco_plantao, bloco_resumo):
+        if linhas:
+            linhas.append("")  # espaço entre seções
+        linhas.extend(bloco)
 
     return {
         "ok": pode_enviar,
@@ -247,7 +300,10 @@ def montar_checklist_trilha(
         "cargo_para": cargo_para,
         "chave": trilha["chave"],
         "rotulo": trilha.get("rotulo") or trilha["chave"],
-        "segundos_plantao": int(segundos_plantao or 0),
+        "segundos_plantao": total_seg,
+        "titulo_card": (
+            "Requisitos completos" if pode_enviar else "Requisitos incompletos"
+        ),
     }
 
 

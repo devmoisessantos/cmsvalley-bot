@@ -5,7 +5,6 @@ from __future__ import annotations
 import discord
 
 from src.config import CANAIS
-from src.cursos.cursos_service import rotulo_curso
 from src.plantao.permissoes import e_diretoria
 from src.promocoes.promocoes_service import (
     aplicar_promocao_cargos,
@@ -509,20 +508,15 @@ async def processar_escolha_trilha(
 
         checklist = await montar_checklist_trilha_async(membro, trilha)
         if not checklist.get("pode_enviar"):
-            linhas = list(checklist.get("linhas") or [])
-            faltando = checklist.get("cursos_faltando") or []
-            if faltando:
-                linhas.append(
-                    "Cursos faltando: " + ", ".join(rotulo_curso(c) for c in faltando)
-                )
-                linhas.append(
-                    "Vá ao painel de **Solicitar cursos** e conclua o que falta."
-                )
             await responder_aviso(
                 interacao,
-                titulo="Requisitos incompletos",
-                linhas=linhas or ["Não foi possível enviar a solicitação."],
+                titulo=checklist.get("titulo_card") or "Requisitos incompletos",
+                linhas=list(
+                    checklist.get("linhas")
+                    or ["Não foi possível enviar a solicitação."]
+                ),
                 delay=60,
+                com_marcador=False,
             )
             return
 
@@ -592,10 +586,14 @@ async def processar_escolha_trilha(
             titulo="Solicitação enviada",
             linhas=[
                 f"Pedido `#{registro.id}` · **{trilha['rotulo']}**",
-                "A diretoria vai analisar Aprovar / Reprovar no canal de promoções.",
-                *(checklist.get("linhas") or [])[:6],
+                f"**De:** `{trilha['de_cargo']}` → **Para:** `{trilha['para_cargo']}`",
+                "A diretoria vai analisar **Aprovar / Reprovar** no canal de promoções.",
+                "",
+                "### Requisitos no momento do envio",
+                *(checklist.get("linhas") or []),
             ],
             delay=60,
+            com_marcador=False,
         )
     except Exception as erro:
         await enviar_erro_para_log_erros(
