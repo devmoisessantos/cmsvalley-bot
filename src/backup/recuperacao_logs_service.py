@@ -17,7 +17,11 @@ from datetime import (
 import discord
 from sqlalchemy import select
 
-from src.config import CANAIS
+from src.config import (
+    CANAIS,
+    CARGOS,
+    TOTAL_PERGUNTAS_PROVA,
+)
 from src.database.connection import async_session
 from src.database.models import (
     Chamada,
@@ -318,32 +322,64 @@ async def _garantir_usuario(
 # ── LOG_RECRUTAMENTOS ────────────────────────────────────────────────────
 
 
-def parsear_mensagem_recrutamento(mensagem: discord.Message) -> dict | None:
+def _role_ids_no_texto(texto: str) -> list[int]:
+    return [int(x) for x in re.findall(r"<@&(\d+)>", texto)]
+
+
+def _resolver_cargo_final_por_roles(texto: str) -> str | None:
+    """
+    Só ENFERMEIRO ou PARAMEDICO (valores válidos de cargo_final).
+    Olha menções <@&id> no texto.
+    """
+    id_enf = int(CARGOS.get("🔰・Enfermeiro (a)") or 0)
+    id_par = int(CARGOS.get("🚑・Paramédico") or 0)
+    ids = set(_role_ids_no_texto(texto))
+    # Paramédico tem prioridade se os dois aparecerem
+    if id_par and id_par in ids:
+        return "PARAMEDICO"
+    if id_enf and id_enf in ids:
+        return "ENFERMEIRO"
+    lower = texto.lower()
+    if "param" in lower:
+        return "PARAMEDICO"
+    if "enferm" in lower:
+        return "ENFERMEIRO"
+    return None
+
+
+def _parsear_nota_percentual(texto: str) -> float | None:
+    match = re.search(r"Nota:\s*`?([0-9]+(?:[.,][0-9]+)?)\s*%?", texto, re.I)
+    if not match:
+        match = re.search(r"([0-9]+(?:[.,][0-9]+)?)\s*%", texto)
+    if not match:
+        return None
+    return float(match.group(1).replace(",", "."))
+
+
+def _estimar_acertos(nota: float | None) -> int | None:
+    if nota is None:
+        return None
+    total = int(TOTAL_PERGUNTAS_PROVA or 11)
+    return int(round((nota / 100.0) * total))
+
+
+# ── LOG_RECRUTAMENTOS (início) ───────────────────────────────────────────
+
+
+def parsear_mensagem_recrutamento_iniciado(mensagem: discord.Message) -> dict | None:
+    """# Novo Recrutamento Iniciado → status ESTUDANDO (ainda sem cargo final)."""
     texto = extrair_texto_mensagem(mensagem)
     if not texto.strip():
         return None
-
     lower = texto.lower()
-    # só conclusões / manuais / realizados — não só "iniciado" sem aprovação
     if (
-        "recrutamento iniciado" in lower
-        and "realizado" not in lower
-        and "manual" not in lower
+        "recrutamento iniciado" not in lower
+        and "novo recrutamento iniciado" not in lower
     ):
-        # ainda importa como ESTUDANDO? melhor só APROVADO
-        status = "ESTUDANDO"
-    elif "manual" in lower or "realizado" in lower or "recrutamento" in lower:
-        status = "APROVADO"
-    else:
-        return None
-
-    if (
-        "novo recrutamento" not in lower
-        and "recrutamento manual" not in lower
-        and "recrutamento realizado" not in lower
-    ):
-        # aceita se tiver os campos típicos
         if "membro recrutado" not in lower:
+            return None
+        # manual / realizado tratados em outro fluxo
+        if "aprovado" in lower or "reprovado" in lower:
             return None
 
     candidato = _id_backtick_apos("Membro recrutado", texto)
@@ -356,73 +392,273 @@ def parsear_mensagem_recrutamento(mensagem: discord.Message) -> dict | None:
     recrutador = _id_backtick_apos("Recrutado por", texto)
     if recrutador is None:
         ids = _ids_no_texto(texto)
-        if len(ids) >= 2:
-            recrutador = ids[1]
-    if recrutador is None:
-        recrutador = 0
+        recrutador = ids[1] if len(ids) >= 2 else 0
 
     id_fivem = _campo_backtick("ID FiveM", texto)
     if id_fivem and id_fivem.upper() in ("N/A", "NA", "-"):
         id_fivem = None
-
-    cargo = _campo_backtick("Cargo", texto)
-    # cargo às vezes é menção de role <@&id>
-    if not cargo:
-        match = re.search(r"Cargo:\*\*\s*<@&(\d+)>", texto)
-        if not match:
-            match = re.search(r"Cargo:\s*<@&(\d+)>", texto)
-        cargo = match.group(1) if match else None
+    if id_fivem:
+        id_fivem = str(id_fivem)[:20]
 
     criado_em = mensagem.created_at
     if criado_em.tzinfo is None:
         criado_em = criado_em.replace(tzinfo=timezone.utc)
 
-    # títulos "Iniciado" → não marcar APROVADO
-    if "iniciado" in lower and "manual" not in lower and "realizado" not in lower:
-        status = "ESTUDANDO"
-
     return {
         "discord_id_candidato": int(candidato),
-        "discord_id_recrutador": int(recrutador),
-        "id_fivem": (id_fivem or None),
-        "cargo_final": (str(cargo) if cargo else "IMPORTADO"),
-        "status": status,
+        "discord_id_recrutador": int(recrutador or 0),
+        "id_fivem": id_fivem,
+        "status": "ESTUDANDO",
+        "cargo_final": None,
+        "nota_percentual": None,
+        "acertos": None,
         "criado_em": criado_em,
         "message_id": mensagem.id,
     }
 
 
-async def recrutamento_ja_importado(
+# ── LOG_APROVACOES ───────────────────────────────────────────────────────
+
+
+def parsear_mensagem_aprovacao(mensagem: discord.Message) -> dict | None:
+    """# Candidato Aprovado → APROVADO + cargo_final + nota."""
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return None
+    lower = texto.lower()
+    if "candidato aprovado" not in lower and "aprovado" not in lower:
+        return None
+    if "reprovado" in lower:
+        return None
+
+    candidato = _id_backtick_apos("Membro", texto)
+    if candidato is None:
+        ids = _ids_no_texto(texto)
+        candidato = ids[0] if ids else None
+    if candidato is None:
+        return None
+
+    executor = _id_backtick_apos("Executor", texto)
+    if executor is None:
+        ids = _ids_no_texto(texto)
+        executor = ids[1] if len(ids) >= 2 else 0
+
+    cargo_final = _resolver_cargo_final_por_roles(texto)
+    if cargo_final is None:
+        # aprovação sem Enfermeiro/Paramédico no log → não grava cargo inválido
+        cargo_final = None
+
+    nota = _parsear_nota_percentual(texto)
+    acertos = _estimar_acertos(nota)
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    return {
+        "discord_id_candidato": int(candidato),
+        "discord_id_recrutador": int(executor or 0),
+        "id_fivem": None,
+        "status": "APROVADO",
+        "cargo_final": cargo_final,
+        "nota_percentual": nota,
+        "acertos": acertos,
+        "criado_em": criado_em,
+        "message_id": mensagem.id,
+    }
+
+
+# ── LOG_REPROVACOES ──────────────────────────────────────────────────────
+
+
+def parsear_mensagem_reprovacao(mensagem: discord.Message) -> dict | None:
+    """# Candidato Reprovado → REPROVADO_TEMPO + nota."""
+    texto = extrair_texto_mensagem(mensagem)
+    if not texto.strip():
+        return None
+    lower = texto.lower()
+    if "reprovado" not in lower:
+        return None
+
+    candidato = _id_backtick_apos("Membro", texto)
+    if candidato is None:
+        ids = _ids_no_texto(texto)
+        candidato = ids[0] if ids else None
+    if candidato is None:
+        return None
+
+    executor = _id_backtick_apos("Executor", texto)
+    if executor is None:
+        ids = _ids_no_texto(texto)
+        executor = ids[1] if len(ids) >= 2 else 0
+
+    nota = _parsear_nota_percentual(texto)
+    acertos = _estimar_acertos(nota)
+
+    status = "REPROVADO_TEMPO" if "24h" in lower or "24 h" in lower else "REPROVADO"
+
+    criado_em = mensagem.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+
+    return {
+        "discord_id_candidato": int(candidato),
+        "discord_id_recrutador": int(executor or 0),
+        "id_fivem": None,
+        "status": status,
+        "cargo_final": None,
+        "nota_percentual": nota,
+        "acertos": acertos,
+        "criado_em": criado_em,
+        "message_id": mensagem.id,
+    }
+
+
+async def _buscar_recrutamento_aberto(
+    sessao,
     discord_id_candidato: int,
-    criado_em: datetime,
-) -> bool:
-    """Evita duplicar: mesmo candidato + mesmo timestamp da mensagem."""
+) -> Recrutamento | None:
+    """Último recrutamento do candidato que ainda não está APROVADO."""
+    resultado = await sessao.execute(
+        select(Recrutamento)
+        .where(Recrutamento.discord_id_candidato == int(discord_id_candidato))
+        .order_by(Recrutamento.id.desc())
+        .limit(5)
+    )
+    candidatos = list(resultado.scalars().all())
+    for reg in candidatos:
+        if reg.status in ("ESTUDANDO", "EM_PROVA", "REPROVADO", "REPROVADO_TEMPO"):
+            return reg
+    return candidatos[0] if candidatos else None
+
+
+async def _upsert_recrutamento_from_log(dados: dict) -> str:
+    """
+    Cria ou atualiza recrutamento.
+    Retorna: criado | atualizado | ignorado
+    """
     async with async_session() as sessao:
+        await _garantir_usuario(
+            sessao,
+            dados["discord_id_candidato"],
+            id_fivem=dados.get("id_fivem"),
+            status="APROVADO" if dados["status"] == "APROVADO" else "ESTUDANDO",
+        )
+
+        # anti-duplicata exata por timestamp de início
         resultado = await sessao.execute(
-            select(Recrutamento.id)
+            select(Recrutamento)
             .where(
-                Recrutamento.discord_id_candidato == int(discord_id_candidato),
-                Recrutamento.data_inicio == criado_em,
+                Recrutamento.discord_id_candidato == dados["discord_id_candidato"],
+                Recrutamento.data_inicio == dados["criado_em"],
             )
             .limit(1)
         )
-        return resultado.scalar_one_or_none() is not None
+        existente_mesmo_ts = resultado.scalar_one_or_none()
+        if existente_mesmo_ts is not None:
+            return "ignorado"
+
+        registro = await _buscar_recrutamento_aberto(
+            sessao, dados["discord_id_candidato"]
+        )
+
+        # Início: só cria se não houver aberto recente
+        if dados["status"] == "ESTUDANDO":
+            if registro is not None and registro.status == "ESTUDANDO":
+                # atualiza fivem se veio no log
+                if dados.get("id_fivem") and not registro.id_fivem:
+                    registro.id_fivem = dados["id_fivem"]
+                if dados.get("discord_id_recrutador"):
+                    registro.discord_id_recrutador = dados["discord_id_recrutador"]
+                await sessao.commit()
+                return "atualizado"
+
+            sessao.add(
+                Recrutamento(
+                    id_fivem=dados.get("id_fivem"),
+                    discord_id_candidato=dados["discord_id_candidato"],
+                    discord_id_recrutador=dados.get("discord_id_recrutador") or 0,
+                    data_inicio=dados["criado_em"],
+                    status="ESTUDANDO",
+                    cargo_final=None,
+                )
+            )
+            await sessao.commit()
+            return "criado"
+
+        # Aprovação / reprovação: atualiza aberto ou cria completo
+        if registro is None:
+            sessao.add(
+                Recrutamento(
+                    id_fivem=dados.get("id_fivem"),
+                    discord_id_candidato=dados["discord_id_candidato"],
+                    discord_id_recrutador=dados.get("discord_id_recrutador") or 0,
+                    data_inicio=dados["criado_em"],
+                    data_fim=dados["criado_em"],
+                    status=dados["status"][:30],
+                    cargo_final=dados.get("cargo_final"),
+                    nota_percentual=dados.get("nota_percentual"),
+                    acertos=dados.get("acertos"),
+                )
+            )
+            await sessao.commit()
+            return "criado"
+
+        registro.status = dados["status"][:30]
+        registro.data_fim = dados["criado_em"]
+        if dados.get("cargo_final"):
+            registro.cargo_final = dados["cargo_final"]
+        if dados.get("nota_percentual") is not None:
+            registro.nota_percentual = dados["nota_percentual"]
+        if dados.get("acertos") is not None:
+            registro.acertos = dados["acertos"]
+        if dados.get("discord_id_recrutador"):
+            registro.discord_id_recrutador = dados["discord_id_recrutador"]
+        if dados.get("id_fivem") and not registro.id_fivem:
+            registro.id_fivem = dados["id_fivem"]
+        await sessao.commit()
+        return "atualizado"
 
 
-def _normalizar_cargo_final(cargo_bruto: str | None) -> str:
-    """cargo_final no banco é VARCHAR(30)."""
-    if not cargo_bruto:
-        return "IMPORTADO"
-    texto = str(cargo_bruto).strip()
-    lower = texto.lower()
-    if "param" in lower:
-        return "PARAMEDICO"
-    if "enferm" in lower:
-        return "ENFERMEIRO"
-    # ID numérico de cargo → genérico curto
-    if texto.isdigit():
-        return "IMPORTADO"
-    return texto[:30]
+async def importar_canal_recrutamento_generico(
+    canal: discord.TextChannel,
+    *,
+    parser,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    lidas = importadas = atualizadas = ignoradas = ja_existiam = erros = 0
+
+    async for mensagem in canal.history(limit=limite, oldest_first=True):
+        lidas += 1
+        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
+            ignoradas += 1
+            continue
+        try:
+            dados = parser(mensagem)
+            if dados is None:
+                ignoradas += 1
+                continue
+            resultado = await _upsert_recrutamento_from_log(dados)
+            if resultado == "criado":
+                importadas += 1
+            elif resultado == "atualizado":
+                atualizadas += 1
+            else:
+                ja_existiam += 1
+        except Exception as erro:
+            erros += 1
+            logger.exception("import recrutamento msg %s: %s", mensagem.id, erro)
+
+    return {
+        "lidas": lidas,
+        "importadas": importadas,
+        "atualizadas": atualizadas,
+        "ignoradas": ignoradas,
+        "ja_existiam": ja_existiam,
+        "erros": erros,
+        "canal_id": canal.id,
+    }
 
 
 async def importar_log_recrutamentos_do_canal(
@@ -431,64 +667,43 @@ async def importar_log_recrutamentos_do_canal(
     limite: int | None = None,
     apenas_bot_id: int | None = None,
 ) -> dict:
-    lidas = importadas = ignoradas = ja_existiam = erros = 0
+    """LOG_RECRUTAMENTOS — inícios (ESTUDANDO)."""
+    return await importar_canal_recrutamento_generico(
+        canal,
+        parser=parsear_mensagem_recrutamento_iniciado,
+        limite=limite,
+        apenas_bot_id=apenas_bot_id,
+    )
 
-    async for mensagem in canal.history(limit=limite, oldest_first=True):
-        lidas += 1
-        if apenas_bot_id is not None and mensagem.author.id != apenas_bot_id:
-            ignoradas += 1
-            continue
-        try:
-            dados = parsear_mensagem_recrutamento(mensagem)
-            if dados is None:
-                ignoradas += 1
-                continue
 
-            if await recrutamento_ja_importado(
-                dados["discord_id_candidato"],
-                dados["criado_em"],
-            ):
-                ja_existiam += 1
-                continue
+async def importar_log_aprovacoes_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    """LOG_APROVACOES — APROVADO + ENFERMEIRO/PARAMEDICO + nota."""
+    return await importar_canal_recrutamento_generico(
+        canal,
+        parser=parsear_mensagem_aprovacao,
+        limite=limite,
+        apenas_bot_id=apenas_bot_id,
+    )
 
-            cargo_final = _normalizar_cargo_final(dados.get("cargo_final"))
-            id_fivem = dados.get("id_fivem")
-            if id_fivem:
-                id_fivem = str(id_fivem)[:20]
-            status = str(dados["status"])[:30]
 
-            async with async_session() as sessao:
-                await _garantir_usuario(
-                    sessao,
-                    dados["discord_id_candidato"],
-                    id_fivem=id_fivem,
-                    status="APROVADO" if status == "APROVADO" else "ESTUDANDO",
-                )
-                sessao.add(
-                    Recrutamento(
-                        id_fivem=id_fivem,
-                        discord_id_candidato=dados["discord_id_candidato"],
-                        discord_id_recrutador=dados["discord_id_recrutador"],
-                        data_inicio=dados["criado_em"],
-                        data_fim=dados["criado_em"] if status == "APROVADO" else None,
-                        status=status,
-                        cargo_final=cargo_final,
-                    )
-                )
-                await sessao.commit()
-            importadas += 1
-        except Exception as erro:
-            erros += 1
-            logger.exception("import recrutamento msg %s: %s", mensagem.id, erro)
-
-    return {
-        "lidas": lidas,
-        "importadas": importadas,
-        "ignoradas": ignoradas,
-        "ja_existiam": ja_existiam,
-        "erros": erros,
-        "canal_id": canal.id,
-    }
+async def importar_log_reprovacoes_do_canal(
+    canal: discord.TextChannel,
+    *,
+    limite: int | None = None,
+    apenas_bot_id: int | None = None,
+) -> dict:
+    """LOG_REPROVACOES — REPROVADO(_TEMPO) + nota."""
+    return await importar_canal_recrutamento_generico(
+        canal,
+        parser=parsear_mensagem_reprovacao,
+        limite=limite,
+        apenas_bot_id=apenas_bot_id,
+    )
 
 
 # ── LOG_PUNICOES ─────────────────────────────────────────────────────────
