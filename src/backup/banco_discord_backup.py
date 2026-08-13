@@ -249,13 +249,16 @@ async def exportar_banco_para_canal(
         fp=io.BytesIO(conteudo_json.encode("utf-8")),
         filename=nome_arquivo,
     )
-    # content curto = marcador + hash (parse do bot); view = card visual
-    texto_parseavel = _montar_conteudo_parseavel(snapshot, autor=autor)
+
+    # Components V2 não permite content + view na mesma mensagem.
+    # 1ª = card visual | 2ª = marcador/hash + anexo JSON
     view_card = _montar_card_backup_db(guilda, snapshot, autor=autor)
-    mensagem = await canal.send(
+    mensagem_card = await canal.send(view=view_card)
+
+    texto_parseavel = _montar_conteudo_parseavel(snapshot, autor=autor)
+    mensagem_arquivo = await canal.send(
         content=texto_parseavel,
         file=arquivo,
-        view=view_card,
     )
 
     return {
@@ -264,7 +267,8 @@ async def exportar_banco_para_canal(
         "hash": hash_local,
         "tabelas": quantidade_tabelas,
         "linhas": quantidade_linhas,
-        "mensagem_id": mensagem.id,
+        "mensagem_id": mensagem_arquivo.id,
+        "mensagem_card_id": mensagem_card.id,
         "arquivo": nome_arquivo,
         "canal_id": canal.id,
     }
