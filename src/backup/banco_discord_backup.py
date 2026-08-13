@@ -30,8 +30,15 @@ from src.backup.api_db_sync import (
     exportar_snapshot_banco,
     restaurar_faltantes_no_banco,
 )
-from src.config import CANAIS
+from src.config import (
+    CANAIS,
+    MESES_ABREV,
+)
 from src.utils.error_handling import LoggingViewMixin
+from src.utils.formatacao import (
+    agora_brasilia,
+    para_horario_brasilia,
+)
 from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
@@ -62,26 +69,113 @@ def _contar_linhas(snapshot: dict[str, Any]) -> tuple[int, int]:
     return quantidade_tabelas, quantidade_linhas
 
 
-def _montar_texto_mensagem(
+def _formatar_momento_backup(data_hora: datetime | None = None) -> str:
+    """Ex.: 13 Ago de 2026 - 03:22:16 (Brasília)."""
+    local = para_horario_brasilia(data_hora) if data_hora else agora_brasilia()
+    if local is None:
+        local = agora_brasilia()
+    nome_mes = MESES_ABREV.get(local.month, "—")
+    return f"{local.day} {nome_mes} de {local.year} - {local.strftime('%H:%M:%S')}"
+
+
+def _formatar_numero_linhas(quantidade: int) -> str:
+    """Ex.: 3526 → 3.526"""
+    return f"{int(quantidade):,}".replace(",", ".")
+
+
+def _montar_conteudo_parseavel(
     snapshot: dict[str, Any],
     *,
     autor: str | None = None,
 ) -> str:
+    """
+    Texto curto na mensagem (não é o card visual).
+    Serve para o bot achar o hash no history sem abrir o LayoutView.
+    """
     hash_completo = snapshot.get("hash_conteudo") or ""
-    hash_curto = hash_completo[:16] if hash_completo else "?"
-    quantidade_tabelas, quantidade_linhas = _contar_linhas(snapshot)
-    atualizado = snapshot.get("atualizado_em") or datetime.now(timezone.utc).isoformat()
     linhas = [
         MARCADOR_BACKUP_DB,
         f"hash=`{hash_completo}`",
-        f"hash_curto=`{hash_curto}`",
-        f"tabelas=`{quantidade_tabelas}`",
-        f"linhas=`{quantidade_linhas}`",
-        f"em=`{atualizado}`",
     ]
     if autor:
         linhas.append(f"por=`{autor}`")
     return "\n".join(linhas)
+
+
+def _montar_card_backup_db(
+    guilda: discord.Guild,
+    snapshot: dict[str, Any],
+    *,
+    autor: str | None = None,
+) -> discord.ui.LayoutView:
+    """
+    Card Components V2 no canal LOG_BACKUP.
+
+    Layout pedido:
+      # 🗄️ CMS Valley - Backup DB + thumbnail
+      hash / tabelas / linhas / em / por
+      separador
+      verificação + status
+    """
+    hash_completo = snapshot.get("hash_conteudo") or "—"
+    hash_curto = hash_completo[:16] if hash_completo != "—" else "—"
+    quantidade_tabelas, quantidade_linhas = _contar_linhas(snapshot)
+
+    momento_iso = snapshot.get("atualizado_em")
+    momento_dt: datetime | None = None
+    if momento_iso:
+        try:
+            momento_dt = datetime.fromisoformat(str(momento_iso).replace("Z", "+00:00"))
+        except ValueError:
+            momento_dt = None
+    texto_momento = _formatar_momento_backup(momento_dt)
+
+    autor_texto = autor or "Sistema"
+    verificacao = (
+        "automática"
+        if "automátic" in autor_texto.lower() or "sistema" in autor_texto.lower()
+        else "manual"
+    )
+
+    corpo = (
+        f"> `🔐` * **Hash:** ||{hash_completo}||\n"
+        f"> `✂️` * **Hash curto:** `{hash_curto}`\n"
+        f"> `📊` * **Tabelas:** `{quantidade_tabelas}`\n"
+        f"> `📄` * **Linhas:** `{_formatar_numero_linhas(quantidade_linhas)}`\n"
+        f"> `🕐` * **Em:** `{texto_momento}`\n"
+        f"> `👤` * **Por:** *{autor_texto}*"
+    )
+    rodape = f"* **Verificação:** `{verificacao}`\n* **Status:** ||✅ Concluído||"
+
+    url_icone = None
+    if guilda.icon is not None:
+        url_icone = guilda.icon.url
+
+    componentes: list = []
+    if url_icone:
+        componentes.append(
+            discord.ui.Section(
+                "# 🗄️ CMS Valley - Backup DB",
+                corpo,
+                accessory=discord.ui.Thumbnail(url_icone),
+            )
+        )
+    else:
+        componentes.append(
+            discord.ui.TextDisplay(f"# 🗄️ CMS Valley - Backup DB\n{corpo}")
+        )
+
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+    componentes.append(discord.ui.TextDisplay(rodape))
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(
+        discord.ui.Container(
+            *componentes,
+            accent_color=discord.Color.dark_teal(),
+        )
+    )
+    return view
 
 
 def _extrair_hash_do_conteudo(conteudo: str | None) -> str | None:
@@ -155,8 +249,14 @@ async def exportar_banco_para_canal(
         fp=io.BytesIO(conteudo_json.encode("utf-8")),
         filename=nome_arquivo,
     )
-    texto = _montar_texto_mensagem(snapshot, autor=autor)
-    mensagem = await canal.send(content=texto, file=arquivo)
+    # content curto = marcador + hash (parse do bot); view = card visual
+    texto_parseavel = _montar_conteudo_parseavel(snapshot, autor=autor)
+    view_card = _montar_card_backup_db(guilda, snapshot, autor=autor)
+    mensagem = await canal.send(
+        content=texto_parseavel,
+        file=arquivo,
+        view=view_card,
+    )
 
     return {
         "enviado": True,
