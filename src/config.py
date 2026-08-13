@@ -323,11 +323,9 @@ CANAIS = {
     "RANKING_HORAS_PLANTAO": 1534862719457427466,
     # Ranking de moedas (tempo real, mesma ideia do ranking de horas)
     # Configure o ID do canal no .env se for outro: sobrescreva via código ou ajuste aqui
-    "RANKING_MOEDAS": int(os.getenv("RANKING_MOEDAS", "0") or 1537382621338800168),
+    "RANKING_MOEDAS": 1537382621338800168,
     # Pedidos de depósito $ → moedas (padrão: canal de finanças)
-    "CANAL_DEPOSITO_MOEDAS": int(
-        os.getenv("CANAL_DEPOSITO_MOEDAS", "1486369137021161472") or 1537382938176655410
-    ),
+    "CANAL_DEPOSITO_MOEDAS": 1537382938176655410,
     "CRIAR_EVENTO_GATE": 1533993716635799643,
     "WHITELIST_CANAL_ID": 1528299364970266657,
     "HIERARQUIA_SUL": 1487250788391583745,
