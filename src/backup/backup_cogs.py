@@ -47,6 +47,7 @@ from src.backup.member_snapshot import (
 )
 from src.backup.restore_manager import RestoreManager
 from src.config import (
+    AUTO_BACKUP_DB_INTERVAL_MINUTES,
     AUTO_BACKUP_INTERVAL_HOURS,
     BACKUP_DIR,
     CONFIRMATION_TIMEOUT,
@@ -85,9 +86,14 @@ class BackupCog(commands.Cog):
         self.logger = BackupLogger()
         self.tarefa_backup_automatico.change_interval(hours=AUTO_BACKUP_INTERVAL_HOURS)
         self.tarefa_backup_automatico.start()
+        # Banco: a cada N minutos, só posta no LOG_BACKUP se o hash mudou
+        minutos_banco = max(1, int(AUTO_BACKUP_DB_INTERVAL_MINUTES or 1))
+        self.tarefa_backup_banco.change_interval(minutes=minutos_banco)
+        self.tarefa_backup_banco.start()
 
     def cog_unload(self):
         self.tarefa_backup_automatico.cancel()
+        self.tarefa_backup_banco.cancel()
 
     # ------------------------------------------------------------------
     # Helpers internos
@@ -215,12 +221,8 @@ class BackupCog(commands.Cog):
     @tasks.loop(hours=24)
     async def tarefa_backup_automatico(self):
         """
-        Roda no ready (reinício / redeploy) e depois a cada AUTO_BACKUP_INTERVAL_HOURS.
-
-        - Estrutural (Discord): só grava JSON local se o diff achar mudança.
-        - Banco: sincroniza com a API (cofre JSON).
-            * push aditivo (nunca apaga no cofre)
-            * restore aditivo no Postgres local (só cria o que falta)
+        Backup estrutural do Discord (cargos/canais/membros em JSON local).
+        Só grava se houver diferença em relação ao último snapshot.
         """
         for guilda in self.bot.guilds:
             try:
@@ -228,38 +230,39 @@ class BackupCog(commands.Cog):
             except Exception as erro:
                 print(f"Erro no backup estrutural de {guilda.name}: {erro}")
 
-        # Cofre do banco = canal LOG_BACKUP (JSON anexado). Só posta se o hash mudou.
+    @tarefa_backup_automatico.before_loop
+    async def _antes_do_backup_automatico(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=1)
+    async def tarefa_backup_banco(self):
+        """
+        A cada AUTO_BACKUP_DB_INTERVAL_MINUTES (padrão 1):
+          - calcula o snapshot do Postgres
+          - compara hash com o último JSON no LOG_BACKUP
+          - se igual → silêncio total
+          - se diferente → posta o novo arquivo no canal (sem spam de log extra)
+        """
         for guilda in self.bot.guilds:
             try:
                 resultado_banco = await exportar_banco_para_canal(
                     guilda,
-                    autor="Sistema (automático)",
+                    autor="Sistema (verificação automática)",
                     forcar=False,
                 )
                 if resultado_banco.get("enviado"):
+                    # Só um print no console — o próprio anexo no LOG_BACKUP já é o registro
                     print(
-                        f"[backup-db] postado em LOG_BACKUP: "
-                        f"{resultado_banco.get('arquivo')} "
-                        f"hash={str(resultado_banco.get('hash') or '')[:12]}"
+                        f"[backup-db] atualizado: {resultado_banco.get('arquivo')} "
+                        f"hash={str(resultado_banco.get('hash') or '')[:12]} "
+                        f"linhas={resultado_banco.get('linhas')}"
                     )
-                    await self.logger.log(
-                        guilda,
-                        "🗄️ Backup do banco no canal",
-                        (
-                            f"Arquivo: `{resultado_banco.get('arquivo')}`\n"
-                            f"Tabelas: {resultado_banco.get('tabelas')} · "
-                            f"Linhas: {resultado_banco.get('linhas')}\n"
-                            f"Hash: `{str(resultado_banco.get('hash') or '')[:16]}…`"
-                        ),
-                        COR_SUCESSO,
-                    )
-                else:
-                    print(f"[backup-db] {guilda.name}: {resultado_banco.get('motivo')}")
+                # Sem alteração → nada no console (silencioso)
             except Exception as erro:
-                print(f"Erro no backup do banco (canal) em {guilda.name}: {erro}")
+                print(f"[backup-db] erro em {guilda.name}: {erro}")
 
-    @tarefa_backup_automatico.before_loop
-    async def _antes_do_backup_automatico(self):
+    @tarefa_backup_banco.before_loop
+    async def _antes_do_backup_banco(self):
         await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------

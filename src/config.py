@@ -16,7 +16,10 @@ CANAL_PAINEL_RECRUTAMENTO_ID = 1486369071590281326
 
 BACKUP_DIR = os.getenv("BACKUP_DIR", "data/backups")
 MAX_BACKUPS_PER_GUILD = int(os.getenv("MAX_BACKUPS_PER_GUILD", 10))
+# Backup estrutural do Discord (cargos/canais) — intervalo em horas
 AUTO_BACKUP_INTERVAL_HOURS = int(os.getenv("AUTO_BACKUP_INTERVAL_HOURS", 24))
+# Backup do banco (JSON no LOG_BACKUP) — verificação silenciosa em minutos
+AUTO_BACKUP_DB_INTERVAL_MINUTES = int(os.getenv("AUTO_BACKUP_DB_INTERVAL_MINUTES", 1))
 ADMIN_ROLE_NAMES = [
     r.strip()
     for r in os.getenv("ADMIN_ROLE_NAMES", "Admin,Fundador").split(",")
