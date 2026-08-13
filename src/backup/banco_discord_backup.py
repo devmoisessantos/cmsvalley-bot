@@ -272,12 +272,9 @@ async def exportar_banco_para_canal(
     conteudo_json = json.dumps(snapshot, ensure_ascii=False, indent=2)
     bytes_json = conteudo_json.encode("utf-8")
     tamanho_bytes = len(bytes_json)
-    arquivo = discord.File(
-        fp=io.BytesIO(bytes_json),
-        filename=nome_arquivo,
-    )
 
-    # Uma mensagem só: card V2 + anexo JSON (sem content — regra do Components V2)
+    # Components V2 não envia anexo na mesma mensagem do card.
+    # 1ª mensagem = card | 2ª = só o arquivo JSON (sem texto)
     view_card = _montar_card_backup_db(
         guilda,
         snapshot,
@@ -285,7 +282,13 @@ async def exportar_banco_para_canal(
         nome_arquivo=nome_arquivo,
         tamanho_bytes=tamanho_bytes,
     )
-    mensagem = await canal.send(view=view_card, file=arquivo)
+    mensagem_card = await canal.send(view=view_card)
+
+    arquivo = discord.File(
+        fp=io.BytesIO(bytes_json),
+        filename=nome_arquivo,
+    )
+    mensagem_arquivo = await canal.send(file=arquivo)
 
     return {
         "enviado": True,
@@ -293,7 +296,8 @@ async def exportar_banco_para_canal(
         "hash": hash_local,
         "tabelas": quantidade_tabelas,
         "linhas": quantidade_linhas,
-        "mensagem_id": mensagem.id,
+        "mensagem_id": mensagem_arquivo.id,
+        "mensagem_card_id": mensagem_card.id,
         "arquivo": nome_arquivo,
         "canal_id": canal.id,
         "tamanho_bytes": tamanho_bytes,
