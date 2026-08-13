@@ -387,29 +387,56 @@ async def obter_solicitacao(solicitacao_id: int) -> SolicitacaoPromocao | None:
         return resultado.scalar_one_or_none()
 
 
+async def obter_solicitacao_pendente(
+    discord_id: int,
+) -> SolicitacaoPromocao | None:
+    """
+    Retorna a solicitação ainda PENDENTE do membro, se existir.
+    Usado para bloquear pedido duplicado enquanto a diretoria não decide.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoPromocao)
+            .where(
+                SolicitacaoPromocao.discord_id == int(discord_id),
+                SolicitacaoPromocao.status == "PENDENTE",
+            )
+            .order_by(SolicitacaoPromocao.id.desc())
+            .limit(1)
+        )
+        return resultado.scalar_one_or_none()
+
+
 async def decidir_solicitacao(
     *,
     solicitacao_id: int,
     aprovada: bool,
     analisado_por: int,
     motivo: str | None = None,
-) -> SolicitacaoPromocao | None:
+) -> tuple[SolicitacaoPromocao | None, bool]:
+    """
+    Marca a solicitação como APROVADA ou REPROVADA.
+
+    Retorna (registro, foi_decidido_agora).
+    - registro None → pedido não existe
+    - foi_decidido_agora False → já tinha sido decidido (evita card duplicado)
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoPromocao).where(SolicitacaoPromocao.id == solicitacao_id)
         )
         registro = resultado.scalar_one_or_none()
         if registro is None:
-            return None
+            return None, False
         if registro.status != "PENDENTE":
-            return registro
+            return registro, False
         registro.status = "APROVADA" if aprovada else "REPROVADA"
         registro.analisado_por = analisado_por
         registro.motivo_reprovacao = (motivo or "")[:500] or None
         registro.atualizado_em = agora()
         await sessao.commit()
         await sessao.refresh(registro)
-        return registro
+        return registro, True
 
 
 async def registrar_historico(

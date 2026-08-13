@@ -457,5 +457,5 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
                 "**Copie o bloco abaixo** para colar no servidor Valley Roleplay:",
                 bloco_copiar,
             ],
-            delay=120,
+            delay=300,
         )

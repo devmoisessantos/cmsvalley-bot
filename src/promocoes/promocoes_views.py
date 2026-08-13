@@ -14,6 +14,7 @@ from src.promocoes.promocoes_service import (
     listar_cargos_destino,
     montar_checklist_trilha_async,
     obter_solicitacao,
+    obter_solicitacao_pendente,
     obter_trilha,
     obter_trilha_por_destino_e_origem,
     registrar_historico,
@@ -371,13 +372,21 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
             if registro.status != "PENDENTE":
                 await responder_aviso(
                     interacao,
-                    titulo="Já decidido",
-                    linhas=[f"Status atual: `{registro.status}`."],
-                    delay=10,
+                    titulo="Pedido já decidido",
+                    linhas=[
+                        f"Solicitação `#{registro.id}` já está como `{registro.status}`.",
+                        "Não é possível aprovar ou reprovar de novo.",
+                    ],
+                    delay=12,
                 )
+                try:
+                    if interacao.message is not None:
+                        await interacao.message.delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
                 return
 
-            registro = await decidir_solicitacao(
+            registro, foi_decidido_agora = await decidir_solicitacao(
                 solicitacao_id=self.solicitacao_id,
                 aprovada=aprovada,
                 analisado_por=membro.id,
@@ -389,6 +398,23 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                     titulo="Falha",
                     linhas=["Não foi possível atualizar o pedido."],
                 )
+                return
+            # Outro staff clicou primeiro — não posta card de novo
+            if not foi_decidido_agora:
+                await responder_aviso(
+                    interacao,
+                    titulo="Pedido já decidido",
+                    linhas=[
+                        f"Solicitação `#{registro.id}` já está como `{registro.status}`.",
+                        "Outra pessoa da diretoria já registrou a decisão.",
+                    ],
+                    delay=12,
+                )
+                try:
+                    if interacao.message is not None:
+                        await interacao.message.delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
                 return
 
             guilda = interacao.guild
@@ -453,7 +479,7 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                 )
 
             # Após a decisão o card some do canal de aprovar/recusar —
-            # o resultado público já foi (ou será) para promovidos / não promovidos.
+            # o resultado público já foi para promovidos / não promovidos.
             try:
                 if interacao.message is not None:
                     await interacao.message.delete()
@@ -518,6 +544,22 @@ async def processar_escolha_trilha(
                 ),
                 delay=60,
                 com_marcador=False,
+            )
+            return
+
+        # Bloqueia segundo pedido enquanto houver um ainda PENDENTE
+        pedido_aberto = await obter_solicitacao_pendente(membro.id)
+        if pedido_aberto is not None:
+            await responder_aviso(
+                interacao,
+                titulo="Solicitação já enviada",
+                linhas=[
+                    f"Você já tem o pedido `#{pedido_aberto.id}` aguardando a diretoria.",
+                    f"**Trilha:** `{pedido_aberto.chave_trilha}`",
+                    f"**De:** `{pedido_aberto.cargo_de}` → **Para:** `{pedido_aberto.cargo_para}`",
+                    "Espere a análise (aprovar / reprovar) antes de enviar outro.",
+                ],
+                delay=20,
             )
             return
 
@@ -691,20 +733,41 @@ async def _postar_resultado_publico(
     staff: discord.Member,
     solicitacao_id: int,
 ) -> None:
-    """Publica em CANAL_PROMOVIDOS ou CANAL_NAO_PROMOVIDOS no padrão visual pedido."""
+    """
+    Publica o resultado em um único canal:
+    - aprovada → CANAL_PROMOVIDOS (fallback LOG_PROMOVIDOS)
+    - reprovada → CANAL_NAO_PROMOVIDOS (fallback LOG_PROMOVIDOS)
+
+    Antes o bot postava nos dois canais ao mesmo tempo e gerava card duplicado.
+    """
     if guilda is None:
         return
-    canal_id = (
-        CANAIS.get("CANAL_PROMOVIDOS")
-        if aprovada
-        else CANAIS.get("CANAL_NAO_PROMOVIDOS")
-    )
-    log_id = CANAIS.get("LOG_PROMOVIDOS")
-    canais_ids: list[int] = []
-    if canal_id:
-        canais_ids.append(int(canal_id))
-    if log_id and int(log_id) not in canais_ids:
-        canais_ids.append(int(log_id))
+
+    if aprovada:
+        canal_id = CANAIS.get("CANAL_PROMOVIDOS") or CANAIS.get("LOG_PROMOVIDOS")
+    else:
+        canal_id = CANAIS.get("CANAL_NAO_PROMOVIDOS") or CANAIS.get("LOG_PROMOVIDOS")
+
+    if not canal_id:
+        await enviar_erro_para_log_erros(
+            guilda,
+            "Canal de resultado de promoção não configurado",
+            RuntimeError("CANAL_PROMOVIDOS / CANAL_NAO_PROMOVIDOS ausentes"),
+            contexto="_postar_resultado_publico",
+            usuario=staff,
+        )
+        return
+
+    canal = guilda.get_channel(int(canal_id))
+    if canal is None:
+        await enviar_erro_para_log_erros(
+            guilda,
+            "Canal de resultado de promoção não encontrado",
+            RuntimeError(f"canal_id={canal_id}"),
+            contexto="_postar_resultado_publico",
+            usuario=staff,
+        )
+        return
 
     alvo = guilda.get_member(alvo_id)
     url_avatar = alvo.display_avatar.url if alvo is not None else None
@@ -732,38 +795,33 @@ async def _postar_resultado_publico(
     momento = int(datetime.now(timezone.utc).timestamp())
     rodape = f"-# 🏥 {guilda.name} • <t:{momento}:f>"
 
-    for cid in canais_ids:
-        canal = guilda.get_channel(cid)
-        if canal is None:
-            continue
-        # Título + quebra de linha antes do corpo (padrão pedido)
-        componentes: list = [
-            discord.ui.TextDisplay(f"# {titulo}\n"),
-        ]
-        if url_avatar:
-            componentes.append(
-                discord.ui.Section(
-                    corpo,
-                    accessory=discord.ui.Thumbnail(url_avatar),
-                )
+    componentes: list = [
+        discord.ui.TextDisplay(f"# {titulo}\n"),
+    ]
+    if url_avatar:
+        componentes.append(
+            discord.ui.Section(
+                corpo,
+                accessory=discord.ui.Thumbnail(url_avatar),
             )
-        else:
-            componentes.append(discord.ui.TextDisplay(corpo))
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-        componentes.append(discord.ui.TextDisplay(rodape))
+        )
+    else:
+        componentes.append(discord.ui.TextDisplay(corpo))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+    componentes.append(discord.ui.TextDisplay(rodape))
 
-        view = discord.ui.LayoutView(timeout=None)
-        view.add_item(discord.ui.Container(*componentes, accent_color=cor))
-        try:
-            await canal.send(view=view)
-        except discord.HTTPException as erro:
-            await enviar_erro_para_log_erros(
-                guilda,
-                "Falha ao postar resultado de promoção",
-                erro,
-                contexto="_postar_resultado_publico",
-                usuario=staff,
-            )
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*componentes, accent_color=cor))
+    try:
+        await canal.send(view=view)
+    except discord.HTTPException as erro:
+        await enviar_erro_para_log_erros(
+            guilda,
+            "Falha ao postar resultado de promoção",
+            erro,
+            contexto="_postar_resultado_publico",
+            usuario=staff,
+        )
 
 
 def view_persistente_promocao() -> PainelPromocaoLayout:
