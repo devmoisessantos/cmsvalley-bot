@@ -967,15 +967,9 @@ class BackupCog(commands.Cog):
                     f"Canal: <#{resultado.get('canal_id')}>",
                 ],
                 cor=COR_SUCESSO,
-                delay=30,
+                delay=20,
             )
-            await self.logger.log(
-                interacao.guild,
-                "🗄️ Backup do banco (manual)",
-                f"{resultado.get('arquivo')} · hash={str(resultado.get('hash') or '')[:16]}",
-                COR_SUCESSO,
-                autor=str(interacao.user),
-            )
+            # Só o card + JSON no LOG_BACKUP — sem mensagem extra de log
         else:
             await enviar_card(
                 interacao,

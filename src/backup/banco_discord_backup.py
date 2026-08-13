@@ -47,6 +47,11 @@ from src.utils.mensagens import (
 
 MARCADOR_BACKUP_DB = "🗄️ DB_BACKUP"
 PADRAO_HASH = re.compile(r"hash=`([a-f0-9]{16,64})`", re.IGNORECASE)
+# Nome do anexo: db_backup_<hash16>_<timestamp>.json
+PADRAO_HASH_NO_ARQUIVO = re.compile(
+    r"db_backup_([a-f0-9]{16})_",
+    re.IGNORECASE,
+)
 
 
 def _canal_log_backup(guilda: discord.Guild) -> discord.TextChannel | None:
@@ -83,23 +88,16 @@ def _formatar_numero_linhas(quantidade: int) -> str:
     return f"{int(quantidade):,}".replace(",", ".")
 
 
-def _montar_conteudo_parseavel(
-    snapshot: dict[str, Any],
-    *,
-    autor: str | None = None,
-) -> str:
-    """
-    Texto curto na mensagem (não é o card visual).
-    Serve para o bot achar o hash no history sem abrir o LayoutView.
-    """
-    hash_completo = snapshot.get("hash_conteudo") or ""
-    linhas = [
-        MARCADOR_BACKUP_DB,
-        f"hash=`{hash_completo}`",
-    ]
-    if autor:
-        linhas.append(f"por=`{autor}`")
-    return "\n".join(linhas)
+def _formatar_tamanho_arquivo(bytes_tamanho: int) -> str:
+    """Ex.: 2097152 → 2 MB"""
+    if bytes_tamanho < 1024:
+        return f"{bytes_tamanho} B"
+    if bytes_tamanho < 1024 * 1024:
+        return f"{bytes_tamanho / 1024:.1f} KB".replace(".0 KB", " KB")
+    megas = bytes_tamanho / (1024 * 1024)
+    if megas < 10:
+        return f"{megas:.1f} MB".replace(".0 MB", " MB")
+    return f"{int(round(megas))} MB"
 
 
 def _montar_card_backup_db(
@@ -107,15 +105,13 @@ def _montar_card_backup_db(
     snapshot: dict[str, Any],
     *,
     autor: str | None = None,
+    nome_arquivo: str,
+    tamanho_bytes: int,
 ) -> discord.ui.LayoutView:
     """
-    Card Components V2 no canal LOG_BACKUP.
+    Card Components V2 único no LOG_BACKUP (+ anexo JSON na mesma mensagem).
 
-    Layout pedido:
-      # 🗄️ CMS Valley - Backup DB + thumbnail
-      hash / tabelas / linhas / em / por
-      separador
-      verificação + status
+    Hash curto fica no nome do arquivo para o bot comparar sem content.
     """
     hash_completo = snapshot.get("hash_conteudo") or "—"
     hash_curto = hash_completo[:16] if hash_completo != "—" else "—"
@@ -143,7 +139,10 @@ def _montar_card_backup_db(
         f"> `📊` * **Tabelas:** `{quantidade_tabelas}`\n"
         f"> `📄` * **Linhas:** `{_formatar_numero_linhas(quantidade_linhas)}`\n"
         f"> `🕐` * **Em:** `{texto_momento}`\n"
-        f"> `👤` * **Por:** *{autor_texto}*"
+        f"> `👤` * **Por:** *{autor_texto}*\n\n"
+        f"## 📦 Arquivo\n"
+        f"* `{nome_arquivo}`\n"
+        f"* **Tamanho:** `{_formatar_tamanho_arquivo(tamanho_bytes)}`"
     )
     rodape = f"* **Verificação:** `{verificacao}`\n* **Status:** ||✅ Concluído||"
 
@@ -184,6 +183,26 @@ def _extrair_hash_do_conteudo(conteudo: str | None) -> str | None:
     encontrado = PADRAO_HASH.search(conteudo)
     if encontrado:
         return encontrado.group(1)
+    return None
+
+
+def _extrair_hash_do_nome_arquivo(nome: str | None) -> str | None:
+    if not nome:
+        return None
+    encontrado = PADRAO_HASH_NO_ARQUIVO.search(nome)
+    if encontrado:
+        return encontrado.group(1).lower()
+    return None
+
+
+def _extrair_hash_da_mensagem(mensagem: discord.Message) -> str | None:
+    """Hash no content (legado) ou no nome do anexo JSON."""
+    hash_content = _extrair_hash_do_conteudo(mensagem.content)
+    if hash_content:
+        return hash_content.lower()
+    anexo = _anexo_json_da_mensagem(mensagem)
+    if anexo is not None:
+        return _extrair_hash_do_nome_arquivo(anexo.filename)
     return None
 
 
@@ -232,8 +251,13 @@ async def exportar_banco_para_canal(
     if not forcar:
         ultimo = await obter_ultimo_backup_mensagem(canal)
         if ultimo is not None:
-            hash_canal = _extrair_hash_do_conteudo(ultimo.content)
-            if hash_canal and hash_canal == hash_local:
+            hash_canal = _extrair_hash_da_mensagem(ultimo) or ""
+            # Compara pelos 16 primeiros (nome do arquivo) ou hash completo (legado)
+            if hash_canal and (
+                hash_canal == hash_local
+                or hash_canal == hash_local[:16]
+                or hash_local.startswith(hash_canal)
+            ):
                 return {
                     "enviado": False,
                     "motivo": "sem alteração (hash igual ao último no canal)",
@@ -243,23 +267,25 @@ async def exportar_banco_para_canal(
 
     quantidade_tabelas, quantidade_linhas = _contar_linhas(snapshot)
     carimbo = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-    nome_arquivo = f"db_backup_{carimbo}.json"
+    hash_curto = (hash_local or "semhash")[:16]
+    nome_arquivo = f"db_backup_{hash_curto}_{carimbo}.json"
     conteudo_json = json.dumps(snapshot, ensure_ascii=False, indent=2)
+    bytes_json = conteudo_json.encode("utf-8")
+    tamanho_bytes = len(bytes_json)
     arquivo = discord.File(
-        fp=io.BytesIO(conteudo_json.encode("utf-8")),
+        fp=io.BytesIO(bytes_json),
         filename=nome_arquivo,
     )
 
-    # Components V2 não permite content + view na mesma mensagem.
-    # 1ª = card visual | 2ª = marcador/hash + anexo JSON
-    view_card = _montar_card_backup_db(guilda, snapshot, autor=autor)
-    mensagem_card = await canal.send(view=view_card)
-
-    texto_parseavel = _montar_conteudo_parseavel(snapshot, autor=autor)
-    mensagem_arquivo = await canal.send(
-        content=texto_parseavel,
-        file=arquivo,
+    # Uma mensagem só: card V2 + anexo JSON (sem content — regra do Components V2)
+    view_card = _montar_card_backup_db(
+        guilda,
+        snapshot,
+        autor=autor,
+        nome_arquivo=nome_arquivo,
+        tamanho_bytes=tamanho_bytes,
     )
+    mensagem = await canal.send(view=view_card, file=arquivo)
 
     return {
         "enviado": True,
@@ -267,20 +293,29 @@ async def exportar_banco_para_canal(
         "hash": hash_local,
         "tabelas": quantidade_tabelas,
         "linhas": quantidade_linhas,
-        "mensagem_id": mensagem_arquivo.id,
-        "mensagem_card_id": mensagem_card.id,
+        "mensagem_id": mensagem.id,
         "arquivo": nome_arquivo,
         "canal_id": canal.id,
+        "tamanho_bytes": tamanho_bytes,
     }
 
 
 async def obter_ultimo_backup_mensagem(
     canal: discord.TextChannel,
 ) -> discord.Message | None:
+    """Última mensagem do canal que tem anexo .json de backup."""
     async for mensagem in canal.history(limit=50):
-        if MARCADOR_BACKUP_DB in (mensagem.content or ""):
-            if _anexo_json_da_mensagem(mensagem) is not None:
-                return mensagem
+        anexo = _anexo_json_da_mensagem(mensagem)
+        if anexo is None:
+            continue
+        nome = (anexo.filename or "").lower()
+        if nome.startswith("db_backup_") or MARCADOR_BACKUP_DB in (
+            mensagem.content or ""
+        ):
+            return mensagem
+        # Qualquer .json no LOG_BACKUP conta (legado)
+        if nome.endswith(".json"):
+            return mensagem
     return None
 
 
@@ -295,16 +330,21 @@ async def listar_backups_do_canal(
 
     encontrados: list[dict[str, Any]] = []
     async for mensagem in canal.history(limit=80):
-        if MARCADOR_BACKUP_DB not in (mensagem.content or ""):
-            continue
         anexo = _anexo_json_da_mensagem(mensagem)
         if anexo is None:
+            continue
+        nome = (anexo.filename or "").lower()
+        if not (
+            nome.startswith("db_backup_")
+            or MARCADOR_BACKUP_DB in (mensagem.content or "")
+            or nome.endswith(".json")
+        ):
             continue
         encontrados.append(
             {
                 "mensagem_id": mensagem.id,
                 "criado_em": mensagem.created_at.isoformat(),
-                "hash": _extrair_hash_do_conteudo(mensagem.content),
+                "hash": _extrair_hash_da_mensagem(mensagem),
                 "arquivo": anexo.filename,
                 "url": anexo.url,
                 "tamanho": anexo.size,
@@ -344,10 +384,18 @@ async def verificar_banco_vs_canal(guilda: discord.Guild) -> dict[str, Any]:
             "linhas": quantidade_linhas,
         }
 
-    hash_canal = _extrair_hash_do_conteudo(ultimo.content)
+    hash_canal = _extrair_hash_da_mensagem(ultimo)
+    igual = bool(
+        hash_canal
+        and (
+            hash_canal == hash_local
+            or hash_canal == hash_local[:16]
+            or hash_local.startswith(hash_canal)
+        )
+    )
     return {
         "ok": True,
-        "igual": bool(hash_canal and hash_canal == hash_local),
+        "igual": igual,
         "motivo": "comparado com o último do canal",
         "hash_local": hash_local,
         "hash_canal": hash_canal,
