@@ -188,18 +188,18 @@ def montar_yaml_para_copiar(
     Texto para o responsável copiar e colar no servidor Valley Roleplay.
     Só vai na ephemeral — o canal de laudos continua com o card formatado.
     """
-    emoji_parecer = "✅ APROVADO" if parecer == "APROVADO" else "❌ REPROVADO"
+    emoji_parecer = "✅ **APROVADO**" if parecer == "APROVADO" else "❌ **REPROVADO**"
     corpo = (
-        "# 📋 CMS Valley — LAUDO PSICOLÓGICO"
+        "# 📋 CMS Valley — LAUDO PSICOLÓGICO\n"
         "> 📌 **Finalidade:** Avaliação para porte de arma de fogo."
         "\n\n"
         "👤 **Identificação do Avaliado**"
         "\n"
-        f"• Nome: <@{discord_id_paciente}> • Passaporte: {id_fivem_paciente}"
+        f"• Nome: <@{discord_id_paciente}> • FID: `{id_fivem_paciente}`"
         "\n\n"
         "🥼 **Psicólogo Responsável**"
         "\n"
-        f"• Nome: <@{discord_id_psicologo}> • Passaporte: {id_fivem_psicologo}"
+        f"• Nome: <@{discord_id_psicologo}> • FID: `{id_fivem_psicologo}`"
         "\n"
         f"• Registro Profissional: `{registro_profissional}`"
         "\n\n"
