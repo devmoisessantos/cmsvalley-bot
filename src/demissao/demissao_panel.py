@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import discord
 
-from src.config import CANAIS, GUILD_ID
+from src.config import CANAIS
 from src.demissao.demissao_service import (
     aplicar_cargos_demissao,
     cargo_atual_hierarquia,
@@ -17,12 +17,26 @@ from src.demissao.demissao_service import (
     membro_e_diretoria,
     membro_pode_solicitar_demissao,
     obter_pedido_pendente,
-    obter_solicitacao,
 )
-from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin, enviar_erro_para_log_erros
-from src.utils.formatacao import agora_brasilia, para_horario_brasilia
-from src.utils.mensagens import responder_aviso, responder_erro, responder_sucesso
-from src.utils.notificacao import enviar_dm_card, COR_AVISO, COR_ERRO, COR_INFO, COR_SUCESSO
+from src.utils.error_handling import (
+    LoggingModalMixin,
+    LoggingViewMixin,
+    enviar_erro_para_log_erros,
+)
+from src.utils.formatacao import (
+    agora_brasilia,
+    para_horario_brasilia,
+)
+from src.utils.mensagens import (
+    responder_aviso,
+    responder_erro,
+    responder_sucesso,
+)
+from src.utils.notificacao import (
+    COR_AVISO,
+    COR_INFO,
+    enviar_dm_card,
+)
 
 CUSTOM_ID_SOLICITAR = "demissao:solicitar"
 CUSTOM_ID_APROVAR = "demissao:aprovar:"
@@ -48,8 +62,7 @@ def _formatar_momento_brasilia(data: datetime | None = None) -> str:
         "Dez",
     )
     return (
-        f"{local.day} {meses[local.month - 1]} {local.year} — "
-        f"{local.strftime('%H:%M')}"
+        f"{local.day} {meses[local.month - 1]} {local.year} — {local.strftime('%H:%M')}"
     )
 
 
@@ -355,6 +368,8 @@ class ViewDecisaoDemissao(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.solicitacao_id = solicitacao_id
 
+        # Só custom_id — o callback fica no on_interaction do cog
+        # (evita processar a mesma interação duas vezes).
         linha = discord.ui.ActionRow()
         botao_ok = discord.ui.Button(
             label="Aprovar demissão",
@@ -362,14 +377,12 @@ class ViewDecisaoDemissao(LoggingViewMixin, discord.ui.LayoutView):
             emoji="✅",
             custom_id=f"{CUSTOM_ID_APROVAR}{solicitacao_id}",
         )
-        botao_ok.callback = self._ao_aprovar
         botao_no = discord.ui.Button(
             label="Recusar",
             style=discord.ButtonStyle.danger,
             emoji="❌",
             custom_id=f"{CUSTOM_ID_REPROVAR}{solicitacao_id}",
         )
-        botao_no.callback = self._ao_recusar
         linha.add_item(botao_ok)
         linha.add_item(botao_no)
 
@@ -387,16 +400,6 @@ class ViewDecisaoDemissao(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
-    async def _ao_aprovar(self, interacao: discord.Interaction):
-        await processar_decisao_demissao(
-            interacao, self.solicitacao_id, aprovada=True
-        )
-
-    async def _ao_recusar(self, interacao: discord.Interaction):
-        await processar_decisao_demissao(
-            interacao, self.solicitacao_id, aprovada=False
-        )
-
 
 async def processar_decisao_demissao(
     interacao: discord.Interaction,
@@ -404,6 +407,9 @@ async def processar_decisao_demissao(
     *,
     aprovada: bool,
 ) -> None:
+    if interacao.response.is_done():
+        return
+
     if not isinstance(interacao.user, discord.Member) or interacao.guild is None:
         await responder_erro(
             interacao,
