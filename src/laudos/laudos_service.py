@@ -19,9 +19,12 @@ from src.config import CARGOS
 from src.database.connection import async_session
 from src.database.models import (
     ConsultaLaudo,
+    EstadoPlantao,
     Laudo,
+    Recrutamento,
+    Usuario,
 )
-from src.recrutamento.recrutamento_service import resolver_id_fivem
+from src.plantao.ocr.scraping_membros import extrair_id_do_apelido
 
 NOMES_CARGOS_PSICOLOGO = (
     "🩺・Psicólogo",
@@ -35,6 +38,109 @@ def membro_e_psicologo(membro: discord.Member) -> bool:
         return True
     ids_permitidos = {CARGOS[nome] for nome in NOMES_CARGOS_PSICOLOGO if nome in CARGOS}
     return any(cargo.id in ids_permitidos for cargo in membro.roles)
+
+
+async def _buscar_id_fivem_no_banco(discord_id: int) -> str | None:
+    """
+    Ordem: usuarios → estado_plantao → qualquer recrutamento com passaporte.
+    (Visitantes novos quase nunca têm recrutamento APROVADO.)
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Usuario.id_fivem).where(
+                Usuario.discord_id == discord_id,
+                Usuario.id_fivem.is_not(None),
+            )
+        )
+        valor = resultado.scalar_one_or_none()
+        if valor:
+            return str(valor).strip() or None
+
+        resultado = await sessao.execute(
+            select(EstadoPlantao.id_fivem).where(
+                EstadoPlantao.discord_id == discord_id,
+                EstadoPlantao.id_fivem.is_not(None),
+            )
+        )
+        valor = resultado.scalar_one_or_none()
+        if valor:
+            return str(valor).strip() or None
+
+        resultado = await sessao.execute(
+            select(Recrutamento.id_fivem)
+            .where(
+                Recrutamento.discord_id_candidato == discord_id,
+                Recrutamento.id_fivem.is_not(None),
+            )
+            .order_by(Recrutamento.id.desc())
+            .limit(1)
+        )
+        valor = resultado.scalar_one_or_none()
+        if valor:
+            return str(valor).strip() or None
+    return None
+
+
+async def _persistir_id_fivem_no_usuario(
+    membro: discord.Member,
+    id_fivem: str,
+) -> None:
+    """
+    Grava o passaporte em usuarios (e preenche se a linha ainda não existir).
+    Nunca sobrescreve um id_fivem que já estiver salvo.
+    """
+    id_limpo = str(id_fivem).strip()[:20]
+    if not id_limpo:
+        return
+
+    nickname = (membro.nick or membro.display_name or membro.name or "")[:100]
+
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Usuario).where(Usuario.discord_id == membro.id)
+        )
+        usuario = resultado.scalar_one_or_none()
+        if usuario is None:
+            sessao.add(
+                Usuario(
+                    discord_id=membro.id,
+                    id_fivem=id_limpo,
+                    nickname_atual=nickname or None,
+                    status="VISITANTE",
+                    ja_foi_aprovado=False,
+                )
+            )
+        else:
+            if not usuario.id_fivem:
+                usuario.id_fivem = id_limpo
+            if nickname and not usuario.nickname_atual:
+                usuario.nickname_atual = nickname
+        await sessao.commit()
+
+
+async def resolver_e_persistir_id_fivem(membro: discord.Member) -> str | None:
+    """
+    Resolve o passaporte FiveM do membro e grava em usuarios se ainda não tinha.
+
+    Fontes (nessa ordem):
+      1. Tabela usuarios
+      2. estado_plantao
+      3. recrutamento (qualquer status com id)
+      4. Apelido no padrão `Nome | 12345`
+    """
+    id_banco = await _buscar_id_fivem_no_banco(membro.id)
+    if id_banco:
+        # Garante que usuarios também tem o valor (visitante antigo só no plantão, etc.)
+        await _persistir_id_fivem_no_usuario(membro, id_banco)
+        return id_banco
+
+    nome_exibido = membro.nick or membro.display_name or membro.name or ""
+    id_do_apelido = extrair_id_do_apelido(nome_exibido)
+    if id_do_apelido:
+        await _persistir_id_fivem_no_usuario(membro, id_do_apelido)
+        return str(id_do_apelido).strip()
+
+    return None
 
 
 async def buscar_consulta_aberta(discord_id_psicologo: int) -> ConsultaLaudo | None:
@@ -55,10 +161,14 @@ async def iniciar_consulta(
     *,
     psicologo: discord.Member,
     paciente: discord.Member,
+    id_fivem_paciente_manual: str | None = None,
 ) -> tuple[bool, str, ConsultaLaudo | None]:
     """
     Abre uma consulta ABERTA para o psicólogo.
     Só permite uma consulta aberta por vez por psicólogo.
+
+    id_fivem_paciente_manual: passaporte digitado pelo psicólogo quando
+    o paciente (visitante) ainda não tem ID no banco/apelido.
     """
     if not membro_e_psicologo(psicologo):
         return (
@@ -84,21 +194,33 @@ async def iniciar_consulta(
             consulta_existente,
         )
 
-    id_fivem_psicologo = await resolver_id_fivem(psicologo.id)
-    id_fivem_paciente = await resolver_id_fivem(paciente.id)
+    id_fivem_psicologo = await resolver_e_persistir_id_fivem(psicologo)
+    id_fivem_paciente = await resolver_e_persistir_id_fivem(paciente)
+
+    # Passaporte informado na hora (visitante sem ID no nick/banco)
+    if not id_fivem_paciente and id_fivem_paciente_manual:
+        id_manual = str(id_fivem_paciente_manual).strip()
+        if id_manual.isdigit() and 1 <= len(id_manual) <= 7:
+            await _persistir_id_fivem_no_usuario(paciente, id_manual)
+            id_fivem_paciente = id_manual
 
     if not id_fivem_psicologo:
         return (
             False,
-            "Seu ID FiveM não foi encontrado no banco. Vincule o ID antes de atender.",
+            (
+                "Seu ID FiveM não foi encontrado. "
+                "Coloque o passaporte no apelido no formato `Nome | 12345` "
+                "ou vincule o ID no banco antes de atender."
+            ),
             None,
         )
     if not id_fivem_paciente:
         return (
             False,
             (
-                f"O paciente {paciente.mention} não tem ID FiveM registrado. "
-                "Peça para o paciente vincular o passaporte ou informe o recrutamento."
+                f"O paciente {paciente.mention} não tem ID FiveM reconhecido.\n"
+                "Peça o apelido no padrão **`Nome | passaporte`** "
+                "(ex.: `João Silva | 1382`) **ou** informe o passaporte no modal."
             ),
             None,
         )

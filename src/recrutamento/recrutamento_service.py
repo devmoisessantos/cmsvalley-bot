@@ -351,24 +351,43 @@ async def validar_e_iniciar_recrutamento(
 
 
 async def resolver_id_fivem(discord_id: int) -> str | None:
-    """Prioridade: 1) id_fivem já salvo em EstadoPlantao (de recrutamento anterior ou modal).
-    2) Recrutamento aprovado mais recente. Retorna None se não encontrado em nenhum lugar."""
+    """
+    Prioridade:
+      1) usuarios.id_fivem
+      2) EstadoPlantao.id_fivem
+      3) Recrutamento com passaporte (qualquer status; preferindo o mais recente)
+    """
     async with async_session() as session:
+        from src.database.models import Usuario
+
+        resultado_usuario = await session.execute(
+            select(Usuario.id_fivem).where(
+                Usuario.discord_id == discord_id,
+                Usuario.id_fivem.is_not(None),
+            )
+        )
+        id_usuario = resultado_usuario.scalar_one_or_none()
+        if id_usuario:
+            return str(id_usuario)
+
         resultado = await session.execute(
-            select(EstadoPlantao.id_fivem).where(EstadoPlantao.discord_id == discord_id)
+            select(EstadoPlantao.id_fivem).where(
+                EstadoPlantao.discord_id == discord_id,
+                EstadoPlantao.id_fivem.is_not(None),
+            )
         )
         id_fivem_salvo = resultado.scalar_one_or_none()
         if id_fivem_salvo:
-            return id_fivem_salvo
+            return str(id_fivem_salvo)
 
         resultado_rec = await session.execute(
             select(Recrutamento.id_fivem)
             .where(
                 Recrutamento.discord_id_candidato == discord_id,
-                Recrutamento.status == "APROVADO",
                 Recrutamento.id_fivem.is_not(None),
             )
             .order_by(Recrutamento.id.desc())
             .limit(1)
         )
-        return resultado_rec.scalar_one_or_none()
+        valor = resultado_rec.scalar_one_or_none()
+        return str(valor) if valor else None

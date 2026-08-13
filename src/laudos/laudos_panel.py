@@ -337,12 +337,30 @@ async def _finalizar_inicio_consulta_com_id(
             linhas=[mensagem],
             delay=20,
         )
-    else:
-        await responder_erro(
-            interacao,
-            titulo="Não foi possível iniciar",
-            linhas=[mensagem],
+        return
+
+    # Visitante sem passaporte no banco/apelido → botão que abre modal do ID FiveM
+    precisa_passaporte = (
+        ("ID FiveM" in mensagem or "passaporte" in mensagem.lower())
+        and "Você já tem uma consulta" not in mensagem
+        and paciente.id != interacao.user.id
+    )
+    if precisa_passaporte:
+        await interacao.followup.send(
+            view=ViewInformarPassaporte(
+                id_do_psicologo=id_do_psicologo,
+                id_paciente=paciente.id,
+                texto_erro=mensagem,
+            ),
+            ephemeral=True,
         )
+        return
+
+    await responder_erro(
+        interacao,
+        titulo="Não foi possível iniciar",
+        linhas=[mensagem],
+    )
 
 
 class ModalBuscarPacientePorDiscordId(
@@ -375,6 +393,139 @@ class ModalBuscarPacientePorDiscordId(
             id_do_psicologo=self.id_do_psicologo,
             id_paciente=int(texto),
         )
+
+
+class ViewInformarPassaporte(LoggingViewMixin, discord.ui.LayoutView):
+    """Quando o visitante não tem ID no banco/apelido — botão abre modal."""
+
+    def __init__(
+        self,
+        *,
+        id_do_psicologo: int,
+        id_paciente: int,
+        texto_erro: str,
+    ):
+        super().__init__(timeout=180)
+        self.id_do_psicologo = id_do_psicologo
+        self.id_paciente = id_paciente
+
+        linha = discord.ui.ActionRow()
+        botao = discord.ui.Button(
+            label="Informar passaporte",
+            style=discord.ButtonStyle.primary,
+            emoji="🪪",
+            custom_id="laudos:informar_passaporte",
+        )
+        botao.callback = self._ao_abrir_modal
+        linha.add_item(botao)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# 🪪 Passaporte não encontrado\n"
+                    f"{texto_erro}\n\n"
+                    "Informe o **ID FiveM** do paciente. "
+                    "O bot grava em `usuarios` e inicia a consulta."
+                ),
+                linha,
+                accent_color=discord.Color.orange(),
+            )
+        )
+
+    async def _ao_abrir_modal(self, interacao: discord.Interaction):
+        if interacao.user.id != self.id_do_psicologo:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Este botão não é seu."],
+            )
+            return
+        await interacao.response.send_modal(
+            ModalInformarPassaportePaciente(
+                id_do_psicologo=self.id_do_psicologo,
+                id_paciente=self.id_paciente,
+            )
+        )
+
+
+class ModalInformarPassaportePaciente(
+    LoggingModalMixin, discord.ui.Modal, title="🪪 Passaporte FiveM do paciente"
+):
+    passaporte_input = discord.ui.TextInput(
+        label="ID FiveM (passaporte)",
+        placeholder="Ex: 1382",
+        required=True,
+        min_length=1,
+        max_length=7,
+    )
+
+    def __init__(self, *, id_do_psicologo: int, id_paciente: int):
+        super().__init__()
+        self.id_do_psicologo = id_do_psicologo
+        self.id_paciente = id_paciente
+
+    async def on_submit(self, interacao: discord.Interaction):
+        texto = self.passaporte_input.value.strip()
+        if not texto.isdigit():
+            await responder_erro(
+                interacao,
+                titulo="Passaporte inválido",
+                linhas=["Informe só números do ID FiveM (ex.: 1382)."],
+            )
+            return
+
+        if interacao.user.id != self.id_do_psicologo:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Esta ação não é sua."],
+            )
+            return
+
+        guilda = interacao.guild
+        if guilda is None or not isinstance(interacao.user, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Contexto inválido",
+                linhas=["Use o painel dentro do servidor."],
+            )
+            return
+
+        paciente = guilda.get_member(self.id_paciente)
+        if paciente is None:
+            try:
+                paciente = await guilda.fetch_member(self.id_paciente)
+            except discord.HTTPException:
+                paciente = None
+        if paciente is None:
+            await responder_erro(
+                interacao,
+                titulo="Paciente não encontrado",
+                linhas=[f"Discord ID `{self.id_paciente}` não está no servidor."],
+            )
+            return
+
+        if not interacao.response.is_done():
+            await interacao.response.defer(ephemeral=True)
+
+        ok, mensagem, _consulta = await iniciar_consulta(
+            psicologo=interacao.user,
+            paciente=paciente,
+            id_fivem_paciente_manual=texto,
+        )
+        if ok:
+            await responder_sucesso(
+                interacao,
+                titulo="Consulta iniciada",
+                linhas=[mensagem, f"Passaporte gravado: `{texto}`"],
+                delay=20,
+            )
+        else:
+            await responder_erro(
+                interacao,
+                titulo="Não foi possível iniciar",
+                linhas=[mensagem],
+            )
 
 
 class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Laudo"):
