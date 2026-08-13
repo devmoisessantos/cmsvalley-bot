@@ -85,6 +85,7 @@ class CmsValleyBot(commands.Bot):
             "src.cogs.moderacao",
             "src.cogs.busca",
             "src.cogs.manutencao",
+            "src.cogs.avaliar_atendimento",
             "src.punicoes.cogs",
             "src.gate.gate_cogs",
             "src.guia.guia_cogs",
