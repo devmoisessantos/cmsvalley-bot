@@ -478,6 +478,19 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                     solicitacao_id=registro.id,
                 )
 
+            # DM + log LOG_NOTIFICACOES_DM
+            from src.utils.notificacao import notificar_dm_promocao_resultado
+
+            await notificar_dm_promocao_resultado(
+                alvo=alvo,
+                aprovada=aprovada,
+                cargo_de=registro.cargo_de,
+                cargo_para=registro.cargo_para,
+                solicitacao_id=registro.id,
+                staff=membro,
+                guilda=guilda,
+            )
+
             # Após a decisão o card some do canal de aprovar/recusar —
             # o resultado público já foi para promovidos / não promovidos.
             try:

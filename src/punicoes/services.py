@@ -332,6 +332,17 @@ async def executar_exoneracao(
                 row.message_id = msg_exo.id
                 await session.commit()
 
+    from src.utils.notificacao import notificar_dm_exoneracao
+
+    await notificar_dm_exoneracao(
+        alvo=alvo,
+        executor=executor,
+        id_fivem=id_fivem or "—",
+        motivo=motivo or "Exoneração",
+        automatica=automatica,
+        msg_log=msg_exo,
+    )
+
     origem = "automática (3ª advertência)" if automatica else "manual"
     return True, f"⛔ Exoneração {origem} concluída em {alvo.mention}."
 
@@ -456,6 +467,15 @@ async def remover_punicao(
         motivo_remocao=motivo_remocao,
         punicao_ids=punicao_ids,
         id_fivem=id_fivem,
+    )
+
+    from src.utils.notificacao import notificar_dm_remocao_punicao
+
+    await notificar_dm_remocao_punicao(
+        alvo=alvo,
+        executor=executor,
+        cargos_removidos=removidos,
+        motivo_remocao=motivo_remocao,
     )
 
     lista = ", ".join(f"**{n.strip()}**" for n in removidos)

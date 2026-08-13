@@ -46,12 +46,21 @@ async def enviar_dm_excesso(
     membro: discord.Member,
     caso: CasoBau,
 ) -> bool:
+    """DM de excesso no baú + log em LOG_NOTIFICACOES_DM."""
+    from src.utils.notificacao import enviar_dm_view
+
     view_dm = ViewDmDevolucao(caso_id=caso.id, guild_id=membro.guild.id)
-    try:
-        await membro.send(view=view_dm)
-        return True
-    except (discord.Forbidden, discord.HTTPException):
-        return False
+    return await enviar_dm_view(
+        membro,
+        view_dm,
+        titulo_log="Baú — excesso / devolução",
+        linhas_resumo=[
+            f"Caso `#{caso.id}`",
+            f"Passaporte `{getattr(caso, 'id_fivem', '—')}`",
+            f"Status `{getattr(caso, 'status', '—')}`",
+        ],
+        guilda=membro.guild,
+    )
 
 
 async def log_item_desconhecido(guild: discord.Guild, nome: str, id_fivem: str) -> None:

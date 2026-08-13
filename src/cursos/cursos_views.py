@@ -798,7 +798,7 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
             # Publica em aprovar/reprovar
             await publicar_para_decisao(guilda, registro=registro, aluno=aluno)
 
-            # DM do aluno
+            # DM do aluno + log LOG_NOTIFICACOES_DM
             if aluno is not None:
                 await enviar_dm_card(
                     aluno,
@@ -810,6 +810,7 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                         "Aguarde a **aprovação final** após a aplicação do curso.",
                     ],
                     cor=COR_SUCESSO,
+                    guilda=guilda,
                 )
 
             await responder_sucesso(
@@ -1112,6 +1113,17 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                     chaves=reprovadas,
                     aprovado=False,
                 )
+
+            from src.utils.notificacao import notificar_dm_curso_resultado
+
+            await notificar_dm_curso_resultado(
+                aluno=aluno,
+                aprovadas=aprovadas,
+                reprovadas=reprovadas,
+                solicitacao_id=registro.id,
+                staff=membro,
+                guilda=guilda,
+            )
 
             resumo = (
                 f"Aprovados: {', '.join(rotulo_curso(c) for c in aprovadas) or '—'}\n"

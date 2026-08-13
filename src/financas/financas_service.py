@@ -288,18 +288,21 @@ async def _processar_fechamento_ranking_interno(
     else:
         logger.warning("CANAL_FINANCAS ausente — fechamento %s sem post", chave_area)
 
+    from src.utils.notificacao import notificar_dm_controle_financeiro
+
     for diretor_id in DIRETOR_CONTROLE_FINANCEIRO_IDS:
         try:
             usuario = await bot.fetch_user(int(diretor_id))
-            await usuario.send(content=texto_dm)
-        except (discord.Forbidden, discord.HTTPException) as erro:
-            logger.warning("DM controle financeiro %s falhou: %s", diretor_id, erro)
-            await enviar_erro_para_log_erros(
-                guild,
-                f"DM controle financeiro falhou (id={diretor_id})",
-                erro,
-                contexto="processar_fechamento_ranking DM",
-            )
+        except (discord.NotFound, discord.HTTPException) as erro:
+            logger.warning("Fetch diretor financeiro %s falhou: %s", diretor_id, erro)
+            continue
+        enviou = await notificar_dm_controle_financeiro(
+            usuario,
+            texto=texto_dm,
+            guilda=guild,
+        )
+        if not enviou:
+            logger.warning("DM controle financeiro %s não enviada", diretor_id)
 
 
 async def publicar_solicitacao_troca_moedas(

@@ -552,6 +552,7 @@ async def notificar_dm_moeda_creditada(
     *,
     saldo_total: int,
     valor_em_reais: str | None = None,
+    guilda: discord.Guild | None = None,
 ) -> bool:
     """Opcional: avisa quando uma moeda é creditada no plantão."""
     linhas = [
@@ -566,4 +567,175 @@ async def notificar_dm_moeda_creditada(
         titulo="Moeda creditada",
         linhas=linhas,
         cor=COR_SUCESSO,
+        guilda=guilda,
+    )
+
+
+# ---------------------------------------------------------------------------
+# View custom (ex.: botões de devolução do baú) + log
+# ---------------------------------------------------------------------------
+
+
+async def enviar_dm_view(
+    destino: discord.abc.User | discord.Member | None,
+    view: discord.ui.LayoutView | discord.ui.View,
+    *,
+    titulo_log: str,
+    linhas_resumo: list[str] | None = None,
+    guilda: discord.Guild | None = None,
+    registrar_log: bool = True,
+) -> bool:
+    """
+    Envia uma LayoutView/View pronta na DM e registra em LOG_NOTIFICACOES_DM.
+    Use quando o card já tem botões próprios (não só links).
+    """
+    if destino is None:
+        if registrar_log:
+            await _registrar_log_notificacao_dm(
+                destino=None,
+                titulo=titulo_log,
+                linhas_resumo=linhas_resumo or [],
+                enviou=False,
+                motivo_falha="destino None",
+                guilda=guilda,
+            )
+        return False
+
+    enviou = False
+    motivo_falha: str | None = None
+    try:
+        await destino.send(view=view)
+        enviou = True
+        logger.info(
+            "DM view enviada para %s (%s)",
+            destino,
+            getattr(destino, "id", "?"),
+        )
+    except discord.Forbidden:
+        motivo_falha = "DM bloqueada"
+        logger.warning(
+            "DM bloqueada para %s (%s)",
+            destino,
+            getattr(destino, "id", "?"),
+        )
+    except discord.HTTPException as erro:
+        motivo_falha = f"HTTP {erro}"
+        logger.warning(
+            "Falha HTTP ao enviar DM view para %s: %s",
+            getattr(destino, "id", "?"),
+            erro,
+        )
+
+    if registrar_log:
+        await _registrar_log_notificacao_dm(
+            destino=destino,
+            titulo=titulo_log,
+            linhas_resumo=linhas_resumo or [],
+            enviou=enviou,
+            motivo_falha=motivo_falha,
+            guilda=guilda
+            or (destino.guild if isinstance(destino, discord.Member) else None),
+        )
+    return enviou
+
+
+# ---------------------------------------------------------------------------
+# Promoções / Cursos / Finanças
+# ---------------------------------------------------------------------------
+
+
+async def notificar_dm_promocao_resultado(
+    *,
+    alvo: discord.Member | None,
+    aprovada: bool,
+    cargo_de: str,
+    cargo_para: str,
+    solicitacao_id: int,
+    staff: discord.Member | None = None,
+    guilda: discord.Guild | None = None,
+) -> bool:
+    """DM ao membro quando a diretoria aprova ou reprova a promoção."""
+    if aprovada:
+        titulo = "Promoção aprovada"
+        cor = COR_SUCESSO
+        linhas = [
+            f"Sua solicitação `#{solicitacao_id}` foi **aprovada**.",
+            "",
+            f"**De:** `{cargo_de}`",
+            f"**Para:** `{cargo_para}`",
+        ]
+    else:
+        titulo = "Promoção não aprovada"
+        cor = COR_AVISO
+        linhas = [
+            f"Sua solicitação `#{solicitacao_id}` **não foi aprovada**.",
+            "",
+            f"**Trilha:** `{cargo_de}` → `{cargo_para}`",
+            "Fale com a diretoria se precisar de mais detalhes.",
+        ]
+    if staff is not None:
+        linhas.extend(["", f"**Analisado por:** {staff.mention}"])
+    return await enviar_dm_card(
+        alvo,
+        titulo=titulo,
+        linhas=linhas,
+        cor=cor,
+        guilda=guilda,
+    )
+
+
+async def notificar_dm_curso_resultado(
+    *,
+    aluno: discord.Member | None,
+    aprovadas: list[str],
+    reprovadas: list[str],
+    solicitacao_id: int,
+    staff: discord.Member | None = None,
+    guilda: discord.Guild | None = None,
+) -> bool:
+    """DM ao aluno após decisão final dos cursos (parcial ou total)."""
+    linhas: list[str] = [f"Pedido `#{solicitacao_id}` analisado."]
+    if aprovadas:
+        linhas.append("")
+        linhas.append("**✅ Cursos aprovados:**")
+        for chave in aprovadas:
+            linhas.append(f"> `{chave}`")
+    if reprovadas:
+        linhas.append("")
+        linhas.append("**❌ Cursos não aprovados:**")
+        for chave in reprovadas:
+            linhas.append(f"> `{chave}`")
+    if staff is not None:
+        linhas.extend(["", f"**Instrutor / Responsavel:** {staff.mention}"])
+
+    if aprovadas and not reprovadas:
+        titulo = "Cursos aprovados"
+        cor = COR_SUCESSO
+    elif reprovadas and not aprovadas:
+        titulo = "Cursos não aprovados"
+        cor = COR_AVISO
+    else:
+        titulo = "Resultado dos cursos (parcial)"
+        cor = COR_INFO
+
+    return await enviar_dm_card(
+        aluno,
+        titulo=titulo,
+        linhas=linhas,
+        cor=cor,
+        guilda=guilda,
+    )
+
+
+async def notificar_dm_controle_financeiro(
+    destino: discord.abc.User | discord.Member | None,
+    *,
+    texto: str,
+    guilda: discord.Guild | None = None,
+) -> bool:
+    """DM aos diretores de controle financeiro no fechamento de ranking."""
+    return await enviar_dm_texto(
+        destino,
+        texto,
+        guilda=guilda,
     )
