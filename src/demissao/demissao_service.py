@@ -3,14 +3,28 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 
 import discord
-from sqlalchemy import func, select
+from sqlalchemy import (
+    func,
+    select,
+)
 
-from src.config import CARGOS, CARGOS_DIRETORIA, CARGOS_HIERARQUIA
+from src.config import (
+    CARGOS,
+    CARGOS_DIRETORIA,
+    CARGOS_HIERARQUIA,
+)
 from src.database.connection import async_session
-from src.database.models import Punicao, SolicitacaoDemissao
+from src.database.models import (
+    Punicao,
+    SolicitacaoDemissao,
+)
+from src.utils.nickname import remover_prefixo_existente
 
 
 def cargo_atual_hierarquia(membro: discord.Member) -> str:
@@ -171,4 +185,14 @@ async def aplicar_cargos_demissao(
     except discord.HTTPException as erro:
         return False, f"Falha ao ajustar cargos: {erro}"
 
-    return True, "Cargos ajustados (restou Visitantes)."
+    # Remove prefixo [ TAG ] do nick — mesmo padrão da exoneração
+    nick_limpo = remover_prefixo_existente(membro.display_name)[:32]
+    try:
+        nick_atual = membro.nick or membro.display_name
+        if nick_limpo and nick_limpo != nick_atual:
+            await membro.edit(nick=nick_limpo, reason=motivo_discord)
+    except (discord.Forbidden, discord.HTTPException):
+        # Nick não é crítico — demissão segue mesmo se falhar
+        pass
+
+    return True, "Cargos ajustados (restou Visitantes) e prefixo removido do nick."
