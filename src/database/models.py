@@ -705,6 +705,37 @@ class MovimentacaoMoeda(Base):
     )
 
 
+class SolicitacaoDemissao(Base):
+    """Pedido de demissão voluntária (hierarquia → Visitantes)."""
+
+    __tablename__ = "solicitacoes_demissao"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    membro_nome: Mapped[str] = mapped_column(String(120))
+    cargo: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    tipo_demissao: Mapped[str] = mapped_column(String(40), default="voluntaria")
+    motivo: Mapped[str] = mapped_column(Text)
+    data_solicitacao: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+    data_efetiva: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    solicitante_nome: Mapped[str] = mapped_column(String(120))
+    advertencias: Mapped[int] = mapped_column(Integer, default=0)
+    # pendente | aprovada | negada
+    status: Mapped[str] = mapped_column(String(20), default="pendente", index=True)
+    aprovado_por_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    aprovado_por_nome: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    mensagem_canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mensagem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+
+
 class PedidoDepositoMoeda(Base):
     """Pedido de depósito: $ in-game → moedas (aprovação staff)."""
 

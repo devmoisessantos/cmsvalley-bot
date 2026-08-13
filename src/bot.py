@@ -14,6 +14,7 @@ from src.config import (
 from src.cursos.cursos_setup import garantir_painel_cursos
 from src.database.connection import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
+from src.demissao.demissao_setup import garantir_painel_demissao
 from src.gate.gate_panel import PainelEventosGate
 from src.gate.gate_presenca import montar_container_presenca
 from src.gate.gate_service import listar_eventos_abertos
@@ -107,6 +108,7 @@ class CmsValleyBot(commands.Bot):
             "src.financas.financas_cogs",
             "src.cursos.cursos_cogs",
             "src.promocoes.promocoes_cogs",
+            "src.demissao.demissao_cogs",
         ]
 
         total = len(cogs)
@@ -239,6 +241,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_bau(self)
         await garantir_painel_cursos(self)
         await garantir_painel_promocao(self)
+        await garantir_painel_demissao(self)
 
         fim_deploy()
 

@@ -1,0 +1,54 @@
+# src/demissao/demissao_setup.py
+"""Publicação idempotente do painel de demissão."""
+
+from __future__ import annotations
+
+import discord
+from sqlalchemy import select
+
+from src.config import CANAIS, GUILD_ID
+from src.database.connection import async_session
+from src.database.models import PainelPostado
+from src.demissao.demissao_panel import PainelDemissaoLayout
+
+
+async def garantir_painel_demissao(
+    bot: discord.Client,
+    interacao: discord.Interaction | None = None,
+) -> None:
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(PainelPostado).where(PainelPostado.nome_painel == "demissao")
+        )
+        if resultado.scalar_one_or_none() is not None:
+            return
+
+        canal_id = CANAIS.get("CANAL_PAINEL_DEMISSAO") or 0
+        if not canal_id:
+            print("⚠️ CANAL_PAINEL_DEMISSAO ainda não configurado (0).")
+            return
+
+        canal = bot.get_channel(int(canal_id))
+        if canal is None:
+            print(f"❌ CANAL_PAINEL_DEMISSAO não encontrado ({canal_id}).")
+            return
+
+        guilda = (
+            interacao.guild
+            if interacao and interacao.guild
+            else bot.get_guild(int(GUILD_ID))
+        )
+        if guilda is None:
+            print("❌ Guild não encontrada ao publicar painel de demissão.")
+            return
+
+        mensagem = await canal.send(view=PainelDemissaoLayout(guilda=guilda))
+        sessao.add(
+            PainelPostado(
+                nome_painel="demissao",
+                canal_id=canal.id,
+                message_id=mensagem.id,
+            )
+        )
+        await sessao.commit()
+        print(f"✅ Painel de demissão postado em #{getattr(canal, 'name', canal.id)}.")
