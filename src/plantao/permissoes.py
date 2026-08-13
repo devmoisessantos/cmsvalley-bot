@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import discord
 
-from src.config import CARGOS, CARGOS_DIRETORIA, CARGOS_DOUTOR_OU_ACIMA
+from src.config import (
+    CARGOS,
+    CARGOS_DIRETORIA,
+    CARGOS_DOUTOR_OU_ACIMA,
+)
 
 
 def _ids_cargos(nomes: list[str]) -> set[int]:

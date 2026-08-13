@@ -347,14 +347,13 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         botao.callback = self._callback_toggle
         row_botao.add_item(botao)
 
-        botao_troca = discord.ui.Button(
-            label="Trocar moedas",
+        botao_carteira = discord.ui.Button(
+            label="Carteira",
             style=discord.ButtonStyle.primary,
-            emoji="💵",
-            disabled=(saldo <= 0),
+            emoji="💰",
         )
-        botao_troca.callback = self._callback_trocar_moedas
-        row_botao.add_item(botao_troca)
+        botao_carteira.callback = self._callback_carteira
+        row_botao.add_item(botao_carteira)
 
         avatar_url = membro.display_avatar.url
         componentes = [
@@ -421,19 +420,10 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
         await interaction.edit_original_response(view=nova_view)
 
-    async def _callback_trocar_moedas(self, interaction: discord.Interaction):
-        estado = await _buscar_estado(interaction.user.id)
-        saldo = estado.saldo_moedas if estado else 0
-        if saldo <= 0:
-            await responder_aviso(
-                interaction,
-                titulo="Sem moedas",
-                linhas=["Você não tem moedas para trocar."],
-            )
-            return
-        await interaction.response.send_modal(
-            ModalTrocarMoedasPlantao(saldo_disponivel=saldo)
-        )
+    async def _callback_carteira(self, interaction: discord.Interaction):
+        from src.plantao.carteira_panel import abrir_carteira
+
+        await abrir_carteira(interaction)
 
     async def _callback_selecionar_call(self, interaction: discord.Interaction):
         canal_id = int(interaction.data["values"][0])

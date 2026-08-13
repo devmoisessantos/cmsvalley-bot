@@ -252,6 +252,18 @@ async def _finalizar_periodo_em_call(
                 "Saldo Total": f"{estado.saldo_moedas} moedas ({formatar_dinheiro(estado.saldo_moedas * VALOR_MOEDA_INGAME)})",
             },
         )
+        try:
+            from src.plantao.carteira_service import registrar_movimentacao
+
+            await registrar_movimentacao(
+                discord_id=discord_id,
+                tipo="GANHO_PLANTAO",
+                valor=moedas_ganhas,
+                saldo_apos=int(estado.saldo_moedas),
+                referencia=f"+{moedas_ganhas} plantão",
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -284,10 +296,27 @@ async def admin_definir_moedas(discord_id: int, novo_saldo: int) -> EstadoPlanta
     """Define o saldo de moedas (admin). Cria estado se não existir."""
     async with async_session() as session:
         estado = await _obter_ou_criar_estado(session, discord_id)
+        saldo_antes = int(estado.saldo_moedas or 0)
         estado.saldo_moedas = max(0, int(novo_saldo))
         await session.commit()
         await session.refresh(estado)
-        return estado
+        saldo_depois = int(estado.saldo_moedas)
+
+    try:
+        from src.plantao.carteira_service import registrar_movimentacao
+
+        delta = saldo_depois - saldo_antes
+        if delta != 0:
+            await registrar_movimentacao(
+                discord_id=discord_id,
+                tipo="AJUSTE_STAFF",
+                valor=delta,
+                saldo_apos=saldo_depois,
+                referencia="admin set_moedas",
+            )
+    except Exception:
+        pass
+    return estado
 
 
 async def solicitar_troca_moedas(
@@ -320,6 +349,19 @@ async def solicitar_troca_moedas(
         id_fivem = estado.id_fivem
 
     valor_ingame = quantidade_moedas * VALOR_MOEDA_INGAME
+
+    try:
+        from src.plantao.carteira_service import registrar_movimentacao
+
+        await registrar_movimentacao(
+            discord_id=membro.id,
+            tipo="TROCA_INGAME",
+            valor=-quantidade_moedas,
+            saldo_apos=saldo_restante,
+            referencia=f"{quantidade_moedas} moedas → {formatar_dinheiro(valor_ingame)}",
+        )
+    except Exception:
+        pass
 
     # Log não pode derrubar a troca se falhar
     try:

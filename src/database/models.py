@@ -678,3 +678,51 @@ class HistoricoPromocao(Base):
     executado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     solicitacao_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+
+
+# ---------------------------------------------------------------------------
+# Carteira de moedas (plantão)
+# ---------------------------------------------------------------------------
+
+
+class MovimentacaoMoeda(Base):
+    """Extrato de moedas: ganho, transferência, troca, depósito, ajuste."""
+
+    __tablename__ = "movimentacoes_moedas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # GANHO_PLANTAO | TRANSFERENCIA_ENVIADA | TRANSFERENCIA_RECEBIDA
+    # | TROCA_INGAME | DEPOSITO | AJUSTE_STAFF
+    tipo: Mapped[str] = mapped_column(String(40), index=True)
+    # positivo = crédito, negativo = débito (do ponto de vista do discord_id)
+    valor: Mapped[int] = mapped_column(Integer)
+    saldo_apos: Mapped[int] = mapped_column(Integer, default=0)
+    outro_discord_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    referencia: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora, index=True
+    )
+
+
+class PedidoDepositoMoeda(Base):
+    """Pedido de depósito: $ in-game → moedas (aprovação staff)."""
+
+    __tablename__ = "pedidos_deposito_moedas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    quantidade_moedas: Mapped[int] = mapped_column(Integer)
+    valor_ingame: Mapped[int] = mapped_column(Integer, default=0)
+    observacao: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # PENDENTE | APROVADO | RECUSADO
+    status: Mapped[str] = mapped_column(String(20), default="PENDENTE", index=True)
+    analisado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    motivo_recusa: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    mensagem_canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mensagem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )

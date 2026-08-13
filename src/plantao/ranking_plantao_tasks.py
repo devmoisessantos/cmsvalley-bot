@@ -67,13 +67,15 @@ class RankingPlantaoTasks(commands.Cog):
         self._reinicio_tempo_real: set[str] = set()
         self.loop_rankings.start()
         self.loop_tempo_real_horas.start()
+        self.loop_ranking_moedas.start()
         logger.info(
-            "🏆 RankingPlantaoTasks (chamadas + horas + tempo real) inicializado"
+            "🏆 RankingPlantaoTasks (chamadas + horas + tempo real + moedas) inicializado"
         )
 
     def cog_unload(self):
         self.loop_rankings.cancel()
         self.loop_tempo_real_horas.cancel()
+        self.loop_ranking_moedas.cancel()
 
     # ── Tempo real a cada 1 minuto ────────────────────────────────────────
 
@@ -88,6 +90,54 @@ class RankingPlantaoTasks(commands.Cog):
     async def before_tempo_real(self):
         await self.bot.wait_until_ready()
         logger.info("✅ Loop ranking HORAS tempo real (1 min) ativo")
+
+    @tasks.loop(minutes=1)
+    async def loop_ranking_moedas(self):
+        try:
+            from src.plantao.carteira_ranking import atualizar_ranking_moedas
+
+            await atualizar_ranking_moedas(self.bot)
+        except Exception as erro:
+            logger.exception("Loop ranking moedas: %s", erro)
+
+    @loop_ranking_moedas.before_loop
+    async def before_ranking_moedas(self):
+        await self.bot.wait_until_ready()
+        logger.info("✅ Loop ranking MOEDAS tempo real (1 min) ativo")
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interacao: discord.Interaction):
+        """Reconhece botões de depósito após restart (custom_id dinâmico)."""
+        if interacao.type is not discord.InteractionType.component:
+            return
+        data = interacao.data or {}
+        custom_id = str(data.get("custom_id") or "")
+        from src.plantao.carteira_panel import (
+            CUSTOM_ID_DEP_APROVAR,
+            CUSTOM_ID_DEP_RECUSAR,
+            _processar_decisao_deposito,
+        )
+
+        if custom_id.startswith(CUSTOM_ID_DEP_APROVAR):
+            try:
+                pedido_id = int(custom_id[len(CUSTOM_ID_DEP_APROVAR) :])
+            except ValueError:
+                return
+            if pedido_id <= 0:
+                return
+            if interacao.response.is_done():
+                return
+            await _processar_decisao_deposito(interacao, pedido_id, aprovar=True)
+        elif custom_id.startswith(CUSTOM_ID_DEP_RECUSAR):
+            try:
+                pedido_id = int(custom_id[len(CUSTOM_ID_DEP_RECUSAR) :])
+            except ValueError:
+                return
+            if pedido_id <= 0:
+                return
+            if interacao.response.is_done():
+                return
+            await _processar_decisao_deposito(interacao, pedido_id, aprovar=False)
 
     async def _buscar_registro_tempo_real(self) -> PainelPostado | None:
         async with async_session() as sessao:
