@@ -62,7 +62,7 @@ class PainelNotificacaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "> Todas as notificações são registradas em log, portanto "
                 "evite abusar!\n"
                 "> Caso tenha dúvidas entre em contato com os Gerais!",
-                accessory=discord.ui.Thumbnail(url=url_icone),
+                accessory=discord.ui.Thumbnail(url_icone),
             )
         else:
             bloco_cabecalho = discord.ui.TextDisplay(
