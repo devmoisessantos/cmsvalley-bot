@@ -11,18 +11,6 @@ import aiohttp
 import discord
 from sqlalchemy import select
 
-from src.config import (
-    CANAIS,
-    CARGOS,
-    CARGOS_BYPASS_PRESENCA_CHAMADA,
-)
-from src.database.connection import async_session
-from src.database.models import (
-    Chamada,
-    EstadoPlantao,
-    Recrutamento,
-    Usuario,
-)
 from src.chamada.chamada_service import (
     MOTIVO_CANCEL_ERRO,
     MOTIVO_CANCEL_TIMEOUT_INTERACAO,
@@ -48,6 +36,19 @@ from src.chamada.ocr.scraping_membros import (
     combinar_membros,
     construir_membros_via_apelido,
 )
+from src.config import (
+    CANAIS,
+    CARGOS,
+    CARGOS_BYPASS_PRESENCA_CHAMADA,
+)
+from src.database.connection import async_session
+from src.database.models import (
+    Chamada,
+    EstadoPlantao,
+    Recrutamento,
+    Usuario,
+)
+from src.plantao.permissoes import e_diretoria
 from src.plantao.plantao_service import (
     desligar_servico,
     membro_e_doutor_ou_acima,
@@ -63,6 +64,7 @@ from src.utils.mensagens import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 class _ViewSessaoChamada(discord.ui.LayoutView):
     """LayoutView da sessão: ao expirar (5 min sem interação), cancela sem cooldown."""
@@ -80,8 +82,6 @@ class _ViewSessaoChamada(discord.ui.LayoutView):
             print("[chamada] view expirou — chamada cancelada (sem interação)")
         except Exception as erro:
             print(f"[chamada] on_timeout falhou: {erro}")
-
-
 
 
 # ─────────────────────────────────────────────
@@ -137,9 +137,17 @@ def _construir_view_aguardando_print() -> discord.ui.LayoutView:
 
 
 def _tem_cargo_bypass(discord_id: int, guild: discord.Guild) -> bool:
+    """
+    Dispensa verificação de presença na chamada.
+
+    Inclui CARGOS_BYPASS_PRESENCA_CHAMADA e toda a Diretoria++ (CARGOS_DIRETORIA).
+    Esses membros entram como presentes automaticamente: sem falta, sem +1/- moeda.
+    """
     membro = guild.get_member(discord_id)
     if membro is None:
         return False
+    if e_diretoria(membro):
+        return True
     ids_bypass = {
         CARGOS[nome] for nome in CARGOS_BYPASS_PRESENCA_CHAMADA if nome in CARGOS
     }
@@ -236,13 +244,7 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         # Limpa sessão em memória se o lock já tinha expirado no banco
-        from src.chamada.chamada_service import (
-            liberar_lock_se_expirado,
-            cancelar_chamada,
-            MOTIVO_CANCEL_TIMEOUT_PRINT,
-            MOTIVO_CANCEL_ERRO,
-            MOTIVO_CANCEL_TIMEOUT_INTERACAO,
-        )
+        from src.chamada.chamada_service import cancelar_chamada
 
         liberou_expirado = await liberar_lock_se_expirado()
         if liberou_expirado:
@@ -294,6 +296,7 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
 
         try:
             from src.config import TIMEOUT_PRINT_EMS_SEGUNDOS
+
             mensagem_print = await bot.wait_for(
                 "message",
                 timeout=TIMEOUT_PRINT_EMS_SEGUNDOS,
@@ -489,6 +492,9 @@ async def _processar_ausentes_do_ems(
     for medico in sessao.toggle_ligado_mas_nao_no_ems:
         membro = guild.get_member(medico.discord_id)
         if membro is None:
+            continue
+        # Diretoria / bypass: sem falta e sem desligar plantão por chamada
+        if _tem_cargo_bypass(membro.id, guild):
             continue
         try:
             await membro.send(
@@ -1132,6 +1138,9 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
         membro = guild.get_member(medico.discord_id)
         if membro is None:
             continue
+        # Diretoria / bypass: nunca falta, nunca punição, nunca perde plantão por chamada
+        if _tem_cargo_bypass(membro.id, guild):
+            continue
         await registrar_falta(
             membro.id, sessao.chamada_id, "Não respondeu à chamada (call/rádio)", guild
         )
@@ -1144,6 +1153,9 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
             pass
 
     for medico in presentes:
+        # Diretoria / bypass: presença automática, sem +1 moeda de chamada
+        if _tem_cargo_bypass(medico.discord_id, guild):
+            continue
         async with async_session() as session:
             resultado = await session.execute(
                 select(EstadoPlantao).where(
@@ -1152,7 +1164,7 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
             )
             estado = resultado.scalar_one_or_none()
             if estado:
-                estado.saldo_moedas += 1
+                estado.saldo_moedas = int(estado.saldo_moedas or 0) + 1
             await session.commit()
 
     async with async_session() as session:

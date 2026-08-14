@@ -117,6 +117,11 @@ CARGOS_BYPASS_PRESENCA_CHAMADA = [
     "👑 |  DIRETOR GERAL",
     "👑 | RESPONSÁVEL GERAL",
     "Responsavel HP",
+    # Responsáveis de área (mesma regra da Diretoria++ na chamada)
+    "👑・Responsável Instrutor・🎓",
+    "👑・Responsável Recrutamento・🎯",
+    "👑・Responsável Psicólogo・🧠",
+    "👑・Responsável Doutor・🥼",
 ]
 
 CARGOS_DOUTOR_OU_ACIMA = CARGOS_HIERARQUIA[: CARGOS_HIERARQUIA.index("🥼・Doutor") + 1]

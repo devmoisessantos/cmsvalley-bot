@@ -32,20 +32,28 @@ from src.database.connection import async_session
 from src.database.models import (
     Chamada,
     ControleChamada,
+    EstadoPlantao,
     FaltaChamada,
     Recrutamento,
 )
+from src.plantao.permissoes import e_diretoria
 from src.plantao.plantao_service import garantir_aware
 from src.utils.log_container import LogContainerView
 from src.utils.logger import log_mudanca_cargo
 
 ORDEM_PUNICOES = [
-    "⛔┇ADV VERBAL ",  # falta 1 → aplicado direto
-    "🚫┇Adv 01",  # falta 3 → aplicado (falta 2 só avisa que vem essa)
+    "⛔┇ADV VERBAL ",  # falta 1 → verbal + (-1 moeda)
+    "🚫┇Adv 01",  # falta 3 → Adv 01 + (-3 moedas); falta 2 = aviso na DM
     "🚫┇Adv 02",  # falta 5 → aplicado (falta 4 só avisa)
     "🚫┇Adv 03",  # falta 7 → aplicado (falta 6 só avisa)
     "🚫┇Exonerado",  # falta 9 → aplicado (falta 8 só avisa)
 ]
+
+# Débito de moedas ao aplicar cada tier (chave = nome em ORDEM_PUNICOES)
+DEBITO_MOEDAS_POR_PUNICAO = {
+    "⛔┇ADV VERBAL ": 1,
+    "🚫┇Adv 01": 3,
+}
 
 _PADRAO_LINHA_EMS = re.compile(r"(\d{3,7})\s*[:.\-]\s*(.+)")
 CONFIANCA_MINIMA_AUTOMATICA = (
@@ -310,7 +318,39 @@ def _calcular_estado_punicao(total_faltas: int) -> dict:
     return {"aplicar": False, "cargo_aviso_nome": ORDEM_PUNICOES[indice_aviso]}
 
 
+async def _debitar_moedas_falta(discord_id: int, quantidade: int) -> int:
+    """Remove moedas do saldo de plantão (nunca fica negativo). Retorna saldo final."""
+    if quantidade <= 0:
+        return 0
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado.scalar_one_or_none()
+        if estado is None:
+            return 0
+        saldo_atual = int(estado.saldo_moedas or 0)
+        novo_saldo = max(0, saldo_atual - quantidade)
+        estado.saldo_moedas = novo_saldo
+        await session.commit()
+        return novo_saldo
+
+
 async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) -> int:
+    """
+    Registra falta e aplica escala de punição.
+
+    Diretoria++ não registra falta, não perde moeda e não recebe advertência.
+    Escala (enfermeiro ~ instrutor):
+      1ª falta → ADV VERBAL + debita 1 moeda
+      2ª falta → aviso na DM (próxima = Adv 01)
+      3ª falta → Adv 01 + debita 3 moedas
+      depois continua o escalonamento ímpar/par existente
+    """
+    membro = guild.get_member(discord_id) if guild is not None else None
+    if membro is not None and e_diretoria(membro):
+        return 0
+
     async with async_session() as session:
         session.add(
             FaltaChamada(discord_id=discord_id, chamada_id=chamada_id, motivo=motivo)
@@ -330,6 +370,9 @@ async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) 
         await _aplicar_punicao(
             guild, discord_id, total_faltas, estado_punicao["cargo_nome"]
         )
+        debito = DEBITO_MOEDAS_POR_PUNICAO.get(estado_punicao["cargo_nome"], 0)
+        if debito:
+            await _debitar_moedas_falta(discord_id, debito)
     else:
         await _avisar_proxima_punicao(
             guild, discord_id, total_faltas, estado_punicao["cargo_aviso_nome"]
@@ -342,6 +385,8 @@ async def _aplicar_punicao(guild, discord_id: int, total_faltas: int, cargo_nome
     membro = guild.get_member(discord_id)
     cargo_id = CARGOS_PUNICOES.get(cargo_nome)
     if membro is None or cargo_id is None:
+        return
+    if e_diretoria(membro):
         return
 
     cargo = guild.get_role(cargo_id)
