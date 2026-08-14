@@ -63,8 +63,10 @@ class CardAberturaTicketView(discord.ui.LayoutView):
         container = discord.ui.Container(
             discord.ui.TextDisplay("# Ticket Criado com Sucesso! 📌"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.Section(texto),
-            accessory=discord.ui.Thumbnail(autor.display_avatar.url),
+            discord.ui.Section(
+                texto,
+                accessory=discord.ui.Thumbnail(autor.display_avatar.url),
+            ),
             accent_color=discord.Color.green(),
         )
         self.add_item(container)
