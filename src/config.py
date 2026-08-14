@@ -372,6 +372,8 @@ CANAIS = {
     "LOG_ERROS": 1526596982066380990,
     "LOG_GATE": 1533997859790127345,
     "LOG_BACKUP": 1523367341096697996,
+    # Painel fixo: enviar notificação por DM (Diretoria++)
+    "CANAL_ENVIAR_NOTIFICACAO": 1512277526498639902,
 }
 
 # URLs de imagens da MediaGallery do painel de boas-vindas (até 10).

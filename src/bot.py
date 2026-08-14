@@ -33,6 +33,8 @@ from src.membros.membros_setup import (
     garantir_painel_gerenciar_cargos,
     garantir_painel_gerenciar_membros,
 )
+from src.notificacoes.notificacoes_panel import PainelNotificacaoLayout
+from src.notificacoes.notificacoes_setup import garantir_painel_notificacao
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
 from src.panels.setup_paineis import (
     garantir_painel_avaliacao,
@@ -145,6 +147,7 @@ class CmsValleyBot(commands.Bot):
         self.painel_fazer_chamada_view = None
         self.painel_gerenciar_membros_view = None
         self.painel_punicoes_view = None
+        self.painel_notificacao_view = None
 
         @self.tree.error
         async def on_app_command_error(
@@ -195,6 +198,7 @@ class CmsValleyBot(commands.Bot):
             self.painel_punicoes_view = PainelPunicoesLayout(guild=guild)
             self.painel_laudos_view = PainelLaudosLayout(guild)
             self.painel_bau_view = PainelBauLayout(guild)
+            self.painel_notificacao_view = PainelNotificacaoLayout(guilda=guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -215,6 +219,7 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_fazer_chamada_view)
         self.add_view(self.painel_gerenciar_membros_view)
         self.add_view(self.painel_punicoes_view)
+        self.add_view(self.painel_notificacao_view)
 
         # painéis de presença têm custom_id dinâmico por evento — sempre
         # precisa reconstruir e re-registrar, um por evento aberto
@@ -243,6 +248,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_cursos(self)
         await garantir_painel_promocao(self)
         await garantir_painel_demissao(self)
+        await garantir_painel_notificacao(self)
 
         fim_deploy()
 
