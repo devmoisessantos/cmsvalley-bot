@@ -50,6 +50,15 @@ from src.promocoes.promocoes_setup import garantir_painel_promocao
 from src.punicoes.cogs import garantir_painel_punicoes
 from src.punicoes.panel import PainelPunicoesLayout
 from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
+from src.tickets.tickets_panel import (
+    PainelTicketDenunciasLayout,
+    PainelTicketSuporteLayout,
+)
+from src.tickets.tickets_setup import (
+    garantir_painel_ticket_denuncias,
+    garantir_painel_ticket_suporte,
+)
+from src.tickets.tickets_views import BotoesTicketView
 from src.utils.deploy_logger import (
     erro,
     etapa,
@@ -112,6 +121,7 @@ class CmsValleyBot(commands.Bot):
             "src.cursos.cursos_cogs",
             "src.promocoes.promocoes_cogs",
             "src.demissao.demissao_cogs",
+            "src.tickets.tickets_cogs",
         ]
 
         total = len(cogs)
@@ -148,6 +158,9 @@ class CmsValleyBot(commands.Bot):
         self.painel_gerenciar_membros_view = None
         self.painel_punicoes_view = None
         self.painel_notificacao_view = None
+        self.painel_ticket_suporte_view = None
+        self.painel_ticket_denuncias_view = None
+        self.botoes_ticket_view = None
 
         @self.tree.error
         async def on_app_command_error(
@@ -199,6 +212,11 @@ class CmsValleyBot(commands.Bot):
             self.painel_laudos_view = PainelLaudosLayout(guild)
             self.painel_bau_view = PainelBauLayout(guild)
             self.painel_notificacao_view = PainelNotificacaoLayout(guilda=guild)
+            self.painel_ticket_suporte_view = PainelTicketSuporteLayout(guilda=guild)
+            self.painel_ticket_denuncias_view = PainelTicketDenunciasLayout(
+                guilda=guild
+            )
+            self.botoes_ticket_view = BotoesTicketView()
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -220,6 +238,9 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_gerenciar_membros_view)
         self.add_view(self.painel_punicoes_view)
         self.add_view(self.painel_notificacao_view)
+        self.add_view(self.painel_ticket_suporte_view)
+        self.add_view(self.painel_ticket_denuncias_view)
+        self.add_view(self.botoes_ticket_view)
 
         # painéis de presença têm custom_id dinâmico por evento — sempre
         # precisa reconstruir e re-registrar, um por evento aberto
@@ -249,6 +270,8 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_promocao(self)
         await garantir_painel_demissao(self)
         await garantir_painel_notificacao(self)
+        await garantir_painel_ticket_suporte(self)
+        await garantir_painel_ticket_denuncias(self)
 
         fim_deploy()
 

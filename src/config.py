@@ -73,6 +73,7 @@ CARGOS = {
     "🛡️・【 GATE 】COORDENADOR・TÁTICO": 1515669916785836144,
     "👑・【 GATE 】SUBCOMANDANTE・TÁTICO": 1515669807293403217,
     "👑・【 GATE 】COMANDANTE・TÁTICO": 1515669491038818415,
+    "⚠️ EQUIPE • TICKET": 1486368753754308689,
     "👑・SUPERVISOR": 1522581678072004649,
     "👑・VICE DIRETOR": 1522581475118289036,
     "👑・DIRETOR": 1486368748502781983,
@@ -140,6 +141,11 @@ CARGOS_DIRETORIA = [
     "👑・DIRETOR",
     "👑・VICE DIRETOR",
 ]
+
+# Staff que pode assumir e finalizar tickets
+CARGOS_TICKET_STAFF = [
+    "⚠️ EQUIPE • TICKET",
+] + CARGOS_DIRETORIA
 
 HIERARQUIA_GATE = [
     "👑・【 GATE 】COMANDANTE・TÁTICO",
@@ -379,6 +385,57 @@ CANAIS = {
     "LOG_BACKUP": 1523367341096697996,
     # Painel fixo: enviar notificação por DM (Diretoria++)
     "CANAL_ENVIAR_NOTIFICACAO": 1512277526498639902,
+    # Tickets — painéis de abertura (fixos)
+    "CANAL_ABRIR_SUPORTE_DUVIDAS": 1486369093769760843,
+    "CANAL_ABRIR_TICKET_DENUNCIAS": 1537886870183215255,
+    # Tickets — categorias Discord (onde os canais são criados)
+    "CATEG_SUPORTE_DUVIDAS": 1486368963192688753,
+    "CATEG_REVOGAR_ADV": 1486368965725786225,
+    "CATEG_REVOGAR_EXO": 1486368967193788580,
+    "CATEG_DENUNCIAS_JOGADOR": 1486368965084315679,
+    "CATEG_DENUNCIAS_DIRETORIA": 1537884732358922280,
+}
+
+# ---------------------------------------------------------------------------
+# Tickets — definição das categorias por segmento (painel)
+# ---------------------------------------------------------------------------
+# Cada item: chave interna, rótulo no select, emoji, categoria Discord, painel
+TICKETS_CATEGORIAS = {
+    "suporte_duvidas": {
+        "rotulo": "Suporte / Dúvidas",
+        "emoji": "🙋",
+        "categoria_config": "CATEG_SUPORTE_DUVIDAS",
+        "segmento": "suporte",
+        "prefixo_canal": "🙋・suporte",
+    },
+    "revogar_adv": {
+        "rotulo": "Revogar Advertência",
+        "emoji": "📝",
+        "categoria_config": "CATEG_REVOGAR_ADV",
+        "segmento": "suporte",
+        "prefixo_canal": "📝・revogar-adv",
+    },
+    "revogar_exo": {
+        "rotulo": "Revogar Exoneração",
+        "emoji": "🔓",
+        "categoria_config": "CATEG_REVOGAR_EXO",
+        "segmento": "suporte",
+        "prefixo_canal": "🔓・revogar-exo",
+    },
+    "denuncias_jogador": {
+        "rotulo": "Denúncias Jogador",
+        "emoji": "⛔",
+        "categoria_config": "CATEG_DENUNCIAS_JOGADOR",
+        "segmento": "denuncias",
+        "prefixo_canal": "⛔・denuncia-jogador",
+    },
+    "denuncias_diretoria": {
+        "rotulo": "Denúncias Diretoria",
+        "emoji": "🛡️",
+        "categoria_config": "CATEG_DENUNCIAS_DIRETORIA",
+        "segmento": "denuncias",
+        "prefixo_canal": "🛡️・denuncia-diretoria",
+    },
 }
 
 # URLs de imagens da MediaGallery do painel de boas-vindas (até 10).
