@@ -47,21 +47,24 @@ class CardAberturaTicketView(discord.ui.LayoutView):
         rotulo = definicao.get("rotulo") or "Ticket"
 
         texto = (
-            f"# Ticket Criado com Sucesso! 📌\n"
             f"### Todos os responsáveis pelo ticket já estão cientes da abertura\n"
             f"{autor.mention}, Evite chamar alguém via DM, basta aguardar "
-            f"alguém já irá lhe atender...\n"
+            f"alguém já irá lhe atender...\n\n"
             f"**__Categoria Escolhida:__**\n"
             f"```fix\n"
             f"{emoji} {rotulo}\n"
             f"```\n"
             f"Lembrando que os botões são exclusivos para staffs!\n"
+            f"\n"
             f"**`DESCREVA O MOTIVO DO CONTATO COM O MÁXIMO DE DETALHES "
-            f"POSSÍVEIS QUE ALGUM RESPONSÁVEL JÁ IRÁ LHE ATENDER!`**"
+            f"POSSÍVEIS QUE ALGUM RESPONSÁVEL JÁ IRÁ LHE ATENDER!`**\n"
         )
 
         container = discord.ui.Container(
-            discord.ui.TextDisplay(texto),
+            discord.ui.TextDisplay("# Ticket Criado com Sucesso! 📌"),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.Section(texto),
+            accessory=discord.ui.Thumbnail(autor.display_avatar.url),
             accent_color=discord.Color.green(),
         )
         self.add_item(container)
@@ -96,7 +99,7 @@ class CardBotoesStaffView(discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 "-# Opções exclusivas para o uso dos responsáveis pelo atendimento!"
             ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
         ]
 
         linha_membros = discord.ui.ActionRow()
