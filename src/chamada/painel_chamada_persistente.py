@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import discord
 
-from src.plantao.chamada.chamada_panel import PainelChamadaView
+from src.chamada.chamada_panel import PainelChamadaView
 from src.plantao.permissoes import (
     e_doutor_ou_acima,
     mensagem_sem_permissao,

@@ -10,7 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.plantao.chamada.chamada_service import (
+from src.chamada.chamada_service import (
     admin_buscar_chamada,
     admin_contar_faltas,
     admin_criar_chamada_manual,
@@ -21,8 +21,10 @@ from src.plantao.chamada.chamada_service import (
     admin_remover_falta,
     admin_resetar_cooldown,
     admin_status_controle,
+    liberar_lock_se_expirado,
     registrar_falta,
 )
+from src.chamada.chamada_state import definir_sessao
 from src.utils.formatacao import formatar_data_hora_local
 from src.utils.mensagens import (
     responder_aviso,
@@ -36,13 +38,56 @@ from src.utils.permissions import apenas_administrador
 class ChamadaCog(commands.Cog):
     """Administração de chamada de presença."""
 
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self._limpeza_lock_no_boot_feita = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """
+        Restart: sessão em memória some.
+        - Lock > 15 min → cancela (sem cooldown)
+        - Lock fresco → mantém; mesmo doutor pode retomar
+        """
+        if self._limpeza_lock_no_boot_feita:
+            return
+        self._limpeza_lock_no_boot_feita = True
+        try:
+            liberou = await liberar_lock_se_expirado()
+            definir_sessao(None)
+            if liberou:
+                print("[chamada] lock expirado liberado no boot (chamada cancelada)")
+        except Exception as erro:
+            print(f"[chamada] limpeza de lock no boot: {erro}")
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, membro: discord.Member):
+        """Doutor saiu da guilda durante a chamada → cancela sem cooldown."""
+        try:
+            from src.chamada.chamada_service import (
+                MOTIVO_CANCEL_SAIU_GUILDA,
+                admin_status_controle,
+                cancelar_chamada,
+            )
+            from src.chamada.chamada_state import obter_sessao
+
+            dados = await admin_status_controle()
+            if not dados.get("chamada_em_andamento"):
+                return
+            if dados.get("doutor_em_chamada_id") != membro.id:
+                return
+            await cancelar_chamada(motivo=MOTIVO_CANCEL_SAIU_GUILDA)
+            sessao = obter_sessao()
+            if sessao is not None and sessao.doutor_id == membro.id:
+                definir_sessao(None)
+            print(f"[chamada] cancelada — doutor {membro.id} saiu da guilda")
+        except Exception as erro:
+            print(f"[chamada] on_member_remove: {erro}")
+
     grupo_chamada = app_commands.Group(
         name="chamada",
         description="Administração de chamadas e faltas",
     )
-
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
 
     @grupo_chamada.command(
         name="status",

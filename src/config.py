@@ -305,6 +305,7 @@ CANAIS = {
     "CANAL_TICKETS_BAU": 1486369093769760843,  # ← canal/categoria de tickets (link DM)
     "CANAL_TICKET_VALLEY": 1077995758785138758,
     "CANAL_FINANCAS": 1486369137021161472,
+    "CANAL_AVALIAR_ATENDIMENTO": 1486369031614365856,
     # Promoções e cursos
     "CANAL_PROMOVIDOS": 1486369132071878816,
     "CANAL_NAO_PROMOVIDOS": 1486369133594415194,
@@ -688,6 +689,12 @@ NOMES_CANAIS_PLANTAO = _gerar_nomes_amigaveis()
 TIMEZONE_LOCAL = "America/Sao_Paulo"  # ajuste se o fuso do servidor/cidade for outro
 RR_HORARIOS = ["11:00", "17:00"]  # horários diários de RR (restart) da cidade
 INTERVALO_CHAMADA_MINUTOS = 120
+# Cooldown de 2h só após chamada CONCLUÍDA com sucesso.
+# Timeouts de cancelamento (não aplicam cooldown):
+TIMEOUT_PRINT_EMS_SEGUNDOS = 300  # 5 min sem enviar print do /ems
+TIMEOUT_INTERACAO_POS_OCR_SEGUNDOS = 300  # 5 min sem interação após processar
+# Tempo máximo absoluto da sessão com lock (qualquer etapa)
+TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS = 15
 LIMITE_FALTAS_PARA_ADVERTENCIA = 3
 PENALIDADE_FALTA_MOEDAS = 1
 BONUS_PRESENCA_CHAMADA = 1

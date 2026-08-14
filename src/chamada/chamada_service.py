@@ -17,8 +17,17 @@ from src.config import (
     CARGOS_PUNICOES,
     INTERVALO_CHAMADA_MINUTOS,
     RR_HORARIOS,
+    TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS,
     TIMEZONE_LOCAL,
 )
+
+MOTIVO_CANCEL_TIMEOUT_PRINT = "timeout_print_ems"
+MOTIVO_CANCEL_TIMEOUT_INTERACAO = "timeout_interacao_pos_ocr"
+MOTIVO_CANCEL_TIMEOUT_SESSAO = "timeout_sessao_15min"
+MOTIVO_CANCEL_SAIU_GUILDA = "doutor_saiu_da_guilda"
+MOTIVO_CANCEL_ERRO = "erro_processamento"
+MOTIVO_CANCEL_ABANDONO = "abandono"
+
 from src.database.connection import async_session
 from src.database.models import (
     Chamada,
@@ -108,26 +117,87 @@ async def calcular_proximo_horario_permitido() -> tuple[datetime, bool]:
 # ─────────────────────────────────────────────
 
 
+def _lock_expirou(controle: ControleChamada, agora: datetime | None = None) -> bool:
+    """True se a sessão passou do tempo máximo (abandonada / bot reiniciou)."""
+    if not controle.chamada_em_andamento:
+        return False
+    agora = agora or datetime.now(timezone.utc)
+    iniciada = controle.chamada_iniciada_em
+    if iniciada is None:
+        # Lock antigo sem timestamp → trata como expirado
+        return True
+    iniciada = garantir_aware(iniciada)
+    if iniciada is None:
+        return True
+    limite_segundos = max(1, int(TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS)) * 60
+    return (agora - iniciada).total_seconds() >= limite_segundos
+
+
+async def liberar_lock_se_expirado() -> bool:
+    """
+    Libera o lock se a sessão ultrapassou TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS.
+    Não aplica cooldown (não conta como chamada concluída).
+    Retorna True se liberou algo.
+    """
+    async with async_session() as session:
+        controle = await obter_controle_chamada(session)
+        if not controle.chamada_em_andamento:
+            await session.commit()
+            return False
+        if not _lock_expirou(controle):
+            await session.commit()
+            return False
+        controle.chamada_em_andamento = False
+        controle.doutor_em_chamada_id = None
+        controle.chamada_iniciada_em = None
+        await session.commit()
+        return True
+
+
 async def tentar_iniciar_chamada(doutor_id: int) -> tuple[bool, int | None]:
-    """Tenta pegar o lock. Retorna (conseguiu, id_do_doutor_que_ja_esta_chamando_se_falhou)."""
+    """
+    Tenta pegar o lock. Retorna (conseguiu, id_do_doutor_que_ja_esta_chamando_se_falhou).
+
+    Regras:
+    - Lock expirado → libera e permite iniciar
+    - Mesmo doutor com lock ativo → permite retomar (limpa sessão órfã)
+    - Outro doutor com lock fresco → bloqueia
+    """
+    agora = datetime.now(timezone.utc)
     async with async_session() as session:
         controle = await obter_controle_chamada(session)
 
         if controle.chamada_em_andamento:
             outro_doutor_id = controle.doutor_em_chamada_id
-            await session.commit()
-            return False, outro_doutor_id
+
+            # Sessão abandonada / travada há tempo demais
+            if _lock_expirou(controle, agora):
+                controle.chamada_em_andamento = False
+                controle.doutor_em_chamada_id = None
+                controle.chamada_iniciada_em = None
+            # Mesmo doutor — permite retomar (ex.: print não enviado, view sumiu)
+            elif outro_doutor_id == doutor_id:
+                controle.chamada_iniciada_em = agora
+                await session.commit()
+                return True, None
+            else:
+                await session.commit()
+                return False, outro_doutor_id
 
         controle.chamada_em_andamento = True
         controle.doutor_em_chamada_id = doutor_id
-        controle.chamada_iniciada_em = datetime.now(timezone.utc)
+        controle.chamada_iniciada_em = agora
         await session.commit()
         return True, None
 
 
 async def finalizar_chamada(marcar_ultima_chamada: bool = True):
-    """Libera o lock. Se marcar_ultima_chamada=True, também atualiza o cooldown global
-    (chamado só quando a chamada é concluída de verdade, não em caso de cancelamento)."""
+    """
+    Libera o lock de doutor em chamada.
+
+    marcar_ultima_chamada=True  → chamada CONCLUÍDA → aplica cooldown de 2h
+    marcar_ultima_chamada=False → cancelada/abandonada → sem cooldown
+    """
     async with async_session() as session:
         controle = await obter_controle_chamada(session)
         controle.chamada_em_andamento = False
@@ -136,6 +206,18 @@ async def finalizar_chamada(marcar_ultima_chamada: bool = True):
         if marcar_ultima_chamada:
             controle.ultima_chamada_em = datetime.now(timezone.utc)
         await session.commit()
+
+
+async def cancelar_chamada(*, motivo: str = MOTIVO_CANCEL_ABANDONO) -> None:
+    """
+    Cancela a chamada em andamento e libera o lock SEM cooldown de 2h.
+
+    Usar em: timeout de print, timeout de interação, doutor saiu, erro OCR,
+    sessão máxima, abandono, etc.
+    """
+    await finalizar_chamada(marcar_ultima_chamada=False)
+    # Log leve no console (não depende de guilda)
+    print(f"[chamada] cancelada — motivo={motivo}")
 
 
 # ─────────────────────────────────────────────

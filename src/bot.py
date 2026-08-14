@@ -6,6 +6,7 @@ from discord.ext import commands
 
 from src.bau.bau_panel import PainelBauLayout
 from src.bau.bau_setup import garantir_painel_bau
+from src.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
 from src.config import (
     CANAIS,
     DISCORD_TOKEN,
@@ -41,7 +42,6 @@ from src.panels.setup_paineis import (
     garantir_painel_recrutamento,
     garantir_painel_whitelist,
 )
-from src.plantao.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
 from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.plantao.plantao_tasks import executar_housekeeping_plantao
 from src.promocoes.promocoes_setup import garantir_painel_promocao
@@ -91,7 +91,7 @@ class CmsValleyBot(commands.Bot):
             "src.guia.guia_cogs",
             "src.whitelist.whitelist_cogs",
             "src.plantao.plantao_cogs",
-            "src.plantao.chamada.chamada_cogs",
+            "src.chamada.chamada_cogs",
             "src.plantao.plantao_tasks",
             "src.plantao.plantao_listener",
             "src.plantao.ranking_plantao_tasks",

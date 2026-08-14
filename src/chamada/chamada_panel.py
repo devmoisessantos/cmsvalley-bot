@@ -23,23 +23,28 @@ from src.database.models import (
     Recrutamento,
     Usuario,
 )
-from src.plantao.chamada.chamada_service import (
+from src.chamada.chamada_service import (
+    MOTIVO_CANCEL_ERRO,
+    MOTIVO_CANCEL_TIMEOUT_INTERACAO,
+    MOTIVO_CANCEL_TIMEOUT_PRINT,
     calcular_proximo_horario_permitido,
+    cancelar_chamada,
     finalizar_chamada,
+    liberar_lock_se_expirado,
     registrar_falta,
     tentar_iniciar_chamada,
 )
-from src.plantao.chamada.chamada_state import (
+from src.chamada.chamada_state import (
     MedicoNaChamada,
     SessaoChamada,
     definir_sessao,
     obter_sessao,
 )
-from src.plantao.ocr.ocr_ems_service import (
+from src.chamada.ocr.ocr_ems_service import (
     OcrEmsError,
     extrair_medicos_do_print_ems,
 )
-from src.plantao.ocr.scraping_membros import (
+from src.chamada.ocr.scraping_membros import (
     combinar_membros,
     construir_membros_via_apelido,
 )
@@ -58,6 +63,25 @@ from src.utils.mensagens import (
 )
 
 logger = logging.getLogger(__name__)
+
+class _ViewSessaoChamada(discord.ui.LayoutView):
+    """LayoutView da sessão: ao expirar (5 min sem interação), cancela sem cooldown."""
+
+    def __init__(self, *, timeout: float | None = 300):
+        super().__init__(timeout=timeout)
+
+    async def on_timeout(self):
+        try:
+            sessao = obter_sessao()
+            if sessao is None:
+                return
+            await cancelar_chamada(motivo=MOTIVO_CANCEL_TIMEOUT_INTERACAO)
+            definir_sessao(None)
+            print("[chamada] view expirou — chamada cancelada (sem interação)")
+        except Exception as erro:
+            print(f"[chamada] on_timeout falhou: {erro}")
+
+
 
 
 # ─────────────────────────────────────────────
@@ -211,15 +235,36 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
+        # Limpa sessão em memória se o lock já tinha expirado no banco
+        from src.chamada.chamada_service import (
+            liberar_lock_se_expirado,
+            cancelar_chamada,
+            MOTIVO_CANCEL_TIMEOUT_PRINT,
+            MOTIVO_CANCEL_ERRO,
+            MOTIVO_CANCEL_TIMEOUT_INTERACAO,
+        )
+
+        liberou_expirado = await liberar_lock_se_expirado()
+        if liberou_expirado:
+            definir_sessao(None)
+
         conseguiu, outro_doutor_id = await tentar_iniciar_chamada(interaction.user.id)
         if not conseguiu:
+            mencao_outro = (
+                f"<@{outro_doutor_id}>" if outro_doutor_id else "outro doutor"
+            )
             await interaction.response.send_message(
-                f"⏳ <@{outro_doutor_id}> já está realizando uma chamada agora. Aguarde o próximo período.",
+                f"⏳ {mencao_outro} já está realizando uma chamada agora.\n"
+                "Se a chamada não for concluída, o sistema **cancela sozinho** "
+                "em até 15 minutos e libera para outro doutor.",
                 ephemeral=True,
             )
             return
 
         await interaction.response.defer(ephemeral=True)
+
+        # Nova sessão em memória (substitui qualquer sessão órfã do mesmo doutor)
+        definir_sessao(None)
 
         async with async_session() as session:
             registro_chamada = Chamada(doutor_id=interaction.user.id)
@@ -248,14 +293,20 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
             )
 
         try:
-            mensagem_print = await bot.wait_for("message", timeout=300, check=checagem)
+            from src.config import TIMEOUT_PRINT_EMS_SEGUNDOS
+            mensagem_print = await bot.wait_for(
+                "message",
+                timeout=TIMEOUT_PRINT_EMS_SEGUNDOS,
+                check=checagem,
+            )
         except TimeoutError:
-            await finalizar_chamada(marcar_ultima_chamada=False)
+            await cancelar_chamada(motivo=MOTIVO_CANCEL_TIMEOUT_PRINT)
             definir_sessao(None)
             await interaction.edit_original_response(
                 view=_construir_view_simples(
-                    "⏱️ Tempo Esgotado",
-                    "Nenhum print recebido a tempo. Chamada cancelada.",
+                    "⏱️ Chamada cancelada",
+                    "O doutor não enviou o print do `/ems` em **5 minutos**.\n"
+                    "A chamada permanece **em aberto** para outro doutor (ou o mesmo) iniciar.",
                     discord.Color.red(),
                 )
             )
@@ -310,7 +361,7 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
             extrair_medicos_do_print_ems(url_imagem), timeout=90
         )
     except asyncio.TimeoutError:
-        await finalizar_chamada(marcar_ultima_chamada=False)
+        await cancelar_chamada(motivo=MOTIVO_CANCEL_ERRO)
         await destruir_print_com_aviso(sessao.print_ems_mensagem, delay=10)
         definir_sessao(None)
         await interaction.edit_original_response(
@@ -322,7 +373,7 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
         )
         return
     except OcrEmsError as exc:
-        await finalizar_chamada(marcar_ultima_chamada=False)
+        await cancelar_chamada(motivo=MOTIVO_CANCEL_ERRO)
         await destruir_print_com_aviso(sessao.print_ems_mensagem, delay=10)
         definir_sessao(None)
         await interaction.edit_original_response(
@@ -335,7 +386,7 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
         return
     except Exception:
         logger.exception("💥 Falha inesperada no OCR")
-        await finalizar_chamada(marcar_ultima_chamada=False)
+        await cancelar_chamada(motivo=MOTIVO_CANCEL_ERRO)
         await destruir_print_com_aviso(sessao.print_ems_mensagem, delay=10)
         definir_sessao(None)
         await interaction.edit_original_response(
@@ -572,7 +623,7 @@ def _construir_etapa_1(
     row_continuar.add_item(botao_continuar)
     componentes.append(row_continuar)
 
-    layout = discord.ui.LayoutView(timeout=600)
+    layout = _ViewSessaoChamada(timeout=300)
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -587,7 +638,7 @@ def _resolver_id_fivem_do_membro(
     for m in sessao.membros_conhecidos:
         if m.discord_id == discord_id:
             return m.id_fivem
-    from src.plantao.ocr.scraping_membros import extrair_id_do_apelido
+    from src.chamada.ocr.scraping_membros import extrair_id_do_apelido
 
     nome_exibido = membro.nick or membro.display_name or membro.name
     return extrair_id_do_apelido(nome_exibido)
@@ -834,7 +885,7 @@ def _construir_etapa_2(
     row.add_item(botao_continuar)
     componentes.append(row)
 
-    layout = discord.ui.LayoutView(timeout=600)
+    layout = _ViewSessaoChamada(timeout=300)
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -923,7 +974,7 @@ def _construir_etapa_3(
         row_botoes.add_item(botao_continuar)
         componentes.append(row_botoes)
 
-        layout = discord.ui.LayoutView(timeout=600)
+        layout = _ViewSessaoChamada(timeout=300)
         layout.add_item(
             discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
         )
@@ -967,7 +1018,7 @@ def _construir_etapa_3(
     row_botoes.add_item(botao_continuar)
     componentes.append(row_botoes)
 
-    layout = discord.ui.LayoutView(timeout=600)
+    layout = _ViewSessaoChamada(timeout=300)
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -1054,7 +1105,7 @@ def _construir_etapa_4(
     row.add_item(botao_finalizar)
     componentes.append(row)
 
-    layout = discord.ui.LayoutView(timeout=600)
+    layout = _ViewSessaoChamada(timeout=300)
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
