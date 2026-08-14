@@ -10,7 +10,7 @@ from src.database.connection import async_session
 from src.database.models import PainelPostado
 from src.gate.gate_panel import PainelEventosGate
 from src.panels.avaliacao_panel import PainelAvaliacaoLayout
-from src.plantao.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
+from src.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
 from src.plantao.plantao_panel import PainelPlantaoLayout
 from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
 from src.whitelist.whitelist_panel import PainelWhitelistLayout
