@@ -123,7 +123,9 @@ class AvaliarAtendimentoCog(commands.Cog):
         view = discord.ui.LayoutView(timeout=None)
         view.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# ⭐ Avaliação de Atendimento"),
+                discord.ui.TextDisplay(
+                    '# Use "/avaliar-atendimento"\n> ## ⭐ Avaliação de Atendimento'
+                ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.Section(
                     corpo,
