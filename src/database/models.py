@@ -757,3 +757,41 @@ class PedidoDepositoMoeda(Base):
     atualizado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=agora
     )
+
+
+class Ticket(Base):
+    """Ticket de suporte / denúncia (canal privado + transcript)."""
+
+    __tablename__ = "tickets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # chave interna da categoria (ex: suporte_duvidas, denuncias_jogador)
+    categoria_chave: Mapped[str] = mapped_column(String(60), index=True)
+    categoria_rotulo: Mapped[str] = mapped_column(String(120))
+    # aberto | assumido | finalizado
+    status: Mapped[str] = mapped_column(String(20), default="aberto", index=True)
+
+    autor_discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    autor_nome: Mapped[str] = mapped_column(String(120))
+
+    canal_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    mensagem_painel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    staff_assumiu_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    staff_assumiu_nome: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    staff_finalizou_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    staff_finalizou_nome: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    consideracoes_finais: Mapped[str | None] = mapped_column(Text, nullable=True)
+    senha_transcript: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    url_transcript: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    aberto_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora, index=True
+    )
+    assumido_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finalizado_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
