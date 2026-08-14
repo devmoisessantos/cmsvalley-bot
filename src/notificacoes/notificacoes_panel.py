@@ -1,10 +1,10 @@
 """Painel persistente e fluxos ephemeral de notificação por DM.
 
-Fluxo:
-1. Painel fixo no canal CANAL_ENVIAR_NOTIFICACAO
-2. Botão → ephemeral: escolher membro único OU cargo
-3. Continuar → ephemeral editada: montar título / corpo / cor (com Voltar)
-4. Enviar → DMs + log em LOG_NOTIFICACOES_DM
+1. Painel fixo no canal
+2. Destino (membro ou cargo)
+3. Construtor igual ao /templates (blocos + preview ao vivo)
+   — só com as opções pedidas: seção/texto/título/separador, botão, rodapé,
+     editar/mover/remover, cor, enviar/resetar/cancelar
 """
 
 from __future__ import annotations
@@ -13,21 +13,35 @@ import discord
 
 from src.notificacoes.notificacoes_service import (
     LIMITE_NOTIFICACOES_POR_HORA,
-    NOMES_CORES,
     ainda_pode_enviar,
-    cor_da_sessao,
     destino_esta_pronto,
     enviar_notificacao_da_sessao,
     limpar_sessao,
-    mensagem_esta_pronta,
     obter_sessao,
     quantidade_envios_na_hora,
-    resumo_corpo,
+    rascunho_tem_conteudo,
     resumo_destino,
 )
 from src.plantao.permissoes import (
     e_diretoria,
     mensagem_sem_permissao,
+)
+from src.templates.templates_cogs import (
+    ModalBotao,
+    ModalEscolherBloco,
+    ModalRodape,
+    ModalSecaoCompleta,
+    ModalSeparador,
+    ModalTextoBloco,
+    _modal_para_bloco,
+)
+from src.templates.templates_modelo import (
+    limpar_rascunho,
+    mapa_de_cores,
+    montar_preview,
+    montar_texto_do_rodape,
+    obter_rascunho,
+    resumo_dos_blocos,
 )
 from src.utils.error_handling import (
     LoggingModalMixin,
@@ -37,6 +51,7 @@ from src.utils.mensagens import (
     COR_ERRO,
     COR_INFO,
     COR_SUCESSO,
+    responder_erro,
     responder_view,
 )
 
@@ -162,7 +177,6 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
             "cargo": "🏷️ Cargo específico",
         }.get(sessao.tipo_destino or "", "*Nenhum*")
 
-        # Select do tipo
         linha_tipo = discord.ui.ActionRow()
         seletor_tipo = discord.ui.Select(
             placeholder="Como deseja notificar?",
@@ -300,7 +314,6 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
         valor = interacao.data["values"][0]
         sessao = obter_sessao(self.id_do_executor)
         sessao.tipo_destino = valor
-        # limpa destino anterior ao trocar o tipo
         sessao.id_do_membro = None
         sessao.mencao_do_membro = None
         sessao.id_do_cargo = None
@@ -354,8 +367,27 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
                 ephemeral=True,
             )
             return
-        view_composicao = FluxoComporMensagemView(id_do_executor=self.id_do_executor)
-        await interacao.response.edit_message(view=view_composicao)
+
+        limpar_rascunho(self.id_do_executor)
+        obter_rascunho(self.id_do_executor)
+
+        painel = FluxoComporNotificacaoView(
+            id_do_usuario=self.id_do_executor,
+            guilda=interacao.guild,
+        )
+        await interacao.response.edit_message(view=painel)
+        painel.mensagem_editor = await interacao.original_response()
+
+        view_preview = montar_preview(
+            obter_rascunho(self.id_do_executor),
+            interacao.guild,
+        )
+        mensagem_preview = await interacao.followup.send(
+            view=view_preview,
+            ephemeral=True,
+            wait=True,
+        )
+        painel.mensagem_preview = mensagem_preview
 
     async def _ao_cancelar(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
@@ -420,100 +452,154 @@ class ModalDiscordIdNotificacao(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# ETAPA 2 — compor mensagem (estilo /templates, sem criador completo)
+# ETAPA 2 — construtor (mesmo fluxo do /templates, opções filtradas)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class FluxoComporMensagemView(LoggingViewMixin, discord.ui.LayoutView):
-    """Ephemeral editada: título, corpo, cor, preview, Voltar e Enviar."""
+class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
+    """
+    Editor de blocos + preview separado — API compatível com os modais
+    de templates_cogs (id_do_usuario, indice_em_edicao, _atualizar_painel).
+    """
 
-    def __init__(self, id_do_executor: int):
-        super().__init__(timeout=600)
-        self.id_do_executor = id_do_executor
+    def __init__(
+        self,
+        id_do_usuario: int,
+        guilda: discord.Guild | None = None,
+        mensagem_preview: discord.Message | None = None,
+    ):
+        super().__init__(timeout=1200)
+        self.id_do_usuario = id_do_usuario
+        self.guilda = guilda
+        self.mensagem_preview = mensagem_preview
+        self.mensagem_editor: discord.Message | None = None
+        self.indice_em_edicao: int | None = None
         self._reconstruir()
 
     def _reconstruir(self) -> None:
         self.clear_items()
-        sessao = obter_sessao(self.id_do_executor)
+        rascunho = obter_rascunho(self.id_do_usuario)
+        sessao = obter_sessao(self.id_do_usuario)
 
-        titulo_txt = sessao.titulo.strip() if sessao.titulo.strip() else "*Pendente*"
-        nome_cor = NOMES_CORES.get(sessao.chave_cor, sessao.chave_cor)
-        corpo_txt = resumo_corpo(sessao)
+        linha_1 = discord.ui.ActionRow()
+        for rotulo, emoji, callback in (
+            ("Seção", "🗂️", self._ao_clicar_secao),
+            ("Texto", "📝", self._ao_clicar_texto),
+            ("Título", "✏️", self._ao_clicar_titulo),
+            ("Separador", "➖", self._ao_clicar_separador),
+        ):
+            botao = discord.ui.Button(
+                label=rotulo,
+                style=discord.ButtonStyle.primary,
+                emoji=emoji,
+            )
+            botao.callback = callback
+            linha_1.add_item(botao)
 
-        linha_edicao = discord.ui.ActionRow()
-        botao_titulo = discord.ui.Button(
-            label="Definir título",
-            style=discord.ButtonStyle.primary,
-            emoji="📌",
-        )
-        botao_titulo.callback = self._ao_definir_titulo
-        linha_edicao.add_item(botao_titulo)
+        linha_2 = discord.ui.ActionRow()
+        for rotulo, emoji, callback in (
+            ("Botão", "🔘", self._ao_clicar_botao),
+            ("Rodapé", "📌", self._ao_clicar_rodape),
+        ):
+            botao = discord.ui.Button(
+                label=rotulo,
+                style=discord.ButtonStyle.secondary,
+                emoji=emoji,
+            )
+            botao.callback = callback
+            linha_2.add_item(botao)
 
-        botao_corpo = discord.ui.Button(
-            label="Definir mensagem",
-            style=discord.ButtonStyle.primary,
-            emoji="✏️",
-        )
-        botao_corpo.callback = self._ao_definir_corpo
-        linha_edicao.add_item(botao_corpo)
+        linha_3 = discord.ui.ActionRow()
+        for rotulo, emoji, estilo, callback in (
+            (
+                "Editar bloco",
+                "📝",
+                discord.ButtonStyle.primary,
+                self._ao_clicar_editar_bloco,
+            ),
+            (
+                "Editar último",
+                "✏️",
+                discord.ButtonStyle.primary,
+                self._ao_clicar_editar_ultimo,
+            ),
+            (
+                "Mover bloco",
+                "↕️",
+                discord.ButtonStyle.secondary,
+                self._ao_clicar_mover_bloco,
+            ),
+            (
+                "Remover último",
+                "🗑️",
+                discord.ButtonStyle.danger,
+                self._ao_clicar_remover_ultimo,
+            ),
+        ):
+            botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
+            botao.callback = callback
+            linha_3.add_item(botao)
 
         linha_cor = discord.ui.ActionRow()
         seletor_cor = discord.ui.Select(
-            placeholder="Cor do card na DM…",
+            placeholder="Cor do Container…",
             options=[
-                discord.SelectOption(
-                    label=nome,
-                    value=chave,
-                    default=sessao.chave_cor == chave,
-                )
-                for chave, nome in NOMES_CORES.items()
+                discord.SelectOption(label=nome.title(), value=nome)
+                for nome in mapa_de_cores().keys()
             ],
         )
         seletor_cor.callback = self._ao_escolher_cor
         linha_cor.add_item(seletor_cor)
 
         linha_acoes = discord.ui.ActionRow()
-        botao_voltar = discord.ui.Button(
-            label="Voltar",
-            style=discord.ButtonStyle.secondary,
-            emoji="⬅️",
-        )
-        botao_voltar.callback = self._ao_voltar
-        linha_acoes.add_item(botao_voltar)
+        for rotulo, emoji, estilo, callback in (
+            ("Enviar", "📨", discord.ButtonStyle.success, self._ao_clicar_enviar),
+            ("Resetar", "♻️", discord.ButtonStyle.secondary, self._ao_clicar_resetar),
+            ("Cancelar", "✖️", discord.ButtonStyle.danger, self._ao_clicar_cancelar),
+        ):
+            botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
+            botao.callback = callback
+            linha_acoes.add_item(botao)
 
-        botao_enviar = discord.ui.Button(
-            label="Enviar notificação",
-            style=discord.ButtonStyle.success,
-            emoji="📨",
-            disabled=not mensagem_esta_pronta(sessao),
+        status_rodape = "ligado" if rascunho.rodape_ativo else "desligado"
+        texto_rodape = (
+            montar_texto_do_rodape(rascunho, self.guilda)
+            if rascunho.rodape_ativo
+            else ""
         )
-        botao_enviar.callback = self._ao_enviar
-        linha_acoes.add_item(botao_enviar)
+        status_preview = (
+            "mensagem separada ativa"
+            if self.mensagem_preview is not None
+            else "aguardando…"
+        )
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# ✏️ Montar a mensagem"),
                 discord.ui.TextDisplay(
-                    "### Destino\n"
-                    f"> {resumo_destino(sessao)}\n\n"
-                    "### Pré-visualização (ao vivo)\n"
-                    f"> **Título:** {titulo_txt}\n"
-                    f"> **Cor:** `{nome_cor}`\n"
-                    f"> **Corpo:**\n```\n{corpo_txt}\n```\n"
-                    "-# Use `|` no corpo para quebrar linhas no card da DM."
+                    "# 📨 Montar notificação (DM)\n"
+                    f"-# Destino: {resumo_destino(sessao)}\n"
+                    "-# O **preview** fica em outra mensagem e atualiza a cada mudança."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(
+                    f"### Blocos ({len(rascunho.blocos)})\n"
+                    f"{resumo_dos_blocos(rascunho)}\n\n"
+                    f"**Cor:** `{rascunho.cor_nome}` · **Rodapé:** `{status_rodape}`"
+                    + (f"\n{texto_rodape}" if texto_rodape else "")
+                    + f"\n-# Preview: {status_preview}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-                discord.ui.TextDisplay("### Editar conteúdo"),
-                linha_edicao,
+                linha_1,
+                linha_2,
+                linha_3,
                 linha_cor,
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 linha_acoes,
-                accent_color=cor_da_sessao(sessao),
+                accent_color=discord.Color.dark_teal(),
             )
         )
 
     async def _garantir_dono(self, interacao: discord.Interaction) -> bool:
-        if interacao.user.id != self.id_do_executor:
+        if interacao.user.id != self.id_do_usuario:
             await interacao.response.send_message(
                 "❌ Este painel não é seu.",
                 ephemeral=True,
@@ -521,47 +607,192 @@ class FluxoComporMensagemView(LoggingViewMixin, discord.ui.LayoutView):
             return False
         return True
 
-    async def _atualizar(self, interacao: discord.Interaction) -> None:
+    async def _atualizar_mensagem_preview(self) -> None:
+        if self.mensagem_preview is None:
+            return
+        rascunho = obter_rascunho(self.id_do_usuario)
+        view_preview = montar_preview(rascunho, self.guilda)
+        try:
+            await self.mensagem_preview.edit(view=view_preview)
+        except (discord.NotFound, discord.HTTPException):
+            self.mensagem_preview = None
+
+    async def _destruir_mensagem_preview(self) -> None:
+        if self.mensagem_preview is None:
+            return
+        try:
+            await self.mensagem_preview.delete()
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+        self.mensagem_preview = None
+
+    async def on_timeout(self) -> None:
+        await self._destruir_mensagem_preview()
+
+    async def _atualizar_painel(
+        self,
+        interacao: discord.Interaction | None = None,
+    ) -> None:
+        """Mesmo contrato do PainelTemplatesView — usado pelos modais importados."""
+        if interacao is not None and interacao.guild is not None:
+            self.guilda = interacao.guild
+
+        if interacao is not None and not interacao.response.is_done():
+            try:
+                await interacao.response.defer(ephemeral=True)
+            except discord.HTTPException:
+                pass
+
         self._reconstruir()
-        await interacao.response.edit_message(view=self)
 
-    async def _ao_definir_titulo(self, interacao: discord.Interaction):
+        if self.mensagem_editor is not None:
+            try:
+                await self.mensagem_editor.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                self.mensagem_editor = None
+        elif interacao is not None:
+            try:
+                await interacao.edit_original_response(view=self)
+            except (discord.HTTPException, discord.NotFound):
+                pass
+
+        await self._atualizar_mensagem_preview()
+
+    async def _ao_clicar_titulo(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
-        await interacao.response.send_modal(ModalTituloNotificacao(self))
+        await interacao.response.send_modal(ModalTextoBloco(self, "titulo"))
 
-    async def _ao_definir_corpo(self, interacao: discord.Interaction):
+    async def _ao_clicar_texto(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
-        await interacao.response.send_modal(ModalCorpoNotificacao(self))
+        await interacao.response.send_modal(ModalTextoBloco(self, "texto"))
 
-    async def _ao_escolher_cor(self, interacao: discord.Interaction):
+    async def _ao_clicar_secao(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
-        sessao = obter_sessao(self.id_do_executor)
-        sessao.chave_cor = interacao.data["values"][0]
-        await self._atualizar(interacao)
+        await interacao.response.send_modal(ModalSecaoCompleta(self))
 
-    async def _ao_voltar(self, interacao: discord.Interaction):
+    async def _ao_clicar_separador(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
-        # mantém destino e também o rascunho da mensagem
-        view_destino = FluxoEscolherDestinoView(id_do_executor=self.id_do_executor)
-        await interacao.response.edit_message(view=view_destino)
+        await interacao.response.send_modal(ModalSeparador(self))
 
-    async def _ao_enviar(self, interacao: discord.Interaction):
+    async def _ao_clicar_botao(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
+        await interacao.response.send_modal(ModalBotao(self))
 
-        sessao = obter_sessao(self.id_do_executor)
-        if not destino_esta_pronto(sessao) or not mensagem_esta_pronta(sessao):
+    async def _ao_clicar_rodape(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        await interacao.response.send_modal(ModalRodape(self))
+
+    async def _ao_clicar_remover_ultimo(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        rascunho = obter_rascunho(self.id_do_usuario)
+        if rascunho.blocos:
+            rascunho.blocos.pop()
+        await self._atualizar_painel(interacao)
+
+    async def _ao_clicar_editar_ultimo(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        rascunho = obter_rascunho(self.id_do_usuario)
+        if not rascunho.blocos:
             await interacao.response.send_message(
-                "❌ Complete o destino e a mensagem antes de enviar.",
+                "❌ Não há bloco para editar.",
                 ephemeral=True,
             )
             return
 
-        if not ainda_pode_enviar(self.id_do_executor):
+        self.indice_em_edicao = len(rascunho.blocos) - 1
+        ultimo = rascunho.blocos[-1]
+        modal = _modal_para_bloco(self, ultimo)
+        if modal is None:
+            self.indice_em_edicao = None
+            await interacao.response.send_message(
+                f"❌ Tipo `{ultimo.tipo}` sem editor.",
+                ephemeral=True,
+            )
+            return
+        await interacao.response.send_modal(modal)
+
+    async def _ao_clicar_editar_bloco(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        rascunho = obter_rascunho(self.id_do_usuario)
+        if not rascunho.blocos:
+            await responder_erro(
+                interacao,
+                titulo="Sem blocos",
+                linhas=["Não há blocos para editar. Adicione algum primeiro."],
+            )
+            return
+        await interacao.response.send_modal(ModalEscolherBloco(self, modo="editar"))
+
+    async def _ao_clicar_mover_bloco(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        rascunho = obter_rascunho(self.id_do_usuario)
+        if len(rascunho.blocos) < 2:
+            await responder_erro(
+                interacao,
+                titulo="Poucos blocos",
+                linhas=["É preciso ter pelo menos **2 blocos** para mover."],
+            )
+            return
+        await interacao.response.send_modal(ModalEscolherBloco(self, modo="mover"))
+
+    async def _ao_escolher_cor(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        valores = interacao.data.get("values") if interacao.data else None
+        if valores:
+            obter_rascunho(self.id_do_usuario).cor_nome = valores[0]
+        await self._atualizar_painel(interacao)
+
+    async def _ao_clicar_resetar(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        limpar_rascunho(self.id_do_usuario)
+        await self._atualizar_painel(interacao)
+
+    async def _ao_clicar_cancelar(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        await self._destruir_mensagem_preview()
+        limpar_sessao(self.id_do_usuario)
+        await interacao.response.edit_message(
+            view=_view_mensagem_simples(
+                titulo="❌ Notificação cancelada",
+                linhas=["Rascunho e destino foram descartados."],
+                cor=COR_ERRO,
+            )
+        )
+
+    async def _ao_clicar_enviar(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+
+        sessao = obter_sessao(self.id_do_usuario)
+        if not destino_esta_pronto(sessao):
+            await interacao.response.send_message(
+                "❌ Destino inválido. Cancele e comece de novo.",
+                ephemeral=True,
+            )
+            return
+
+        if not rascunho_tem_conteudo(self.id_do_usuario):
+            await responder_erro(
+                interacao,
+                titulo="Rascunho vazio",
+                linhas=["Adicione pelo menos um bloco antes de enviar."],
+            )
+            return
+
+        if not ainda_pode_enviar(self.id_do_usuario):
             await interacao.response.send_message(
                 f"❌ Limite de **{LIMITE_NOTIFICACOES_POR_HORA}** por hora atingido.",
                 ephemeral=True,
@@ -576,6 +807,7 @@ class FluxoComporMensagemView(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         await interacao.response.defer(ephemeral=True)
+        await self._destruir_mensagem_preview()
 
         resultado = await enviar_notificacao_da_sessao(interacao.guild, sessao)
 
@@ -583,7 +815,6 @@ class FluxoComporMensagemView(LoggingViewMixin, discord.ui.LayoutView):
             titulo = "❌ Nenhum destinatário"
             linhas = [
                 "Não foi possível resolver membros para o destino escolhido.",
-                "Confira se o cargo tem membros online no cache ou se o ID está correto.",
             ]
             cor = COR_ERRO
         elif resultado.enviados == 0:
@@ -598,7 +829,6 @@ class FluxoComporMensagemView(LoggingViewMixin, discord.ui.LayoutView):
             linhas = [
                 f"Destino: {resumo_destino(sessao)}",
                 f"Enviadas: **{resultado.enviados}** / {resultado.total}",
-                f"Título: **{sessao.titulo[:80]}**",
             ]
             cor = COR_SUCESSO
         else:
@@ -610,73 +840,10 @@ class FluxoComporMensagemView(LoggingViewMixin, discord.ui.LayoutView):
             ]
             cor = COR_INFO
 
-        limpar_sessao(self.id_do_executor)
+        limpar_sessao(self.id_do_usuario)
         await interacao.edit_original_response(
             view=_view_mensagem_simples(titulo=titulo, linhas=linhas, cor=cor)
         )
-
-
-class ModalTituloNotificacao(
-    LoggingModalMixin, discord.ui.Modal, title="Título da notificação"
-):
-    campo_titulo = discord.ui.TextInput(
-        label="Título (aparece no topo do card)",
-        placeholder="Ex.: Aviso importante da Diretoria",
-        required=True,
-        max_length=200,
-        style=discord.TextStyle.short,
-    )
-
-    def __init__(self, painel: FluxoComporMensagemView):
-        super().__init__()
-        self.painel = painel
-        sessao = obter_sessao(painel.id_do_executor)
-        if sessao.titulo:
-            self.campo_titulo.default = sessao.titulo[:200]
-
-    async def on_submit(self, interacao: discord.Interaction):
-        sessao = obter_sessao(self.painel.id_do_executor)
-        sessao.titulo = self.campo_titulo.value.strip()
-        self.painel._reconstruir()
-        await interacao.response.edit_message(view=self.painel)
-
-
-class ModalCorpoNotificacao(
-    LoggingModalMixin, discord.ui.Modal, title="Corpo da mensagem"
-):
-    campo_corpo = discord.ui.TextInput(
-        label="Mensagem (use | para quebrar linha)",
-        placeholder="Linha 1 | Linha 2 | Linha 3",
-        required=True,
-        max_length=1500,
-        style=discord.TextStyle.paragraph,
-    )
-
-    def __init__(self, painel: FluxoComporMensagemView):
-        super().__init__()
-        self.painel = painel
-        sessao = obter_sessao(painel.id_do_executor)
-        if sessao.linhas_corpo:
-            self.campo_corpo.default = " | ".join(sessao.linhas_corpo)[:1500]
-
-    async def on_submit(self, interacao: discord.Interaction):
-        texto = self.campo_corpo.value.strip()
-        # aceita tanto | quanto quebras de linha reais do modal
-        partes: list[str] = []
-        for pedaco in texto.replace("\r\n", "\n").split("\n"):
-            for sub in pedaco.split("|"):
-                limpo = sub.strip()
-                if limpo:
-                    partes.append(limpo)
-        sessao = obter_sessao(self.painel.id_do_executor)
-        sessao.linhas_corpo = partes or [texto]
-        self.painel._reconstruir()
-        await interacao.response.edit_message(view=self.painel)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Helpers de UI
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 def _view_mensagem_simples(

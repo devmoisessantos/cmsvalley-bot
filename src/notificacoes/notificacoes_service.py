@@ -1,6 +1,6 @@
-"""Lógica de envio em massa / unitário e limite de uso do painel de notificação.
+"""Lógica de destino, limite de uso e envio da notificação (LayoutView completa).
 
-Não monta interface — só resolve destinos e dispara as DMs.
+O conteúdo do card vem do rascunho do construtor (templates_modelo).
 """
 
 from __future__ import annotations
@@ -15,41 +15,25 @@ from dataclasses import (
 
 import discord
 
-from src.utils.notificacao import (
-    COR_AVISO,
-    COR_INFO,
-    COR_PUNICAO,
-    COR_SUCESSO,
-    enviar_dm_card,
+from src.templates.templates_modelo import (
+    limpar_rascunho,
+    montar_preview,
+    obter_rascunho,
+    resumo_dos_blocos,
 )
+from src.utils.notificacao import enviar_dm_view
 
 logger = logging.getLogger(__name__)
 
-# Limite por usuário que usa o painel (não por destinatário)
 LIMITE_NOTIFICACOES_POR_HORA = 5
 _janela_segundos = 3600
 
-# Histórico simples em memória: id_executor → lista de timestamps unix
 _historico_envios: dict[int, list[float]] = {}
-
-CORES_DISPONIVEIS: dict[str, discord.Color] = {
-    "info": COR_INFO,
-    "sucesso": COR_SUCESSO,
-    "aviso": COR_AVISO,
-    "erro": COR_PUNICAO,
-}
-
-NOMES_CORES = {
-    "info": "Info (azul)",
-    "sucesso": "Sucesso (verde)",
-    "aviso": "Aviso (laranja)",
-    "erro": "Erro / alerta (vermelho)",
-}
 
 
 @dataclass
 class SessaoNotificacao:
-    """Estado do fluxo ephemeral de um diretor."""
+    """Só o destino do fluxo (o card fica no rascunho de templates_modelo)."""
 
     id_do_executor: int
     tipo_destino: str | None = None  # "membro" | "cargo"
@@ -57,9 +41,6 @@ class SessaoNotificacao:
     mencao_do_membro: str | None = None
     id_do_cargo: int | None = None
     nome_do_cargo: str | None = None
-    titulo: str = ""
-    linhas_corpo: list[str] = field(default_factory=list)
-    chave_cor: str = "info"
 
 
 _sessoes: dict[int, SessaoNotificacao] = {}
@@ -73,13 +54,13 @@ def obter_sessao(id_do_executor: int) -> SessaoNotificacao:
 
 def limpar_sessao(id_do_executor: int) -> None:
     _sessoes.pop(id_do_executor, None)
+    limpar_rascunho(id_do_executor)
 
 
 def registrar_envio_do_executor(id_do_executor: int) -> None:
     agora = time.time()
     lista = _historico_envios.setdefault(id_do_executor, [])
     lista.append(agora)
-    # descarta timestamps fora da janela
     _historico_envios[id_do_executor] = [
         marca for marca in lista if agora - marca < _janela_segundos
     ]
@@ -105,18 +86,6 @@ def destino_esta_pronto(sessao: SessaoNotificacao) -> bool:
     return False
 
 
-def mensagem_esta_pronta(sessao: SessaoNotificacao) -> bool:
-    titulo_ok = bool(sessao.titulo.strip())
-    corpo_ok = bool(sessao.linhas_corpo) and any(
-        linha.strip() for linha in sessao.linhas_corpo
-    )
-    return titulo_ok and corpo_ok
-
-
-def cor_da_sessao(sessao: SessaoNotificacao) -> discord.Color:
-    return CORES_DISPONIVEIS.get(sessao.chave_cor, COR_INFO)
-
-
 def resumo_destino(sessao: SessaoNotificacao) -> str:
     if sessao.tipo_destino == "membro" and sessao.id_do_membro:
         return f"{sessao.mencao_do_membro or 'membro'} (`{sessao.id_do_membro}`)"
@@ -126,20 +95,14 @@ def resumo_destino(sessao: SessaoNotificacao) -> str:
     return "*Ainda não definido*"
 
 
-def resumo_corpo(sessao: SessaoNotificacao, limite: int = 280) -> str:
-    if not sessao.linhas_corpo:
-        return "*Vazio*"
-    texto = "\n".join(sessao.linhas_corpo)
-    if len(texto) > limite:
-        return texto[: limite - 3] + "..."
-    return texto
+def rascunho_tem_conteudo(id_do_usuario: int) -> bool:
+    return bool(obter_rascunho(id_do_usuario).blocos)
 
 
 async def resolver_membros_destino(
     guilda: discord.Guild,
     sessao: SessaoNotificacao,
 ) -> list[discord.Member]:
-    """Resolve a lista final de membros que receberão a DM."""
     if sessao.tipo_destino == "membro" and sessao.id_do_membro:
         membro = guilda.get_member(sessao.id_do_membro)
         if membro is None:
@@ -153,7 +116,6 @@ async def resolver_membros_destino(
         cargo = guilda.get_role(sessao.id_do_cargo)
         if cargo is None:
             return []
-        # members já exclui bots na prática do cache; filtramos bots mesmo assim
         return [membro for membro in cargo.members if not membro.bot]
 
     return []
@@ -174,26 +136,40 @@ async def enviar_notificacao_da_sessao(
     atraso_entre_envios: float = 0.35,
 ) -> ResultadoEnvioNotificacao:
     """
-    Envia o card da sessão para todos os destinos resolvidos.
-    Conta um uso no limite por hora do executor (uma vez por clique em Enviar).
+    Monta o LayoutView do rascunho (igual ao /templates) e envia na DM
+    de cada destinatário via enviar_dm_view.
     """
     resultado = ResultadoEnvioNotificacao()
     membros = await resolver_membros_destino(guilda, sessao)
     resultado.total = len(membros)
-
     if not membros:
         return resultado
 
-    titulo = sessao.titulo.strip()[:200]
-    linhas = [linha for linha in sessao.linhas_corpo if linha.strip()]
-    cor = cor_da_sessao(sessao)
+    rascunho = obter_rascunho(sessao.id_do_executor)
+    if not rascunho.blocos:
+        return resultado
+
+    titulo_log = "Notificação por DM (painel)"
+    for bloco in rascunho.blocos:
+        if bloco.tipo == "titulo" and bloco.texto.strip():
+            titulo_log = bloco.texto.strip()[:120]
+            break
+        if bloco.tipo in ("secao", "texto") and bloco.texto.strip():
+            titulo_log = bloco.texto.strip().splitlines()[0][:120]
+            break
+
+    linhas_resumo = [
+        f"Blocos: {len(rascunho.blocos)}",
+        resumo_dos_blocos(rascunho)[:400],
+    ]
 
     for indice, membro in enumerate(membros):
-        enviou = await enviar_dm_card(
+        view_dm = montar_preview(rascunho, guilda)
+        enviou = await enviar_dm_view(
             membro,
-            titulo=titulo,
-            linhas=linhas,
-            cor=cor,
+            view_dm,
+            titulo_log=titulo_log,
+            linhas_resumo=linhas_resumo,
             guilda=guilda,
             registrar_log=True,
         )
