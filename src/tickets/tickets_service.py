@@ -221,6 +221,81 @@ async def finalizar_ticket(
         return ticket_db
 
 
+async def salvar_mensagem_botoes_id(ticket_id: int, mensagem_id: int) -> None:
+    """Guarda o ID da mensagem do card de botões de staff."""
+    async with async_session() as sessao:
+        ticket_db = await sessao.get(Ticket, ticket_id)
+        if ticket_db is None:
+            return
+        ticket_db.mensagem_botoes_id = mensagem_id
+        await sessao.commit()
+
+
+async def salvar_call_canal_id(ticket_id: int, call_canal_id: int | None) -> None:
+    """Associa ou limpa o canal de voz de atendimento do ticket."""
+    async with async_session() as sessao:
+        ticket_db = await sessao.get(Ticket, ticket_id)
+        if ticket_db is None:
+            return
+        ticket_db.call_canal_id = call_canal_id
+        await sessao.commit()
+
+
+async def buscar_ticket_por_id(ticket_id: int) -> Ticket | None:
+    async with async_session() as sessao:
+        return await sessao.get(Ticket, ticket_id)
+
+
+async def enviar_card_no_canal_ticket(
+    canal: discord.TextChannel,
+    titulo: str,
+    linhas: list[str],
+    cor: discord.Color | None = None,
+) -> discord.Message | None:
+    """
+    Publica um CardView no canal do ticket (não ephemeral).
+
+    Usado para feedback visível de todas as ações de staff.
+    """
+    from src.utils.mensagens import (
+        COR_INFO,
+        CardView,
+    )
+
+    view = CardView(
+        titulo=titulo,
+        linhas=linhas,
+        cor=cor or COR_INFO,
+        timeout=None,
+        com_marcador=False,
+    )
+    try:
+        return await canal.send(view=view)
+    except discord.HTTPException:
+        return None
+
+
+async def apagar_call_do_ticket(
+    guilda: discord.Guild,
+    ticket: Ticket,
+) -> None:
+    """Apaga o canal de voz ligado ao ticket, se ainda existir."""
+    if not ticket.call_canal_id:
+        return
+    canal_voz = guilda.get_channel(int(ticket.call_canal_id))
+    if canal_voz is None:
+        try:
+            canal_voz = await guilda.fetch_channel(int(ticket.call_canal_id))
+        except discord.HTTPException:
+            canal_voz = None
+    if canal_voz is not None:
+        try:
+            await canal_voz.delete(reason=f"Call do ticket #{ticket.id} encerrada")
+        except discord.HTTPException:
+            pass
+    await salvar_call_canal_id(ticket.id, None)
+
+
 async def coletar_mensagens_do_canal(
     canal: discord.TextChannel,
     limite: int = 500,

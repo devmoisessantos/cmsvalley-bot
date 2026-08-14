@@ -8,12 +8,16 @@ import asyncio
 
 import discord
 
+from src.tickets.tickets_logger import enviar_log_ticket_finalizado
 from src.tickets.tickets_service import (
     adicionar_membro_ao_ticket,
+    apagar_call_do_ticket,
     assumir_ticket,
     buscar_ticket_por_canal,
+    buscar_ticket_por_id,
     coletar_mensagens_do_canal,
     criar_call_atendimento,
+    enviar_card_no_canal_ticket,
     finalizar_ticket,
     listar_categorias_ticket_na_guilda,
     membro_eh_staff_ticket,
@@ -21,6 +25,8 @@ from src.tickets.tickets_service import (
     mover_canal_ticket,
     nome_usuario_discord,
     remover_membro_do_ticket,
+    salvar_call_canal_id,
+    salvar_mensagem_botoes_id,
     transferir_atendimento,
     trocar_nome_do_canal,
 )
@@ -31,10 +37,10 @@ from src.utils.mensagens import (
     responder_erro,
     responder_view,
 )
-
-# ---------------------------------------------------------------------------
-# Cards enviados ao abrir o canal
-# ---------------------------------------------------------------------------
+from src.utils.notificacao import (
+    COR_INFO as COR_DM_INFO,
+    enviar_dm_card,
+)
 
 
 class CardAberturaTicketView(discord.ui.LayoutView):
@@ -91,17 +97,24 @@ class CardBotoesStaffView(discord.ui.LayoutView):
     """
     Card 3 — opções exclusivas dos responsáveis pelo atendimento.
 
-    custom_ids fixos para sobreviver a reinícios do bot.
+    Estado dinâmico:
+    - se já assumido → botão Assumir vira «Assumido por: …» e fica desativado
+    - se há call → botão vira «Encerrar call de atendimento»
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        staff_assumiu_id: int | None = None,
+        staff_assumiu_label: str | None = None,
+        call_ativa: bool = False,
+    ) -> None:
         super().__init__(timeout=None)
 
         componentes: list = [
             discord.ui.TextDisplay(
                 "-# Opções exclusivas para o uso dos responsáveis pelo atendimento!"
             ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         ]
 
         linha_membros = discord.ui.ActionRow()
@@ -159,25 +172,49 @@ class CardBotoesStaffView(discord.ui.LayoutView):
                 custom_id="ticket:obs_interna",
             )
         )
-        linha_extras.add_item(
-            discord.ui.Button(
-                label="Criar Call de Atendimento",
-                emoji="📞",
-                style=discord.ButtonStyle.secondary,
-                custom_id="ticket:criar_call",
+        if call_ativa:
+            linha_extras.add_item(
+                discord.ui.Button(
+                    label="Encerrar call de atendimento",
+                    emoji="📞",
+                    style=discord.ButtonStyle.danger,
+                    custom_id="ticket:encerrar_call",
+                )
             )
-        )
+        else:
+            linha_extras.add_item(
+                discord.ui.Button(
+                    label="Criar Call de Atendimento",
+                    emoji="📞",
+                    style=discord.ButtonStyle.secondary,
+                    custom_id="ticket:criar_call",
+                )
+            )
         componentes.append(linha_extras)
 
         linha_atendimento = discord.ui.ActionRow()
-        linha_atendimento.add_item(
-            discord.ui.Button(
-                label="Assumir Atendimento",
-                emoji="🙋",
-                style=discord.ButtonStyle.primary,
-                custom_id="ticket:assumir",
+        if staff_assumiu_id is not None:
+            rotulo_assumido = staff_assumiu_label or "Staff"
+            if len(rotulo_assumido) > 70:
+                rotulo_assumido = rotulo_assumido[:67] + "…"
+            linha_atendimento.add_item(
+                discord.ui.Button(
+                    label=f"Assumido por: {rotulo_assumido}",
+                    emoji="🙋",
+                    style=discord.ButtonStyle.secondary,
+                    custom_id="ticket:assumir",
+                    disabled=True,
+                )
             )
-        )
+        else:
+            linha_atendimento.add_item(
+                discord.ui.Button(
+                    label="Assumir Atendimento",
+                    emoji="🙋",
+                    style=discord.ButtonStyle.primary,
+                    custom_id="ticket:assumir",
+                )
+            )
         linha_atendimento.add_item(
             discord.ui.Button(
                 label="Saudar Atendimento",
@@ -218,16 +255,41 @@ async def enviar_mensagens_abertura_ticket(
     canal: discord.TextChannel,
     autor: discord.Member,
     definicao: dict,
+    ticket_id: int,
 ) -> None:
-    """Envia os 3 cards de abertura no canal do ticket."""
+    """Envia os 3 cards de abertura e salva o ID da mensagem de botões."""
     await canal.send(view=CardAberturaTicketView(autor=autor, definicao=definicao))
     await canal.send(view=CardObservacaoDmView())
-    await canal.send(view=CardBotoesStaffView())
+    mensagem_botoes = await canal.send(view=CardBotoesStaffView())
+    await salvar_mensagem_botoes_id(ticket_id, mensagem_botoes.id)
 
 
-# ---------------------------------------------------------------------------
-# Views auxiliares (seleção de membro / categoria)
-# ---------------------------------------------------------------------------
+async def atualizar_card_botoes_staff(
+    canal: discord.TextChannel,
+    ticket,
+) -> None:
+    """Reenvia o estado dos botões (Assumir desativado / Encerrar call)."""
+    if not ticket.mensagem_botoes_id:
+        return
+
+    try:
+        mensagem = await canal.fetch_message(int(ticket.mensagem_botoes_id))
+    except discord.HTTPException:
+        return
+
+    label_assumido = None
+    if ticket.staff_assumiu_id:
+        label_assumido = ticket.staff_assumiu_nome or str(ticket.staff_assumiu_id)
+
+    view = CardBotoesStaffView(
+        staff_assumiu_id=ticket.staff_assumiu_id,
+        staff_assumiu_label=label_assumido,
+        call_ativa=bool(ticket.call_canal_id),
+    )
+    try:
+        await mensagem.edit(view=view)
+    except discord.HTTPException:
+        pass
 
 
 class ViewSelecionarMembro(discord.ui.LayoutView):
@@ -326,23 +388,16 @@ class ViewSelecionarMembro(discord.ui.LayoutView):
 
         if self.acao == "adicionar":
             await adicionar_membro_ao_ticket(canal, membro_alvo)
-            await responder_card(
-                interacao,
-                titulo="Membro adicionado",
+            await interacao.response.defer(ephemeral=True)
+            await enviar_card_no_canal_ticket(
+                canal,
+                titulo="➕ Usuário Adicionado ao Ticket",
                 linhas=[
-                    f"{membro_alvo.mention} agora tem acesso a este ticket.",
+                    f"{membro_alvo.mention} foi adicionado ao ticket por {staff.mention}",
                 ],
                 cor=COR_SUCESSO,
             )
-            try:
-                await canal.send(
-                    content=(
-                        f"➕ {membro_alvo.mention} foi adicionado ao ticket "
-                        f"por {staff.mention}."
-                    )
-                )
-            except discord.HTTPException:
-                pass
+            await interacao.followup.send(content="Membro adicionado.", ephemeral=True)
             return
 
         if self.acao == "remover":
@@ -358,39 +413,31 @@ class ViewSelecionarMembro(discord.ui.LayoutView):
                     linhas=[erro],
                 )
                 return
-            await responder_card(
-                interacao,
-                titulo="Membro removido",
-                linhas=[f"{membro_alvo.mention} perdeu o acesso a este ticket."],
-                cor=COR_SUCESSO,
+            await interacao.response.defer(ephemeral=True)
+            await enviar_card_no_canal_ticket(
+                canal,
+                titulo="➖ Usuário Removido do Ticket",
+                linhas=[
+                    f"{membro_alvo.mention} foi removido do ticket por {staff.mention}.",
+                ],
+                cor=COR_INFO,
             )
-            try:
-                await canal.send(
-                    content=(
-                        f"➖ {membro_alvo.mention} foi removido do ticket "
-                        f"por {staff.mention}."
-                    )
-                )
-            except discord.HTTPException:
-                pass
+            await interacao.followup.send(content="Membro removido.", ephemeral=True)
             return
 
         if self.acao == "chamar":
-            await responder_card(
-                interacao,
-                titulo="Membro chamado",
-                linhas=[f"{membro_alvo.mention} foi mencionado no canal."],
-                cor=COR_SUCESSO,
+            await interacao.response.defer(ephemeral=True)
+            await enviar_card_no_canal_ticket(
+                canal,
+                titulo="👤 Usuário Chamado no Ticket",
+                linhas=[
+                    f"{membro_alvo.mention} foi chamado neste ticket por {staff.mention}.",
+                ],
+                cor=COR_INFO,
             )
-            try:
-                await canal.send(
-                    content=(
-                        f"👤 {membro_alvo.mention}, você foi chamado neste ticket "
-                        f"por {staff.mention}."
-                    )
-                )
-            except discord.HTTPException:
-                pass
+            await interacao.followup.send(
+                content="Membro chamado no canal.", ephemeral=True
+            )
             return
 
         if self.acao == "transferir":
@@ -414,25 +461,21 @@ class ViewSelecionarMembro(discord.ui.LayoutView):
                 )
                 return
 
-            await transferir_atendimento(ticket, membro_alvo, canal)
-            await responder_card(
-                interacao,
-                titulo="Atendimento transferido",
+            await interacao.response.defer(ephemeral=True)
+            ticket_atualizado = await transferir_atendimento(ticket, membro_alvo, canal)
+            await atualizar_card_botoes_staff(canal, ticket_atualizado)
+            await enviar_card_no_canal_ticket(
+                canal,
+                titulo="🔄 Atendimento Transferido",
                 linhas=[
-                    f"Novo responsável: **{nome_usuario_discord(membro_alvo)}**",
-                    "O canal foi renomeado.",
+                    f"Atendimento transferido de {staff.mention} "
+                    f"para {membro_alvo.mention}.",
                 ],
                 cor=COR_SUCESSO,
             )
-            try:
-                await canal.send(
-                    content=(
-                        f"🔄 Atendimento transferido de {staff.mention} "
-                        f"para {membro_alvo.mention}."
-                    )
-                )
-            except discord.HTTPException:
-                pass
+            await interacao.followup.send(
+                content="Atendimento transferido.", ephemeral=True
+            )
             return
 
 
@@ -513,21 +556,17 @@ class ViewMoverCanal(discord.ui.LayoutView):
             )
             return
 
+        await interacao.response.defer(ephemeral=True)
         await mover_canal_ticket(canal, categoria, staff)
-        await responder_card(
-            interacao,
-            titulo="Canal movido",
-            linhas=[f"Nova categoria: **{categoria.name}**"],
-            cor=COR_SUCESSO,
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="📂 Canal Movido",
+            linhas=[
+                f"Canal movido para {categoria.name} por {staff.mention}.",
+            ],
+            cor=COR_INFO,
         )
-        try:
-            await canal.send(
-                content=(
-                    f"📂 Canal movido para **{categoria.name}** por {staff.mention}."
-                )
-            )
-        except discord.HTTPException:
-            pass
+        await interacao.followup.send(content="Canal movido.", ephemeral=True)
 
 
 class ModalTrocarNome(discord.ui.Modal, title="Trocar nome do canal"):
@@ -578,21 +617,16 @@ class ModalTrocarNome(discord.ui.Modal, title="Trocar nome do canal"):
             str(self.novo_nome.value),
             staff,
         )
-        await responder_card(
-            interacao,
-            titulo="Nome atualizado",
-            linhas=[f"Novo nome: **#{nome_aplicado}**"],
-            cor=COR_SUCESSO,
+        await interacao.response.defer(ephemeral=True)
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="✏️ Nome do Canal Atualizado",
+            linhas=[
+                f"Atualizado por {staff.mention} para `{nome_aplicado}`",
+            ],
+            cor=COR_INFO,
         )
-        try:
-            await canal.send(
-                content=(
-                    f"✏️ Nome do canal alterado para `#{nome_aplicado}` "
-                    f"por {staff.mention}."
-                )
-            )
-        except discord.HTTPException:
-            pass
+        await interacao.followup.send(content="Nome atualizado.", ephemeral=True)
 
 
 class ModalObservacaoInterna(discord.ui.Modal, title="Observação interna"):
@@ -639,27 +673,17 @@ class ModalObservacaoInterna(discord.ui.Modal, title="Observação interna"):
             return
 
         conteudo = str(self.texto.value).strip()
-        await responder_card(
-            interacao,
-            titulo="Observação registrada",
-            linhas=["A nota interna foi publicada no canal."],
-            cor=COR_SUCESSO,
+        await interacao.response.defer(ephemeral=True)
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="📋 Observação Interna (Responsavel)",
+            linhas=[
+                f"> **{staff.mention}:** {conteudo}",
+            ],
+            cor=COR_INFO,
         )
-        try:
-            await canal.send(
-                content=(
-                    f"📋 **Observação interna** (staff)\n"
-                    f"Por {staff.mention}:\n"
-                    f"> {conteudo}"
-                )
-            )
-        except discord.HTTPException:
-            pass
+        await interacao.followup.send(content="Observação registrada.", ephemeral=True)
 
-
-# ---------------------------------------------------------------------------
-# Roteamento dos botões de staff
-# ---------------------------------------------------------------------------
 
 CUSTOM_IDS_STAFF = {
     "ticket:adicionar_membro",
@@ -669,6 +693,7 @@ CUSTOM_IDS_STAFF = {
     "ticket:trocar_nome",
     "ticket:obs_interna",
     "ticket:criar_call",
+    "ticket:encerrar_call",
     "ticket:assumir",
     "ticket:saudar",
     "ticket:transferir",
@@ -799,6 +824,10 @@ async def processar_clique_botao_ticket(
         await _tratar_criar_call(interacao, ticket, membro, canal)
         return
 
+    if custom_id == "ticket:encerrar_call":
+        await _tratar_encerrar_call(interacao, ticket, membro, canal)
+        return
+
 
 async def _tratar_mover_canal(
     interacao: discord.Interaction,
@@ -854,6 +883,14 @@ async def _tratar_criar_call(
         )
         return
 
+    if ticket.call_canal_id:
+        await responder_erro(
+            interacao,
+            titulo="Call já existe",
+            linhas=["Já existe uma call de atendimento neste ticket."],
+        )
+        return
+
     try:
         canal_voz = await criar_call_atendimento(guilda, canal, ticket, membro)
     except discord.HTTPException as erro:
@@ -864,24 +901,52 @@ async def _tratar_criar_call(
         )
         return
 
-    await responder_card(
-        interacao,
-        titulo="Call criada",
+    await salvar_call_canal_id(ticket.id, canal_voz.id)
+    ticket_atualizado = await buscar_ticket_por_id(ticket.id)
+    if ticket_atualizado is not None:
+        await atualizar_card_botoes_staff(canal, ticket_atualizado)
+
+    await interacao.response.defer(ephemeral=True)
+    await enviar_card_no_canal_ticket(
+        canal,
+        titulo="📞 Call de Atendimento",
         linhas=[
-            f"Canal de voz: {canal_voz.mention}",
-            "Autor e equipe de tickets já têm acesso.",
+            f"Call criada: {canal_voz.mention}",
+            f"Por {membro.mention}.",
         ],
         cor=COR_SUCESSO,
     )
-    try:
-        await canal.send(
-            content=(
-                f"📞 Call de atendimento criada: {canal_voz.mention}\n"
-                f"Por {membro.mention}."
-            )
+    await interacao.followup.send(content="Call criada.", ephemeral=True)
+
+
+async def _tratar_encerrar_call(
+    interacao: discord.Interaction,
+    ticket,
+    membro: discord.Member,
+    canal: discord.TextChannel,
+) -> None:
+    guilda = interacao.guild
+    if guilda is None:
+        await responder_erro(
+            interacao,
+            titulo="Erro",
+            linhas=["Guilda não encontrada."],
         )
-    except discord.HTTPException:
-        pass
+        return
+
+    await interacao.response.defer(ephemeral=True)
+    await apagar_call_do_ticket(guilda, ticket)
+    ticket_atualizado = await buscar_ticket_por_id(ticket.id)
+    if ticket_atualizado is not None:
+        await atualizar_card_botoes_staff(canal, ticket_atualizado)
+
+    await enviar_card_no_canal_ticket(
+        canal,
+        titulo="📞 Call Encerrada",
+        linhas=[f"Call de atendimento encerrada por {membro.mention}."],
+        cor=COR_INFO,
+    )
+    await interacao.followup.send(content="Call encerrada.", ephemeral=True)
 
 
 async def _tratar_assumir(
@@ -907,25 +972,29 @@ async def _tratar_assumir(
         )
         return
 
+    await interacao.response.defer(ephemeral=True)
     ticket_atualizado = await assumir_ticket(ticket, membro, canal)
+    await atualizar_card_botoes_staff(canal, ticket_atualizado)
 
-    await responder_card(
-        interacao,
-        titulo="Atendimento assumido",
+    username = nome_usuario_discord(membro)
+    await enviar_card_no_canal_ticket(
+        canal,
+        titulo="🎫 Atendimento Assumido",
         linhas=[
-            f"Staff: **{nome_usuario_discord(membro)}**",
-            f"Categoria: {ticket_atualizado.categoria_rotulo}",
-            "O canal foi renomeado.",
+            f"Assumido por {membro.mention} canal alterado para o novo nome: "
+            f"`🙋・{username}`",
         ],
         cor=COR_SUCESSO,
     )
-
-    try:
-        await canal.send(
-            content=(f"🎫 **Atendimento Assumido**\nAssumido por {membro.mention}")
-        )
-    except discord.HTTPException:
-        pass
+    await enviar_card_no_canal_ticket(
+        canal,
+        titulo="🎫 Atendimento Assumido",
+        linhas=[
+            f"Este atendimento foi assumido por {membro.mention}.",
+        ],
+        cor=COR_SUCESSO,
+    )
+    await interacao.followup.send(content="Atendimento assumido.", ephemeral=True)
 
 
 async def _tratar_saudar(
@@ -934,22 +1003,18 @@ async def _tratar_saudar(
     membro: discord.Member,
     canal: discord.TextChannel,
 ) -> None:
-    await responder_card(
-        interacao,
-        titulo="Saudação enviada",
-        linhas=["Mensagem de boas-vindas publicada no canal."],
-        cor=COR_SUCESSO,
+    await interacao.response.defer(ephemeral=True)
+    await enviar_card_no_canal_ticket(
+        canal,
+        titulo="👋 Saudação Inicial",
+        linhas=[
+            f"Olá <@{ticket.autor_discord_id}>! Sou {membro.mention} e vou "
+            f"cuidar do seu atendimento. Pode descrever o motivo do contato "
+            f"com o máximo de detalhes.",
+        ],
+        cor=COR_INFO,
     )
-    try:
-        await canal.send(
-            content=(
-                f"👋 Olá <@{ticket.autor_discord_id}>! "
-                f"Sou {membro.mention} e vou cuidar do seu atendimento. "
-                f"Pode descrever o motivo do contato com o máximo de detalhes."
-            )
-        )
-    except discord.HTTPException:
-        pass
+    await interacao.followup.send(content="Saudação enviada.", ephemeral=True)
 
 
 async def _tratar_finalizar(
@@ -1029,41 +1094,90 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             return
 
         texto_consideracoes = str(self.consideracoes.value or "").strip() or None
+        if not texto_consideracoes:
+            texto_consideracoes = "Atendimento Finalizado"
+
+        await interacao.response.defer(ephemeral=True)
+
+        nome_canal_atual = canal.name
+        username_staff = nome_usuario_discord(membro)
+
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="🎫 Ticket Finalizado",
+            linhas=[
+                f"Este ticket acaba de ser finalizado pelo responsavel "
+                f"{membro.mention} / `{username_staff}`!",
+                "Considerações Finais:",
+                texto_consideracoes,
+            ],
+            cor=COR_SUCESSO,
+        )
+
+        await asyncio.sleep(1)
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="🔒 Processando Finalização",
+            linhas=[
+                "Este canal está passando por algumas etapas de segurança como:",
+                "Compressão de imagens/vídeos.",
+                "Após essas validações o mesmo será deletado e o transcript "
+                "gerado com segurança!",
+            ],
+            cor=COR_INFO,
+        )
+
         ticket_final = await finalizar_ticket(
             ticket,
             membro,
             consideracoes=texto_consideracoes,
         )
-
         mensagens = await coletar_mensagens_do_canal(canal)
-        _html = montar_html_transcript(ticket_final, mensagens, interacao.guild)
+        html_transcript = montar_html_transcript(
+            ticket_final, mensagens, interacao.guild
+        )
 
-        await responder_card(
-            interacao,
-            titulo="Ticket finalizado",
-            linhas=[
-                f"Finalizado por: **{nome_usuario_discord(membro)}**",
-                f"Senha do transcript: `{ticket_final.senha_transcript}`",
-                "O canal será apagado em breve.",
-                "Transcript gerado (envio para o site na próxima fase).",
-            ],
-            cor=COR_SUCESSO,
-            delay=None,
+        if interacao.guild is not None:
+            await apagar_call_do_ticket(interacao.guild, ticket_final)
+
+        autor_mention = f"<@{ticket_final.autor_discord_id}>"
+        await enviar_log_ticket_finalizado(
+            bot=interacao.client,
+            ticket=ticket_final,
+            staff=membro,
+            autor_mention=autor_mention,
+            nome_canal=nome_canal_atual,
+            consideracoes=texto_consideracoes,
         )
 
         try:
-            await canal.send(
-                content=(
-                    f"🎫 **Ticket Finalizado**\n"
-                    f"Finalizado por {membro.mention}\n"
-                    f"Senha do transcript: `{ticket_final.senha_transcript}`\n"
-                    f"Considerações: {texto_consideracoes or '—'}"
-                )
+            autor_user = await interacao.client.fetch_user(
+                ticket_final.autor_discord_id
             )
-        except discord.HTTPException:
+            await enviar_dm_card(
+                destino=autor_user,
+                titulo="🎫 Ticket Finalizado",
+                linhas=[
+                    f"Seu ticket **#{ticket_final.id}** "
+                    f"({ticket_final.categoria_rotulo}) foi finalizado.",
+                    f"Staff: {username_staff}",
+                    f"Considerações: {texto_consideracoes}",
+                    f"Senha do transcript: ||{ticket_final.senha_transcript}||",
+                    "O link de visualização será liberado na próxima fase.",
+                ],
+                cor=COR_DM_INFO,
+            )
+        except Exception:
             pass
 
-        await asyncio.sleep(8)
+        _ = html_transcript
+
+        await interacao.followup.send(
+            content="Ticket finalizado. O canal será apagado em instantes.",
+            ephemeral=True,
+        )
+
+        await asyncio.sleep(5)
         try:
             await canal.delete(
                 reason=f"Ticket #{ticket_final.id} finalizado por {membro}"

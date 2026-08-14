@@ -95,6 +95,7 @@ async def abrir_ticket_por_categoria(
             canal=canal,
             autor=membro,
             definicao=definicao,
+            ticket_id=ticket.id,
         )
     except discord.HTTPException as erro_envio:
         print(f"⚠️ Falha ao enviar cards de abertura do ticket: {erro_envio}")
