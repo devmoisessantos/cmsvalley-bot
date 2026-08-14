@@ -58,7 +58,7 @@ from src.tickets.tickets_setup import (
     garantir_painel_ticket_denuncias,
     garantir_painel_ticket_suporte,
 )
-from src.tickets.tickets_views import BotoesTicketView
+from src.tickets.tickets_views import CardBotoesStaffView
 from src.utils.deploy_logger import (
     erro,
     etapa,
@@ -216,7 +216,7 @@ class CmsValleyBot(commands.Bot):
             self.painel_ticket_denuncias_view = PainelTicketDenunciasLayout(
                 guilda=guild
             )
-            self.botoes_ticket_view = BotoesTicketView()
+            self.botoes_ticket_view = CardBotoesStaffView()
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)

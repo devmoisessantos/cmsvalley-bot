@@ -36,6 +36,10 @@ from src.panels.setup_paineis import (
 )
 from src.promocoes.promocoes_setup import garantir_painel_promocao
 from src.punicoes.cogs import garantir_painel_punicoes
+from src.tickets.tickets_setup import (
+    garantir_painel_ticket_denuncias,
+    garantir_painel_ticket_suporte,
+)
 
 # nome_no_banco → função que posta o painel se não existir registro
 FUNCOES_GARANTIR_PAINEL = {
@@ -54,6 +58,8 @@ FUNCOES_GARANTIR_PAINEL = {
     "bau": garantir_painel_bau,
     "cursos": garantir_painel_cursos,
     "promocao": garantir_painel_promocao,
+    "ticket_suporte": garantir_painel_ticket_suporte,
+    "ticket_denuncias": garantir_painel_ticket_denuncias,
 }
 
 NOMES_DOS_PAINEIS = list(FUNCOES_GARANTIR_PAINEL.keys())

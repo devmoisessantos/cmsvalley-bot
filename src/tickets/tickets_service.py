@@ -16,7 +16,10 @@ from src.config import (
     TICKETS_CATEGORIAS,
 )
 from src.database.connection import async_session
-from src.database.models import Ticket, agora
+from src.database.models import (
+    Ticket,
+    agora,
+)
 
 
 def _ids_cargos_staff(guilda: discord.Guild) -> list[discord.Object]:
@@ -38,6 +41,20 @@ def membro_eh_staff_ticket(membro: discord.Member) -> bool:
 def gerar_senha_transcript() -> str:
     """Gera senha curta para visualização do transcript."""
     return secrets.token_hex(3)
+
+
+def nome_usuario_discord(membro: discord.Member | discord.User) -> str:
+    """
+    Retorna o username global do Discord (não o apelido do servidor).
+
+    Ex.: 'guxta' em vez de '⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763'
+    """
+    return membro.name
+
+
+def sanitizar_nome_canal(texto: str) -> str:
+    """Normaliza texto para uso em nome de canal Discord."""
+    return texto.lower().replace(" ", "-").replace("/", "-").replace("|", "-")[:90]
 
 
 async def buscar_ticket_por_canal(canal_id: int) -> Ticket | None:
@@ -89,13 +106,8 @@ async def criar_ticket(
     ):
         return None
 
-    nome_base = f"{definicao['prefixo_canal']}-{autor.display_name}"
-    # Discord limita nome de canal a 100 caracteres e caracteres especiais
-    nome_canal = (
-        nome_base.lower()
-        .replace(" ", "-")
-        .replace("/", "-")[:90]
-    )
+    username = nome_usuario_discord(autor)
+    nome_canal = sanitizar_nome_canal(f"{definicao['prefixo_canal']}-{username}")
 
     overwrites: dict[
         discord.Role | discord.Member | discord.Object,
@@ -133,8 +145,8 @@ async def criar_ticket(
         name=nome_canal,
         category=categoria_discord,
         overwrites=overwrites,
-        topic=f"Ticket de {autor.display_name} ({autor.id}) | {definicao['rotulo']}",
-        reason=f"Ticket aberto por {autor} — {definicao['rotulo']}",
+        topic=f"Ticket criado para o usuário: {username}",
+        reason=f"Ticket aberto por {username} — {definicao['rotulo']}",
     )
 
     async with async_session() as sessao:
@@ -143,7 +155,7 @@ async def criar_ticket(
             categoria_rotulo=definicao["rotulo"],
             status="aberto",
             autor_discord_id=autor.id,
-            autor_nome=autor.display_name,
+            autor_nome=username,
             canal_id=canal.id,
             aberto_em=agora(),
         )
@@ -159,14 +171,16 @@ async def assumir_ticket(
     staff: discord.Member,
     canal: discord.TextChannel,
 ) -> Ticket:
-    """Marca o ticket como assumido e renomeia o canal com o nick do staff."""
-    novo_nome = f"{ticket.categoria_rotulo[:20]}・{staff.display_name}"
-    novo_nome = novo_nome.lower().replace(" ", "-").replace("/", "-")[:90]
+    """Marca o ticket como assumido e renomeia o canal com o username do staff."""
+    username_staff = nome_usuario_discord(staff)
+    novo_nome = sanitizar_nome_canal(
+        f"{ticket.categoria_rotulo[:20]}・{username_staff}"
+    )
 
     try:
         await canal.edit(
             name=novo_nome,
-            reason=f"Ticket assumido por {staff}",
+            reason=f"Ticket assumido por {username_staff}",
         )
     except discord.HTTPException:
         pass
@@ -177,7 +191,7 @@ async def assumir_ticket(
             return ticket
         ticket_db.status = "assumido"
         ticket_db.staff_assumiu_id = staff.id
-        ticket_db.staff_assumiu_nome = staff.display_name
+        ticket_db.staff_assumiu_nome = username_staff
         ticket_db.assumido_em = agora()
         await sessao.commit()
         await sessao.refresh(ticket_db)
@@ -198,7 +212,7 @@ async def finalizar_ticket(
             return ticket
         ticket_db.status = "finalizado"
         ticket_db.staff_finalizou_id = staff.id
-        ticket_db.staff_finalizou_nome = staff.display_name
+        ticket_db.staff_finalizou_nome = nome_usuario_discord(staff)
         ticket_db.consideracoes_finais = consideracoes
         ticket_db.senha_transcript = senha
         ticket_db.finalizado_em = agora()
@@ -216,6 +230,160 @@ async def coletar_mensagens_do_canal(
     async for mensagem in canal.history(limit=limite, oldest_first=True):
         mensagens.append(mensagem)
     return mensagens
+
+
+async def adicionar_membro_ao_ticket(
+    canal: discord.TextChannel,
+    membro_alvo: discord.Member,
+) -> None:
+    """Libera visão e envio de mensagens no canal do ticket para o membro."""
+    await canal.set_permissions(
+        membro_alvo,
+        view_channel=True,
+        send_messages=True,
+        attach_files=True,
+        embed_links=True,
+        read_message_history=True,
+        reason="Membro adicionado ao ticket",
+    )
+
+
+async def remover_membro_do_ticket(
+    canal: discord.TextChannel,
+    membro_alvo: discord.Member,
+    autor_discord_id: int,
+) -> str | None:
+    """
+    Remove acesso do membro ao canal.
+
+    Não remove o autor do ticket nem o próprio bot.
+    Retorna mensagem de erro ou None se ok.
+    """
+    if membro_alvo.id == autor_discord_id:
+        return "Não é possível remover o autor do ticket."
+    if membro_alvo.bot:
+        return "Não é possível remover o bot do ticket."
+
+    await canal.set_permissions(
+        membro_alvo,
+        overwrite=None,
+        reason="Membro removido do ticket",
+    )
+    return None
+
+
+async def trocar_nome_do_canal(
+    canal: discord.TextChannel,
+    novo_nome: str,
+    staff: discord.Member,
+) -> str:
+    """Renomeia o canal. Retorna o nome aplicado."""
+    nome_limpo = sanitizar_nome_canal(novo_nome)
+    if not nome_limpo:
+        nome_limpo = "ticket"
+    await canal.edit(
+        name=nome_limpo,
+        reason=f"Nome alterado por {nome_usuario_discord(staff)}",
+    )
+    return nome_limpo
+
+
+async def mover_canal_ticket(
+    canal: discord.TextChannel,
+    categoria_destino: discord.CategoryChannel,
+    staff: discord.Member,
+) -> None:
+    """Move o canal do ticket para outra categoria Discord."""
+    await canal.edit(
+        category=categoria_destino,
+        reason=f"Canal movido por {nome_usuario_discord(staff)}",
+    )
+
+
+async def transferir_atendimento(
+    ticket: Ticket,
+    novo_staff: discord.Member,
+    canal: discord.TextChannel,
+) -> Ticket:
+    """Transfere o atendimento para outro staff e renomeia o canal."""
+    return await assumir_ticket(ticket, novo_staff, canal)
+
+
+async def criar_call_atendimento(
+    guilda: discord.Guild,
+    canal_texto: discord.TextChannel,
+    ticket: Ticket,
+    staff: discord.Member,
+) -> discord.VoiceChannel:
+    """
+    Cria um canal de voz na mesma categoria do ticket.
+
+    Permissões: autor + staff + cargos de ticket.
+    """
+    categoria = canal_texto.category
+    username_autor = ticket.autor_nome or "usuario"
+    nome_call = sanitizar_nome_canal(f"📞・atendimento-{username_autor}")
+
+    overwrites: dict[
+        discord.Role | discord.Member | discord.Object,
+        discord.PermissionOverwrite,
+    ] = {
+        guilda.default_role: discord.PermissionOverwrite(view_channel=False),
+        guilda.me: discord.PermissionOverwrite(
+            view_channel=True,
+            connect=True,
+            speak=True,
+            manage_channels=True,
+        ),
+        staff: discord.PermissionOverwrite(
+            view_channel=True,
+            connect=True,
+            speak=True,
+            move_members=True,
+        ),
+    }
+
+    autor = guilda.get_member(ticket.autor_discord_id)
+    if autor is not None:
+        overwrites[autor] = discord.PermissionOverwrite(
+            view_channel=True,
+            connect=True,
+            speak=True,
+        )
+
+    for objeto_cargo in _ids_cargos_staff(guilda):
+        overwrites[objeto_cargo] = discord.PermissionOverwrite(
+            view_channel=True,
+            connect=True,
+            speak=True,
+        )
+
+    canal_voz = await guilda.create_voice_channel(
+        name=nome_call,
+        category=categoria,
+        overwrites=overwrites,
+        reason=f"Call de atendimento — ticket #{ticket.id}",
+    )
+    return canal_voz
+
+
+def listar_categorias_ticket_na_guilda(
+    guilda: discord.Guild,
+) -> list[tuple[str, discord.CategoryChannel]]:
+    """
+    Retorna pares (rótulo, categoria) das categorias de ticket configuradas
+    e existentes na guilda.
+    """
+    lista: list[tuple[str, discord.CategoryChannel]] = []
+    for definicao in TICKETS_CATEGORIAS.values():
+        chave_config = definicao["categoria_config"]
+        categoria_id = CANAIS.get(chave_config)
+        if not categoria_id:
+            continue
+        canal = guilda.get_channel(int(categoria_id))
+        if isinstance(canal, discord.CategoryChannel):
+            lista.append((definicao["rotulo"], canal))
+    return lista
 
 
 def montar_html_transcript(
