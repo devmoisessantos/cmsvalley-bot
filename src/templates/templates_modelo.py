@@ -211,7 +211,11 @@ def _montar_secao(bloco: BlocoTemplate, url_icone: str | None) -> Any:
 def _montar_linha_de_botoes(botoes: list[tuple[str, str, str]]) -> discord.ui.ActionRow:
     linha = discord.ui.ActionRow()
     for rotulo, estilo, url_ou_id in botoes[:5]:
-        if estilo == "link":
+        e_link = estilo == "link" or (
+            isinstance(url_ou_id, str)
+            and (url_ou_id.startswith("http://") or url_ou_id.startswith("https://"))
+        )
+        if e_link:
             linha.add_item(
                 discord.ui.Button(
                     label=rotulo[:80],

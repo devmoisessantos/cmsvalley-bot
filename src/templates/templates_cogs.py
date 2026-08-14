@@ -1099,7 +1099,12 @@ class ModalBotao(LoggingModalMixin, discord.ui.Modal):
         if estilo not in ("primary", "secondary", "success", "danger", "link"):
             estilo = "secondary"
         valor = self.url_ou_id.value.strip()
-        if estilo == "link" and not valor.startswith("http"):
+        # URL http(s) sempre vira botão de link (senão o Discord não redireciona)
+        if valor.startswith("http://") or valor.startswith("https://"):
+            estilo = "link"
+        if estilo == "link" and not (
+            valor.startswith("http://") or valor.startswith("https://")
+        ):
             await interacao.response.send_message(
                 "❌ Botão link precisa de URL http(s).", ephemeral=True
             )
