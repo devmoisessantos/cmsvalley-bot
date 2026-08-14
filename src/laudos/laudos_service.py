@@ -24,7 +24,7 @@ from src.database.models import (
     Recrutamento,
     Usuario,
 )
-from src.plantao.ocr.scraping_membros import extrair_id_do_apelido
+from src.chamada.ocr.scraping_membros import extrair_id_do_apelido
 
 NOMES_CARGOS_PSICOLOGO = (
     "🩺・Psicólogo",
