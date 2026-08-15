@@ -634,22 +634,28 @@ def _texto_da_mensagem_discord(mensagem: discord.Message) -> str:
     Mensagens Components V2 do bot costumam ter content vazio —
     o texto fica nos TextDisplay / Section dos componentes.
     Labels de botão não entram aqui.
+
+    Evita duplicar: prefere payload bruto (_data); se vazio, usa objetos.
     """
     partes: list[str] = []
 
     if mensagem.content and mensagem.content.strip():
         partes.append(mensagem.content.strip())
 
-    componentes = getattr(mensagem, "components", None) or []
-    for componente in componentes:
-        partes.extend(_coletar_textos_de_componente(componente, ignorar_botoes=True))
-
+    # Uma fonte só para componentes — evita texto em dobro
     dados = getattr(mensagem, "_data", None)
-    if isinstance(dados, dict):
+    textos_componentes: list[str] = []
+    if isinstance(dados, dict) and dados.get("components"):
         for componente in dados.get("components") or []:
-            partes.extend(
+            textos_componentes.extend(
                 _coletar_textos_de_componente(componente, ignorar_botoes=True)
             )
+    if not textos_componentes:
+        for componente in getattr(mensagem, "components", None) or []:
+            textos_componentes.extend(
+                _coletar_textos_de_componente(componente, ignorar_botoes=True)
+            )
+    partes.extend(textos_componentes)
 
     vistos: set[str] = set()
     unicos: list[str] = []
@@ -751,40 +757,139 @@ def montar_html_transcript(
             pass
         return local.strftime("%d/%m/%Y, %H:%M:%S")
 
-    def mapa_nomes_mencionados(mensagem: discord.Message) -> dict[str, str]:
-        """id → nome legível para trocar <@id> por @nome."""
+    def mapa_usuarios_mencionados(
+        mensagem: discord.Message,
+        texto_extra: str = "",
+    ) -> dict[str, str]:
+        """id → username Discord (não apelido do servidor)."""
         mapa: dict[str, str] = {}
         for usuario in getattr(mensagem, "mentions", None) or []:
-            nome = getattr(usuario, "display_name", None) or usuario.name
-            mapa[str(usuario.id)] = nome
-        if ticket.autor_discord_id and ticket.autor_nome:
-            mapa[str(ticket.autor_discord_id)] = ticket.autor_nome
-        if ticket.staff_assumiu_id and ticket.staff_assumiu_nome:
-            mapa[str(ticket.staff_assumiu_id)] = ticket.staff_assumiu_nome
-        if ticket.staff_finalizou_id and ticket.staff_finalizou_nome:
-            mapa[str(ticket.staff_finalizou_id)] = ticket.staff_finalizou_nome
+            mapa[str(usuario.id)] = nome_usuario_discord(usuario)
+        try:
+            mapa[str(mensagem.author.id)] = nome_usuario_discord(mensagem.author)
+        except Exception:
+            pass
+        # Resolve IDs soltos no texto via cache da guilda
+        texto_busca = f"{mensagem.content or ''}\n{texto_extra or ''}"
+        if guilda is not None:
+            for match in modulo_re.finditer(r"<@!?(\d+)>", texto_busca):
+                id_usuario = match.group(1)
+                if id_usuario in mapa:
+                    continue
+                membro = guilda.get_member(int(id_usuario))
+                if membro is not None:
+                    mapa[id_usuario] = nome_usuario_discord(membro)
         return mapa
 
-    def substituir_mencoes(texto: str, mapa_nomes: dict[str, str]) -> str:
-        def trocar(match) -> str:
-            id_usuario = match.group(1)
-            nome = mapa_nomes.get(id_usuario)
-            if nome:
-                return f"@{nome}"
-            return "@usuário"
+    def mapa_cargos_mencionados(
+        mensagem: discord.Message,
+        texto_extra: str = "",
+    ) -> dict[str, tuple[str, str]]:
+        """id → (nome_do_cargo, cor_hex)."""
+        mapa: dict[str, tuple[str, str]] = {}
 
-        return modulo_re.sub(r"<@!?(\d+)>", trocar, texto or "")
+        def registrar_cargo(cargo) -> None:
+            if cargo is None:
+                return
+            cor = getattr(cargo, "color", None)
+            cor_valor = getattr(cor, "value", 0) or 0
+            cor_hex = f"#{cor_valor:06x}" if cor_valor else "#99aab5"
+            mapa[str(cargo.id)] = (cargo.name, cor_hex)
 
-    def markdown_simples_para_html(texto: str, mapa_nomes: dict[str, str]) -> str:
-        """Escapes + menções @nome + markdown leve."""
-        com_mencao = substituir_mencoes(texto, mapa_nomes)
-        seguro = esc(com_mencao)
-        # @nome → span azul estilo menção Discord (sem href real)
+        for cargo in getattr(mensagem, "role_mentions", None) or []:
+            registrar_cargo(cargo)
+
+        # Resolve IDs que ainda aparecem no texto (content ou components)
+        texto_busca = f"{mensagem.content or ''}\n{texto_extra or ''}"
+        if guilda is not None:
+            for match in modulo_re.finditer(r"<@&(\d+)>", texto_busca):
+                id_cargo = match.group(1)
+                if id_cargo in mapa:
+                    continue
+                registrar_cargo(guilda.get_role(int(id_cargo)))
+        return mapa
+
+    def preparar_texto_com_mencoes(
+        texto: str,
+        mapa_usuarios: dict[str, str],
+        mapa_cargos: dict[str, tuple[str, str]],
+    ) -> str:
+        """
+        Troca tokens Discord por marcadores temporários antes do escape HTML.
+        Usuários → {{U:id}}  |  Cargos → {{R:id}}  |  Emojis custom → {{E:...}}
+        """
+        if not texto:
+            return ""
+
+        def trocar_usuario(match) -> str:
+            return f"{{{{U:{match.group(1)}}}}}"
+
+        def trocar_cargo(match) -> str:
+            return f"{{{{R:{match.group(1)}}}}}"
+
+        def trocar_emoji(match) -> str:
+            animado = match.group(1) == "a"
+            nome = match.group(2)
+            emoji_id = match.group(3)
+            return f"{{{{E:{'a' if animado else 's'}:{nome}:{emoji_id}}}}}"
+
+        saida = texto
+        saida = modulo_re.sub(r"<@!?(\d+)>", trocar_usuario, saida)
+        saida = modulo_re.sub(r"<@&(\d+)>", trocar_cargo, saida)
+        saida = modulo_re.sub(r"<(a?):([A-Za-z0-9_]+):(\d+)>", trocar_emoji, saida)
+        return saida
+
+    def markdown_simples_para_html(
+        texto: str,
+        mapa_usuarios: dict[str, str],
+        mapa_cargos: dict[str, tuple[str, str]],
+    ) -> str:
+        """Escapes + menções (user/cargo) + emoji custom + markdown leve."""
+        preparado = preparar_texto_com_mencoes(texto, mapa_usuarios, mapa_cargos)
+        seguro = esc(preparado)
+
+        # Emoji custom Discord → <img>
+        def html_emoji(match) -> str:
+            animado = match.group(1) == "a"
+            nome = match.group(2)
+            emoji_id = match.group(3)
+            extensao = "gif" if animado else "png"
+            url = f"https://cdn.discordapp.com/emojis/{emoji_id}.{extensao}"
+            return (
+                f"<img class='emoji' src='{esc(url)}' "
+                f"alt=':{esc(nome)}:' loading='lazy'>"
+            )
+
         seguro = modulo_re.sub(
-            r"@([A-Za-z0-9_.\-]{2,32})",
-            r"<span class='mention'>@\1</span>",
+            r"\{\{E:(a|s):([A-Za-z0-9_]+):(\d+)\}\}",
+            html_emoji,
             seguro,
         )
+
+        # Menção de usuário → @username azul
+        def html_usuario(match) -> str:
+            id_usuario = match.group(1)
+            nome = mapa_usuarios.get(id_usuario) or "usuário"
+            return f"<span class='mention'>@{esc(nome)}</span>"
+
+        seguro = modulo_re.sub(r"\{\{U:(\d+)\}\}", html_usuario, seguro)
+
+        # Menção de cargo → nome com a cor do cargo
+        def html_cargo(match) -> str:
+            id_cargo = match.group(1)
+            dados_cargo = mapa_cargos.get(id_cargo)
+            if dados_cargo:
+                nome_cargo, cor_hex = dados_cargo
+                return (
+                    f"<span class='role' style='color:{esc(cor_hex)};"
+                    f"background-color:{esc(cor_hex)}22'>"
+                    f"@{esc(nome_cargo)}</span>"
+                )
+            return "<span class='role'>@cargo</span>"
+
+        seguro = modulo_re.sub(r"\{\{R:(\d+)\}\}", html_cargo, seguro)
+
+        # Markdown leve
         seguro = modulo_re.sub(
             r"```(?:\w+)?\n?(.*?)```",
             r"<pre class='code-block'>\1</pre>",
@@ -793,6 +898,7 @@ def montar_html_transcript(
         )
         seguro = modulo_re.sub(r"`([^`]+)`", r"<code>\1</code>", seguro)
         seguro = modulo_re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", seguro)
+        seguro = modulo_re.sub(r"__(.+?)__", r"<u>\1</u>", seguro)
         seguro = modulo_re.sub(r"(?m)^#\s+(.+)$", r"<div class='h1'>\1</div>", seguro)
         seguro = modulo_re.sub(r"(?m)^##\s+(.+)$", r"<div class='h2'>\1</div>", seguro)
         seguro = modulo_re.sub(r"(?m)^###\s+(.+)$", r"<div class='h3'>\1</div>", seguro)
@@ -1089,6 +1195,20 @@ body {
   cursor: default;
   text-decoration: none;
 }
+.role {
+  color: #99aab5;
+  background: rgba(153, 170, 181, 0.15);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-weight: 500;
+  cursor: default;
+  text-decoration: none;
+}
+.emoji {
+  max-width: 22px;
+  height: auto;
+  vertical-align: middle;
+}
 .attachments { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .attachments img {
   max-width: min(440px, 100%); border-radius: 10px; display: block;
@@ -1219,11 +1339,10 @@ span.button-emoji {
 
     for mensagem in mensagens:
         autor = mensagem.author
+        # Cabeçalho: mostra o nome como aparece no servidor (display_name)
         nome = esc(getattr(autor, "display_name", None) or autor.name)
         avatar = esc(url_avatar(autor))
         quando = formatar_horario(mensagem.created_at)
-        mapa_nomes = mapa_nomes_mencionados(mensagem)
-
         classes_mensagem = ["message"]
         tags_html: list[str] = []
         if autor.bot:
@@ -1239,8 +1358,9 @@ span.button-emoji {
         botoes = coletar_botoes(mensagem)
         rotulos_botoes = {b["label"].strip().lower() for b in botoes}
 
-        # Texto sem labels de botão (botões vão em container-row)
         texto_bruto = _texto_da_mensagem_discord(mensagem)
+        mapa_usuarios = mapa_usuarios_mencionados(mensagem, texto_extra=texto_bruto)
+        mapa_cargos = mapa_cargos_mencionados(mensagem, texto_extra=texto_bruto)
         if texto_bruto and rotulos_botoes:
             linhas_filtradas: list[str] = []
             for linha in texto_bruto.split("\n"):
@@ -1251,18 +1371,7 @@ span.button-emoji {
                 linhas_filtradas.append(linha)
             texto_bruto = "\n".join(linhas_filtradas).strip()
 
-        # message-container → avatar fora + message-content → message
-        partes.append("<div class='message-container'>")
-        partes.append(f"<img class='avatar' src='{avatar}' alt='' loading='lazy'>")
-        partes.append("<div class='message-content'>")
-        partes.append(f"<div class='{' '.join(classes_mensagem)}'>")
-        partes.append("<div class='author-timestamp'>")
-        partes.append(f"<span class='author'>{nome}</span>")
-        partes.append(f"<span class='timestamp'>{quando}</span>")
-        partes.extend(tags_html)
-        partes.append("</div>")
-
-        # Mensagem só com botões de staff: texto curto entra no bloco V2
+        # Texto de opções de staff → small-text no bloco V2
         texto_opcoes_staff = ""
         if botoes and texto_bruto:
             linhas_texto = [linha for linha in texto_bruto.split("\n") if linha.strip()]
@@ -1273,21 +1382,70 @@ span.button-emoji {
                 texto_opcoes_staff = linhas_texto[0].strip()
                 texto_bruto = ""
 
-        # Texto simples (usuário / staff) fica em content-message
-        if texto_bruto and not botoes:
+        partes.append("<div class='message-container'>")
+        partes.append(f"<img class='avatar' src='{avatar}' alt='' loading='lazy'>")
+        partes.append("<div class='message-content'>")
+        partes.append(f"<div class='{' '.join(classes_mensagem)}'>")
+        partes.append("<div class='author-timestamp'>")
+        partes.append(f"<span class='author'>{nome}</span>")
+        partes.append(f"<span class='timestamp'>{quando}</span>")
+        partes.extend(tags_html)
+        partes.append("</div>")
+
+        # --- Conteúdo: UM caminho só (sem duplicar) ---
+        # Bot / Components V2 → message-container-v2
+        # Mensagem comum (usuário) → content-message
+        usar_bloco_v2 = bool(botoes) or (bool(texto_bruto) and bool(autor.bot))
+
+        if usar_bloco_v2:
+            partes.append("<div class='message-container-v2'>")
+            if texto_opcoes_staff:
+                partes.append(
+                    "<div class='container-text-block'>"
+                    f"<span class='small-text'>{esc(texto_opcoes_staff)}</span>"
+                    "</div>"
+                    "<hr class='container-divider'>"
+                )
+            elif texto_bruto:
+                partes.append(
+                    "<div class='container-text-block'>"
+                    f"{markdown_simples_para_html(texto_bruto, mapa_usuarios, mapa_cargos)}"
+                    "</div>"
+                )
+                if botoes:
+                    partes.append("<hr class='container-divider'>")
+
+            if botoes:
+                partes.append("<div class='container-row'>")
+                for indice, botao in enumerate(botoes):
+                    if indice > 0 and indice % 4 == 0:
+                        partes.append("</div><div class='container-row'>")
+                    classes_btn = f"container-button button-{botao['style']}"
+                    if botao["disabled"]:
+                        classes_btn += " disabled"
+                    partes.append(
+                        f"<div class='{classes_btn}'>"
+                        f"{botao.get('emoji_html') or ''}"
+                        f"{esc(botao['label'])}"
+                        f"</div>"
+                    )
+                partes.append("</div>")
+            partes.append("</div>")
+        elif texto_bruto:
             partes.append(
                 f"<div class='content-message'>"
-                f"{markdown_simples_para_html(texto_bruto, mapa_nomes)}"
+                f"{markdown_simples_para_html(texto_bruto, mapa_usuarios, mapa_cargos)}"
                 f"</div>"
             )
-        elif texto_bruto and botoes:
-            # Texto + botões: texto dentro do container V2
-            pass
 
         for embed in mensagem.embeds[:6]:
             titulo = esc(embed.title or "")
             desc_raw = embed.description or ""
-            desc = markdown_simples_para_html(desc_raw, mapa_nomes) if desc_raw else ""
+            desc = (
+                markdown_simples_para_html(desc_raw, mapa_usuarios, mapa_cargos)
+                if desc_raw
+                else ""
+            )
             if not titulo and not desc:
                 continue
             partes.append("<div class='embed'>")
@@ -1316,42 +1474,6 @@ span.button-emoji {
                         f"<a class='file-link' href='{url_anexo}' "
                         f"target='_blank' rel='noopener'>📎 {nome_arq}</a>"
                     )
-            partes.append("</div>")
-
-        if botoes or (texto_bruto and autor.bot):
-            # Bloco Components V2 (texto + botões coloridos) — estrutura do modelo
-            partes.append("<div class='message-container-v2'>")
-            if texto_opcoes_staff:
-                partes.append(
-                    "<div class='container-text-block'>"
-                    f"<span class='small-text'>{esc(texto_opcoes_staff)}</span>"
-                    "</div>"
-                    "<hr class='container-divider'>"
-                )
-            elif texto_bruto:
-                partes.append(
-                    "<div class='container-text-block'>"
-                    f"{markdown_simples_para_html(texto_bruto, mapa_nomes)}"
-                    "</div>"
-                )
-                if botoes:
-                    partes.append("<hr class='container-divider'>")
-
-            if botoes:
-                partes.append("<div class='container-row'>")
-                for indice, botao in enumerate(botoes):
-                    if indice > 0 and indice % 4 == 0:
-                        partes.append("</div><div class='container-row'>")
-                    classes_btn = f"container-button button-{botao['style']}"
-                    if botao["disabled"]:
-                        classes_btn += " disabled"
-                    partes.append(
-                        f"<div class='{classes_btn}'>"
-                        f"{botao.get('emoji_html') or ''}"
-                        f"{esc(botao['label'])}"
-                        f"</div>"
-                    )
-                partes.append("</div>")
             partes.append("</div>")
 
         if (
