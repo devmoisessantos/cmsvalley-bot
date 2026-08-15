@@ -25,16 +25,25 @@ Regras de cuidado
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import (
+    dataclass,
+    field,
+)
 
 import discord
 from sqlalchemy import select
 
-from src.config import CARGOS, CARGOS_HIERARQUIA
+from src.chamada.ocr.scraping_membros import extrair_id_do_apelido
+from src.config import (
+    CARGOS,
+    CARGOS_HIERARQUIA,
+)
 from src.database.connection import async_session
-from src.database.models import EstadoPlantao, Recrutamento, Usuario
-from src.plantao.ocr.scraping_membros import extrair_id_do_apelido
-
+from src.database.models import (
+    EstadoPlantao,
+    Recrutamento,
+    Usuario,
+)
 
 # ── Inferência de status a partir dos cargos ──────────────────────────────
 
@@ -224,9 +233,7 @@ async def _sincronizar_um_membro(
             bool(usuario_existente.ja_foi_aprovado) if usuario_existente else False
         )
         id_fivem_antes = usuario_existente.id_fivem if usuario_existente else None
-        nickname_antes = (
-            usuario_existente.nickname_atual if usuario_existente else None
-        )
+        nickname_antes = usuario_existente.nickname_atual if usuario_existente else None
 
     status_final, ja_foi_final = _escolher_status_final(
         status_banco=status_banco,
