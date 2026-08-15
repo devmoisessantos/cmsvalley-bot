@@ -133,9 +133,13 @@ async def enviar_transcript_para_api(
         print(f"⚠️ [transcript] {msg}")
         return None
 
-    # Preferir página do site (Vercel); a API só guarda o HTML
-    if TRANSCRIPT_SITE_URL:
-        url_visualizacao = f"{TRANSCRIPT_SITE_URL}/transcript?id={ticket.id}"
+    # Preferir página do site (Vercel); a API só guarda o HTML.
+    # Normaliza base para não gerar /transcript/transcript?id=
+    base_site = (TRANSCRIPT_SITE_URL or "").rstrip("/")
+    if base_site.endswith("/transcript"):
+        base_site = base_site[: -len("/transcript")].rstrip("/")
+    if base_site:
+        url_visualizacao = f"{base_site}/transcript?id={ticket.id}"
     else:
         url_visualizacao = (dados or {}).get("url_visualizacao") or (
             f"{CMSVALLEY_API_URL}/transcript/{ticket.id}"
