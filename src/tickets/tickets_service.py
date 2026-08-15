@@ -617,10 +617,55 @@ def montar_html_transcript(
     """
     HTML do transcript no estilo dos cards do ticket (cyan border + partículas).
 
-    Inspirado no visual dos cards Components V2 e no modelo de referência.
+    - Avatar fora do card (lado esquerdo)
+    - Cards alinhados à esquerda
+    - Botões com cores do CardBotoesStaffView (tickets_views.py)
+    - Menções como @nome em azul (link visual, sem destino)
+    - Sem bloco de meta do ticket (Ticket/Categoria/Autor/…)
     """
     import html as modulo_html
     import json as modulo_json
+    import re as modulo_re
+
+    # Estilos Discord Button (API) e fallbacks alinhados a tickets_views.py
+    ESTILO_BOTAO_POR_NUMERO = {
+        1: "primary",
+        2: "secondary",
+        3: "success",
+        4: "danger",
+    }
+    ESTILO_BOTAO_POR_ROTULO = {
+        "adicionar membro": "secondary",
+        "chamar membro": "secondary",
+        "remover membro": "secondary",
+        "mover canal": "secondary",
+        "mover ticket": "secondary",
+        "trocar nome do canal": "secondary",
+        "adicionar observação interna": "secondary",
+        "criar call de atendimento": "secondary",
+        "encerrar call de atendimento": "danger",
+        "assumir atendimento": "primary",
+        "saudar atendimento": "secondary",
+        "já saudado": "secondary",
+        "transferir atendimento": "secondary",
+        "finalizar ticket": "success",
+    }
+    EMOJI_BOTAO_POR_ROTULO = {
+        "adicionar membro": "➕",
+        "chamar membro": "👤",
+        "remover membro": "➖",
+        "mover canal": "📂",
+        "mover ticket": "📂",
+        "trocar nome do canal": "✏️",
+        "adicionar observação interna": "📋",
+        "criar call de atendimento": "📞",
+        "encerrar call de atendimento": "📞",
+        "assumir atendimento": "🙋",
+        "saudar atendimento": "👋",
+        "já saudado": "👋",
+        "transferir atendimento": "🔄",
+        "finalizar ticket": "✅",
+    }
 
     def esc(texto: str) -> str:
         return modulo_html.escape(texto or "")
@@ -650,12 +695,40 @@ def montar_html_transcript(
             pass
         return local.strftime("%d/%m/%Y, %H:%M:%S")
 
-    def markdown_simples_para_html(texto: str) -> str:
-        """Conversão leve: escapes + quebras + **negrito** + `code` + ```blocos```."""
-        import re as modulo_re
+    def mapa_nomes_mencionados(mensagem: discord.Message) -> dict[str, str]:
+        """id → nome legível para trocar <@id> por @nome."""
+        mapa: dict[str, str] = {}
+        for usuario in getattr(mensagem, "mentions", None) or []:
+            nome = getattr(usuario, "display_name", None) or usuario.name
+            mapa[str(usuario.id)] = nome
+        if ticket.autor_discord_id and ticket.autor_nome:
+            mapa[str(ticket.autor_discord_id)] = ticket.autor_nome
+        if ticket.staff_assumiu_id and ticket.staff_assumiu_nome:
+            mapa[str(ticket.staff_assumiu_id)] = ticket.staff_assumiu_nome
+        if ticket.staff_finalizou_id and ticket.staff_finalizou_nome:
+            mapa[str(ticket.staff_finalizou_id)] = ticket.staff_finalizou_nome
+        return mapa
 
-        seguro = esc(texto)
-        # blocos de código
+    def substituir_mencoes(texto: str, mapa_nomes: dict[str, str]) -> str:
+        def trocar(match) -> str:
+            id_usuario = match.group(1)
+            nome = mapa_nomes.get(id_usuario)
+            if nome:
+                return f"@{nome}"
+            return "@usuário"
+
+        return modulo_re.sub(r"<@!?(\d+)>", trocar, texto or "")
+
+    def markdown_simples_para_html(texto: str, mapa_nomes: dict[str, str]) -> str:
+        """Escapes + menções @nome + markdown leve."""
+        com_mencao = substituir_mencoes(texto, mapa_nomes)
+        seguro = esc(com_mencao)
+        # @nome → span azul estilo menção Discord (sem href real)
+        seguro = modulo_re.sub(
+            r"@([A-Za-z0-9_.\-]{2,32})",
+            r"<span class='mention'>@\1</span>",
+            seguro,
+        )
         seguro = modulo_re.sub(
             r"```(?:\w+)?\n?(.*?)```",
             r"<pre class='code-block'>\1</pre>",
@@ -673,6 +746,90 @@ def montar_html_transcript(
         seguro = seguro.replace("\n", "<br>")
         return seguro
 
+    def coletar_botoes(mensagem: discord.Message) -> list[dict]:
+        """Lista de {label, style, emoji, disabled} na ordem dos componentes."""
+        botoes: list[dict] = []
+        vistos: set[str] = set()
+
+        def adicionar(
+            rotulo: str, estilo_num: int | None, desativado: bool, emoji: str | None
+        ):
+            chave = rotulo.strip().lower()
+            if not chave or chave in vistos:
+                return
+            if chave.startswith("ticket:"):
+                return
+            vistos.add(chave)
+            estilo = ESTILO_BOTAO_POR_NUMERO.get(estilo_num or 2, "secondary")
+            if chave in ESTILO_BOTAO_POR_ROTULO:
+                estilo = ESTILO_BOTAO_POR_ROTULO[chave]
+            elif chave.startswith("assumido por"):
+                estilo = "secondary"
+                desativado = True
+            emoji_final = emoji or EMOJI_BOTAO_POR_ROTULO.get(chave, "")
+            if chave.startswith("assumido por") and not emoji_final:
+                emoji_final = "🙋"
+            botoes.append(
+                {
+                    "label": rotulo,
+                    "style": estilo,
+                    "emoji": emoji_final,
+                    "disabled": desativado,
+                }
+            )
+
+        def percorrer(no):
+            if not isinstance(no, dict):
+                return
+            # type 2 = Button
+            if no.get("type") == 2 and no.get("label"):
+                emoji_obj = no.get("emoji")
+                emoji_str = None
+                if isinstance(emoji_obj, dict):
+                    emoji_str = emoji_obj.get("name")
+                elif isinstance(emoji_obj, str):
+                    emoji_str = emoji_obj
+                adicionar(
+                    str(no["label"]),
+                    no.get("style"),
+                    bool(no.get("disabled")),
+                    emoji_str,
+                )
+            for filho in no.get("components") or []:
+                percorrer(filho)
+
+        dados = getattr(mensagem, "_data", None)
+        if isinstance(dados, dict):
+            for comp in dados.get("components") or []:
+                percorrer(comp)
+
+        # Fallback: objetos discord.py
+        for componente in getattr(mensagem, "components", None) or []:
+            try:
+                itens = list(getattr(componente, "children", None) or [])
+            except TypeError:
+                itens = []
+            for item in itens:
+                rotulo = getattr(item, "label", None)
+                if not rotulo:
+                    continue
+                estilo_attr = getattr(item, "style", None)
+                estilo_num = getattr(estilo_attr, "value", None)
+                if estilo_num is None and isinstance(estilo_attr, int):
+                    estilo_num = estilo_attr
+                emoji_attr = getattr(item, "emoji", None)
+                emoji_str = None
+                if emoji_attr is not None:
+                    emoji_str = getattr(emoji_attr, "name", None) or str(emoji_attr)
+                adicionar(
+                    str(rotulo),
+                    estilo_num,
+                    bool(getattr(item, "disabled", False)),
+                    emoji_str,
+                )
+
+        return botoes
+
     ids_staff: set[int] = set()
     if ticket.staff_assumiu_id:
         ids_staff.add(int(ticket.staff_assumiu_id))
@@ -682,12 +839,11 @@ def montar_html_transcript(
     nome_guilda = esc(guilda.name if guilda else "CMS Valley")
     icone = esc(url_icone_guilda())
 
-    # Visual alinhado ao modelo (cards cyan, tags, partículas)
     css = """
 @import url('https://fonts.googleapis.com/css2?family=Rock+Salt&display=swap');
 :root {
   --bg: #36393f;
-  --card: #333;
+  --card: #2b2d31;
   --text: #dcddde;
   --muted: #72767d;
   --cyan: #00aff4;
@@ -701,7 +857,7 @@ body {
   background-color: var(--bg);
   color: var(--text);
   font-size: 17px;
-  padding: 20px;
+  padding: 20px 24px 40px;
   overflow-y: auto;
   position: relative;
 }
@@ -709,70 +865,73 @@ body {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
   z-index: -1; pointer-events: none;
 }
-.page { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; }
-.header, .footer { text-align: center; margin-bottom: 20px; }
+.page {
+  position: relative; z-index: 1;
+  max-width: 920px; margin: 0; /* alinhado à esquerda */
+  width: 100%;
+}
+.header { text-align: left; margin-bottom: 24px; }
 .header-box {
-  max-width: 71%; padding: 20px; margin: 0 auto;
-  display: flex; flex-direction: column; align-items: center;
+  padding: 8px 0 12px;
+  display: flex; flex-direction: column; align-items: flex-start;
 }
 .guild-avatar {
-  border-radius: 50%; width: 80px; height: 80px; margin-bottom: 10px;
+  border-radius: 50%; width: 72px; height: 72px; margin-bottom: 10px;
   box-shadow: 0 0 15px var(--cyan-glow);
   animation: border-glow 2s infinite;
 }
 .guild-name {
   font-family: 'Rock Salt', cursive;
-  font-size: 1.5em; font-weight: 700; margin-top: 10px;
+  font-size: 1.45em; font-weight: 700; margin-top: 6px;
   text-shadow: 0 0 15px var(--cyan-glow);
   animation: text-glow 2s infinite;
   color: #fff;
 }
-.channel-info { font-size: 1.2em; margin-top: 5px; color: #b0b0b0; }
-.ticket-meta {
-  background: #252729; border: 1px solid var(--cyan);
-  border-radius: 10px; padding: 14px 16px; margin: 0 auto 24px;
-  max-width: 70%; box-shadow: 6px 4px 3px 3px var(--cyan-shadow);
-  font-size: 14px; color: #c5c6c7; text-align: left;
-}
-.ticket-meta div { margin: 4px 0; }
-.ticket-meta strong { color: #fff; }
+.channel-info { font-size: 1.05em; margin-top: 4px; color: #b0b0b0; }
 .chat {
-  display: flex; flex-direction: column; gap: 0;
+  display: flex; flex-direction: column; gap: 16px;
   align-items: flex-start; width: 100%;
 }
-.msg-card {
-  margin-bottom: 20px; padding: 20px; border-radius: 10px;
-  max-width: 70%; align-self: flex-start;
-  background-color: var(--card);
-  border: 1px solid var(--cyan);
-  box-shadow: 6px 4px 3px 3px var(--cyan-shadow);
-}
-.msg-card.bot { background-color: #333; border: 1px solid var(--cyan); }
-.msg-card.staff { background-color: #333; border: 1px solid var(--cyan); }
-.msg-card.autor { background-color: #333; border: 1px solid var(--cyan); }
-.msg-top {
-  display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px;
+.message-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  width: 100%; max-width: 100%;
 }
 .avatar {
   width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
   border: 1px solid var(--cyan);
   box-shadow: 2px 2px 3px 3px var(--cyan-shadow);
+  margin-top: 4px;
+}
+.msg-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: min(720px, calc(100% - 52px));
+  padding: 14px 16px;
+  border-radius: 10px;
+  background-color: var(--card);
+  border: 1px solid var(--cyan);
+  box-shadow: 6px 4px 3px 3px var(--cyan-shadow);
+}
+.msg-card.bot, .msg-card.staff, .msg-card.autor {
+  background-color: var(--card);
+  border: 1px solid var(--cyan);
 }
 .meta-col {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px;
+  margin-bottom: 8px;
 }
 .author { font-weight: 700; color: var(--cyan); }
-.timestamp { margin-left: 5px; font-size: .8em; color: var(--muted); }
-.tag, .bot-tag, .autor-tag, .staff-tag {
-  font-size: 0.8em; padding: 2px 5px; border-radius: 3px;
+.timestamp { font-size: .8em; color: var(--muted); }
+.bot-tag, .autor-tag, .staff-tag {
+  font-size: 0.75em; padding: 2px 6px; border-radius: 3px;
   color: #fff; display: inline;
 }
-.tag-bot, .bot-tag { background-color: #02f2ff6e; }
-.tag-autor, .autor-tag { background-color: #18f30e78; }
-.tag-staff, .staff-tag { background-color: #ff4500; }
-.content, .content-message {
+.bot-tag { background-color: #02f2ff6e; }
+.autor-tag { background-color: #18f30e78; }
+.staff-tag { background-color: #ff4500; }
+.content {
   overflow-wrap: break-word; word-break: break-word;
-  width: auto; max-width: 100%; font-size: 14px; margin-top: 5px;
+  width: auto; max-width: 100%; font-size: 14px;
   white-space: pre-wrap; color: var(--text);
 }
 .content .h1 { font-size: 1.5em; font-weight: 700; margin: 4px 0 8px; color: #fff; }
@@ -780,13 +939,22 @@ body {
 .content .h3 { font-size: 1em; font-weight: 600; margin: 4px 0; color: #e8eaed; }
 .content .muted { color: var(--muted); font-size: 0.85rem; }
 .content code {
-  background: #2F3136; padding: 1px 5px; border-radius: 4px;
+  background: #1e1f22; padding: 1px 5px; border-radius: 4px;
   font-family: ui-monospace, monospace; font-size: 0.85em;
 }
 .content pre.code-block {
-  background: #2F3136; border: 1px solid #4f545c; border-radius: 8px;
+  background: #1e1f22; border: 1px solid #4f545c; border-radius: 8px;
   padding: 10px 12px; overflow-x: auto; white-space: pre-wrap;
   font-family: ui-monospace, monospace; font-size: 0.82rem; margin: 8px 0;
+}
+.mention {
+  color: #00aff4;
+  background: rgba(0, 175, 244, 0.12);
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 500;
+  cursor: default;
+  text-decoration: none;
 }
 .attachments { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .attachments img {
@@ -795,12 +963,12 @@ body {
 }
 .file-link {
   display: inline-flex; align-items: center; padding: 5px 10px;
-  border: 1px solid #ddd; border-radius: 5px; text-decoration: none;
-  color: #333; background-color: #f9f9f9; margin-top: 10px;
+  border: 1px solid #4f545c; border-radius: 5px; text-decoration: none;
+  color: #dcddde; background-color: #2b2d31; margin-top: 6px;
 }
 .embed {
   border-radius: 10px; padding: 10px; margin-top: 10px;
-  background-color: #252729; border: 1px solid #4f545c;
+  background-color: #1e1f22; border: 1px solid #4f545c;
   box-shadow: 0 2px 6px rgba(0,0,0,0.15); max-width: 520px;
 }
 .embed-title { font-weight: 700; color: var(--cyan); }
@@ -808,12 +976,47 @@ body {
   margin-top: 5px; color: #c5c6c7; overflow-wrap: break-word;
   font-size: 14px; white-space: pre-wrap;
 }
-.btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.btn-chip {
-  background: #2a2f3a; border: 1px solid #3a4150; color: #cfd3db;
-  border-radius: 6px; padding: 5px 10px; font-size: 0.75rem;
+.btn-row {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 12px;
 }
-.footer { text-align: center; margin-top: 28px; font-size: 12px; color: #b0b0b0; }
+.btn-discord {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: none; border-radius: 4px;
+  padding: 8px 14px;
+  font-size: 13px; font-weight: 500;
+  font-family: inherit;
+  color: #fff;
+  cursor: default;
+  user-select: none;
+  line-height: 1.2;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.15);
+}
+.btn-discord .btn-emoji { font-size: 14px; line-height: 1; }
+.btn-discord.secondary {
+  background: #4e5058;
+  color: #f2f3f5;
+}
+.btn-discord.primary {
+  background: #5865f2;
+  color: #fff;
+}
+.btn-discord.success {
+  background: #248046;
+  color: #fff;
+}
+.btn-discord.danger {
+  background: #da373c;
+  color: #fff;
+}
+.btn-discord.disabled,
+.btn-discord[disabled] {
+  opacity: 0.55;
+  filter: grayscale(0.15);
+}
+.footer {
+  text-align: left; margin-top: 28px; font-size: 12px; color: #b0b0b0;
+}
 @keyframes text-glow {
   0% { text-shadow: 0 0 15px var(--cyan-glow); }
   50% { text-shadow: 0 0 30px rgba(0,175,244,0.9); }
@@ -825,10 +1028,11 @@ body {
   100% { box-shadow: 0 0 15px var(--cyan-glow); }
 }
 @media (max-width: 700px) {
-  .msg-card { max-width: 100%; padding: 12px; }
-  .ticket-meta { max-width: 100%; }
+  body { padding: 12px; }
+  .msg-card { max-width: calc(100% - 48px); padding: 12px; }
   .attachments img { max-width: 100%; }
-  .tag, .bot-tag, .autor-tag, .staff-tag { font-size: 0.7em; padding: 1px 3px; }
+  .bot-tag, .autor-tag, .staff-tag { font-size: 0.7em; padding: 1px 3px; }
+  .btn-discord { padding: 7px 10px; font-size: 12px; }
 }
 """
 
@@ -850,87 +1054,64 @@ body {
         f"<div class='channel-info'>Transcript · "
         f"{esc(ticket.categoria_rotulo or 'Ticket')} · #{ticket.id}</div>",
         "</div></header>",
-        "<section class='ticket-meta'>",
-        f"<div><strong>Ticket:</strong> #{ticket.id}</div>",
-        f"<div><strong>Categoria:</strong> {esc(ticket.categoria_rotulo or '—')}</div>",
-        f"<div><strong>Autor:</strong> {esc(ticket.autor_nome or '—')} "
-        f"(`{ticket.autor_discord_id}`)</div>",
+        "<main class='chat'>",
     ]
-    if ticket.staff_assumiu_nome:
-        partes.append(
-            f"<div><strong>Assumido por:</strong> {esc(ticket.staff_assumiu_nome)}</div>"
-        )
-    if ticket.staff_finalizou_nome:
-        partes.append(
-            f"<div><strong>Finalizado por:</strong> {esc(ticket.staff_finalizou_nome)}</div>"
-        )
-    if ticket.consideracoes_finais:
-        partes.append(
-            f"<div><strong>Considerações:</strong> {esc(ticket.consideracoes_finais)}</div>"
-        )
-    partes.append(
-        f"<div><strong>Aberto em:</strong> {formatar_horario(ticket.aberto_em)}</div>"
-    )
-    partes.append("</section>")
-    partes.append("<main class='chat'>")
 
     for mensagem in mensagens:
         autor = mensagem.author
         nome = esc(getattr(autor, "display_name", None) or autor.name)
         avatar = esc(url_avatar(autor))
         quando = formatar_horario(mensagem.created_at)
+        mapa_nomes = mapa_nomes_mencionados(mensagem)
 
-        classes = ["msg-card"]
+        classes_card = ["msg-card"]
         tags_html: list[str] = []
         if autor.bot:
-            classes.append("bot")
+            classes_card.append("bot")
             tags_html.append("<span class='bot-tag'>BOT</span>")
         if autor.id == ticket.autor_discord_id:
-            classes.append("autor")
+            classes_card.append("autor")
             tags_html.append("<span class='autor-tag'>Autor</span>")
         if autor.id in ids_staff:
-            classes.append("staff")
+            classes_card.append("staff")
             tags_html.append("<span class='staff-tag'>STAFF</span>")
 
+        botoes = coletar_botoes(mensagem)
+        rotulos_botoes = {b["label"].strip().lower() for b in botoes}
+
+        # Texto visível sem labels de botão (eles vão no .btn-row)
         texto_bruto = _texto_da_mensagem_discord(mensagem)
-        rotulos_botoes: list[str] = []
-        # Coleta labels de botões para exibir como chips
-        for componente in getattr(mensagem, "components", None) or []:
-            for texto_comp in _coletar_textos_de_componente(componente):
-                # labels curtos de botão já entram no texto; chips extras se vierem só de Button
-                pass
-        dados = getattr(mensagem, "_data", None)
-        if isinstance(dados, dict):
+        if texto_bruto and rotulos_botoes:
+            linhas_filtradas: list[str] = []
+            for linha in texto_bruto.split("\n"):
+                if linha.strip().lower() in rotulos_botoes:
+                    continue
+                # linha que é só "Assumido por: ..." também vira botão
+                if linha.strip().lower().startswith("assumido por:"):
+                    continue
+                linhas_filtradas.append(linha)
+            texto_bruto = "\n".join(linhas_filtradas).strip()
 
-            def _labels_botao(no):
-                if not isinstance(no, dict):
-                    return
-                # type 2 = button no Discord
-                if no.get("type") == 2 and no.get("label"):
-                    rotulos_botoes.append(str(no["label"]))
-                for filho in no.get("components") or []:
-                    _labels_botao(filho)
-
-            for comp in dados.get("components") or []:
-                _labels_botao(comp)
-
-        partes.append(f"<article class='{' '.join(classes)}'>")
-        partes.append("<div class='msg-top'>")
+        partes.append("<div class='message-row'>")
         partes.append(f"<img class='avatar' src='{avatar}' alt='' loading='lazy'>")
+        partes.append(f"<article class='{' '.join(classes_card)}'>")
         partes.append("<div class='meta-col'>")
         partes.append(f"<span class='author'>{nome}</span>")
         partes.append(f"<span class='timestamp'>{quando}</span>")
         partes.extend(tags_html)
-        partes.append("</div></div>")
+        partes.append("</div>")
 
         if texto_bruto:
             partes.append(
-                f"<div class='content'>{markdown_simples_para_html(texto_bruto)}</div>"
+                f"<div class='content'>"
+                f"{markdown_simples_para_html(texto_bruto, mapa_nomes)}"
+                f"</div>"
             )
 
         for embed in mensagem.embeds[:6]:
             titulo = esc(embed.title or "")
-            desc = esc(embed.description or "")
+            desc_raw = embed.description or ""
+            desc = markdown_simples_para_html(desc_raw, mapa_nomes) if desc_raw else ""
             if not titulo and not desc:
                 continue
             partes.append("<div class='embed'>")
@@ -961,29 +1142,34 @@ body {
                     )
             partes.append("</div>")
 
-        if rotulos_botoes:
-            # Dedup
-            visto_btn: set[str] = set()
-            chips: list[str] = []
-            for rotulo in rotulos_botoes:
-                if rotulo in visto_btn:
-                    continue
-                visto_btn.add(rotulo)
-                chips.append(f"<span class='btn-chip'>{esc(rotulo)}</span>")
-            if chips:
-                partes.append("<div class='btn-row'>" + "".join(chips) + "</div>")
+        if botoes:
+            partes.append("<div class='btn-row'>")
+            for botao in botoes:
+                classes_btn = f"btn-discord {botao['style']}"
+                if botao["disabled"]:
+                    classes_btn += " disabled"
+                emoji_html = ""
+                if botao["emoji"]:
+                    emoji_html = f"<span class='btn-emoji'>{esc(botao['emoji'])}</span>"
+                partes.append(
+                    f"<span class='{classes_btn}'>"
+                    f"{emoji_html}{esc(botao['label'])}"
+                    f"</span>"
+                )
+            partes.append("</div>")
 
         if (
             not texto_bruto
             and not mensagem.attachments
             and not any(e.title or e.description for e in mensagem.embeds)
-            and not rotulos_botoes
+            and not botoes
         ):
             partes.append(
                 "<div class='content'><em>(mensagem sem texto legível)</em></div>"
             )
 
         partes.append("</article>")
+        partes.append("</div>")  # message-row
 
     partes.append("</main>")
     partes.append(
@@ -991,7 +1177,6 @@ body {
     )
     partes.append("</div>")  # page
 
-    # Particles (CDN) — fundo estilo do modelo
     config_particulas = {
         "particles": {
             "number": {"value": 55, "density": {"enable": True, "value_area": 900}},
