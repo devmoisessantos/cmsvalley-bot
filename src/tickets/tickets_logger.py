@@ -72,6 +72,47 @@ def _formatar_aberto_ha(aberto_em: datetime | None) -> str:
     return f"há {dias} dia" + ("s" if dias != 1 else "")
 
 
+def _montar_linha_botoes_transcript(ticket: Ticket) -> discord.ui.ActionRow:
+    """
+    Botões de transcript no log / DM.
+
+    - Acessar: link se url_transcript existir; senão desativado
+    - Senha: sempre desativado (só exibe a senha no rótulo)
+    """
+    linha = discord.ui.ActionRow()
+    senha = ticket.senha_transcript or "—"
+    url = (ticket.url_transcript or "").strip()
+
+    if url.startswith("http://") or url.startswith("https://"):
+        linha.add_item(
+            discord.ui.Button(
+                label="Acessar o Transcript",
+                emoji="🔗",
+                style=discord.ButtonStyle.link,
+                url=url,
+            )
+        )
+    else:
+        linha.add_item(
+            discord.ui.Button(
+                label="Acessar o Transcript",
+                emoji="🔗",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+            )
+        )
+
+    linha.add_item(
+        discord.ui.Button(
+            label=f"Senha: {senha}",
+            emoji="🔓",
+            style=discord.ButtonStyle.success,
+            disabled=True,
+        )
+    )
+    return linha
+
+
 class LogTicketFinalizadoView(discord.ui.LayoutView):
     """Card de log enviado em LOG_TICKETS após finalizar."""
 
@@ -82,6 +123,7 @@ class LogTicketFinalizadoView(discord.ui.LayoutView):
         autor_mention: str,
         nome_canal: str,
         consideracoes: str | None,
+        guilda: discord.Guild | None = None,
     ) -> None:
         super().__init__(timeout=None)
 
@@ -92,49 +134,47 @@ class LogTicketFinalizadoView(discord.ui.LayoutView):
         horario = _formatar_horario_extenso(ticket.finalizado_em)
         aberto_ha = _formatar_aberto_ha(ticket.aberto_em)
 
-        texto = (
-            f"# 🔐 Ticket Finalizado com Sucesso\n"
-            f"\n"
-            f"> ℹ️ __Informações do Ticket__\n"
+        texto_info = (
+            f"> ℹ️ **__Informações do Ticket__**\n"
             f"- **`👮` Responsável por Finalizar:** "
-            f"[{staff.mention} / `{staff.id}` / `{staff_username}`]\n"
+            f"{staff.mention} / `**{staff.id}**` / `{staff_username}`\n"
             f"- **`❓` Categoria:** `{ticket.categoria_rotulo}`\n"
-            f"- **`⏰` Horário Finalizado:** `{horario}`\n"
-            f"\n"
-            f"> 🗂️ __Detalhes do Ticket__\n"
+            f"- **`⏰` Horário Finalizado:** `{horario}`\n\n"
+            f"> 🗂️ **__Detalhes do Ticket__**\n"
             f"- **`📌` Canal:** `{nome_canal}`\n"
             f"- **`⏰` Aberto:** [`{aberto_ha}`]\n"
             f"- **`🔢` ID:** {ticket.id}\n"
             f"- **`🙋` Autor:** {autor_mention} "
-            f"( `{ticket.autor_discord_id}` / `{autor_username}` )\n"
-            f"\n"
-            f"> ✏️ __Considerações Finais__\n"
-            f"- # {consideracoes_texto}\n"
-            f"> ## **🔐 __Senha para visualização do Transcript:__**\n"
-            f"- # ||`{senha}`||"
+            f"( `**{ticket.autor_discord_id}**` / `{autor_username}` )\n\n"
+            f"> ✏️ **__Considerações Finais__**\n"
+            f"# {consideracoes_texto}\n"
+            f"> **🔐 __Senha para visualização do Transcript:__**\n"
+            f"# - ||`{senha}`||"
         )
 
-        linha_botoes = discord.ui.ActionRow()
-        linha_botoes.add_item(
-            discord.ui.Button(
-                label="Acessar o transcript",
-                style=discord.ButtonStyle.secondary,
-                disabled=False,
+        componentes: list = [
+            discord.ui.TextDisplay("# 🔐 Ticket Finalizado com Sucesso"),
+        ]
+
+        url_icone = None
+        if guilda is not None and guilda.icon is not None:
+            url_icone = guilda.icon.url
+
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_info,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
             )
-        )
-        linha_botoes.add_item(
-            discord.ui.Button(
-                label=f"Senha: {senha}",
-                style=discord.ButtonStyle.secondary,
-                disabled=True,
-            )
-        )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_info))
+
+        componentes.append(_montar_linha_botoes_transcript(ticket))
 
         container = discord.ui.Container(
-            discord.ui.TextDisplay(texto),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            linha_botoes,
-            accent_color=discord.Color.dark_green(),
+            *componentes,
+            accent_color=discord.Color.blurple(),
         )
         self.add_item(container)
 
@@ -164,12 +204,15 @@ async def enviar_log_ticket_finalizado(
         print(f"⚠️ Canal LOG_TICKETS ({canal_id}) não encontrado.")
         return
 
+    guilda = getattr(canal, "guild", None) or staff.guild
+
     view = LogTicketFinalizadoView(
         ticket=ticket,
         staff=staff,
         autor_mention=autor_mention,
         nome_canal=nome_canal,
         consideracoes=consideracoes,
+        guilda=guilda,
     )
     try:
         await canal.send(view=view)

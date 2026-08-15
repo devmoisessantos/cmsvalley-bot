@@ -1236,9 +1236,15 @@ def montar_dm_ticket_finalizado(
     """
     Card de DM para o autor quando o ticket é finalizado.
 
-    Inclui thumbnail do ícone do servidor quando disponível.
+    Inclui thumbnail do ícone do servidor e botões:
+    Acessar Transcript | Senha (desativado) | Avaliar Atendimento.
     """
-    from src.config import TICKETS_CATEGORIAS
+    from src.config import (
+        CANAIS,
+        GUILD_ID,
+        TICKETS_CATEGORIAS,
+    )
+    from src.tickets.tickets_logger import _montar_linha_botoes_transcript
 
     data_abertura = para_horario_brasilia(ticket.aberto_em)
     if data_abertura is not None:
@@ -1286,6 +1292,35 @@ def montar_dm_ticket_finalizado(
         )
     else:
         componentes.append(discord.ui.TextDisplay(f"{titulo}\n\n{texto_corpo}"))
+
+    # Botões: transcript + senha + avaliar
+    linha = _montar_linha_botoes_transcript(ticket)
+
+    canal_avaliar_id = CANAIS.get("CANAL_AVALIAR_ATENDIMENTO") or 0
+    guild_id = int(GUILD_ID)
+    if guilda is not None:
+        guild_id = guilda.id
+    if canal_avaliar_id:
+        url_avaliar = f"https://discord.com/channels/{guild_id}/{int(canal_avaliar_id)}"
+        linha.add_item(
+            discord.ui.Button(
+                label="Avaliar Atendimento",
+                emoji="⭐",
+                style=discord.ButtonStyle.link,
+                url=url_avaliar,
+            )
+        )
+    else:
+        linha.add_item(
+            discord.ui.Button(
+                label="Avaliar Atendimento",
+                emoji="⭐",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+            )
+        )
+
+    componentes.append(linha)
 
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(
