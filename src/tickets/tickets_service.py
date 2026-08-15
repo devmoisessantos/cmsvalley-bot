@@ -502,12 +502,30 @@ def listar_categorias_ticket_na_guilda(
     return lista
 
 
-def _coletar_textos_de_componente(objeto, profundidade: int = 0) -> list[str]:
+def _eh_no_botao(objeto) -> bool:
+    """True se o nó parece um botão Discord (type 2 ou classe Button)."""
+    if isinstance(objeto, dict):
+        return objeto.get("type") == 2
+    tipo = getattr(objeto, "type", None)
+    if tipo is not None and getattr(tipo, "value", tipo) == 2:
+        return True
+    nome_classe = type(objeto).__name__.lower()
+    return "button" in nome_classe and hasattr(objeto, "label")
+
+
+def _coletar_textos_de_componente(
+    objeto,
+    profundidade: int = 0,
+    *,
+    ignorar_botoes: bool = True,
+) -> list[str]:
     """
     Percorre componentes Components V2 (TextDisplay, Section, Container, etc.)
     e extrai textos legíveis para o transcript.
+
+    Por padrão ignora labels de botão — eles vão no bloco de botões coloridos.
     """
-    if objeto is None or profundidade > 12:
+    if objeto is None or profundidade > 14:
         return []
 
     textos: list[str] = []
@@ -516,10 +534,15 @@ def _coletar_textos_de_componente(objeto, profundidade: int = 0) -> list[str]:
         limpo = objeto.strip()
         return [limpo] if limpo else []
 
+    if ignorar_botoes and _eh_no_botao(objeto):
+        return []
+
     if isinstance(objeto, dict):
+        # type 2 = botão → não puxa label para o texto
+        if ignorar_botoes and objeto.get("type") == 2:
+            return []
         for chave in (
             "content",
-            "label",
             "placeholder",
             "title",
             "description",
@@ -529,18 +552,35 @@ def _coletar_textos_de_componente(objeto, profundidade: int = 0) -> list[str]:
             valor = objeto.get(chave)
             if isinstance(valor, str) and valor.strip():
                 textos.append(valor.strip())
+        # label só se NÃO for botão
+        if not ignorar_botoes or objeto.get("type") != 2:
+            valor_label = objeto.get("label")
+            if isinstance(valor_label, str) and valor_label.strip():
+                if objeto.get("type") != 2:
+                    textos.append(valor_label.strip())
         for chave in ("components", "children", "items", "accessory"):
             filho = objeto.get(chave)
             if isinstance(filho, list):
                 for item in filho:
-                    textos.extend(_coletar_textos_de_componente(item, profundidade + 1))
+                    textos.extend(
+                        _coletar_textos_de_componente(
+                            item,
+                            profundidade + 1,
+                            ignorar_botoes=ignorar_botoes,
+                        )
+                    )
             elif filho is not None:
-                textos.extend(_coletar_textos_de_componente(filho, profundidade + 1))
+                textos.extend(
+                    _coletar_textos_de_componente(
+                        filho,
+                        profundidade + 1,
+                        ignorar_botoes=ignorar_botoes,
+                    )
+                )
         return textos
 
     for atributo in (
         "content",
-        "label",
         "placeholder",
         "title",
         "description",
@@ -551,6 +591,12 @@ def _coletar_textos_de_componente(objeto, profundidade: int = 0) -> list[str]:
         if isinstance(valor, str) and valor.strip():
             textos.append(valor.strip())
 
+    if not ignorar_botoes or not _eh_no_botao(objeto):
+        valor_label = getattr(objeto, "label", None)
+        if isinstance(valor_label, str) and valor_label.strip():
+            if not _eh_no_botao(objeto):
+                textos.append(valor_label.strip())
+
     for atributo in ("children", "components", "items"):
         filhos = getattr(objeto, atributo, None)
         if not filhos:
@@ -560,12 +606,23 @@ def _coletar_textos_de_componente(objeto, profundidade: int = 0) -> list[str]:
         except TypeError:
             continue
         for filho in iteravel:
-            textos.extend(_coletar_textos_de_componente(filho, profundidade + 1))
+            textos.extend(
+                _coletar_textos_de_componente(
+                    filho,
+                    profundidade + 1,
+                    ignorar_botoes=ignorar_botoes,
+                )
+            )
 
-    # Dados brutos da API (quando o content da mensagem está vazio)
     dados_brutos = getattr(objeto, "_data", None)
     if isinstance(dados_brutos, dict):
-        textos.extend(_coletar_textos_de_componente(dados_brutos, profundidade + 1))
+        textos.extend(
+            _coletar_textos_de_componente(
+                dados_brutos,
+                profundidade + 1,
+                ignorar_botoes=ignorar_botoes,
+            )
+        )
 
     return textos
 
@@ -576,31 +633,30 @@ def _texto_da_mensagem_discord(mensagem: discord.Message) -> str:
 
     Mensagens Components V2 do bot costumam ter content vazio —
     o texto fica nos TextDisplay / Section dos componentes.
+    Labels de botão não entram aqui.
     """
     partes: list[str] = []
 
     if mensagem.content and mensagem.content.strip():
         partes.append(mensagem.content.strip())
 
-    # Componentes da mensagem (V2 e clássicos)
     componentes = getattr(mensagem, "components", None) or []
     for componente in componentes:
-        partes.extend(_coletar_textos_de_componente(componente))
+        partes.extend(_coletar_textos_de_componente(componente, ignorar_botoes=True))
 
-    # Payload bruto (fallback)
     dados = getattr(mensagem, "_data", None)
     if isinstance(dados, dict):
         for componente in dados.get("components") or []:
-            partes.extend(_coletar_textos_de_componente(componente))
+            partes.extend(
+                _coletar_textos_de_componente(componente, ignorar_botoes=True)
+            )
 
-    # Dedup preservando ordem
     vistos: set[str] = set()
     unicos: list[str] = []
     for texto in partes:
         chave = texto.strip()
         if not chave or chave in vistos:
             continue
-        # Ignora custom_ids e lixo técnico
         if chave.startswith("ticket:") or chave.startswith("tpl:"):
             continue
         vistos.add(chave)
@@ -822,10 +878,10 @@ def montar_html_transcript(
                 }
             )
 
-        def percorrer(no) -> None:
+        def percorrer_dict(no) -> None:
             if not isinstance(no, dict):
                 return
-            # type 2 = Button
+            # type 2 = Button no payload da API
             if no.get("type") == 2 and no.get("label"):
                 adicionar(
                     str(no["label"]),
@@ -833,35 +889,56 @@ def montar_html_transcript(
                     bool(no.get("disabled")),
                     no.get("emoji"),
                 )
-            for filho in no.get("components") or []:
-                percorrer(filho)
+            for chave in ("components", "children", "items"):
+                filhos = no.get(chave)
+                if isinstance(filhos, list):
+                    for filho in filhos:
+                        percorrer_dict(filho)
+                elif isinstance(filhos, dict):
+                    percorrer_dict(filhos)
 
-        dados = getattr(mensagem, "_data", None)
-        if isinstance(dados, dict):
-            for comp in dados.get("components") or []:
-                percorrer(comp)
-
-        # Fallback: objetos discord.py
-        if not botoes:
-            for componente in getattr(mensagem, "components", None) or []:
-                try:
-                    itens = list(getattr(componente, "children", None) or [])
-                except TypeError:
-                    itens = []
-                for item in itens:
-                    rotulo = getattr(item, "label", None)
-                    if not rotulo:
-                        continue
-                    estilo_attr = getattr(item, "style", None)
+        def percorrer_objeto(no, profundidade: int = 0) -> None:
+            if no is None or profundidade > 14:
+                return
+            if isinstance(no, dict):
+                percorrer_dict(no)
+                return
+            if _eh_no_botao(no):
+                rotulo = getattr(no, "label", None)
+                if rotulo:
+                    estilo_attr = getattr(no, "style", None)
                     estilo_num = getattr(estilo_attr, "value", None)
                     if estilo_num is None and isinstance(estilo_attr, int):
                         estilo_num = estilo_attr
                     adicionar(
                         str(rotulo),
                         estilo_num,
-                        bool(getattr(item, "disabled", False)),
-                        getattr(item, "emoji", None),
+                        bool(getattr(no, "disabled", False)),
+                        getattr(no, "emoji", None),
                     )
+            for atributo in ("children", "components", "items"):
+                filhos = getattr(no, atributo, None)
+                if not filhos:
+                    continue
+                try:
+                    lista_filhos = list(filhos)
+                except TypeError:
+                    continue
+                for filho in lista_filhos:
+                    percorrer_objeto(filho, profundidade + 1)
+            dados_internos = getattr(no, "_data", None)
+            if isinstance(dados_internos, dict):
+                percorrer_dict(dados_internos)
+
+        # 1) payload bruto da mensagem (mais confiável para style/emoji)
+        dados = getattr(mensagem, "_data", None)
+        if isinstance(dados, dict):
+            for comp in dados.get("components") or []:
+                percorrer_dict(comp)
+
+        # 2) objetos tipados do discord.py
+        for componente in getattr(mensagem, "components", None) or []:
+            percorrer_objeto(componente)
 
         return botoes
 
@@ -1040,10 +1117,14 @@ body {
   margin-top: 8px;
   border-left: 4px solid #5865f2;
 }
-.container-text-block { margin-bottom: 8px; }
+.container-text-block { margin-bottom: 8px; color: var(--text); font-size: 14px; }
+.small-text {
+  color: #b0b0b0;
+  font-size: 0.85rem;
+}
 .container-divider {
   border: 0;
-  border-top: 1px solid rgba(255,255,255,0.08);
+  border-top: 1px solid rgba(255,255,255,0.1);
   margin: 10px 0;
 }
 .container-row {
@@ -1181,12 +1262,27 @@ span.button-emoji {
         partes.extend(tags_html)
         partes.append("</div>")
 
-        if texto_bruto:
+        # Mensagem só com botões de staff: texto curto entra no bloco V2
+        texto_opcoes_staff = ""
+        if botoes and texto_bruto:
+            linhas_texto = [linha for linha in texto_bruto.split("\n") if linha.strip()]
+            if (
+                len(linhas_texto) == 1
+                and "opções exclusivas" in linhas_texto[0].lower()
+            ):
+                texto_opcoes_staff = linhas_texto[0].strip()
+                texto_bruto = ""
+
+        # Texto simples (usuário / staff) fica em content-message
+        if texto_bruto and not botoes:
             partes.append(
                 f"<div class='content-message'>"
                 f"{markdown_simples_para_html(texto_bruto, mapa_nomes)}"
                 f"</div>"
             )
+        elif texto_bruto and botoes:
+            # Texto + botões: texto dentro do container V2
+            pass
 
         for embed in mensagem.embeds[:6]:
             titulo = esc(embed.title or "")
@@ -1222,29 +1318,45 @@ span.button-emoji {
                     )
             partes.append("</div>")
 
-        if botoes:
-            # Container V2 com botões coloridos (modelo)
+        if botoes or (texto_bruto and autor.bot):
+            # Bloco Components V2 (texto + botões coloridos) — estrutura do modelo
             partes.append("<div class='message-container-v2'>")
-            # Se o texto for só a linha de opções exclusivas, já está no content;
-            # os botões ficam em linhas de ~4 por row, como no modelo.
-            partes.append("<div class='container-row'>")
-            for indice, botao in enumerate(botoes):
-                if indice > 0 and indice % 4 == 0:
-                    partes.append("</div><div class='container-row'>")
-                classes_btn = f"container-button button-{botao['style']}"
-                if botao["disabled"]:
-                    classes_btn += " disabled"
+            if texto_opcoes_staff:
                 partes.append(
-                    f"<div class='{classes_btn}'>"
-                    f"{botao.get('emoji_html') or ''}"
-                    f"{esc(botao['label'])}"
-                    f"</div>"
+                    "<div class='container-text-block'>"
+                    f"<span class='small-text'>{esc(texto_opcoes_staff)}</span>"
+                    "</div>"
+                    "<hr class='container-divider'>"
                 )
-            partes.append("</div>")  # container-row
-            partes.append("</div>")  # message-container-v2
+            elif texto_bruto:
+                partes.append(
+                    "<div class='container-text-block'>"
+                    f"{markdown_simples_para_html(texto_bruto, mapa_nomes)}"
+                    "</div>"
+                )
+                if botoes:
+                    partes.append("<hr class='container-divider'>")
+
+            if botoes:
+                partes.append("<div class='container-row'>")
+                for indice, botao in enumerate(botoes):
+                    if indice > 0 and indice % 4 == 0:
+                        partes.append("</div><div class='container-row'>")
+                    classes_btn = f"container-button button-{botao['style']}"
+                    if botao["disabled"]:
+                        classes_btn += " disabled"
+                    partes.append(
+                        f"<div class='{classes_btn}'>"
+                        f"{botao.get('emoji_html') or ''}"
+                        f"{esc(botao['label'])}"
+                        f"</div>"
+                    )
+                partes.append("</div>")
+            partes.append("</div>")
 
         if (
             not texto_bruto
+            and not texto_opcoes_staff
             and not mensagem.attachments
             and not any(e.title or e.description for e in mensagem.embeds)
             and not botoes
