@@ -112,36 +112,6 @@ async def abrir_ticket_por_categoria(
     )
 
 
-def _montar_linhas_botoes_categoria(segmento: str) -> list[discord.ui.ActionRow]:
-    """Monta ActionRows com um botão por categoria do segmento."""
-    linhas: list[discord.ui.ActionRow] = []
-    linha_atual = discord.ui.ActionRow()
-    contador = 0
-
-    for chave, definicao in TICKETS_CATEGORIAS.items():
-        if definicao["segmento"] != segmento:
-            continue
-
-        botao = discord.ui.Button(
-            label=definicao["rotulo"],
-            emoji=definicao.get("emoji") or None,
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"ticket:abrir:{chave}",
-        )
-        linha_atual.add_item(botao)
-        contador += 1
-
-        # Discord: no máximo 5 botões por ActionRow
-        if contador % 5 == 0:
-            linhas.append(linha_atual)
-            linha_atual = discord.ui.ActionRow()
-
-    if len(linha_atual.children) > 0:
-        linhas.append(linha_atual)
-
-    return linhas
-
-
 class PainelTicketSuporteLayout(discord.ui.LayoutView):
     """Painel fixo do segmento Suporte (dúvidas + revogações)."""
 
@@ -149,19 +119,84 @@ class PainelTicketSuporteLayout(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guilda = guilda
 
-        componentes: list = [
-            discord.ui.TextDisplay("# 🙋 Abrir ticket — Suporte"),
+        componentes: list = []
+
+        # Bloco 1 — título com ícone da guilda
+        url_icone = guilda.icon.url if guilda and guilda.icon else None
+        texto_titulo = (
+            "# 🎫 Sistema de Tickets — Suporte\n"
+            "> **Precisa de ajuda?** Escolha uma das opções abaixo para abrir "
+            "um canal privado com nossa equipe."
+        )
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_titulo,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_titulo))
+
+        # Bloco 2 — separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3 — categorias disponíveis
+        componentes.append(
             discord.ui.TextDisplay(
-                "Clique na categoria desejada para abrir um canal privado "
-                "com a equipe.\n"
-                "• Suporte / Dúvidas\n"
-                "• Revogar Advertência\n"
-                "• Revogar Exoneração"
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        ]
-        for linha in _montar_linhas_botoes_categoria("suporte"):
-            componentes.append(linha)
+                "## 📋 Categorias Disponíveis\n\n"
+                "- `💬` **Suporte / Dúvidas**: Tire dúvidas ou solicite ajuda "
+                "com qualquer assunto\n"
+                "- `⚠️` **Revogar Advertência**: Solicite a revisão de uma "
+                "advertência aplicada\n"
+                "- `🔄` **Revogar Exoneração**: Peça a revisão de um processo "
+                "de exoneração"
+            )
+        )
+
+        # Bloco 4 — separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        # Bloco 5 — como funciona
+        componentes.append(
+            discord.ui.TextDisplay(
+                "### `❓` __Como funciona__\n"
+                "**1.** Clique na categoria desejada\n"
+                "**2.** Um canal privado será criado automaticamente\n"
+                "**3.** Nossa equipe responderá o mais breve possível"
+            )
+        )
+
+        # Bloco 6 — separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 7 — botões (custom_id = ticket:abrir:<chave>)
+        linha = discord.ui.ActionRow()
+        linha.add_item(
+            discord.ui.Button(
+                label="Suporte / Dúvidas",
+                emoji="🙋",
+                style=discord.ButtonStyle.secondary,
+                custom_id="ticket:abrir:suporte_duvidas",
+            )
+        )
+        linha.add_item(
+            discord.ui.Button(
+                label="Revogar Advertência",
+                emoji="✏️",
+                style=discord.ButtonStyle.danger,
+                custom_id="ticket:abrir:revogar_adv",
+            )
+        )
+        linha.add_item(
+            discord.ui.Button(
+                label="Revogar Exoneração",
+                emoji="🚫",
+                style=discord.ButtonStyle.danger,
+                custom_id="ticket:abrir:revogar_exo",
+            )
+        )
+        componentes.append(linha)
 
         container = discord.ui.Container(
             *componentes,
@@ -177,23 +212,80 @@ class PainelTicketDenunciasLayout(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guilda = guilda
 
-        componentes: list = [
-            discord.ui.TextDisplay("# ⛔ Abrir ticket — Denúncias"),
+        componentes: list = []
+
+        # Bloco 1 — título com ícone da guilda
+        url_icone = guilda.icon.url if guilda and guilda.icon else None
+        texto_titulo = (
+            "# 🎫 Sistema de Tickets — Denúncias\n"
+            "> **Identificou alguma irregularidade?** Escolha uma das opções "
+            "abaixo para abrir um canal privado com nossa equipe."
+        )
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_titulo,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_titulo))
+
+        # Bloco 2 — separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3 — categorias disponíveis
+        componentes.append(
             discord.ui.TextDisplay(
-                "Clique na categoria desejada para abrir um canal privado "
-                "com a equipe.\n"
-                "• Denúncias Jogador\n"
-                "• Denúncias Diretoria\n\n"
-                "Descreva o ocorrido com o máximo de detalhes possível."
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        ]
-        for linha in _montar_linhas_botoes_categoria("denuncias"):
-            componentes.append(linha)
+                "## 📋 Categorias Disponíveis\n\n"
+                "- `👤` **Denúncias Jogador**: Reporte comportamentos "
+                "inadequados de jogadores\n"
+                "- `🏢` **Denúncias Diretoria**: Reporte irregularidades "
+                "envolvendo a diretoria"
+            )
+        )
+
+        # Bloco 4 — separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        # Bloco 5 — como fazer a denúncia
+        componentes.append(
+            discord.ui.TextDisplay(
+                "### ✏️ __Como fazer sua denúncia__\n"
+                "-# Para que possamos analisar seu caso com eficiência, inclua:\n\n"
+                "- **Descrição detalhada** dos fatos\n"
+                "- **Provas disponíveis** (prints, vídeos, links)\n\n"
+                "> `⚠️` **Importante:** Denúncias sem informações suficientes "
+                "podem ter o processo atrasado."
+            )
+        )
+
+        # Bloco 6 — separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 7 — botões
+        linha = discord.ui.ActionRow()
+        linha.add_item(
+            discord.ui.Button(
+                label="Denúnciar Jogador",
+                emoji="⛔",
+                style=discord.ButtonStyle.danger,
+                custom_id="ticket:abrir:denuncias_jogador",
+            )
+        )
+        linha.add_item(
+            discord.ui.Button(
+                label="Denúnciar Diretoria",
+                emoji="🛡️",
+                style=discord.ButtonStyle.primary,
+                custom_id="ticket:abrir:denuncias_diretoria",
+            )
+        )
+        componentes.append(linha)
 
         container = discord.ui.Container(
             *componentes,
-            accent_color=discord.Color.red(),
+            accent_color=discord.Color.blurple(),
         )
         self.add_item(container)
 

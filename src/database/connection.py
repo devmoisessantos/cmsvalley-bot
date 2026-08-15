@@ -46,9 +46,28 @@ async def init_db():
     Cria no banco todas as tabelas definidas em models.py.
 
     Só cria o que ainda não existe — não apaga nem altera colunas antigas.
+    Colunas novas em tabelas já existentes entram via ALTER TABLE IF NOT EXISTS.
     """
+    from sqlalchemy import text
+
     async with engine.begin() as conexao:
         await conexao.run_sync(Base.metadata.create_all)
+
+        # Migrações leves: colunas novas do domínio tickets
+        await conexao.execute(
+            text(
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS mensagem_botoes_id BIGINT"
+            )
+        )
+        await conexao.execute(
+            text("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS call_canal_id BIGINT")
+        )
+        await conexao.execute(
+            text(
+                "ALTER TABLE tickets "
+                "ADD COLUMN IF NOT EXISTS saudado BOOLEAN DEFAULT FALSE"
+            )
+        )
 
 
 async def reiniciar_pool_se_preciso():

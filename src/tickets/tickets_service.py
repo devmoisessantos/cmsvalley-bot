@@ -170,32 +170,73 @@ async def assumir_ticket(
     ticket: Ticket,
     staff: discord.Member,
     canal: discord.TextChannel,
-) -> Ticket:
-    """Marca o ticket como assumido e renomeia o canal com o username do staff."""
-    username_staff = nome_usuario_discord(staff)
-    novo_nome = sanitizar_nome_canal(
-        f"{ticket.categoria_rotulo[:20]}・{username_staff}"
-    )
+) -> tuple[Ticket, str]:
+    """
+    Marca o ticket como assumido e renomeia o canal.
 
+    Nome final: `{emoji}・{username}` (ex.: 🙋・i.m.guxta)
+    Retorna (ticket, nome_aplicado).
+    """
+    username_staff = nome_usuario_discord(staff)
+    definicao = TICKETS_CATEGORIAS.get(ticket.categoria_chave) or {}
+    emoji = definicao.get("emoji") or "🎫"
+    # Discord aceita unicode no nome; mantém pontos do username
+    novo_nome = f"{emoji}・{username_staff}"[:100]
+
+    nome_aplicado = novo_nome
     try:
-        await canal.edit(
+        canal_editado = await canal.edit(
             name=novo_nome,
             reason=f"Ticket assumido por {username_staff}",
         )
-    except discord.HTTPException:
-        pass
+        nome_aplicado = canal_editado.name
+    except discord.HTTPException as erro:
+        print(f"⚠️ Falha ao renomear canal do ticket: {erro}")
 
     async with async_session() as sessao:
         ticket_db = await sessao.get(Ticket, ticket.id)
         if ticket_db is None:
-            return ticket
+            return ticket, nome_aplicado
         ticket_db.status = "assumido"
         ticket_db.staff_assumiu_id = staff.id
         ticket_db.staff_assumiu_nome = username_staff
         ticket_db.assumido_em = agora()
         await sessao.commit()
         await sessao.refresh(ticket_db)
+        return ticket_db, nome_aplicado
+
+
+async def marcar_ticket_saudado(ticket_id: int) -> Ticket | None:
+    """Marca que a saudação inicial já foi enviada neste ticket."""
+    async with async_session() as sessao:
+        ticket_db = await sessao.get(Ticket, ticket_id)
+        if ticket_db is None:
+            return None
+        ticket_db.saudado = True
+        await sessao.commit()
+        await sessao.refresh(ticket_db)
         return ticket_db
+
+
+def listar_membros_com_acesso_extra(
+    canal: discord.TextChannel,
+    autor_discord_id: int,
+) -> list[discord.Member]:
+    """
+    Membros com overwrite explícito de ver o canal,
+    excluindo autor e bots (candidatos a 'remover do ticket').
+    """
+    lista: list[discord.Member] = []
+    for alvo, overwrite in canal.overwrites.items():
+        if not isinstance(alvo, discord.Member):
+            continue
+        if alvo.id == autor_discord_id:
+            continue
+        if alvo.bot:
+            continue
+        if overwrite.view_channel is True:
+            lista.append(alvo)
+    return lista
 
 
 async def finalizar_ticket(
@@ -379,7 +420,7 @@ async def transferir_atendimento(
     ticket: Ticket,
     novo_staff: discord.Member,
     canal: discord.TextChannel,
-) -> Ticket:
+) -> tuple[Ticket, str]:
     """Transfere o atendimento para outro staff e renomeia o canal."""
     return await assumir_ticket(ticket, novo_staff, canal)
 

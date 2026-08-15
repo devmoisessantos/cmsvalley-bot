@@ -95,25 +95,26 @@ class LogTicketFinalizadoView(discord.ui.LayoutView):
         texto = (
             f"# 🔐 Ticket Finalizado com Sucesso\n"
             f"\n"
-            f"> ## ℹ️ __Informações do Ticket__\n"
+            f"> ℹ️ __Informações do Ticket__\n"
             f"\n"
-            f"- **`👮` Staff que Finalizou:** "
+            f"- **`👮` Responsável por Finalizar:** "
             f"[{staff.mention} / `{staff.id}` / `{staff_username}`]\n"
             f"- **`❓` Categoria:** `{ticket.categoria_rotulo}`\n"
             f"- **`⏰` Horário Finalizado:** `{horario}`\n"
             f"\n"
-            f"> ## 🗂️ __Detalhes do Ticket__\n"
+            f"> 🗂️ __Detalhes do Ticket__\n"
             f"\n"
             f"- **`📌` Canal:** `{nome_canal}`\n"
             f"- **`⏰` Aberto:** [`{aberto_ha}`]\n"
             f"- **`🔢` ID:** {ticket.id}\n"
             f"- **`🙋` Autor:** {autor_mention} "
             f"( `{ticket.autor_discord_id}` / `{autor_username}` )\n"
-            f"> ## ✏️ __Considerações Finais__\n"
+            f"\n"
+            f"> ✏️ __Considerações Finais__\n"
             f"\n"
             f"# {consideracoes_texto}\n"
-            f"**`🔐` __Senha para visualização do Transcript:__**\n"
-            f"`|| {senha} ||`"
+            f"> **`🔐` __Senha para visualização do Transcript:__**\n"
+            f"- ||`{senha}`||"
         )
 
         linha_botoes = discord.ui.ActionRow()
@@ -121,7 +122,7 @@ class LogTicketFinalizadoView(discord.ui.LayoutView):
             discord.ui.Button(
                 label="Acessar o transcript",
                 style=discord.ButtonStyle.secondary,
-                disabled=True,
+                disabled=False,
             )
         )
         linha_botoes.add_item(

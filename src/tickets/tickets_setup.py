@@ -5,7 +5,10 @@ from __future__ import annotations
 import discord
 from sqlalchemy import select
 
-from src.config import CANAIS, GUILD_ID
+from src.config import (
+    CANAIS,
+    GUILD_ID,
+)
 from src.database.connection import async_session
 from src.database.models import PainelPostado
 from src.tickets.tickets_panel import (
@@ -40,9 +43,7 @@ async def garantir_painel_ticket_suporte(
         canal_id = CANAIS.get("CANAL_ABRIR_SUPORTE_DUVIDAS") or 0
         canal = bot.get_channel(int(canal_id)) if canal_id else None
         if canal is None:
-            print(
-                "⚠️ Canal CANAL_ABRIR_SUPORTE_DUVIDAS não configurado/encontrado."
-            )
+            print("⚠️ Canal CANAL_ABRIR_SUPORTE_DUVIDAS não configurado/encontrado.")
             return
 
         guilda = await _resolver_guilda(bot, interacao)
@@ -79,9 +80,7 @@ async def garantir_painel_ticket_denuncias(
         canal_id = CANAIS.get("CANAL_ABRIR_TICKET_DENUNCIAS") or 0
         canal = bot.get_channel(int(canal_id)) if canal_id else None
         if canal is None:
-            print(
-                "⚠️ Canal CANAL_ABRIR_TICKET_DENUNCIAS não configurado/encontrado."
-            )
+            print("⚠️ Canal CANAL_ABRIR_TICKET_DENUNCIAS não configurado/encontrado.")
             return
 
         guilda = await _resolver_guilda(bot, interacao)

@@ -20,6 +20,8 @@ from src.tickets.tickets_service import (
     enviar_card_no_canal_ticket,
     finalizar_ticket,
     listar_categorias_ticket_na_guilda,
+    listar_membros_com_acesso_extra,
+    marcar_ticket_saudado,
     membro_eh_staff_ticket,
     montar_html_transcript,
     mover_canal_ticket,
@@ -107,6 +109,7 @@ class CardBotoesStaffView(discord.ui.LayoutView):
         staff_assumiu_id: int | None = None,
         staff_assumiu_label: str | None = None,
         call_ativa: bool = False,
+        saudado: bool = False,
     ) -> None:
         super().__init__(timeout=None)
 
@@ -215,14 +218,25 @@ class CardBotoesStaffView(discord.ui.LayoutView):
                     custom_id="ticket:assumir",
                 )
             )
-        linha_atendimento.add_item(
-            discord.ui.Button(
-                label="Saudar Atendimento",
-                emoji="👋",
-                style=discord.ButtonStyle.secondary,
-                custom_id="ticket:saudar",
+        if saudado:
+            linha_atendimento.add_item(
+                discord.ui.Button(
+                    label="Já saudado",
+                    emoji="👋",
+                    style=discord.ButtonStyle.secondary,
+                    custom_id="ticket:saudar",
+                    disabled=True,
+                )
             )
-        )
+        else:
+            linha_atendimento.add_item(
+                discord.ui.Button(
+                    label="Saudar Atendimento",
+                    emoji="👋",
+                    style=discord.ButtonStyle.secondary,
+                    custom_id="ticket:saudar",
+                )
+            )
         linha_atendimento.add_item(
             discord.ui.Button(
                 label="Transferir Atendimento",
@@ -285,6 +299,7 @@ async def atualizar_card_botoes_staff(
         staff_assumiu_id=ticket.staff_assumiu_id,
         staff_assumiu_label=label_assumido,
         call_ativa=bool(ticket.call_canal_id),
+        saudado=bool(getattr(ticket, "saudado", False)),
     )
     try:
         await mensagem.edit(view=view)
@@ -293,7 +308,7 @@ async def atualizar_card_botoes_staff(
 
 
 class ViewSelecionarMembro(discord.ui.LayoutView):
-    """Ephemeral: UserSelect para adicionar, remover, chamar ou transferir."""
+    """Ephemeral: seleção de membro (UserSelect / lista / busca por ID)."""
 
     def __init__(
         self,
@@ -301,37 +316,93 @@ class ViewSelecionarMembro(discord.ui.LayoutView):
         canal_id: int,
         ticket_id: int,
         autor_discord_id: int,
+        opcoes_remover: list[discord.SelectOption] | None = None,
     ) -> None:
-        super().__init__(timeout=120)
+        super().__init__(timeout=180)
         self.acao = acao
         self.canal_id = canal_id
         self.ticket_id = ticket_id
         self.autor_discord_id = autor_discord_id
 
         titulos = {
-            "adicionar": "Selecione o membro para **adicionar** ao ticket",
-            "remover": "Selecione o membro para **remover** do ticket",
-            "chamar": "Selecione o membro para **chamar** no canal",
-            "transferir": "Selecione o staff que vai **assumir** o atendimento",
+            "adicionar": (
+                "# 👥 Adicionar Membro ao Ticket\n"
+                "> Utilize o menu abaixo para selecionar o membro que fará "
+                "parte deste atendimento."
+            ),
+            "remover": (
+                "# ➖ Remover Membro do Ticket\n"
+                "> Selecione um membro que foi adicionado a este atendimento."
+            ),
+            "chamar": (
+                "# 📨 Chamar Membro\n"
+                "> ⚠️ *O membro será notificado via mensagem direta. "
+                "Caso as DMs estejam fechadas, um aviso será exibido.*"
+            ),
+            "transferir": (
+                "# 🔄 Transferir Atendimento\n"
+                "> Selecione o staff que vai assumir este ticket."
+            ),
         }
         texto = titulos.get(acao, "Selecione um membro")
 
-        seletor = discord.ui.UserSelect(
-            placeholder="Escolha um membro…",
-            min_values=1,
-            max_values=1,
-        )
-        seletor.callback = self._ao_selecionar
+        componentes: list = [discord.ui.TextDisplay(texto)]
 
-        linha = discord.ui.ActionRow()
-        linha.add_item(seletor)
+        if acao == "remover":
+            if not opcoes_remover:
+                componentes.append(
+                    discord.ui.TextDisplay(
+                        "Não há membros extras com acesso a este ticket."
+                    )
+                )
+            else:
+                seletor = discord.ui.Select(
+                    placeholder="Membros adicionados…",
+                    min_values=1,
+                    max_values=1,
+                    options=opcoes_remover[:25],
+                )
+                seletor.callback = self._ao_selecionar
+                linha = discord.ui.ActionRow()
+                linha.add_item(seletor)
+                componentes.append(linha)
+        else:
+            seletor = discord.ui.UserSelect(
+                placeholder="Escolha um membro…",
+                min_values=1,
+                max_values=1,
+            )
+            seletor.callback = self._ao_selecionar
+            linha = discord.ui.ActionRow()
+            linha.add_item(seletor)
+            componentes.append(linha)
+
+            if acao in ("adicionar", "chamar"):
+                linha_id = discord.ui.ActionRow()
+                botao_id = discord.ui.Button(
+                    label="Buscar por Discord ID",
+                    emoji="🔍",
+                    style=discord.ButtonStyle.secondary,
+                )
+                botao_id.callback = self._abrir_modal_id
+                linha_id.add_item(botao_id)
+                componentes.append(linha_id)
 
         container = discord.ui.Container(
-            discord.ui.TextDisplay(f"### {texto}"),
-            linha,
+            *componentes,
             accent_color=discord.Color.blurple(),
         )
         self.add_item(container)
+
+    async def _abrir_modal_id(self, interacao: discord.Interaction) -> None:
+        await interacao.response.send_modal(
+            ModalBuscarDiscordId(
+                acao=self.acao,
+                canal_id=self.canal_id,
+                ticket_id=self.ticket_id,
+                autor_discord_id=self.autor_discord_id,
+            )
+        )
 
     async def _ao_selecionar(self, interacao: discord.Interaction) -> None:
         valores = interacao.data.get("values") if interacao.data else None
@@ -342,141 +413,237 @@ class ViewSelecionarMembro(discord.ui.LayoutView):
                 linhas=["Nenhum membro foi selecionado."],
             )
             return
+        await _executar_acao_membro(
+            interacao=interacao,
+            acao=self.acao,
+            membro_id=int(valores[0]),
+            canal_id=self.canal_id,
+            autor_discord_id=self.autor_discord_id,
+        )
 
-        membro_id = int(valores[0])
-        guilda = interacao.guild
-        if guilda is None:
+
+class ModalBuscarDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
+    """Modal para informar o ID numérico do membro."""
+
+    discord_id = discord.ui.TextInput(
+        label="Discord ID",
+        style=discord.TextStyle.short,
+        placeholder="Ex.: 859100649366356000",
+        required=True,
+        max_length=25,
+    )
+
+    def __init__(
+        self,
+        acao: str,
+        canal_id: int,
+        ticket_id: int,
+        autor_discord_id: int,
+    ) -> None:
+        super().__init__()
+        self.acao = acao
+        self.canal_id = canal_id
+        self.ticket_id = ticket_id
+        self.autor_discord_id = autor_discord_id
+
+    async def on_submit(self, interacao: discord.Interaction) -> None:
+        texto = str(self.discord_id.value).strip()
+        if not texto.isdigit():
             await responder_erro(
                 interacao,
-                titulo="Erro",
-                linhas=["Guilda não encontrada."],
+                titulo="ID inválido",
+                linhas=["Informe apenas números do Discord ID."],
             )
             return
+        await _executar_acao_membro(
+            interacao=interacao,
+            acao=self.acao,
+            membro_id=int(texto),
+            canal_id=self.canal_id,
+            autor_discord_id=self.autor_discord_id,
+        )
 
-        membro_alvo = guilda.get_member(membro_id)
-        if membro_alvo is None:
-            try:
-                membro_alvo = await guilda.fetch_member(membro_id)
-            except discord.HTTPException:
-                membro_alvo = None
 
-        if membro_alvo is None:
-            await responder_erro(
-                interacao,
-                titulo="Membro não encontrado",
-                linhas=["Não foi possível localizar este membro no servidor."],
-            )
-            return
+async def _executar_acao_membro(
+    interacao: discord.Interaction,
+    acao: str,
+    membro_id: int,
+    canal_id: int,
+    autor_discord_id: int,
+) -> None:
+    """Executa adicionar / remover / chamar / transferir após escolher o membro."""
+    guilda = interacao.guild
+    if guilda is None:
+        await responder_erro(
+            interacao,
+            titulo="Erro",
+            linhas=["Guilda não encontrada."],
+        )
+        return
 
-        canal = guilda.get_channel(self.canal_id)
-        if not isinstance(canal, discord.TextChannel):
-            await responder_erro(
-                interacao,
-                titulo="Canal inválido",
-                linhas=["O canal do ticket não foi encontrado."],
-            )
-            return
+    membro_alvo = guilda.get_member(membro_id)
+    if membro_alvo is None:
+        try:
+            membro_alvo = await guilda.fetch_member(membro_id)
+        except discord.HTTPException:
+            membro_alvo = None
 
-        staff = interacao.user
-        if not isinstance(staff, discord.Member) or not membro_eh_staff_ticket(staff):
-            await responder_erro(
-                interacao,
-                titulo="Sem permissão",
-                linhas=["Apenas a equipe de tickets pode usar esta ação."],
-            )
-            return
+    if membro_alvo is None:
+        await responder_erro(
+            interacao,
+            titulo="Membro não encontrado",
+            linhas=["Não foi possível localizar este membro no servidor."],
+        )
+        return
 
-        if self.acao == "adicionar":
-            await adicionar_membro_ao_ticket(canal, membro_alvo)
+    canal = guilda.get_channel(canal_id)
+    if not isinstance(canal, discord.TextChannel):
+        await responder_erro(
+            interacao,
+            titulo="Canal inválido",
+            linhas=["O canal do ticket não foi encontrado."],
+        )
+        return
+
+    staff = interacao.user
+    if not isinstance(staff, discord.Member) or not membro_eh_staff_ticket(staff):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Apenas a equipe de tickets pode usar esta ação."],
+        )
+        return
+
+    if acao == "adicionar":
+        await adicionar_membro_ao_ticket(canal, membro_alvo)
+        if not interacao.response.is_done():
             await interacao.response.defer(ephemeral=True)
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="➕ Usuário Adicionado ao Ticket",
+            linhas=[
+                f"{membro_alvo.mention} foi adicionado ao ticket por {staff.mention}",
+            ],
+            cor=COR_SUCESSO,
+        )
+        return
+
+    if acao == "remover":
+        erro = await remover_membro_do_ticket(
+            canal,
+            membro_alvo,
+            autor_discord_id,
+        )
+        if erro:
+            await responder_erro(
+                interacao,
+                titulo="Não foi possível remover",
+                linhas=[erro],
+            )
+            return
+        if not interacao.response.is_done():
+            await interacao.response.defer(ephemeral=True)
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="➖ Usuário Removido do Ticket",
+            linhas=[
+                f"{membro_alvo.mention} foi removido do ticket por {staff.mention}.",
+            ],
+            cor=COR_INFO,
+        )
+        return
+
+    if acao == "chamar":
+        if not interacao.response.is_done():
+            await interacao.response.defer(ephemeral=True)
+
+        link_canal = canal.jump_url
+        nome_ticket = canal.name
+        username_alvo = nome_usuario_discord(membro_alvo)
+
+        enviou = await enviar_dm_card(
+            destino=membro_alvo,
+            titulo="📨 Membro Chamado",
+            linhas=[
+                "> Você está sendo chamado no ticket, clique abaixo para "
+                "retomar o atendimento.",
+                f"**👤 Membro:** `{username_alvo}`",
+                f"**📋 Ticket:** [ `{nome_ticket}` ]",
+                "**💬 Mensagem:**",
+                "> Por favor, compareça ao ticket acima para tratarmos "
+                "de um assunto importante.",
+            ],
+            cor=COR_DM_INFO,
+            botoes_link=[("Abrir ticket", link_canal)],
+            guilda=guilda,
+            registrar_log=False,
+        )
+
+        if enviou:
             await enviar_card_no_canal_ticket(
                 canal,
-                titulo="➕ Usuário Adicionado ao Ticket",
+                titulo="📨 Membro Chamado",
                 linhas=[
-                    f"{membro_alvo.mention} foi adicionado ao ticket por {staff.mention}",
+                    f"{membro_alvo.mention} foi notificado por DM por {staff.mention}.",
                 ],
                 cor=COR_SUCESSO,
             )
-            await interacao.followup.send(content="Membro adicionado.", ephemeral=True)
-            return
-
-        if self.acao == "remover":
-            erro = await remover_membro_do_ticket(
-                canal,
-                membro_alvo,
-                self.autor_discord_id,
-            )
-            if erro:
-                await responder_erro(
-                    interacao,
-                    titulo="Não foi possível remover",
-                    linhas=[erro],
-                )
-                return
-            await interacao.response.defer(ephemeral=True)
+        else:
             await enviar_card_no_canal_ticket(
                 canal,
-                titulo="➖ Usuário Removido do Ticket",
+                titulo="🔒 DMs Bloqueadas",
                 linhas=[
-                    f"{membro_alvo.mention} foi removido do ticket por {staff.mention}.",
+                    "> ⚠️ **Não foi possível notificar este membro.**",
+                    f"**👤 Membro:** {membro_alvo.mention}",
+                    "**❌ Motivo:** As mensagens diretas deste membro "
+                    "estão **fechadas/bloqueadas**.",
+                    "### 💡 O que fazer?",
+                    "- Tente contatá-lo por outro meio disponível",
+                    "- Solicite que ele habilite as DMs temporariamente",
+                    "- Utilize um canal alternativo de comunicação do servidor",
+                    "🔁 *Tente novamente após a liberação das DMs.*",
                 ],
                 cor=COR_INFO,
             )
-            await interacao.followup.send(content="Membro removido.", ephemeral=True)
-            return
+        return
 
-        if self.acao == "chamar":
-            await interacao.response.defer(ephemeral=True)
-            await enviar_card_no_canal_ticket(
-                canal,
-                titulo="👤 Usuário Chamado no Ticket",
+    if acao == "transferir":
+        if not membro_eh_staff_ticket(membro_alvo):
+            await responder_erro(
+                interacao,
+                titulo="Destino inválido",
                 linhas=[
-                    f"{membro_alvo.mention} foi chamado neste ticket por {staff.mention}.",
+                    "Só é possível transferir para quem tem cargo de "
+                    "equipe de tickets ou diretoria.",
                 ],
-                cor=COR_INFO,
-            )
-            await interacao.followup.send(
-                content="Membro chamado no canal.", ephemeral=True
             )
             return
 
-        if self.acao == "transferir":
-            if not membro_eh_staff_ticket(membro_alvo):
-                await responder_erro(
-                    interacao,
-                    titulo="Destino inválido",
-                    linhas=[
-                        "Só é possível transferir para quem tem cargo de "
-                        "equipe de tickets ou diretoria.",
-                    ],
-                )
-                return
+        ticket = await buscar_ticket_por_canal(canal.id)
+        if ticket is None:
+            await responder_erro(
+                interacao,
+                titulo="Ticket não encontrado",
+                linhas=["Não foi possível localizar este ticket."],
+            )
+            return
 
-            ticket = await buscar_ticket_por_canal(canal.id)
-            if ticket is None:
-                await responder_erro(
-                    interacao,
-                    titulo="Ticket não encontrado",
-                    linhas=["Não foi possível localizar este ticket."],
-                )
-                return
-
+        if not interacao.response.is_done():
             await interacao.response.defer(ephemeral=True)
-            ticket_atualizado = await transferir_atendimento(ticket, membro_alvo, canal)
-            await atualizar_card_botoes_staff(canal, ticket_atualizado)
-            await enviar_card_no_canal_ticket(
-                canal,
-                titulo="🔄 Atendimento Transferido",
-                linhas=[
-                    f"Atendimento transferido de {staff.mention} "
-                    f"para {membro_alvo.mention}.",
-                ],
-                cor=COR_SUCESSO,
-            )
-            await interacao.followup.send(
-                content="Atendimento transferido.", ephemeral=True
-            )
-            return
+        ticket_atualizado, _nome = await transferir_atendimento(
+            ticket, membro_alvo, canal
+        )
+        await atualizar_card_botoes_staff(canal, ticket_atualizado)
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="🔄 Atendimento Transferido",
+            linhas=[
+                f"Atendimento transferido de {staff.mention} "
+                f"para {membro_alvo.mention}.",
+            ],
+            cor=COR_SUCESSO,
+        )
+        return
 
 
 class ViewMoverCanal(discord.ui.LayoutView):
@@ -566,7 +733,6 @@ class ViewMoverCanal(discord.ui.LayoutView):
             ],
             cor=COR_INFO,
         )
-        await interacao.followup.send(content="Canal movido.", ephemeral=True)
 
 
 class ModalTrocarNome(discord.ui.Modal, title="Trocar nome do canal"):
@@ -626,7 +792,6 @@ class ModalTrocarNome(discord.ui.Modal, title="Trocar nome do canal"):
             ],
             cor=COR_INFO,
         )
-        await interacao.followup.send(content="Nome atualizado.", ephemeral=True)
 
 
 class ModalObservacaoInterna(discord.ui.Modal, title="Observação interna"):
@@ -682,7 +847,6 @@ class ModalObservacaoInterna(discord.ui.Modal, title="Observação interna"):
             ],
             cor=COR_INFO,
         )
-        await interacao.followup.send(content="Observação registrada.", ephemeral=True)
 
 
 CUSTOM_IDS_STAFF = {
@@ -770,6 +934,15 @@ async def processar_clique_botao_ticket(
         return
 
     if custom_id == "ticket:remover_membro":
+        membros_extra = listar_membros_com_acesso_extra(canal, ticket.autor_discord_id)
+        opcoes = [
+            discord.SelectOption(
+                label=nome_usuario_discord(m)[:100],
+                value=str(m.id),
+                description=f"ID {m.id}"[:100],
+            )
+            for m in membros_extra[:25]
+        ]
         await responder_view(
             interacao,
             view=ViewSelecionarMembro(
@@ -777,6 +950,7 @@ async def processar_clique_botao_ticket(
                 canal_id=canal.id,
                 ticket_id=ticket.id,
                 autor_discord_id=ticket.autor_discord_id,
+                opcoes_remover=opcoes,
             ),
             ephemeral=True,
         )
@@ -916,7 +1090,6 @@ async def _tratar_criar_call(
         ],
         cor=COR_SUCESSO,
     )
-    await interacao.followup.send(content="Call criada.", ephemeral=True)
 
 
 async def _tratar_encerrar_call(
@@ -946,7 +1119,6 @@ async def _tratar_encerrar_call(
         linhas=[f"Call de atendimento encerrada por {membro.mention}."],
         cor=COR_INFO,
     )
-    await interacao.followup.send(content="Call encerrada.", ephemeral=True)
 
 
 async def _tratar_assumir(
@@ -969,20 +1141,20 @@ async def _tratar_assumir(
             titulo="Já é seu",
             linhas=["Você já assumiu este atendimento."],
             cor=COR_INFO,
+            delay=10,
         )
         return
 
     await interacao.response.defer(ephemeral=True)
-    ticket_atualizado = await assumir_ticket(ticket, membro, canal)
+    ticket_atualizado, nome_aplicado = await assumir_ticket(ticket, membro, canal)
     await atualizar_card_botoes_staff(canal, ticket_atualizado)
 
-    username = nome_usuario_discord(membro)
     await enviar_card_no_canal_ticket(
         canal,
         titulo="🎫 Atendimento Assumido",
         linhas=[
             f"Assumido por {membro.mention} canal alterado para o novo nome: "
-            f"`🙋・{username}`",
+            f"`{nome_aplicado}`",
         ],
         cor=COR_SUCESSO,
     )
@@ -994,7 +1166,14 @@ async def _tratar_assumir(
         ],
         cor=COR_SUCESSO,
     )
-    await interacao.followup.send(content="Atendimento assumido.", ephemeral=True)
+    # Confirmação ephemeral curta (some sozinha)
+    await responder_card(
+        interacao,
+        titulo="Atendimento assumido",
+        linhas=["Os cards foram publicados no canal."],
+        cor=COR_SUCESSO,
+        delay=10,
+    )
 
 
 async def _tratar_saudar(
@@ -1003,6 +1182,16 @@ async def _tratar_saudar(
     membro: discord.Member,
     canal: discord.TextChannel,
 ) -> None:
+    if getattr(ticket, "saudado", False):
+        await responder_card(
+            interacao,
+            titulo="Já saudado",
+            linhas=["A saudação inicial já foi enviada neste ticket."],
+            cor=COR_INFO,
+            delay=10,
+        )
+        return
+
     await interacao.response.defer(ephemeral=True)
     await enviar_card_no_canal_ticket(
         canal,
@@ -1014,7 +1203,9 @@ async def _tratar_saudar(
         ],
         cor=COR_INFO,
     )
-    await interacao.followup.send(content="Saudação enviada.", ephemeral=True)
+    ticket_atualizado = await marcar_ticket_saudado(ticket.id)
+    if ticket_atualizado is not None:
+        await atualizar_card_botoes_staff(canal, ticket_atualizado)
 
 
 async def _tratar_finalizar(
