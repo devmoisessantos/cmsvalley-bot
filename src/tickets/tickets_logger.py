@@ -137,7 +137,7 @@ class LogTicketFinalizadoView(discord.ui.LayoutView):
         texto_info = (
             f"> ℹ️ **__Informações do Ticket__**\n"
             f"- **`👮` Responsável por Finalizar:** "
-            f"{staff.mention} / `**{staff.id}**` / `{staff_username}`\n"
+            f"{staff.mention} / **`{staff.id}`** / `{staff_username}`\n"
             f"- **`❓` Categoria:** `{ticket.categoria_rotulo}`\n"
             f"- **`⏰` Horário Finalizado:** `{horario}`\n\n"
             f"> 🗂️ **__Detalhes do Ticket__**\n"
@@ -145,7 +145,7 @@ class LogTicketFinalizadoView(discord.ui.LayoutView):
             f"- **`⏰` Aberto:** [`{aberto_ha}`]\n"
             f"- **`🔢` ID:** {ticket.id}\n"
             f"- **`🙋` Autor:** {autor_mention} "
-            f"( `**{ticket.autor_discord_id}**` / `{autor_username}` )\n\n"
+            f"( **`{ticket.autor_discord_id}`** / `{autor_username}` )\n\n"
             f"> ✏️ **__Considerações Finais__**\n"
             f"# {consideracoes_texto}\n"
             f"> **🔐 __Senha para visualização do Transcript:__**\n"
