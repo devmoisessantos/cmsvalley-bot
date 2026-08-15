@@ -1160,19 +1160,11 @@ async def _tratar_assumir(
         ],
         cor=COR_SUCESSO,
     )
-    await enviar_card_no_canal_ticket(
-        canal,
-        titulo="🎫 Atendimento Assumido",
-        linhas=[
-            f"Este atendimento foi assumido por {membro.mention}.",
-        ],
-        cor=COR_SUCESSO,
-    )
     # Confirmação ephemeral curta (some sozinha)
     await responder_card(
         interacao,
-        titulo="Atendimento assumido",
-        linhas=["Os cards foram publicados no canal."],
+        titulo="🎫 Atendimento Assumido",
+        linhas=[f"Este atendimento foi assumido por {membro.mention}."],
         cor=COR_SUCESSO,
         delay=10,
     )
@@ -1292,7 +1284,6 @@ def montar_dm_ticket_finalizado(
         )
     else:
         componentes.append(discord.ui.TextDisplay(f"{titulo}\n\n{texto_corpo}"))
-
     # Botões: transcript + senha + avaliar
     linha = _montar_linha_botoes_transcript(ticket)
 
@@ -1320,6 +1311,7 @@ def montar_dm_ticket_finalizado(
             )
         )
 
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(linha)
 
     view = discord.ui.LayoutView(timeout=None)

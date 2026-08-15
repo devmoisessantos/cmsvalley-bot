@@ -169,7 +169,7 @@ class LogTicketFinalizadoView(discord.ui.LayoutView):
             )
         else:
             componentes.append(discord.ui.TextDisplay(texto_info))
-
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(_montar_linha_botoes_transcript(ticket))
 
         container = discord.ui.Container(
