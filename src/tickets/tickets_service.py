@@ -682,130 +682,153 @@ def montar_html_transcript(
     nome_guilda = esc(guilda.name if guilda else "CMS Valley")
     icone = esc(url_icone_guilda())
 
+    # Visual alinhado ao modelo (cards cyan, tags, partículas)
     css = """
+@import url('https://fonts.googleapis.com/css2?family=Rock+Salt&display=swap');
 :root {
-  --bg: #1a1d23;
-  --card: #23262e;
-  --card-bot: #1e222b;
-  --text: #dce0e6;
-  --muted: #8b929c;
-  --cyan: #00d4ff;
-  --cyan-dim: rgba(0, 212, 255, 0.35);
-  --accent-bot: #7c6cf0;
-  --green: #3ba55d;
-  --orange: #f26522;
+  --bg: #36393f;
+  --card: #333;
+  --text: #dcddde;
+  --muted: #72767d;
+  --cyan: #00aff4;
+  --cyan-glow: rgba(0, 175, 244, 0.7);
+  --cyan-shadow: #00aff438;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; }
 body {
-  font-family: Whitney, "Segoe UI", system-ui, sans-serif;
-  background: var(--bg);
+  font-family: Whitney, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background-color: var(--bg);
   color: var(--text);
-  padding: 28px 16px 56px;
+  font-size: 17px;
+  padding: 20px;
+  overflow-y: auto;
   position: relative;
 }
 #particles-js {
-  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  z-index: -1; pointer-events: none;
 }
-.page { position: relative; z-index: 1; max-width: 860px; margin: 0 auto; }
-.header {
-  text-align: center; margin-bottom: 22px;
+.page { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; }
+.header, .footer { text-align: center; margin-bottom: 20px; }
+.header-box {
+  max-width: 71%; padding: 20px; margin: 0 auto;
+  display: flex; flex-direction: column; align-items: center;
 }
 .guild-avatar {
-  width: 72px; height: 72px; border-radius: 50%;
-  border: 2px solid var(--cyan);
-  box-shadow: 0 0 18px var(--cyan-dim);
+  border-radius: 50%; width: 80px; height: 80px; margin-bottom: 10px;
+  box-shadow: 0 0 15px var(--cyan-glow);
+  animation: border-glow 2s infinite;
 }
 .guild-name {
-  margin: 12px 0 4px; font-size: 1.35rem; font-weight: 700; color: #fff;
+  font-family: 'Rock Salt', cursive;
+  font-size: 1.5em; font-weight: 700; margin-top: 10px;
+  text-shadow: 0 0 15px var(--cyan-glow);
+  animation: text-glow 2s infinite;
+  color: #fff;
 }
-.channel-info { color: var(--muted); font-size: 0.95rem; }
+.channel-info { font-size: 1.2em; margin-top: 5px; color: #b0b0b0; }
 .ticket-meta {
-  background: var(--card);
-  border: 1px solid var(--cyan-dim);
-  border-radius: 12px;
-  padding: 14px 16px;
-  margin-bottom: 20px;
-  box-shadow: 0 0 0 1px rgba(0,212,255,0.08), 0 8px 24px rgba(0,0,0,.25);
-  font-size: 13.5px; color: #c5cad3;
+  background: #252729; border: 1px solid var(--cyan);
+  border-radius: 10px; padding: 14px 16px; margin: 0 auto 24px;
+  max-width: 70%; box-shadow: 6px 4px 3px 3px var(--cyan-shadow);
+  font-size: 14px; color: #c5c6c7; text-align: left;
 }
-.ticket-meta div { margin: 3px 0; }
+.ticket-meta div { margin: 4px 0; }
 .ticket-meta strong { color: #fff; }
-.chat { display: flex; flex-direction: column; gap: 14px; }
+.chat {
+  display: flex; flex-direction: column; gap: 0;
+  align-items: flex-start; width: 100%;
+}
 .msg-card {
-  background: var(--card);
-  border: 1px solid var(--cyan-dim);
-  border-radius: 14px;
-  padding: 14px 16px;
-  box-shadow: 0 0 12px rgba(0, 212, 255, 0.08), 0 6px 18px rgba(0,0,0,.2);
-  position: relative;
+  margin-bottom: 20px; padding: 20px; border-radius: 10px;
+  max-width: 70%; align-self: flex-start;
+  background-color: var(--card);
+  border: 1px solid var(--cyan);
+  box-shadow: 6px 4px 3px 3px var(--cyan-shadow);
 }
-.msg-card.bot {
-  background: var(--card-bot);
-  border-left: 3px solid var(--accent-bot);
-}
-.msg-card.staff { border-left: 3px solid var(--orange); }
-.msg-card.autor { border-left: 3px solid var(--green); }
+.msg-card.bot { background-color: #333; border: 1px solid var(--cyan); }
+.msg-card.staff { background-color: #333; border: 1px solid var(--cyan); }
+.msg-card.autor { background-color: #333; border: 1px solid var(--cyan); }
 .msg-top {
-  display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+  display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px;
 }
 .avatar {
   width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
-  border: 1px solid var(--cyan-dim);
+  border: 1px solid var(--cyan);
+  box-shadow: 2px 2px 3px 3px var(--cyan-shadow);
 }
-.meta-col { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-.author { font-weight: 700; color: #fff; }
-.timestamp { font-size: 0.75rem; color: var(--muted); }
-.tag {
-  font-size: 0.65rem; font-weight: 700; padding: 2px 7px;
-  border-radius: 4px; color: #fff; letter-spacing: 0.02em;
+.meta-col {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px;
 }
-.tag-bot { background: rgba(124, 108, 240, 0.85); }
-.tag-autor { background: rgba(59, 165, 93, 0.9); }
-.tag-staff { background: rgba(242, 101, 34, 0.9); }
-.content {
-  font-size: 0.92rem; line-height: 1.45; color: var(--text);
-  white-space: pre-wrap; overflow-wrap: anywhere;
+.author { font-weight: 700; color: var(--cyan); }
+.timestamp { margin-left: 5px; font-size: .8em; color: var(--muted); }
+.tag, .bot-tag, .autor-tag, .staff-tag {
+  font-size: 0.8em; padding: 2px 5px; border-radius: 3px;
+  color: #fff; display: inline;
 }
-.content .h1 { font-size: 1.2rem; font-weight: 700; margin: 4px 0 8px; color: #fff; }
-.content .h2 { font-size: 1.05rem; font-weight: 700; margin: 4px 0 6px; color: #fff; }
-.content .h3 { font-size: 0.98rem; font-weight: 600; margin: 4px 0; color: #e8eaed; }
+.tag-bot, .bot-tag { background-color: #02f2ff6e; }
+.tag-autor, .autor-tag { background-color: #18f30e78; }
+.tag-staff, .staff-tag { background-color: #ff4500; }
+.content, .content-message {
+  overflow-wrap: break-word; word-break: break-word;
+  width: auto; max-width: 100%; font-size: 14px; margin-top: 5px;
+  white-space: pre-wrap; color: var(--text);
+}
+.content .h1 { font-size: 1.5em; font-weight: 700; margin: 4px 0 8px; color: #fff; }
+.content .h2 { font-size: 1.25em; font-weight: 700; margin: 4px 0 6px; color: #fff; }
+.content .h3 { font-size: 1em; font-weight: 600; margin: 4px 0; color: #e8eaed; }
 .content .muted { color: var(--muted); font-size: 0.85rem; }
 .content code {
-  background: rgba(0,0,0,.35); padding: 1px 5px; border-radius: 4px;
+  background: #2F3136; padding: 1px 5px; border-radius: 4px;
   font-family: ui-monospace, monospace; font-size: 0.85em;
 }
 .content pre.code-block {
-  background: #15171c; border: 1px solid #2c313a; border-radius: 8px;
+  background: #2F3136; border: 1px solid #4f545c; border-radius: 8px;
   padding: 10px 12px; overflow-x: auto; white-space: pre-wrap;
   font-family: ui-monospace, monospace; font-size: 0.82rem; margin: 8px 0;
 }
 .attachments { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .attachments img {
   max-width: min(440px, 100%); border-radius: 10px; display: block;
-  border: 1px solid rgba(0,212,255,0.2);
+  border: 1px solid rgba(0,175,244,0.35);
 }
-.file-link { color: var(--cyan); text-decoration: none; font-size: 0.9rem; }
-.file-link:hover { text-decoration: underline; }
+.file-link {
+  display: inline-flex; align-items: center; padding: 5px 10px;
+  border: 1px solid #ddd; border-radius: 5px; text-decoration: none;
+  color: #333; background-color: #f9f9f9; margin-top: 10px;
+}
 .embed {
-  margin-top: 8px; border-left: 3px solid var(--cyan);
-  background: #1a1d24; border-radius: 6px; padding: 10px 12px; max-width: 520px;
+  border-radius: 10px; padding: 10px; margin-top: 10px;
+  background-color: #252729; border: 1px solid #4f545c;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15); max-width: 520px;
 }
-.embed-title { font-weight: 700; color: #fff; margin-bottom: 4px; }
-.embed-description { color: #c5cad3; font-size: 0.88rem; white-space: pre-wrap; }
-.btn-row {
-  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
+.embed-title { font-weight: 700; color: var(--cyan); }
+.embed-description {
+  margin-top: 5px; color: #c5c6c7; overflow-wrap: break-word;
+  font-size: 14px; white-space: pre-wrap;
 }
+.btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .btn-chip {
   background: #2a2f3a; border: 1px solid #3a4150; color: #cfd3db;
   border-radius: 6px; padding: 5px 10px; font-size: 0.75rem;
 }
-.footer {
-  text-align: center; margin-top: 28px; font-size: 12px; color: var(--muted);
+.footer { text-align: center; margin-top: 28px; font-size: 12px; color: #b0b0b0; }
+@keyframes text-glow {
+  0% { text-shadow: 0 0 15px var(--cyan-glow); }
+  50% { text-shadow: 0 0 30px rgba(0,175,244,0.9); }
+  100% { text-shadow: 0 0 15px var(--cyan-glow); }
 }
-@media (max-width: 640px) {
-  .msg-card { padding: 12px; }
+@keyframes border-glow {
+  0% { box-shadow: 0 0 15px var(--cyan-glow); }
+  50% { box-shadow: 0 0 30px rgba(0,175,244,0.9); }
+  100% { box-shadow: 0 0 15px var(--cyan-glow); }
+}
+@media (max-width: 700px) {
+  .msg-card { max-width: 100%; padding: 12px; }
+  .ticket-meta { max-width: 100%; }
   .attachments img { max-width: 100%; }
+  .tag, .bot-tag, .autor-tag, .staff-tag { font-size: 0.7em; padding: 1px 3px; }
 }
 """
 
@@ -821,12 +844,12 @@ body {
         "<body>",
         "<div id='particles-js'></div>",
         "<div class='page'>",
-        "<header class='header'>",
+        "<header class='header'><div class='header-box'>",
         f"<img class='guild-avatar' src='{icone}' alt=''>",
         f"<div class='guild-name'>{nome_guilda}</div>",
         f"<div class='channel-info'>Transcript · "
         f"{esc(ticket.categoria_rotulo or 'Ticket')} · #{ticket.id}</div>",
-        "</header>",
+        "</div></header>",
         "<section class='ticket-meta'>",
         f"<div><strong>Ticket:</strong> #{ticket.id}</div>",
         f"<div><strong>Categoria:</strong> {esc(ticket.categoria_rotulo or '—')}</div>",
@@ -861,13 +884,13 @@ body {
         tags_html: list[str] = []
         if autor.bot:
             classes.append("bot")
-            tags_html.append("<span class='tag tag-bot'>BOT</span>")
+            tags_html.append("<span class='bot-tag'>BOT</span>")
         if autor.id == ticket.autor_discord_id:
             classes.append("autor")
-            tags_html.append("<span class='tag tag-autor'>Autor</span>")
+            tags_html.append("<span class='autor-tag'>Autor</span>")
         if autor.id in ids_staff:
             classes.append("staff")
-            tags_html.append("<span class='tag tag-staff'>STAFF</span>")
+            tags_html.append("<span class='staff-tag'>STAFF</span>")
 
         texto_bruto = _texto_da_mensagem_discord(mensagem)
         rotulos_botoes: list[str] = []
@@ -972,15 +995,15 @@ body {
     config_particulas = {
         "particles": {
             "number": {"value": 55, "density": {"enable": True, "value_area": 900}},
-            "color": {"value": "#00d4ff"},
+            "color": {"value": "#00aff4"},
             "shape": {"type": "circle"},
-            "opacity": {"value": 0.35, "random": True},
+            "opacity": {"value": 0.4, "random": True},
             "size": {"value": 2.5, "random": True},
             "line_linked": {
                 "enable": True,
                 "distance": 140,
-                "color": "#00d4ff",
-                "opacity": 0.18,
+                "color": "#00aff4",
+                "opacity": 0.2,
                 "width": 1,
             },
             "move": {"enable": True, "speed": 1.1, "out_mode": "out"},
