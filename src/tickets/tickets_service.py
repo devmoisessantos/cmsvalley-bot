@@ -844,7 +844,19 @@ def montar_html_transcript(
         mapa_usuarios: dict[str, str],
         mapa_cargos: dict[str, tuple[str, str]],
     ) -> str:
-        """Escapes + menções (user/cargo) + emoji custom + markdown leve."""
+        """
+        Converte markdown Discord (o mesmo dos TextDisplay em tickets_views)
+        para HTML.
+
+        Suporta:
+        - # / ## / ### (títulos)
+        - -# (subtexto muted)
+        - **negrito** / __sublinhado__ / *itálico* / _itálico_
+        - ~~riscado~~ / ||spoiler||
+        - `código` / ```bloco```
+        - listas com - no início da linha
+        - menções user/cargo e emoji custom
+        """
         preparado = preparar_texto_com_mencoes(texto, mapa_usuarios, mapa_cargos)
         seguro = esc(preparado)
 
@@ -866,7 +878,6 @@ def montar_html_transcript(
             seguro,
         )
 
-        # Menção de usuário → @username azul
         def html_usuario(match) -> str:
             id_usuario = match.group(1)
             nome = mapa_usuarios.get(id_usuario) or "usuário"
@@ -874,7 +885,6 @@ def montar_html_transcript(
 
         seguro = modulo_re.sub(r"\{\{U:(\d+)\}\}", html_usuario, seguro)
 
-        # Menção de cargo → nome com a cor do cargo
         def html_cargo(match) -> str:
             id_cargo = match.group(1)
             dados_cargo = mapa_cargos.get(id_cargo)
@@ -889,23 +899,97 @@ def montar_html_transcript(
 
         seguro = modulo_re.sub(r"\{\{R:(\d+)\}\}", html_cargo, seguro)
 
-        # Markdown leve
+        # Blocos de código primeiro (não mexer no interior)
+        blocos_codigo: list[str] = []
+
+        def guardar_bloco(match) -> str:
+            indice = len(blocos_codigo)
+            blocos_codigo.append(f"<pre class='code-block'>{match.group(1)}</pre>")
+            return f"{{{{CODE{indice}}}}}"
+
         seguro = modulo_re.sub(
             r"```(?:\w+)?\n?(.*?)```",
-            r"<pre class='code-block'>\1</pre>",
+            guardar_bloco,
             seguro,
             flags=modulo_re.DOTALL,
         )
-        seguro = modulo_re.sub(r"`([^`]+)`", r"<code>\1</code>", seguro)
+
+        # Código inline
+        seguro = modulo_re.sub(r"`([^`\n]+)`", r"<code>\1</code>", seguro)
+
+        # Títulos e subtexto (ordem: -# → ### → ## → #)
+        seguro = modulo_re.sub(
+            r"(?m)^-#\s+(.+)$",
+            r"<div class='muted'>\1</div>",
+            seguro,
+        )
+        seguro = modulo_re.sub(
+            r"(?m)^###\s+(.+)$",
+            r"<div class='h3'>\1</div>",
+            seguro,
+        )
+        seguro = modulo_re.sub(
+            r"(?m)^##\s+(.+)$",
+            r"<div class='h2'>\1</div>",
+            seguro,
+        )
+        seguro = modulo_re.sub(
+            r"(?m)^#\s+(.+)$",
+            r"<div class='h1'>\1</div>",
+            seguro,
+        )
+
+        # Listas com hífen no início da linha (não confundir com -#)
+        seguro = modulo_re.sub(
+            r"(?m)^-\s+(.+)$",
+            r"<div class='list-item'>\1</div>",
+            seguro,
+        )
+
+        # Formatação inline (mais externo → interno)
+        # **__texto__** e __**texto**__
+        seguro = modulo_re.sub(
+            r"\*\*__(.+?)__\*\*",
+            r"<strong><u>\1</u></strong>",
+            seguro,
+        )
+        seguro = modulo_re.sub(
+            r"__\*\*(.+?)\*\*__",
+            r"<u><strong>\1</strong></u>",
+            seguro,
+        )
         seguro = modulo_re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", seguro)
         seguro = modulo_re.sub(r"__(.+?)__", r"<u>\1</u>", seguro)
-        seguro = modulo_re.sub(r"(?m)^#\s+(.+)$", r"<div class='h1'>\1</div>", seguro)
-        seguro = modulo_re.sub(r"(?m)^##\s+(.+)$", r"<div class='h2'>\1</div>", seguro)
-        seguro = modulo_re.sub(r"(?m)^###\s+(.+)$", r"<div class='h3'>\1</div>", seguro)
+        seguro = modulo_re.sub(r"~~(.+?)~~", r"<s>\1</s>", seguro)
         seguro = modulo_re.sub(
-            r"(?m)^-#\s+(.+)$", r"<div class='muted'>\1</div>", seguro
+            r"\|\|(.+?)\|\|",
+            r"<span class='spoiler'>\1</span>",
+            seguro,
         )
+        # Itálico: *texto* ou _texto_ (evitar confundir com **)
+        seguro = modulo_re.sub(
+            r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
+            r"<em>\1</em>",
+            seguro,
+        )
+        seguro = modulo_re.sub(
+            r"(?<![A-Za-z0-9_])_(?!_)(.+?)(?<!_)_(?![A-Za-z0-9_])",
+            r"<em>\1</em>",
+            seguro,
+        )
+
+        # Restaura blocos de código
+        for indice, bloco in enumerate(blocos_codigo):
+            seguro = seguro.replace(f"{{{{CODE{indice}}}}}", bloco)
+
+        # Quebras de linha (não quebrar dentro de tags de bloco já fechadas)
         seguro = seguro.replace("\n", "<br>")
+        # Limpa <br> logo após/antes de divs de título/lista
+        seguro = modulo_re.sub(r"<br>\s*(?=<div class='h[123]')", "", seguro)
+        seguro = modulo_re.sub(r"(</div>)<br>", r"\1", seguro)
+        seguro = modulo_re.sub(r"<br>\s*(?=<pre )", "", seguro)
+        seguro = modulo_re.sub(r"(</pre>)<br>", r"\1", seguro)
+
         return seguro
 
     def html_emoji_botao(emoji_obj) -> str:
@@ -1160,32 +1244,60 @@ body {
 .bot-tag { background-color: #02f2ff6e; }
 .autor-tag { background-color: #18f30e78; }
 .staff-tag { background-color: #ff4500; }
-.content-message, .content {
+.content-message, .content, .container-text-block {
   overflow-wrap: break-word; word-break: break-word;
   width: auto; max-width: 100%; font-size: 14px;
-  white-space: pre-wrap; color: var(--text);
+  white-space: normal; color: var(--text);
 }
-.content-message .h1, .content .h1 {
-  font-size: 1.5em; font-weight: 700; margin: 4px 0 8px; color: #fff;
+.h1 {
+  font-size: 1.5em; font-weight: 700; margin: 4px 0 10px; color: #fff;
+  line-height: 1.25;
 }
-.content-message .h2, .content .h2 {
-  font-size: 1.25em; font-weight: 700; margin: 4px 0 6px; color: #fff;
+.h2 {
+  font-size: 1.25em; font-weight: 700; margin: 4px 0 8px; color: #fff;
+  line-height: 1.3;
 }
-.content-message .h3, .content .h3 {
-  font-size: 1em; font-weight: 600; margin: 4px 0; color: #e8eaed;
+.h3 {
+  font-size: 1.05em; font-weight: 600; margin: 4px 0 6px; color: #e8eaed;
+  line-height: 1.35;
 }
-.content-message .muted, .content .muted {
-  color: var(--muted); font-size: 0.85rem;
+.muted {
+  color: var(--muted); font-size: 0.85rem; margin: 2px 0;
 }
-.content-message code, .content code {
+code {
   background: #1e1f22; padding: 1px 5px; border-radius: 4px;
   font-family: ui-monospace, monospace; font-size: 0.85em;
+  color: #dcddde;
 }
-.content-message pre.code-block, .content pre.code-block {
+pre.code-block {
   background: #1e1f22; border: 1px solid #4f545c; border-radius: 8px;
   padding: 10px 12px; overflow-x: auto; white-space: pre-wrap;
   font-family: ui-monospace, monospace; font-size: 0.82rem; margin: 8px 0;
+  color: #dcddde;
 }
+.list-item {
+  margin: 2px 0 2px 12px;
+  padding-left: 8px;
+  position: relative;
+}
+.list-item::before {
+  content: "•";
+  position: absolute;
+  left: -8px;
+  color: #b0b0b0;
+}
+.spoiler {
+  background: #202225;
+  color: transparent;
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.spoiler:hover { color: #dcddde; }
+strong { font-weight: 700; color: #fff; }
+u { text-decoration: underline; }
+em { font-style: italic; }
+s { text-decoration: line-through; opacity: 0.85; }
 .mention {
   color: #00aff4;
   background: rgba(0, 175, 244, 0.12);
