@@ -32,6 +32,7 @@ from src.tickets.tickets_service import (
     transferir_atendimento,
     trocar_nome_do_canal,
 )
+from src.utils.formatacao import para_horario_brasilia
 from src.utils.mensagens import (
     COR_INFO,
     COR_SUCESSO,
@@ -42,6 +43,7 @@ from src.utils.mensagens import (
 from src.utils.notificacao import (
     COR_INFO as COR_DM_INFO,
     enviar_dm_card,
+    enviar_dm_view,
 )
 
 
@@ -1225,6 +1227,73 @@ async def _tratar_finalizar(
     await interacao.response.send_modal(ModalFinalizarTicket(ticket_id=ticket.id))
 
 
+def montar_dm_ticket_finalizado(
+    ticket,
+    username_staff: str,
+    consideracoes: str,
+    guilda: discord.Guild | None,
+) -> discord.ui.LayoutView:
+    """
+    Card de DM para o autor quando o ticket é finalizado.
+
+    Inclui thumbnail do ícone do servidor quando disponível.
+    """
+    from src.config import TICKETS_CATEGORIAS
+
+    data_abertura = para_horario_brasilia(ticket.aberto_em)
+    if data_abertura is not None:
+        texto_abertura = data_abertura.strftime("%d/%m/%Y às %H:%M:%S")
+    else:
+        texto_abertura = "—"
+
+    definicao = TICKETS_CATEGORIAS.get(ticket.categoria_chave) or {}
+    emoji_categoria = definicao.get("emoji") or ""
+    rotulo = ticket.categoria_rotulo
+    senha = ticket.senha_transcript or "—"
+
+    texto_corpo = (
+        f"Seu Ticket de ID: [`{ticket.id}`]"
+        f"\n\n"
+        f"Categoria: `{emoji_categoria} {rotulo}`"
+        f"\n\n"
+        f"Que foi aberto dia **{texto_abertura}**"
+        f"\n\n"
+        f"**Acabou de ser Finalizado!**"
+        f"\n\n"
+        f"Responsável por Finalizar: `{username_staff}`"
+        f"\n\n"
+        f"> **✏️ __Considerações Finais:__**"
+        f"\n"
+        f"# - {consideracoes}"
+        f"\n\n"
+        f"> **🔐 __Senha para visualização do Transcript:__**"
+        f"\n"
+        f"# ||**`{senha}`**||"
+    )
+
+    componentes: list = []
+    url_icone = None
+    if guilda is not None and guilda.icon is not None:
+        url_icone = guilda.icon.url
+
+    titulo = "# Ticket Finalizado! 📋"
+    if url_icone:
+        componentes.append(
+            discord.ui.Section(
+                f"{titulo}\n\n{texto_corpo}",
+                accessory=discord.ui.Thumbnail(url_icone),
+            )
+        )
+    else:
+        componentes.append(discord.ui.TextDisplay(f"{titulo}\n\n{texto_corpo}"))
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(
+        discord.ui.Container(*componentes, accent_color=discord.Color.green())
+    )
+    return view
+
+
 class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
     """Coleta considerações finais antes de fechar."""
 
@@ -1345,18 +1414,22 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             autor_user = await interacao.client.fetch_user(
                 ticket_final.autor_discord_id
             )
-            await enviar_dm_card(
+            view_dm = montar_dm_ticket_finalizado(
+                ticket=ticket_final,
+                username_staff=username_staff,
+                consideracoes=texto_consideracoes,
+                guilda=interacao.guild,
+            )
+            await enviar_dm_view(
                 destino=autor_user,
-                titulo="🎫 Ticket Finalizado",
-                linhas=[
-                    f"Seu ticket **#{ticket_final.id}** "
-                    f"({ticket_final.categoria_rotulo}) foi finalizado.",
-                    f"Staff: {username_staff}",
-                    f"Considerações: {texto_consideracoes}",
-                    f"Senha do transcript: ||{ticket_final.senha_transcript}||",
-                    "O link de visualização será liberado na próxima fase.",
+                view=view_dm,
+                titulo_log="Ticket Finalizado (DM autor)",
+                linhas_resumo=[
+                    f"Ticket #{ticket_final.id}",
+                    ticket_final.categoria_rotulo,
                 ],
-                cor=COR_DM_INFO,
+                guilda=interacao.guild,
+                registrar_log=True,
             )
         except Exception:
             pass
