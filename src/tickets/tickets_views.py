@@ -32,6 +32,7 @@ from src.tickets.tickets_service import (
     transferir_atendimento,
     trocar_nome_do_canal,
 )
+from src.tickets.tickets_transcript_api import enviar_transcript_para_api
 from src.utils.formatacao import para_horario_brasilia
 from src.utils.mensagens import (
     COR_INFO,
@@ -1424,6 +1425,35 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             ticket_final, mensagens, interacao.guild
         )
 
+        # Obrigatório: publicar na API antes do log/DM (habilita botão Acessar)
+        print(
+            f"📤 [transcript] iniciando upload ticket=#{ticket_final.id} "
+            f"html_chars={len(html_transcript or '')}"
+        )
+        url_publica = await enviar_transcript_para_api(
+            ticket_final,
+            html_transcript,
+        )
+        if url_publica:
+            ticket_final.url_transcript = url_publica
+            print(f"✅ [transcript] url gravada: {url_publica}")
+        else:
+            print(
+                f"⚠️ [transcript] upload falhou no ticket #{ticket_final.id} "
+                "— botão Acessar permanecerá desativado"
+            )
+            try:
+                await interacao.followup.send(
+                    content=(
+                        "⚠️ Transcript **não** foi publicado na API. "
+                        "Confira `BACKUP_API_TOKEN` e "
+                        "`CMSVALLEY_API_URL` no ambiente do bot."
+                    ),
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
         if interacao.guild is not None:
             await apagar_call_do_ticket(interacao.guild, ticket_final)
 
@@ -1458,10 +1488,8 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
                 guilda=interacao.guild,
                 registrar_log=True,
             )
-        except Exception:
-            pass
-
-        _ = html_transcript
+        except Exception as erro_dm:
+            print(f"⚠️ [transcript] falha ao enviar DM do autor: {erro_dm}")
 
         await interacao.followup.send(
             content="Ticket finalizado. O canal será apagado em instantes.",
