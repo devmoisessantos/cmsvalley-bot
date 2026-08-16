@@ -737,6 +737,12 @@
 				align-self: flex-start;
 				box-shadow: rgba(0, 175, 244, 0.22) 6px 4px 3px
 					3px;
+				border: 1px solid rgb(0, 175, 244);
+				background-color: rgb(51, 51, 51);
+			}
+			.message.membro {
+				border: 1px solid rgb(0, 175, 244);
+				background-color: rgb(51, 51, 51);
 			}
 			.message.autor {
 				border: 1px solid rgb(0, 175, 244);
@@ -984,6 +990,36 @@ MEDIA QUERIES ============ */
 				.embed-container {
 					max-width: 100%;
 				}
+			}
+
+			.msg-link {
+				color: rgb(0, 175, 244);
+				text-decoration: underline;
+				word-break: break-all;
+			}
+			.attachments img,
+			.content-message img.emoji,
+			img.emoji {
+				max-width: 48px;
+				height: auto;
+				vertical-align: middle;
+			}
+			.attachments img:not(.emoji) {
+				max-width: min(440px, 100%);
+				border-radius: 10px;
+			}
+			pre.code-block {
+				background: #1e1f22;
+				border: 1px solid #4f545c;
+				border-radius: 8px;
+				padding: 10px 12px;
+				overflow-x: auto;
+				white-space: pre-wrap;
+				font-family: ui-monospace, monospace;
+				font-size: 0.82rem;
+				margin: 8px 0;
+				color: #dcddde;
+				display: block;
 			}
 		</style>
 	</head>

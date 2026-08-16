@@ -1383,7 +1383,7 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
 
         texto_consideracoes = str(self.consideracoes.value or "").strip() or None
         if not texto_consideracoes:
-            texto_consideracoes = "Atendimento Finalizado"
+            texto_consideracoes = "**Atendimento Finalizado**"
 
         await interacao.response.defer(ephemeral=True)
 
@@ -1395,9 +1395,9 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             titulo="🎫 Ticket Finalizado",
             linhas=[
                 f"Este ticket acaba de ser finalizado pelo responsavel "
-                f"{membro.mention} / `{username_staff}`!",
-                "Considerações Finais:",
-                texto_consideracoes,
+                f"{membro.mention} / `{username_staff}`!\n",
+                "## Considerações Finais:",
+                f"- {texto_consideracoes}",
             ],
             cor=COR_SUCESSO,
         )
@@ -1407,9 +1407,9 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             canal,
             titulo="🔒 Processando Finalização",
             linhas=[
-                "Este canal está passando por algumas etapas de segurança como:",
+                "Este canal está passando por algumas etapas de segurança como:\n",
                 "Compressão de imagens/vídeos.",
-                "Após essas validações o mesmo será deletado e o transcript "
+                "## Após essas validações o mesmo será deletado e o transcript "
                 "gerado com segurança!",
             ],
             cor=COR_INFO,

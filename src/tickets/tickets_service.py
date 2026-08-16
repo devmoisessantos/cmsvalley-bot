@@ -889,6 +889,17 @@ def montar_html_transcript(
         seguro = esc(preparado)
         seguro = seguro.replace("\x00HR\x00", "<hr class='container-divider'>")
 
+        # Links http(s) — ANTES de montar <img> de emoji/GIF
+        # (se rodar depois, o regex engole o src e quebra o GIF)
+        seguro = modulo_re.sub(
+            r"(?<![\"'=])(https?://[^\s<>\"']+)",
+            lambda m: (
+                f'<a href="{m.group(1)}" target="_blank" '
+                f'rel="noopener" class="msg-link">{m.group(1)}</a>'
+            ),
+            seguro,
+        )
+
         # Emoji custom Discord → <img>
         def html_emoji(match) -> str:
             animado = match.group(1) == "a"
@@ -897,8 +908,8 @@ def montar_html_transcript(
             extensao = "gif" if animado else "png"
             url = f"https://cdn.discordapp.com/emojis/{emoji_id}.{extensao}"
             return (
-                f"<img class='emoji' src='{esc(url)}' "
-                f"alt=':{esc(nome)}:' loading='lazy'>"
+                f'<img class="emoji" src="{esc(url)}" '
+                f'alt=":{esc(nome)}:" loading="lazy">'
             )
 
         seguro = modulo_re.sub(
@@ -970,13 +981,6 @@ def montar_html_transcript(
             guardar_bloco,
             seguro,
             flags=modulo_re.DOTALL,
-        )
-        seguro = modulo_re.sub(
-            r'(https?://[^\s<>"]+)',
-            lambda m: (
-                f"<a href='{m.group(0)}' target='_blank' rel='noopener' class='msg-link'>{m.group(0)}</a>"
-            ),
-            seguro,
         )
         # Código inline
         seguro = modulo_re.sub(r"`([^`\n]+)`", r"<code>\1</code>", seguro)
@@ -1514,6 +1518,9 @@ def montar_html_transcript(
         if eh_staff:
             classes_mensagem.append("staff")
             tags_html.append('<span class="staff-tag">STAFF</span>')
+        if not autor.bot and autor.id != ticket.autor_discord_id and not eh_staff:
+            classes_mensagem.append("membro")
+            tags_html.append('<span class="staff-tag">Membro</span>')
 
         partes_mensagens.append('<div class="message-container">')
         partes_mensagens.append(
