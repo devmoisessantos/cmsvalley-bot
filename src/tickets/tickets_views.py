@@ -1392,12 +1392,12 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
 
         await enviar_card_no_canal_ticket(
             canal,
-            titulo="🎫 Ticket Finalizado",
+            titulo="🎫 Ticket Finalizado com Sucesso",
             linhas=[
-                f"Este ticket acaba de ser finalizado pelo responsavel "
-                f"{membro.mention} / `{username_staff}`!\n",
-                "## Considerações Finais:",
+                f"**Responsável pela finalização:** {membro.mention} (`{username_staff}`)\n",
+                "## 📝 Considerações Finais",
                 f"- {texto_consideracoes}",
+                "\n*O ticket foi encerrado e será processado para arquivamento.*",
             ],
             cor=COR_SUCESSO,
         )
@@ -1405,12 +1405,17 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
         await asyncio.sleep(1)
         await enviar_card_no_canal_ticket(
             canal,
-            titulo="🔒 Processando Finalização",
+            titulo="🔄 Processando Finalização",
             linhas=[
-                "Este canal está passando por algumas etapas de segurança como:\n",
-                "Compressão de imagens/vídeos.",
-                "## Após essas validações o mesmo será deletado e o transcript "
-                "gerado com segurança!",
+                "### ⚙️ Etapas de Segurança em Andamento\n",
+                "📦 **Compactação de Mídia**",
+                "- Comprimindo imagens e vídeos...\n",
+                "🔒 **Validação de Dados**",
+                "- Verificando integridade dos arquivos anexados\n",
+                "- Removendo metadados sensíveis\n",
+                "## 📄 Geração do Transcript",
+                "*Após a conclusão das etapas acima, o transcript será gerado com segurança e o canal será deletado automaticamente.*\n",
+                "⏳ Aguarde enquanto processamos as últimas etapas...",
             ],
             cor=COR_INFO,
         )
