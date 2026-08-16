@@ -1,0 +1,3468 @@
+<!doctype html>
+<html>
+	<head>
+		<style>
+			@import url("https://fonts.googleapis.com/css?family=Montserrat:400,600,700|Work+Sans:300,400,700,900");
+			html,
+			body {
+				margin: 0px;
+				padding: 0px;
+				width: 100%;
+				height: 100%;
+			}
+			#containerFree {
+				user-select: none;
+				outline-width: 0px;
+				margin: 0px;
+				padding: 0px;
+				width: 100%;
+				height: 100vh;
+				min-height: 100vh;
+				display: flex;
+				-webkit-box-pack: center;
+				justify-content: center;
+				-webkit-box-align: center;
+				align-items: center;
+				position: relative;
+				overflow: hidden;
+				font-family: Montserrat !important;
+				background-size: cover !important;
+				background-position: center center !important;
+				background-repeat: no-repeat !important;
+			}
+			#inviteContainer {
+				display: flex;
+				overflow: hidden;
+				position: relative;
+				border-radius: 15px;
+				height: auto;
+			}
+			#inviteContainer .acceptContainer {
+				padding: 5%;
+				width: 100%;
+				margin-left: -100%;
+				overflow: hidden;
+				height: 0px;
+				opacity: 0;
+			}
+			#inviteContainer .acceptContainer.loadIn {
+				opacity: 1;
+				margin-left: 0px;
+				transition: 0.5s;
+			}
+			#inviteContainer .acceptContainer::before {
+				content: "";
+				box-shadow: rgba(40, 43, 48, 0.75) 0px 0px 0px
+					3000px inset;
+				filter: blur(10px);
+				position: absolute;
+				width: 150%;
+				height: 150%;
+				top: -50px;
+				left: -50px;
+				background-size: cover !important;
+			}
+			.tnds {
+				font-family: monospace;
+				text-align: center;
+				margin-top: 20px;
+				font-size: 15px;
+				color: rgb(8, 246, 255);
+				text-shadow: rgb(115, 115, 115) 0px 0px 10px;
+			}
+			.footer-text {
+				text-align: center;
+				margin-top: 20px;
+				font-size: 10px;
+				color: rgba(255, 255, 255, 0.52);
+			}
+			form {
+				position: relative;
+				text-align: center;
+				height: 100%;
+			}
+			form h1 {
+				margin: 0px 0px 15px;
+				font-weight: 700;
+				font-size: 20px;
+				color: rgb(255, 255, 255);
+				user-select: none;
+				opacity: 0;
+				left: -30px;
+				position: relative;
+				transition: 0.5s;
+				font-family: "Work Sans" !important;
+			}
+			form h1.loadIn {
+				left: 0px;
+				opacity: 1;
+			}
+			.formContainer {
+				display: block;
+				text-align: center;
+			}
+			.formContainer .formDiv {
+				margin-bottom: 30px;
+				left: -25px;
+				opacity: 0;
+				transition: 0.5s;
+				position: relative;
+			}
+			.formContainer .formDiv.loadIn {
+				opacity: 1;
+				left: 0px;
+			}
+			.formContainer .formDiv:last-child {
+				padding-top: 10px;
+				margin-bottom: 0px;
+			}
+			.formContainer p {
+				padding-bottom: 10px;
+				margin: 0px;
+				font-weight: 700;
+				color: rgb(170, 170, 170);
+				font-size: 10px;
+				user-select: none;
+			}
+			.formContainer input[type="password"],
+			.formContainer input[type="text"] {
+				margin: 0px auto;
+				display: inline-block;
+				background: transparent;
+				text-align: center;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+				padding: 20px 10px;
+				box-sizing: border-box;
+				color: rgb(255, 255, 255);
+				width: auto;
+				font-size: 200%;
+				line-height: 48px;
+				box-shadow: rgba(255, 255, 255, 0.15) 0px -1px
+					0px inset;
+			}
+			.formContainer input[type="password"]:focus,
+			.formContainer input[type="text"]:focus {
+				outline: none;
+				box-shadow: rgba(0, 242, 255, 0.5) 0px 0px 10px;
+			}
+			.logoContainer {
+				padding: 70px;
+				box-sizing: border-box;
+				z-index: 2;
+				position: relative;
+				overflow: hidden;
+				display: flex;
+				-webkit-box-align: center;
+				align-items: center;
+				-webkit-box-pack: center;
+				justify-content: center;
+				-webkit-box-orient: vertical;
+				-webkit-box-direction: normal;
+				flex-direction: column;
+				transform: scale(0, 0);
+			}
+			.logoContainer img {
+				width: 150px;
+				margin-bottom: -5px;
+				display: block;
+				position: relative;
+			}
+			.logoContainer img:first-child {
+				width: 150px;
+			}
+			.logoContainer .text {
+				padding: 25px 0px 10px;
+				margin-top: -70px;
+				opacity: 0;
+			}
+			.logoContainer .text.loadIn {
+				margin-top: 0px;
+				opacity: 1;
+				transition: 0.8s;
+			}
+			.logoContainer .logo {
+				position: relative;
+				top: -20px;
+				opacity: 0;
+			}
+			.logoContainer .logo.loadIn {
+				top: 0px;
+				opacity: 1;
+				transition: 0.8s;
+			}
+			.logoContainer::before {
+				content: "";
+				position: absolute;
+				top: -50px;
+				left: -50px;
+				width: 150%;
+				height: 150%;
+				background-size: cover !important;
+			}
+			.perdeuSenha {
+				color: rgb(170, 170, 170);
+				opacity: 0.8;
+				text-decoration: none;
+				font-weight: 700;
+				font-size: 10px;
+				margin-top: 15px;
+				display: block;
+				transition: 0.2s;
+			}
+			.perdeuSenha:hover {
+				opacity: 1;
+				color: rgb(255, 255, 255);
+			}
+			.formDiv input:focus {
+				outline: none;
+				box-shadow: rgb(0, 123, 255) 0px 0px 5px;
+			}
+			.desbloquear {
+				color: black;
+				display: block;
+				margin: 0px auto;
+				border-radius: 20px;
+				width: 70%;
+				height: 7vh;
+				animation: 1.5s ease 0s infinite normal none
+					running pulse;
+				box-shadow: rgb(57, 228, 215) 0px 0px 5px;
+				background: linear-gradient(
+						45deg,
+						rgb(0, 242, 255),
+						rgb(255, 255, 255),
+						rgb(3, 226, 255)
+					)
+					0% 0% / 400% 400%;
+				transition: background-position 0.5s;
+				cursor: pointer;
+			}
+			.desbloquear:hover {
+				transform: scale(1.05);
+				background-position: 100% 50%;
+			}
+			@keyframes pulse {
+				0% {
+					transform: scale(1);
+				}
+				50% {
+					transform: scale(1.05);
+				}
+				100% {
+					transform: scale(1);
+				}
+			}
+			#passwordContainer.error {
+				animation: 0.5s ease-in-out 0s 1 normal none
+					running shake;
+			}
+			#avisoSenha {
+				display: none;
+				color: rgb(220, 53, 69);
+				font-weight: bold;
+				margin-top: 10px;
+				text-align: center;
+			}
+			#avisoSenha i {
+				margin-right: 5px;
+			}
+			@keyframes shake {
+				0% {
+					transform: translateX(0px);
+				}
+				25% {
+					transform: translateX(-5px);
+					box-shadow: rgba(220, 53, 69, 0.8) 0px
+						0px 10px;
+				}
+				50% {
+					transform: translateX(5px);
+					box-shadow: rgba(220, 53, 69, 0.8) 0px
+						0px 10px;
+				}
+				75% {
+					transform: translateX(-5px);
+					box-shadow: rgba(220, 53, 69, 0.8) 0px
+						0px 10px;
+				}
+				100% {
+					transform: translateX(0px);
+				}
+			}
+			@media (max-width: 768px) {
+				.logoContainer {
+					display: none;
+				}
+				#inviteContainer {
+					width: auto;
+					height: auto;
+				}
+				#faq {
+					width: 90%;
+				}
+				.desbloquear {
+					width: 80%;
+				}
+				.formContainer input[type="password"],
+				.formContainer input[type="text"] {
+					width: 90%;
+				}
+				.logoContainer img {
+					max-width: 90px;
+				}
+			}
+
+			@import url("https://fonts.googleapis.com/css2?family=Rock+Salt&display=swap");
+			body {
+				font-family:
+					Whitney, "Helvetica Neue", Helvetica,
+					Arial, sans-serif;
+				background-color: rgb(54, 57, 63);
+				color: rgb(220, 221, 222);
+				font-size: 17px;
+				margin: 0px;
+				padding: 20px;
+				overflow-y: auto;
+			}
+			.header,
+			.footer {
+				text-align: center;
+				margin-bottom: 20px;
+			}
+			.header-box,
+			.footer-box {
+				max-width: 71%;
+				padding: 20px;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+			}
+			.guild-avatar {
+				border-radius: 50%;
+				width: 80px;
+				height: 80px;
+				margin-bottom: 10px;
+				box-shadow: rgba(0, 175, 244, 0.7) 0px 0px 15px;
+				animation: 2s ease 0s infinite normal none
+					running border-glow;
+			}
+			.guild-name {
+				font-family: "Rock Salt", cursive;
+				font-size: 1.5em;
+				font-weight: 700;
+				margin-top: 10px;
+				text-shadow: rgba(0, 175, 244, 0.7) 0px 0px 15px;
+				animation: 2s ease 0s infinite normal none
+					running text-glow;
+			}
+			.channel-info {
+				font-size: 1.2em;
+				margin-top: 5px;
+				color: rgb(176, 176, 176);
+			}
+			.author {
+				font-weight: 700;
+				color: rgb(0, 175, 244);
+			}
+			.author:hover {
+				background-color: rgb(79, 84, 92);
+				cursor: pointer;
+			}
+			.author-timestamp {
+				align-items: baseline;
+			}
+			.timestamp {
+				margin-right: 5px;
+				margin-left: 5px;
+				font-size: 0.8em;
+				color: rgb(114, 118, 125);
+			}
+			.contentnew {
+				display: none;
+				margin-top: 5px;
+				color: rgb(220, 221, 222);
+			}
+			.embed {
+				border-radius: 10px;
+				padding: 10px;
+				margin-top: 10px;
+				background-color: rgb(37, 39, 41);
+				border: 1px solid rgb(79, 84, 92);
+				box-shadow: rgba(0, 0, 0, 0.15) 0px 2px 6px;
+			}
+			.embed-author {
+				font-weight: 700;
+				color: rgb(0, 175, 244);
+			}
+			.embed-title {
+				font-weight: 700;
+				color: rgb(0, 175, 244);
+			}
+			.embed-description {
+				margin-top: 5px;
+				color: rgb(197, 198, 199);
+				overflow-wrap: break-word;
+				word-break: break-all;
+				width: auto;
+				max-width: 100%;
+				font-size: 14px;
+			}
+			.embed-field {
+				margin-top: 10px;
+			}
+			.embed-field-name {
+				font-weight: 700;
+				color: rgb(255, 255, 255);
+			}
+			.embed-field-value {
+				margin-top: 2px;
+				color: rgb(197, 198, 199);
+			}
+			.embed-thumbnail {
+				display: block;
+			}
+			.emoji-placeholder {
+				background-color: rgb(47, 49, 54);
+				color: rgb(255, 9, 9);
+				border-radius: 4px;
+				line-height: 28px;
+			}
+			.emoji {
+				max-width: 28px;
+				height: auto;
+				vertical-align: middle;
+			}
+			.animated-emoji {
+				image-rendering: auto;
+			}
+			.embed-thumbnail.small {
+				width: 80px;
+				height: 80px;
+				float: right;
+			}
+			.embed-thumbnail.large {
+				margin: 0px 0px 10px 10px;
+				float: right;
+				width: auto;
+				height: auto;
+				max-width: 100%;
+			}
+			.sticker {
+				max-width: 150px;
+				height: auto;
+				display: block;
+			}
+			.embed-footer {
+				margin-top: 10px;
+				font-size: 0.8em;
+				color: rgb(176, 176, 176);
+			}
+			.embed-image {
+				margin-top: 10px;
+				max-width: 100%;
+				border-radius: 5px;
+			}
+			.role {
+				color: rgb(255, 255, 255);
+				text-decoration: none;
+				padding: 2px 5px;
+				border-radius: 3px;
+				transition: background-color 0.2s;
+				box-shadow: rgba(0, 0, 0, 0.1) 0px 1px 2px;
+			}
+			.pdf-preview {
+				border: 1px solid rgb(221, 221, 221);
+				border-radius: 5px;
+				padding: 10px;
+				background-color: rgb(249, 249, 249);
+				margin-bottom: 10px;
+			}
+			.pdf-embed {
+				width: 100%;
+				height: 400px;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+			}
+			.video-embed {
+				width: 100%;
+				height: 400px;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+				margin-bottom: 10px;
+			}
+			.video-link {
+				display: inline-block;
+				margin: 10px 0px;
+				padding: 10px;
+				background-color: rgb(111, 228, 255);
+				border-radius: 5px;
+				text-decoration: none;
+				color: rgb(51, 51, 51);
+				font-weight: bold;
+			}
+			.video-link:hover {
+				background-color: rgb(224, 224, 224);
+			}
+			.file-link {
+				display: inline-flex;
+				align-items: center;
+				padding: 5px 10px;
+				border: 1px solid rgb(221, 221, 221);
+				border-radius: 5px;
+				text-decoration: none;
+				color: rgb(51, 51, 51);
+				background-color: rgb(249, 249, 249);
+				transition: background-color 0.2s;
+				margin-top: 10px;
+			}
+			.file-link:hover {
+				background-color: rgb(240, 240, 240);
+			}
+			.file-link i {
+				margin-right: 5px;
+				font-size: 1.2em;
+			}
+			.channel {
+				color: rgb(0, 175, 244);
+				text-decoration: none;
+				padding: 2px 5px;
+				border-radius: 5px;
+				font-weight: 500;
+				transition: background-color 0.2s;
+			}
+			.channel:hover {
+				background-color: rgb(79, 84, 92);
+				cursor: pointer;
+			}
+			.list-item {
+				margin-left: 20px;
+				list-style-type: disc;
+			}
+			.message-container {
+				display: flex;
+				align-items: flex-start;
+				margin-bottom: 20px;
+				width: 100%;
+			}
+			.avatar {
+				border: 1px solid rgb(0, 175, 244);
+				box-shadow: rgba(0, 175, 244, 0.22) 2px 2px 3px
+					3px;
+				width: 40px;
+				height: 40px;
+				border-radius: 50%;
+				margin-right: 10px;
+			}
+			.message-content {
+				flex-direction: column;
+				gap: 10px;
+				width: 100%;
+			}
+			.embed-container {
+				align-self: flex-start;
+			}
+			.message.autor {
+				border: 1px solid rgb(0, 175, 244);
+				background-color: rgb(51, 51, 51);
+			}
+			.message.bot {
+				border: 1px solid rgb(0, 175, 244);
+				background-color: rgb(51, 51, 51);
+			}
+			.message.staff {
+				border: 1px solid rgb(0, 175, 244);
+				background-color: rgb(51, 51, 51);
+				align-self: flex-end;
+				text-align: left;
+				padding: 10px;
+				margin-bottom: 10px;
+			}
+			.staff-tag {
+				background-color: rgb(255, 69, 0);
+				color: rgb(255, 255, 255);
+				padding: 2px 5px;
+				border-radius: 3px;
+				font-size: 0.8em;
+				display: inline;
+			}
+			.autor-tag {
+				background-color: rgba(24, 243, 14, 0.47);
+				color: rgb(255, 255, 255);
+				padding: 2px 5px;
+				border-radius: 3px;
+				font-size: 0.8em;
+				display: inline;
+			}
+			.bot-tag {
+				background-color: rgba(2, 242, 255, 0.43);
+				color: rgb(255, 255, 255);
+				padding: 2px 5px;
+				border-radius: 3px;
+				font-size: 0.8em;
+				display: inline;
+			}
+			.h1 {
+				font-size: 1.5em;
+			}
+			.h2 {
+				font-size: 1.25em;
+			}
+			.h3 {
+				font-size: 1em;
+			}
+			.carregando {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				height: 100%;
+				width: 100%;
+				position: fixed;
+				top: 0px;
+				left: 0px;
+				z-index: 9999;
+			}
+			.carregando i {
+				font-size: 48px;
+				color: rgb(0, 175, 244);
+				margin-bottom: 20px;
+			}
+			.carregando-text {
+				font-size: 24px;
+				font-weight: bold;
+				color: rgb(0, 175, 244);
+			}
+			.content-message {
+				overflow-wrap: break-word;
+				word-break: break-all;
+				width: auto;
+				max-width: 100%;
+				font-size: 14px;
+				margin-top: 5px;
+				white-space: pre-wrap;
+				color: rgb(220, 221, 222);
+			}
+			.message {
+				margin-bottom: 20px;
+				padding: 20px;
+				border-radius: 10px;
+				max-width: 70%;
+				align-self: flex-start;
+				box-shadow: rgba(0, 175, 244, 0.22) 6px 4px 3px
+					3px;
+			}
+			.futuristic-bg {
+				background: linear-gradient(
+						45deg,
+						rgb(15, 15, 15),
+						rgb(26, 26, 26),
+						rgb(31, 31, 31),
+						rgb(42, 42, 42)
+					)
+					0% 0% / 400% 400%;
+				animation: 10s ease 0s infinite normal none
+					running gradient;
+			}
+			.spoiler {
+				background-color: rgb(47, 49, 54);
+				color: transparent;
+				cursor: pointer;
+			}
+			.spoiler:hover {
+				color: white;
+			}
+			.tnds {
+				font-family: monospace;
+				text-align: center;
+				margin-top: 20px;
+				font-size: 15px;
+				color: rgb(125, 125, 125);
+				text-shadow: rgb(115, 115, 115) 0px 0px 10px;
+			}
+			.modal {
+				display: none;
+				position: fixed;
+				z-index: 1;
+				padding-top: 100px;
+				left: 0px;
+				top: 0px;
+				width: 100%;
+				height: 100%;
+				overflow: auto;
+				background-color: rgba(0, 0, 0, 0.9);
+			}
+			.modal-content {
+				border-radius: 15px;
+				margin: auto;
+				display: block;
+				width: 80%;
+				max-width: 50vh;
+			}
+			.modal-content,
+			#caption {
+				animation-name: zoom;
+				animation-duration: 0.6s;
+			}
+			.close {
+				position: absolute;
+				top: 15px;
+				right: 35px;
+				color: rgb(241, 241, 241);
+				font-size: 40px;
+				font-weight: bold;
+				transition: 0.3s;
+			}
+			.close:hover,
+			.close:focus {
+				color: rgb(187, 187, 187);
+				text-decoration: none;
+				cursor: pointer;
+			}
+			#caption {
+				margin: auto;
+				display: block;
+				width: 80%;
+				max-width: 700px;
+				text-align: center;
+				color: rgb(204, 204, 204);
+				padding: 10px 0px;
+				height: 150px;
+			}
+			#particles-js {
+				position: fixed;
+				top: 0px;
+				left: 0px;
+				width: 100%;
+				height: 100%;
+				z-index: -1;
+			}
+			#myImg {
+				border-radius: 15px;
+				cursor: grab;
+				transition: 0.5s;
+			}
+			#myImg:hover {
+				opacity: 0.7;
+			}
+			@keyframes text-glow {
+				0% {
+					text-shadow: rgba(0, 175, 244, 0.7) 0px
+						0px 15px;
+				}
+				50% {
+					text-shadow: rgba(0, 175, 244, 0.9) 0px
+						0px 30px;
+				}
+				100% {
+					text-shadow: rgba(0, 175, 244, 0.7) 0px
+						0px 15px;
+				}
+			}
+			@keyframes border-glow {
+				0% {
+					box-shadow: rgba(0, 175, 244, 0.7) 0px
+						0px 15px;
+				}
+				50% {
+					box-shadow: rgba(0, 175, 244, 0.9) 0px
+						0px 30px;
+				}
+				100% {
+					box-shadow: rgba(0, 175, 244, 0.7) 0px
+						0px 15px;
+				}
+			}
+			@keyframes pulse {
+				0% {
+					transform: scale(1);
+				}
+				50% {
+					transform: scale(1.05);
+				}
+				100% {
+					transform: scale(1);
+				}
+			}
+			@keyframes gradient {
+				0% {
+					background-position: 0% 50%;
+				}
+				50% {
+					background-position: 100% 50%;
+				}
+				100% {
+					background-position: 0% 50%;
+				}
+			}
+			@-webkit-keyframes zoom {
+				0% {
+					transform: scale(0);
+				}
+				100% {
+					transform: scale(1);
+				}
+			}
+			@keyframes zoom {
+				0% {
+					transform: scale(0);
+				}
+				100% {
+					transform: scale(1);
+				}
+			}
+			@media only screen and (max-width: 700px) {
+				.bot-tag,
+				.bot-icon,
+				.autor-tag,
+				.autor-icon,
+				.staff-tag,
+				.staff-icon,
+				.author-timestamp,
+				.timestamp,
+				.message-self,
+				.message-staff,
+				.message-bot {
+					font-size: 0.7em !important;
+					padding: 1px 3px !important;
+				}
+				.modal-content {
+					width: 100%;
+				}
+				.message-container {
+					flex-direction: column;
+					align-items: flex-start;
+				}
+				.avatar {
+					margin-bottom: 10px;
+				}
+				.message,
+				.embed-container {
+					max-width: 100%;
+				}
+			}
+			.message-container-v2 {
+				background-color: rgb(47, 49, 54);
+				border-radius: 8px;
+				padding: 12px;
+				margin-top: 8px;
+				border-left: 4px solid rgb(88, 101, 242);
+			}
+			.container-text-block {
+				margin-bottom: 8px;
+				color: rgb(220, 221, 222);
+				font-size: 14px;
+			}
+			.small-text {
+				color: rgb(176, 176, 176);
+				font-size: 0.85rem;
+			}
+			.container-divider {
+				border: 0px;
+				height: 1px;
+				background-color: rgba(255, 255, 255, 0.1);
+				margin: 8px 0px;
+			}
+			.container-row {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 4px;
+				align-items: center;
+				margin-bottom: 8px;
+			}
+			.container-row:last-child {
+				margin-bottom: 0px;
+			}
+			.container-row-content {
+				flex-grow: 1;
+			}
+			.container-button {
+				display: inline-flex;
+				align-items: center;
+				padding: 8px 16px;
+				font-weight: 500;
+				font-size: 13px;
+				font-family: inherit;
+				cursor: default;
+				user-select: none;
+				margin: 2px;
+				border-radius: 4px;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+				color: rgb(255, 255, 255);
+				line-height: 1.25;
+			}
+			.button-emoji {
+				margin-right: 6px;
+				width: 20px;
+				height: 20px;
+				vertical-align: middle;
+				object-fit: contain;
+				display: inline-block;
+			}
+			span.button-emoji {
+				width: auto;
+				height: auto;
+				font-size: 15px;
+				line-height: 1;
+			}
+			.button-emoji img {
+				width: 100%;
+				height: 100%;
+				object-fit: contain;
+			}
+			.button-primary {
+				background-color: rgb(88, 101, 242);
+				color: rgb(255, 255, 255);
+			}
+			.button-secondary {
+				background-color: rgb(79, 84, 92);
+				color: rgb(255, 255, 255);
+			}
+			.button-success {
+				background-color: rgb(67, 181, 129);
+				color: rgb(255, 255, 255);
+			}
+			.button-danger {
+				background-color: rgb(240, 71, 71);
+				color: rgb(255, 255, 255);
+			}
+			.container-button.disabled,
+			.button-disabled {
+				opacity: 0.5;
+				cursor: not-allowed;
+				filter: grayscale(0.12);
+			}
+			.mention {
+				color: rgb(0, 175, 244);
+				background: rgba(0, 175, 244, 0.12);
+				border-radius: 3px;
+				padding: 0px 2px;
+				font-weight: 500;
+				cursor: default;
+				text-decoration: none;
+			}
+
+			.message-container-v2 {
+				background-color: rgb(47, 49, 54);
+				border-radius: 8px;
+				padding: 12px;
+				margin-top: 8px;
+				border-left: 4px solid rgb(88, 101, 242);
+			}
+			.container-text-block {
+				margin-bottom: 8px;
+				color: rgb(220, 221, 222);
+				font-size: 14px;
+			}
+			.small-text {
+				color: rgb(176, 176, 176);
+				font-size: 0.85rem;
+			}
+			.container-divider {
+				border: 0px;
+				height: 1px;
+				background-color: rgba(255, 255, 255, 0.1);
+				margin: 8px 0px;
+			}
+			.container-row {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 4px;
+				align-items: center;
+				margin-bottom: 8px;
+			}
+			.container-row:last-child {
+				margin-bottom: 0px;
+			}
+			.container-row-content {
+				flex-grow: 1;
+			}
+			.container-button {
+				display: inline-flex;
+				align-items: center;
+				padding: 8px 16px;
+				font-weight: 500;
+				font-size: 13px;
+				font-family: inherit;
+				cursor: default;
+				user-select: none;
+				margin: 2px;
+				border-radius: 4px;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+				color: rgb(255, 255, 255);
+				line-height: 1.25;
+			}
+			.button-emoji {
+				margin-right: 6px;
+				width: 20px;
+				height: 20px;
+				vertical-align: middle;
+				object-fit: contain;
+				display: inline-block;
+			}
+			span.button-emoji {
+				width: auto;
+				height: auto;
+				font-size: 15px;
+				line-height: 1;
+			}
+			.button-emoji img {
+				width: 100%;
+				height: 100%;
+				object-fit: contain;
+			}
+			.button-primary {
+				background-color: rgb(88, 101, 242);
+				color: rgb(255, 255, 255);
+			}
+			.button-secondary {
+				background-color: rgb(79, 84, 92);
+				color: rgb(255, 255, 255);
+			}
+			.button-success {
+				background-color: rgb(67, 181, 129);
+				color: rgb(255, 255, 255);
+			}
+			.button-danger {
+				background-color: rgb(240, 71, 71);
+				color: rgb(255, 255, 255);
+			}
+			.container-button.disabled,
+			.button-disabled {
+				opacity: 0.5;
+				cursor: not-allowed;
+				filter: grayscale(0.12);
+			}
+			.mention {
+				color: rgb(0, 175, 244);
+				background: rgba(0, 175, 244, 0.12);
+				border-radius: 3px;
+				padding: 0px 2px;
+				font-weight: 500;
+				cursor: default;
+				text-decoration: none;
+			}
+			.role {
+				color: rgb(153, 170, 181);
+				background: rgba(153, 170, 181, 0.15);
+				border-radius: 3px;
+				padding: 0px 4px;
+				font-weight: 500;
+				cursor: default;
+				text-decoration: none;
+			}
+			.emoji {
+				max-width: 22px;
+				height: auto;
+				vertical-align: middle;
+			}
+
+			.container-button {
+				display: inline-flex;
+				align-items: center;
+				padding: 8px 16px;
+				font-weight: 500;
+				font-size: 13px;
+				cursor: default;
+				margin: 2px;
+				border-radius: 4px;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+				color: rgb(255, 255, 255);
+				line-height: 1.25;
+			}
+			.button-emoji {
+				margin-right: 6px;
+				width: 20px;
+				height: 20px;
+				vertical-align: middle;
+				object-fit: contain;
+				display: inline-block;
+			}
+			span.button-emoji {
+				width: auto;
+				height: auto;
+				font-size: 15px;
+				line-height: 1;
+			}
+			.button-emoji img {
+				width: 100%;
+				height: 100%;
+				object-fit: contain;
+			}
+			.button-primary {
+				background-color: rgb(88, 101, 242);
+				color: rgb(255, 255, 255);
+			}
+			.button-secondary {
+				background-color: rgb(79, 84, 92);
+				color: rgb(255, 255, 255);
+			}
+			.button-success {
+				background-color: rgb(67, 181, 129);
+				color: rgb(255, 255, 255);
+			}
+			.button-danger {
+				background-color: rgb(240, 71, 71);
+				color: rgb(255, 255, 255);
+			}
+			.container-button.disabled,
+			.button-disabled {
+				opacity: 0.5;
+				cursor: not-allowed;
+			}
+
+			html,
+			body {
+				margin: 0px;
+				padding: 0px;
+				width: 100%;
+				height: 100%;
+				overflow-x: hidden;
+			}
+			.hidden-content {
+				display: none;
+			}
+			#contentUnlocked {
+				display: none;
+				position: relative;
+				z-index: 2;
+				min-height: 100vh;
+			}
+			#contentUnlocked.is-open {
+				display: block;
+			}
+			#frame-transcript {
+				width: 100%;
+				min-height: 100vh;
+				border: 0px;
+				background: transparent;
+			}
+			.footer-box span {
+				color: rgba(255, 255, 255, 0.52);
+				font-size: 10px;
+			}
+			.logoContainer img.logo-servidor {
+				width: 160px;
+				height: 160px;
+				max-height: 180px;
+				object-fit: contain;
+				border-radius: 50%;
+				border: 3px solid rgba(0, 242, 255, 0.55);
+				box-shadow: rgba(0, 242, 255, 0.45) 0px 0px 24px;
+				background: transparent;
+			}
+
+			#containerFree,
+			.acceptContainer::before,
+			#logoContainer::before,
+			.logoContainer::before {
+				background-attachment: fixed;
+				background-image: url("https://i.imgur.com/28mCEyg.jpg") !important;
+				background-position: center center !important;
+				background-repeat: no-repeat !important;
+				background-size: cover !important;
+			}
+			#containerFree {
+				margin: 0px !important;
+				padding: 0px !important;
+				width: 100% !important;
+				height: 100vh !important;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- ===== TELA DE BLOQUEIO ===== -->
+		<div id="containerFree" style="display: none">
+			<div id="inviteContainer">
+				<div
+					class="logoContainer"
+					style="transform: scale(1, 1)"
+				>
+					<img
+						class="logo logo-servidor loadIn"
+						src="assets/img/icon_animado_servidor.gif"
+						alt="CMS Valley"
+					/>
+				</div>
+
+				<div
+					class="acceptContainer loadIn"
+					style="height: 100%"
+				>
+					<form
+						action=""
+						method="post"
+						onsubmit="return false;"
+					>
+						<h1 class="loadIn">
+							<i
+								class="fas fa-lock"
+							></i>
+							Transcript bloqueado por
+							senha!
+						</h1>
+
+						<div id="faq">
+							<p class="tnds">
+								<u
+									><b
+										>Quem
+										possui
+										acesso?</b
+									></u
+								>
+							</p>
+							<ul
+								style="
+									text-align: center;
+									color: white;
+								"
+							>
+								- Responsável
+								por abrir o
+								ticket no
+								servidor.
+								<br />
+								- Staffs e
+								responsáveis
+								pelo
+								atendimento.
+							</ul>
+							<p class="tnds">
+								<u
+									><b
+										>Como
+										acesso
+										ele?</b
+									></u
+								>
+							</p>
+							<ul
+								style="
+									text-align: center;
+									color: white;
+								"
+							>
+								- Utilize a
+								senha recebida
+								com o
+								transcript.
+							</ul>
+						</div>
+
+						<br />
+
+						<div class="formContainer">
+							<div
+								class="formDiv loadIn"
+								style="
+									transition-delay: 0.2s;
+								"
+							>
+								<div
+									id="passwordContainer"
+								>
+									<input
+										type="password"
+										name="password"
+										id="password"
+										placeholder="Cole a senha aqui!"
+										required=""
+										autocomplete="off"
+									/>
+									<div
+										id="avisoSenha"
+										style="
+											display: none;
+										"
+									>
+										<i
+											class="fas fa-exclamation-triangle"
+										></i>
+										<span
+											id="avisoSenhaTexto"
+											>Senha
+											incorreta,
+											tente
+											novamente.</span
+										>
+									</div>
+								</div>
+								<a
+									style="
+										text-align: center;
+									"
+									class="perdeuSenha"
+									id="link-discord"
+									href="https://discord.com/channels/1325206480516808745/1486369093769760843"
+									target="_blank"
+									rel="noopener noreferrer"
+								>
+									Esqueceu
+									sua
+									senha?
+									Abra um
+									Ticket
+									no nosso
+									<u
+										>Discord</u
+									>!
+								</a>
+							</div>
+
+							<div
+								class="formDiv loadIn"
+								style="
+									transition-delay: 0.4s;
+								"
+							>
+								<button
+									class="desbloquear"
+									type="button"
+									id="btn-desbloquear"
+								>
+									<i
+										class="fas fa-unlock"
+									></i>
+									Desbloquear!
+								</button>
+							</div>
+						</div>
+
+						<div class="footer-text">
+							<div class="footer-box">
+								<span
+									>Centro
+									Médico
+									Sul
+									Valley ·
+									Tickets
+									· Feito
+									com ❤️
+									por
+									Guxta</span
+								>
+							</div>
+						</div>
+					</form>
+				</div>
+			</div>
+			<style>
+				#containerFree,
+				.acceptContainer:before,
+				#logoContainer:before,
+				.logoContainer:before {
+					background-image: url(https://i.imgur.com/28mCEyg.jpg) !important;
+					background-position: center center !important;
+					background-repeat: no-repeat !important;
+					background-size: cover !important;
+					background-attachment: fixed;
+				}
+				#containerFree {
+					margin: 0 !important;
+					padding: 0 !important;
+					width: 100% !important;
+					height: 100vh !important;
+				}
+			</style>
+		</div>
+
+		<!-- Fundo de partículas -->
+		<div
+			id="particles-js"
+			style="
+				position: fixed;
+				top: 0;
+				left: 0;
+				width: 100%;
+				height: 100%;
+				z-index: -1;
+			"
+		>
+			<canvas
+				class="particles-js-canvas-el"
+				style="width: 100%; height: 100%"
+				width="150"
+				height="1048"
+			></canvas>
+		</div>
+
+		<!-- ===== CONTEÚDO DESBLOQUEADO ===== -->
+		<div id="contentUnlocked" class="is-open">
+			<div
+				style="
+					position: fixed;
+					top: 12px;
+					right: 12px;
+					z-index: 50;
+				"
+			>
+				<button
+					type="button"
+					id="btn-bloquear-novamente"
+					class="desbloquear"
+					style="
+						width: auto;
+						height: auto;
+						padding: 8px 16px;
+						font-size: 13px;
+						animation: none;
+					"
+				>
+					<i class="fas fa-lock"></i> Bloquear
+					novamente
+				</button>
+			</div>
+			<iframe
+				id="frame-transcript"
+				title="Transcript"
+				sandbox="allow-same-origin allow-scripts"
+				srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang='pt-BR'&gt;
+&lt;head&gt;
+&lt;meta charset='utf-8'&gt;
+&lt;meta name='viewport' content='width=device-width, initial-scale=1'&gt;
+&lt;title&gt;Transcript #31 — Revogar Advertência&lt;/title&gt;
+&lt;style&gt;
+/* ============ IMPORTS ============ */
+			@import url(&quot;https://fonts.googleapis.com/css?family=Montserrat:400,600,700|Work+Sans:300,400,700,900&quot;);
+			@import url(&quot;https://fonts.googleapis.com/css2?family=Rock+Salt&amp;display=swap&quot;);
+			/* ============ KEYFRAMES ============ */
+			@keyframes border-glow {
+				0% {
+					box-shadow: rgba(0, 175, 244, 0.7) 0px
+						0px 15px;
+				}
+				50% {
+					box-shadow: rgba(0, 175, 244, 0.9) 0px
+						0px 30px;
+				}
+				100% {
+					box-shadow: rgba(0, 175, 244, 0.7) 0px
+						0px 15px;
+				}
+			}
+			@keyframes gradient {
+				0% {
+					background-position: 0% 50%;
+				}
+				50% {
+					background-position: 100% 50%;
+				}
+				100% {
+					background-position: 0% 50%;
+				}
+			}
+			@keyframes pulse {
+				0% {
+					transform: scale(1);
+				}
+				50% {
+					transform: scale(1.05);
+				}
+				100% {
+					transform: scale(1);
+				}
+			}
+			@keyframes shake {
+				0% {
+					transform: translateX(0px);
+				}
+				25% {
+					transform: translateX(-5px);
+					box-shadow: rgba(220, 53, 69, 0.8) 0px
+						0px 10px;
+				}
+				50% {
+					transform: translateX(5px);
+					box-shadow: rgba(220, 53, 69, 0.8) 0px
+						0px 10px;
+				}
+				75% {
+					transform: translateX(-5px);
+					box-shadow: rgba(220, 53, 69, 0.8) 0px
+						0px 10px;
+				}
+				100% {
+					transform: translateX(0px);
+				}
+			}
+			@keyframes text-glow {
+				0% {
+					text-shadow: rgba(0, 175, 244, 0.7) 0px
+						0px 15px;
+				}
+				50% {
+					text-shadow: rgba(0, 175, 244, 0.9) 0px
+						0px 30px;
+				}
+				100% {
+					text-shadow: rgba(0, 175, 244, 0.7) 0px
+						0px 15px;
+				}
+			}
+			@keyframes zoom {
+				0% {
+					transform: scale(0);
+				}
+				100% {
+					transform: scale(1);
+				}
+			}
+			@-webkit-keyframes zoom {
+				0% {
+					transform: scale(0);
+				}
+				100% {
+					transform: scale(1);
+				}
+			} /* ============ GLOBAL
+============ */
+			body {
+				font-family:
+					Whitney, &quot;Helvetica Neue&quot;, Helvetica,
+					Arial, sans-serif;
+				background-color: rgb(54, 57, 63);
+				color: rgb(220, 221, 222);
+				font-size: 17px;
+				margin: 0px;
+				padding: 20px;
+				overflow-y: auto;
+			}
+			.hidden-content {
+				display: none;
+			}
+			.h1 {
+				font-size: 1.5em;
+			}
+			.h2 {
+				font-size: 1.25em;
+			}
+			.h3 {
+				font-size: 1em;
+			} /* ============ IDS ============ */
+			#avisoSenha {
+				display: none;
+				color: rgb(220, 53, 69);
+				font-weight: bold;
+				margin-top: 10px;
+				text-align: center;
+			}
+			#avisoSenha i {
+				margin-right: 5px;
+			}
+			#caption {
+				margin: auto;
+				display: block;
+				width: 80%;
+				max-width: 700px;
+				text-align: center;
+				color: rgb(204, 204, 204);
+				padding: 10px 0px;
+				height: 150px;
+			}
+			#containerFree {
+				user-select: none;
+				outline-width: 0px;
+				height: 100vh;
+				display: flex;
+				-webkit-box-pack: center;
+				justify-content: center;
+				-webkit-box-align: center;
+				align-items: center;
+				font-family: Montserrat !important;
+				background-size: cover !important;
+			}
+			#containerFree,
+			.acceptContainer::before,
+			#logoContainer::before {
+				background: url(&quot;https://i.imgur.com/Zce0Nxi.jpeg&quot;)
+					center center fixed;
+			}
+			#inviteContainer {
+				display: flex;
+				overflow: hidden;
+				position: relative;
+				border-radius: 15px;
+				height: auto;
+			}
+			#inviteContainer .acceptContainer {
+				padding: 5%;
+				width: 100%;
+				margin-left: -100%;
+				overflow: hidden;
+				height: 0px;
+				opacity: 0;
+			}
+			#inviteContainer .acceptContainer.loadIn {
+				opacity: 1;
+				margin-left: 0px;
+				transition: 0.5s;
+			}
+			#inviteContainer .acceptContainer::before {
+				content: &quot;&quot;;
+				box-shadow: rgba(40, 43, 48, 0.75) 0px 0px 0px
+					3000px inset;
+				filter: blur(10px);
+				position: absolute;
+				width: 150%;
+				height: 150%;
+				top: -50px;
+				left: -50px;
+				background-size: cover !important;
+			}
+			#myImg {
+				border-radius: 15px;
+				cursor: grab;
+				transition: 0.5s;
+			}
+			#myImg:hover {
+				opacity: 0.7;
+			}
+			#particles-js {
+				position: fixed;
+				top: 0px;
+				left: 0px;
+				width: 100%;
+				height: 100%;
+				z-index: -1;
+			}
+			#passwordContainer.error {
+				animation: 0.5s ease-in-out 0s 1 normal none
+					running shake;
+			} /* ============ CLASSES - A ============ */
+			.acceptContainer.loadIn {
+				opacity: 1;
+				margin-left: 0px;
+				transition: 0.5s;
+			}
+			.animated-emoji {
+				image-rendering: auto;
+			}
+			.author {
+				font-weight: 700;
+				color: rgb(0, 175, 244);
+			}
+			.author:hover {
+				background-color: rgb(79, 84, 92);
+				cursor: pointer;
+			}
+			.author-timestamp {
+				align-items: baseline;
+			}
+			.autor-tag {
+				background-color: rgba(24, 243, 14, 0.47);
+				color: rgb(255, 255, 255);
+				padding: 2px 5px;
+				border-radius: 3px;
+				font-size: 0.8em;
+				display: inline;
+			}
+			.avatar {
+				border: 1px solid rgb(0, 175, 244);
+				box-shadow: rgba(0, 175, 244, 0.22) 2px 2px 3px
+					3px;
+				width: 40px;
+				height: 40px;
+				border-radius: 50%;
+				margin-right: 10px;
+			} /*
+============ CLASSES - B ============ */
+			.bot-tag {
+				background-color: rgba(2, 242, 255, 0.43);
+				color: rgb(255, 255, 255);
+				padding: 2px 5px;
+				border-radius: 3px;
+				font-size: 0.8em;
+				display: inline;
+			}
+			.button-disabled {
+				opacity: 0.5;
+				cursor: not-allowed;
+			}
+			.button-emoji {
+				margin-right: 6px;
+				width: 20px;
+				height: 20px;
+				vertical-align: middle;
+			}
+			.button-emoji img {
+				width: 100%;
+				height: 100%;
+				object-fit: contain;
+			}
+			.button-primary {
+				background-color: rgb(88, 101, 242);
+				color: white;
+			}
+			.button-secondary {
+				background-color: rgb(79, 84, 92);
+				color: white;
+			}
+			.button-success {
+				background-color: rgb(67, 181, 129);
+				color: white;
+			}
+			.button-danger {
+				background-color: rgb(240, 71, 71);
+				color: white;
+			} /*
+============ CLASSES - C ============ */
+			.carregando {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				height: 100%;
+				width: 100%;
+				position: fixed;
+				top: 0px;
+				left: 0px;
+				z-index: 9999;
+			}
+			.carregando i {
+				font-size: 48px;
+				color: rgb(0, 175, 244);
+				margin-bottom: 20px;
+			}
+			.carregando-text {
+				font-size: 24px;
+				font-weight: bold;
+				color: rgb(0, 175, 244);
+			}
+			.channel {
+				color: rgb(0, 175, 244);
+				text-decoration: none;
+				padding: 2px 5px;
+				border-radius: 5px;
+				font-weight: 500;
+				transition: background-color 0.2s;
+			}
+			.channel:hover {
+				background-color: rgb(79, 84, 92);
+				cursor: pointer;
+			}
+			.channel-info {
+				font-size: 1.2em;
+				margin-top: 5px;
+				color: rgb(176, 176, 176);
+			}
+			.close {
+				position: absolute;
+				top: 15px;
+				right: 35px;
+				color: rgb(241, 241, 241);
+				font-size: 40px;
+				font-weight: bold;
+				transition: 0.3s;
+			}
+			.close:hover,
+			.close:focus {
+				color: rgb(187, 187, 187);
+				text-decoration: none;
+				cursor: pointer;
+			}
+			code {
+				background: #1e1f22;
+				padding: 1px 5px;
+				border-radius: 4px;
+				font-family: ui-monospace, monospace;
+				font-size: 0.85em;
+				color: #dcddde;
+			}
+			.container-button {
+				display: inline-flex;
+				align-items: center;
+				padding: 8px 16px;
+				font-weight: 500;
+				cursor: pointer;
+				margin: 2px;
+			}
+			.container-divider {
+				border: 0px;
+				height: 1px;
+				background-color: rgba(255, 255, 255, 0.1);
+				margin: 8px 0px;
+			}
+			.container-row {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 4px;
+				align-items: center;
+				margin-bottom: 8px;
+			}
+			.container-row-content {
+				flex-grow: 1;
+			}
+			.container-text-block {
+				margin-bottom: 8px;
+			}
+			.content-message {
+				overflow-wrap: break-word; /* Permite quebrar palavras longas */
+				word-break: normal; /* Volta ao comportamento padrão */
+				word-wrap: break-word; /* Garante compatibilidade com navegadores antigos */
+				white-space: normal; /* Permite quebra de linha automática */
+
+				width: auto;
+				max-width: 100%;
+				font-size: 14px;
+				margin-top: 5px;
+				color: rgb(220, 221, 222);
+			}
+			.contentnew {
+				display: none;
+				margin-top: 5px;
+				color: rgb(220, 221, 222);
+			}
+			.custom-id-info {
+				font-size: 12px;
+				color: rgb(185, 187, 190);
+				margin-top: 4px;
+				font-style: italic;
+			} /* ============ CLASSES - D ============ */
+			.desbloquear {
+				color: black;
+				display: block;
+				margin: 0px auto;
+				border-radius: 20px;
+				width: 70%;
+				height: 7vh;
+				animation: 1.5s ease 0s infinite normal none
+					running pulse;
+				box-shadow: rgb(57, 228, 215) 0px 0px 5px;
+				background: linear-gradient(
+						45deg,
+						rgb(0, 242, 255),
+						rgb(255, 255, 255),
+						rgb(3, 226, 255)
+					)
+					0% 0% / 400% 400%;
+				transition: background-position 0.5s;
+				cursor: pointer;
+			}
+			.desbloquear:hover {
+				transform: scale(1.05);
+				background-position: 100% 50%;
+			} /* ============ CLASSES
+- E ============ */
+			.embed {
+				border-radius: 10px;
+				padding: 10px;
+				margin-top: 10px;
+				background-color: rgb(37, 39, 41);
+				border: 1px solid rgb(79, 84, 92);
+				box-shadow: rgba(0, 0, 0, 0.15) 0px 2px 6px;
+			}
+			.embed-author {
+				font-weight: 700;
+				color: rgb(0, 175, 244);
+			}
+			.embed-container {
+				align-self: flex-start;
+			}
+			.embed-description {
+				margin-top: 5px;
+				color: rgb(197, 198, 199);
+				overflow-wrap: break-word;
+				word-break: break-all;
+				width: auto;
+				max-width: 100%;
+				font-size: 14px;
+			}
+			.embed-field {
+				margin-top: 10px;
+			}
+			.embed-field-name {
+				font-weight: 700;
+				color: rgb(255, 255, 255);
+			}
+			.embed-field-value {
+				margin-top: 2px;
+				color: rgb(197, 198, 199);
+			}
+			.embed-footer {
+				margin-top: 10px;
+				font-size: 0.8em;
+				color: rgb(176, 176, 176);
+			}
+			.embed-image {
+				margin-top: 10px;
+				max-width: 100%;
+				border-radius: 5px;
+			}
+			.embed-thumbnail {
+				display: block;
+			}
+			.embed-thumbnail.small {
+				width: 80px;
+				height: 80px;
+				float: right;
+			}
+			.embed-thumbnail.large {
+				margin: 0px 0px 10px 10px;
+				float: right;
+				width: auto;
+				height: auto;
+				max-width: 100%;
+			}
+			.embed-title {
+				font-weight: 700;
+				color: rgb(0, 175, 244);
+			}
+			.emoji {
+				max-width: 28px;
+				height: auto;
+				vertical-align: middle;
+			}
+			.emoji-placeholder {
+				background-color: rgb(47, 49, 54);
+				color: rgb(255, 9, 9);
+				border-radius: 4px;
+				line-height: 28px;
+			} /* ============ CLASSES - F
+============ */
+			.file-link {
+				display: inline-flex;
+				align-items: center;
+				padding: 5px 10px;
+				border: 1px solid rgb(221, 221, 221);
+				border-radius: 5px;
+				text-decoration: none;
+				color: rgb(51, 51, 51);
+				background-color: rgb(249, 249, 249);
+				transition: background-color 0.2s;
+				margin-top: 10px;
+			}
+			.file-link:hover {
+				background-color: rgb(240, 240, 240);
+			}
+			.file-link i {
+				margin-right: 5px;
+				font-size: 1.2em;
+			}
+			.footer,
+			.header {
+				text-align: center;
+				margin-bottom: 20px;
+			}
+			.footer-box,
+			.header-box {
+				max-width: 71%;
+				padding: 20px;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+			}
+			.footer-text {
+				text-align: center;
+				margin-top: 20px;
+				font-size: 10px;
+				color: rgba(255, 255, 255, 0.52);
+			}
+			.formContainer {
+				display: block;
+				text-align: center;
+			}
+			.formContainer .formDiv {
+				margin-bottom: 30px;
+				left: -25px;
+				opacity: 0;
+				transition: 0.5s;
+				position: relative;
+			}
+			.formContainer .formDiv.loadIn {
+				opacity: 1;
+				left: 0px;
+			}
+			.formContainer .formDiv:last-child {
+				padding-top: 10px;
+				margin-bottom: 0px;
+			}
+			.formContainer p {
+				padding-bottom: 10px;
+				margin: 0px;
+				font-weight: 700;
+				color: rgb(170, 170, 170);
+				font-size: 10px;
+				user-select: none;
+			}
+			.formContainer input[type=&quot;password&quot;],
+			.formContainer input[type=&quot;text&quot;] {
+				margin: 0px auto;
+				display: inline-block;
+				background: transparent;
+				text-align: center;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+				padding: 20px 10px;
+				box-sizing: border-box;
+				color: rgb(255, 255, 255);
+				width: auto;
+				font-size: 200%;
+				line-height: 48px;
+				box-shadow: rgba(255, 255, 255, 0.15) 0px -1px
+					0px inset;
+			}
+			.formContainer input[type=&quot;password&quot;]:focus,
+			.formContainer input[type=&quot;text&quot;]:focus {
+				outline: none;
+				box-shadow: rgba(0, 242, 255, 0.5) 0px 0px 10px;
+			}
+			.formDiv input:focus {
+				outline: none;
+				box-shadow: rgb(0, 123, 255) 0px 0px 5px;
+			}
+			form {
+				position: relative;
+				text-align: center;
+				height: 100%;
+			}
+			form h1 {
+				margin: 0px 0px 15px;
+				font-weight: 700;
+				font-size: 20px;
+				color: rgb(255, 255, 255);
+				user-select: none;
+				opacity: 0;
+				left: -30px;
+				position: relative;
+				transition: 0.5s;
+				font-family: &quot;Work Sans&quot; !important;
+			}
+			form h1.loadIn {
+				left: 0px;
+				opacity: 1;
+			}
+			.futuristic-bg {
+				background: linear-gradient(
+						45deg,
+						rgb(15, 15, 15),
+						rgb(26, 26, 26),
+						rgb(31, 31, 31),
+						rgb(42, 42, 42)
+					)
+					0% 0% / 400% 400%;
+				animation: 10s ease 0s infinite normal none
+					running gradient;
+			} /* ============ CLASSES - G
+============ */
+			.guild-avatar {
+				border-radius: 50%;
+				width: 80px;
+				height: 80px;
+				margin-bottom: 10px;
+				box-shadow: rgba(0, 175, 244, 0.7) 0px 0px 15px;
+				animation: 2s ease 0s infinite normal none
+					running border-glow;
+			}
+			.guild-name {
+				font-family: &quot;Rock Salt&quot;, cursive;
+				font-size: 1.5em;
+				font-weight: 700;
+				margin-top: 10px;
+				text-shadow: rgba(0, 175, 244, 0.7) 0px 0px 15px;
+				animation: 2s ease 0s infinite normal none
+					running text-glow;
+			} /* ============ CLASSES - L
+============ */
+			.list-item {
+				margin-left: 20px;
+				list-style-type: disc;
+			}
+			.logoContainer {
+				padding: 70px;
+				box-sizing: border-box;
+				z-index: 2;
+				position: relative;
+				overflow: hidden;
+				display: flex;
+				-webkit-box-align: center;
+				align-items: center;
+				-webkit-box-pack: center;
+				justify-content: center;
+				-webkit-box-orient: vertical;
+				-webkit-box-direction: normal;
+				flex-direction: column;
+				transform: scale(0, 0);
+			}
+			.logoContainer img {
+				width: 150px;
+				margin-bottom: -5px;
+				display: block;
+				position: relative;
+			}
+			.logoContainer img:first-child {
+				width: 150px;
+			}
+			.logoContainer .logo {
+				position: relative;
+				top: -20px;
+				opacity: 0;
+			}
+			.logoContainer .logo.loadIn {
+				top: 0px;
+				opacity: 1;
+				transition: 0.8s;
+			}
+			.logoContainer .text {
+				padding: 25px 0px 10px;
+				margin-top: -70px;
+				opacity: 0;
+			}
+			.logoContainer .text.loadIn {
+				margin-top: 0px;
+				opacity: 1;
+				transition: 0.8s;
+			}
+			.logoContainer::before {
+				content: &quot;&quot;;
+				position: absolute;
+				top: -50px;
+				left: -50px;
+				width: 150%;
+				height: 150%;
+				background-size: cover !important;
+			} /* ============ CLASSES - M ============ */
+			.message {
+				margin-bottom: 20px;
+				padding: 20px;
+				border-radius: 10px;
+				max-width: 70%;
+				align-self: flex-start;
+				box-shadow: rgba(0, 175, 244, 0.22) 6px 4px 3px
+					3px;
+			}
+			.message.autor {
+				border: 1px solid rgb(0, 175, 244);
+				background-color: rgb(51, 51, 51);
+			}
+			.message.bot {
+				border: 1px solid rgb(0, 175, 244);
+				background-color: rgb(51, 51, 51);
+			}
+			.message.staff {
+				border: 1px solid rgb(0, 175, 244);
+				background-color: rgb(51, 51, 51);
+				align-self: flex-end;
+				text-align: left;
+				padding: 10px;
+				margin-bottom: 10px;
+			}
+			.message-container {
+				display: flex;
+				align-items: flex-start;
+				margin-bottom: 20px;
+				width: 100%;
+			}
+			.message-container-v2 {
+				background-color: rgb(47, 49, 54);
+				border-radius: 8px;
+				padding: 12px;
+				margin-top: 8px;
+				border-left: 4px solid rgb(88, 101, 242);
+			}
+			.message-content {
+				flex-direction: column;
+				gap: 10px;
+				width: 100%;
+			}
+			.modal {
+				display: none;
+				position: fixed;
+				z-index: 1;
+				padding-top: 100px;
+				left: 0px;
+				top: 0px;
+				width: 100%;
+				height: 100%;
+				overflow: auto;
+				background-color: rgba(0, 0, 0, 0.9);
+			}
+			.modal-content {
+				border-radius: 15px;
+				margin: auto;
+				display: block;
+				width: 80%;
+				max-width: 50vh;
+			}
+			.modal-content,
+			#caption {
+				animation-name: zoom;
+				animation-duration: 0.6s;
+			} /* ============ CLASSES - P ============ */
+			pre.code-block {
+				background: #1e1f22;
+				border: 1px solid #4f545c;
+				border-radius: 8px;
+				padding: 10px 12px;
+				overflow-x: auto;
+				white-space: pre-wrap;
+				font-family: ui-monospace, monospace;
+				font-size: 0.82rem;
+				margin: 8px 0;
+				color: #dcddde;
+			}
+			.pdf-preview {
+				border: 1px solid rgb(221, 221, 221);
+				border-radius: 5px;
+				padding: 10px;
+				background-color: rgb(249, 249, 249);
+				margin-bottom: 10px;
+			}
+			.pdf-embed {
+				width: 100%;
+				height: 400px;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+			}
+			.perdeuSenha {
+				color: rgb(170, 170, 170);
+				opacity: 0.8;
+				text-decoration: none;
+				font-weight: 700;
+				font-size: 10px;
+				margin-top: 15px;
+				display: block;
+				transition: 0.2s;
+			}
+			.perdeuSenha:hover {
+				opacity: 1;
+				color: rgb(255, 255, 255);
+			} /* ============
+CLASSES - R ============ */
+			.role {
+				color: rgb(255, 255, 255);
+				text-decoration: none;
+				padding: 2px 5px;
+				border-radius: 3px;
+				transition: background-color 0.2s;
+				box-shadow: rgba(0, 0, 0, 0.1) 0px 1px 2px;
+			} /* ============ CLASSES - S
+============ */
+			.spoiler {
+				background-color: rgb(47, 49, 54);
+				color: transparent;
+				cursor: pointer;
+			}
+			.spoiler:hover {
+				color: white;
+			}
+			.staff-tag {
+				background-color: rgb(255, 69, 0);
+				color: rgb(255, 255, 255);
+				padding: 2px 5px;
+				border-radius: 3px;
+				font-size: 0.8em;
+				display: inline;
+			}
+			.sticker {
+				max-width: 150px;
+				height: auto;
+				display: block;
+			} /* ============ CLASSES - T ============
+*/
+			.timestamp {
+				margin-right: 5px;
+				margin-left: 5px;
+				font-size: 0.8em;
+				color: rgb(114, 118, 125);
+			}
+			.tnds {
+				font-family: monospace;
+				text-align: center;
+				margin-top: 20px;
+				font-size: 15px;
+				color: rgb(8, 246, 255);
+				text-shadow: rgb(115, 115, 115) 0px 0px 10px;
+			}
+			.tooltip {
+				position: relative;
+				display: inline-block;
+			}
+			.tooltip .tooltiptext {
+				visibility: hidden;
+				width: 200px;
+				background-color: rgb(24, 25, 28);
+				color: rgb(255, 255, 255);
+				text-align: center;
+				border-radius: 4px;
+				padding: 8px;
+				position: absolute;
+				z-index: 1;
+				bottom: 125%;
+				left: 50%;
+				margin-left: -100px;
+				opacity: 0;
+				transition: opacity 0.3s;
+				font-size: 14px;
+				border: 1px solid rgb(79, 84, 92);
+			}
+			.tooltip:hover .tooltiptext {
+				visibility: visible;
+				opacity: 1;
+			} /* ============ CLASSES - V
+============ */
+			.video-embed {
+				width: 100%;
+				height: 400px;
+				border-width: medium;
+				border-style: none;
+				border-color: currentcolor;
+				border-image: none;
+				margin-bottom: 10px;
+			}
+			.video-link {
+				display: inline-block;
+				margin: 10px 0px;
+				padding: 10px;
+				background-color: rgb(111, 228, 255);
+				border-radius: 5px;
+				text-decoration: none;
+				color: rgb(51, 51, 51);
+				font-weight: bold;
+			}
+			.video-link:hover {
+				background-color: rgb(224, 224, 224);
+			} /* ============
+MEDIA QUERIES ============ */
+			@media (max-width: 768px) {
+				.logoContainer {
+					display: none;
+				}
+				#inviteContainer {
+					width: auto;
+					height: auto;
+				}
+				#faq {
+					width: 90%;
+				}
+				.desbloquear {
+					width: 80%;
+				}
+				.formContainer input[type=&quot;password&quot;],
+				.formContainer input[type=&quot;text&quot;] {
+					width: 90%;
+				}
+				.logoContainer img {
+					max-width: 90px;
+				}
+			}
+			@media only screen and (max-width: 700px) {
+				.bot-tag,
+				.bot-icon,
+				.autor-tag,
+				.autor-icon,
+				.staff-tag,
+				.staff-icon,
+				.author-timestamp,
+				.timestamp,
+				.message-self,
+				.message-staff,
+				.message-bot {
+					font-size: 0.7em !important;
+					padding: 1px 3px !important;
+				}
+				.modal-content {
+					width: 100%;
+				}
+				.message-container {
+					flex-direction: column;
+					align-items: flex-start;
+				}
+				.avatar {
+					margin-bottom: 10px;
+				}
+				.message,
+				.embed-container {
+					max-width: 100%;
+				}
+			}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id='particles-js'&gt;&lt;/div&gt;
+&lt;div class='page'&gt;
+&lt;header class='header'&gt;&lt;div class='header-box'&gt;
+&lt;img class='guild-avatar' src='https://cdn.discordapp.com/icons/1325206480516808745/a_8cc8c715e043afe123ef796679dd373f.gif?size=128' alt=''&gt;
+&lt;div class='guild-name'&gt;CENTRO MÉDICO SUL VALLEY&lt;/div&gt;
+&lt;div class='channel-info'&gt;Transcript · Revogar Advertência · #31&lt;/div&gt;
+&lt;/div&gt;&lt;/header&gt;
+&lt;main class='chat'&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/1525705761710145557/f873f6158bba32002e15f887faaffd41.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message bot'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;CMS Valley&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:05&lt;/span&gt;
+&lt;span class='bot-tag'&gt;BOT&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='message-container-v2'&gt;
+&lt;div class='container-text-block'&gt;&lt;h1 class='h1'&gt;Ticket Criado com Sucesso! 📌&lt;/h1&gt;&lt;h3 class='h3'&gt;Todos os responsáveis pelo ticket já estão cientes da abertura&lt;/h3&gt;&lt;span class='author'&gt;@i.m.guxta&lt;/span&gt;, Evite chamar alguém via DM, basta aguardar alguém já irá lhe atender...&lt;br&gt;&lt;br&gt;&lt;strong&gt;&lt;u&gt;Categoria Escolhida:&lt;/u&gt;&lt;/strong&gt;&lt;pre class='code-block'&gt;📝 Revogar Advertência&lt;br&gt;&lt;/pre&gt;Lembrando que os botões são exclusivos para staffs!&lt;br&gt;&lt;br&gt;&lt;strong&gt;&lt;code&gt;DESCREVA O MOTIVO DO CONTATO COM O MÁXIMO DE DETALHES POSSÍVEIS QUE ALGUM RESPONSÁVEL JÁ IRÁ LHE ATENDER!&lt;/code&gt;&lt;/strong&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container-v2'&gt;
+&lt;div class='container-text-block'&gt;&lt;h2 class='h2'&gt;&lt;strong&gt;&lt;code&gt;OBS: Procure manter sua DM aberta para receber uma cópia deste ticket e a opção de avaliar seu atendimento.&lt;/code&gt;&lt;/strong&gt;&lt;/h2&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container-v2'&gt;
+&lt;div class='container-text-block'&gt;&lt;span class='small-text'&gt;-# Opções exclusivas para o uso dos responsáveis pelo atendimento!&lt;/span&gt;&lt;/div&gt;&lt;hr class='container-divider' style='margin: 2rem 0;'&gt;
+&lt;div class='container-row'&gt;
+&lt;div class='container-button button-secondary'&gt;&lt;span class=&quot;button-emoji&quot;&gt;➕&lt;/span&gt;Adicionar Membro&lt;/div&gt;
+&lt;div class='container-button button-secondary'&gt;&lt;span class=&quot;button-emoji&quot;&gt;👤&lt;/span&gt;Chamar Membro&lt;/div&gt;
+&lt;div class='container-button button-secondary'&gt;&lt;span class=&quot;button-emoji&quot;&gt;➖&lt;/span&gt;Remover Membro&lt;/div&gt;
+&lt;div class='container-button button-secondary'&gt;&lt;span class=&quot;button-emoji&quot;&gt;📂&lt;/span&gt;Mover Canal&lt;/div&gt;
+&lt;/div&gt;&lt;div class='container-row'&gt;
+&lt;div class='container-button button-secondary'&gt;&lt;span class=&quot;button-emoji&quot;&gt;✏️&lt;/span&gt;Trocar Nome do Canal&lt;/div&gt;
+&lt;div class='container-button button-secondary'&gt;&lt;span class=&quot;button-emoji&quot;&gt;📋&lt;/span&gt;Adicionar Observação Interna&lt;/div&gt;
+&lt;div class='container-button button-secondary'&gt;&lt;span class=&quot;button-emoji&quot;&gt;📞&lt;/span&gt;Criar Call de Atendimento&lt;/div&gt;
+&lt;div class='container-button button-secondary disabled'&gt;&lt;span class=&quot;button-emoji&quot;&gt;🙋&lt;/span&gt;Assumido por: i.m.guxta&lt;/div&gt;
+&lt;/div&gt;&lt;div class='container-row'&gt;
+&lt;div class='container-button button-secondary disabled'&gt;&lt;span class=&quot;button-emoji&quot;&gt;👋&lt;/span&gt;Já saudado&lt;/div&gt;
+&lt;div class='container-button button-secondary'&gt;&lt;span class=&quot;button-emoji&quot;&gt;🔄&lt;/span&gt;Transferir Atendimento&lt;/div&gt;
+&lt;div class='container-button button-success'&gt;&lt;span class=&quot;button-emoji&quot;&gt;✅&lt;/span&gt;Finalizar Ticket&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:14&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;jhasvkafsc&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:16&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;iagcsachvaskyc&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:18&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;7ugcigacga7&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:22&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;span class='role' style='color:#e67e22;background-color:#e67e2222'&gt;@⚠️ EQUIPE • TICKET&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:24&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Negativo&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:26&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Vai ficar com a adv&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:28&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;span class='author'&gt;@i.m.leozinho&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:33&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;🫪&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:37&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;aiai&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:41&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;digo nada&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:43&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Kkk&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/1525705761710145557/f873f6158bba32002e15f887faaffd41.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message bot'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;CMS Valley&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:46&lt;/span&gt;
+&lt;span class='bot-tag'&gt;BOT&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='message-container-v2'&gt;
+&lt;div class='container-text-block'&gt;&lt;h1 class='h1'&gt;🎫 Atendimento Assumido&lt;/h1&gt;Assumido por &lt;span class='author'&gt;@i.m.guxta&lt;/span&gt; canal alterado para o novo nome: &lt;code&gt;📝・imguxta&lt;/code&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:48&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Eu que nao digo nada&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/1525705761710145557/f873f6158bba32002e15f887faaffd41.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message bot'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;CMS Valley&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:03:51&lt;/span&gt;
+&lt;span class='bot-tag'&gt;BOT&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='message-container-v2'&gt;
+&lt;div class='container-text-block'&gt;&lt;h1 class='h1'&gt;👋 Saudação Inicial&lt;/h1&gt;Olá &lt;span class='author'&gt;@i.m.guxta&lt;/span&gt;! Sou &lt;span class='author'&gt;@i.m.guxta&lt;/span&gt; e vou cuidar do seu atendimento. Pode descrever o motivo do contato com o máximo de detalhes.&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:04:09&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;span class='small-text'&gt;TESTE&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:04:13&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;#TESTE&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:04:17&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;h1 class='h1'&gt;TESTE&lt;/h1&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:04:21&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;h2 class='h2'&gt;TESTE&lt;/h2&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:04:24&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;li class='list-item'&gt;TESTE&lt;/li&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:04:30&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;li class='list-item'&gt;TESTE&lt;/li&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:04:41&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;s&gt;ALOOOO&lt;/s&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:04:50&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;span class='spoiler'&gt; TESTE &lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:04&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;u&gt;TESTE&lt;/u&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:19&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;img class='emoji' src='https://cdn.discordapp.com/emojis/1519032693772521595.png' alt=':darkiondarki:' loading='lazy'&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:19&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;pre class='code-block'&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:28&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;img class='emoji' src='https://cdn.discordapp.com/emojis/788163628855197716.gif' alt=':dog:' loading='lazy'&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:34&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;&lt;img class='emoji' src='https://cdn.discordapp.com/emojis/1519025539854110840.gif' alt=':512:' loading='lazy'&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:36&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Kkk&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:38&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Aiai&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:45&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;❤️❤️❤️❤️❤️❤️❤️❤️&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:05:46&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Eu amo mais&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:06:07&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='attachments'&gt;
+&lt;a href='https://cdn.discordapp.com/attachments/1538518459858690089/1538519226233659402/despicablememinionsGIF_2.gif?ex=6a82f92f&amp;amp;is=6a81a7af&amp;amp;hm=2fd91cd215c3a9bc2e289b20d398f98f708feb1810f0745bfa415d6b9402870d&amp;amp;' target='_blank' rel='noopener'&gt;&lt;img src='https://cdn.discordapp.com/attachments/1538518459858690089/1538519226233659402/despicablememinionsGIF_2.gif?ex=6a82f92f&amp;amp;is=6a81a7af&amp;amp;hm=2fd91cd215c3a9bc2e289b20d398f98f708feb1810f0745bfa415d6b9402870d&amp;amp;' alt='despicablememinionsGIF_2.gif' loading='lazy'&gt;&lt;/a&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:06:13&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Aiai&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:06:26&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;https://medal.tv/&lt;/div&gt;
+&lt;div class='embed'&gt;
+&lt;div class='embed-title'&gt;Record, Edit, and Share Your Game Clips &amp;amp; Gameplay - Medal&lt;/div&gt;
+&lt;div class='embed-description'&gt;Medal is the best way to record, edit, and share gaming clips and videos for free on PC. Download Medal today.&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:07:00&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='attachments'&gt;
+&lt;a href='https://cdn.discordapp.com/attachments/1538518459858690089/1538519444983386153/image.png?ex=6a82f963&amp;amp;is=6a81a7e3&amp;amp;hm=910695095d5442ed677665b90bf74db3e283694a4e698f506a27b8ea2f263730&amp;amp;' target='_blank' rel='noopener'&gt;&lt;img src='https://cdn.discordapp.com/attachments/1538518459858690089/1538519444983386153/image.png?ex=6a82f963&amp;amp;is=6a81a7e3&amp;amp;hm=910695095d5442ed677665b90bf74db3e283694a4e698f506a27b8ea2f263730&amp;amp;' alt='image.png' loading='lazy'&gt;&lt;/a&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:07:24&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;aiai oq rapaz rum&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:07:33&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Rapaz?&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/466874911059869698/ab2ba685d128f0f5aa9b9d600a350ef3.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦ RESP · G ⟧ Leo  | 1186&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:07:34&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;Tendi&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/859100649366356000/868de29a33929eaf153a09077f661fe0.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message autor staff'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:07:37&lt;/span&gt;
+&lt;span class='autor-tag'&gt;Autor&lt;/span&gt;
+&lt;span class='staff-tag'&gt;STAFF&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='content-message'&gt;eu te amo mais&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/1525705761710145557/f873f6158bba32002e15f887faaffd41.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message bot'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;CMS Valley&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:07:43&lt;/span&gt;
+&lt;span class='bot-tag'&gt;BOT&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='message-container-v2'&gt;
+&lt;div class='container-text-block'&gt;&lt;h1 class='h1'&gt;🎫 Ticket Finalizado&lt;/h1&gt;Este ticket acaba de ser finalizado pelo responsavel &lt;span class='author'&gt;@i.m.guxta&lt;/span&gt; / &lt;code&gt;i.m.guxta&lt;/code&gt;!&lt;br&gt;Considerações Finais:&lt;br&gt;Atendimento Finalizado&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class='message-container'&gt;
+&lt;img class='avatar' src='https://cdn.discordapp.com/avatars/1525705761710145557/f873f6158bba32002e15f887faaffd41.png?size=64' alt='' loading='lazy'&gt;
+&lt;div class='message-content'&gt;
+&lt;div class='message bot'&gt;
+&lt;div class='author-timestamp'&gt;
+&lt;span class='author'&gt;CMS Valley&lt;/span&gt;
+&lt;span class='timestamp'&gt;16/08/2026, 09:07:44&lt;/span&gt;
+&lt;span class='bot-tag'&gt;BOT&lt;/span&gt;
+&lt;/div&gt;
+&lt;div class='message-container-v2'&gt;
+&lt;div class='container-text-block'&gt;&lt;h1 class='h1'&gt;🔒 Processando Finalização&lt;/h1&gt;Este canal está passando por algumas etapas de segurança como:&lt;br&gt;Compressão de imagens/vídeos.&lt;br&gt;Após essas validações o mesmo será deletado e o transcript gerado com segurança!&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/main&gt;
+&lt;footer class='footer'&gt;CMS Valley · Transcript gerado automaticamente&lt;/footer&gt;
+&lt;/div&gt;
+&lt;script src=&quot;https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;particlesJS('particles-js', {&quot;particles&quot;: {&quot;number&quot;: {&quot;value&quot;: 55, &quot;density&quot;: {&quot;enable&quot;: true, &quot;value_area&quot;: 900}}, &quot;color&quot;: {&quot;value&quot;: &quot;#00aff4&quot;}, &quot;shape&quot;: {&quot;type&quot;: &quot;circle&quot;}, &quot;opacity&quot;: {&quot;value&quot;: 0.4, &quot;random&quot;: true}, &quot;size&quot;: {&quot;value&quot;: 2.5, &quot;random&quot;: true}, &quot;line_linked&quot;: {&quot;enable&quot;: true, &quot;distance&quot;: 140, &quot;color&quot;: &quot;#00aff4&quot;, &quot;opacity&quot;: 0.2, &quot;width&quot;: 1}, &quot;move&quot;: {&quot;enable&quot;: true, &quot;speed&quot;: 1.1, &quot;out_mode&quot;: &quot;out&quot;}}, &quot;interactivity&quot;: {&quot;detect_on&quot;: &quot;canvas&quot;, &quot;events&quot;: {&quot;onhover&quot;: {&quot;enable&quot;: true, &quot;mode&quot;: &quot;grab&quot;}, &quot;onclick&quot;: {&quot;enable&quot;: false}, &quot;resize&quot;: true}, &quot;modes&quot;: {&quot;grab&quot;: {&quot;distance&quot;: 120, &quot;line_linked&quot;: {&quot;opacity&quot;: 0.35}}}}, &quot;retina_detect&quot;: true});&lt;/script&gt;
+&lt;/body&gt;&lt;/html&gt;"
+			></iframe>
+		</div>
+
+		<script src="assets/js/lock-anim.js"></script>
+		<script>
+			// API no Render (não aparece na UI)
+			const API_BASE_PADRAO =
+				"https://ems-ocr-api-59sa.onrender.com";
+
+			const params = new URLSearchParams(location.search);
+			const senhaInput = document.getElementById("password");
+			const avisoSenha =
+				document.getElementById("avisoSenha");
+			const avisoSenhaTexto =
+				document.getElementById("avisoSenhaTexto");
+			const passwordContainer =
+				document.getElementById("passwordContainer");
+			const btnDesbloquear =
+				document.getElementById("btn-desbloquear");
+			const containerFree =
+				document.getElementById("containerFree");
+			const contentUnlocked =
+				document.getElementById("contentUnlocked");
+			const frame =
+				document.getElementById("frame-transcript");
+
+			// ID do ticket vem só da URL (?id= / ?ticket=)
+			const ticketIdDaUrl = (
+				params.get("id") ||
+				params.get("ticket") ||
+				""
+			).trim();
+
+			const DISCORD_URL =
+				localStorage.getItem("cmsvalley_discord_url") ||
+				"";
+			if (DISCORD_URL) {
+				document.getElementById("link-discord").href =
+					DISCORD_URL;
+			}
+
+			function apiBase() {
+				const salva =
+					localStorage.getItem(
+						"cmsvalley_api_base",
+					);
+				const daUrl = params.get("api");
+				return (
+					daUrl ||
+					salva ||
+					API_BASE_PADRAO
+				).replace(/\/$/, "");
+			}
+
+			function mostrarErro(texto) {
+				avisoSenhaTexto.textContent =
+					texto ||
+					"Senha incorreta, tente novamente.";
+				avisoSenha.style.display = "block";
+				passwordContainer.classList.add("error");
+				setTimeout(function () {
+					passwordContainer.classList.remove(
+						"error",
+					);
+				}, 600);
+			}
+
+			function ocultarErro() {
+				avisoSenha.style.display = "none";
+				passwordContainer.classList.remove("error");
+			}
+
+			function iniciarParticulas() {
+				if (typeof particlesJS !== "function") return;
+				particlesJS("particles-js", {
+					particles: {
+						number: {
+							value: 60,
+							density: {
+								enable: true,
+								value_area: 900,
+							},
+						},
+						color: { value: "#00f2ff" },
+						shape: { type: "circle" },
+						opacity: {
+							value: 0.4,
+							random: true,
+						},
+						size: {
+							value: 2.5,
+							random: true,
+						},
+						line_linked: {
+							enable: true,
+							distance: 140,
+							color: "#00f2ff",
+							opacity: 0.2,
+							width: 1,
+						},
+						move: {
+							enable: true,
+							speed: 1.2,
+							out_mode: "out",
+						},
+					},
+					interactivity: {
+						detect_on: "canvas",
+						events: {
+							onhover: {
+								enable: true,
+								mode: "grab",
+							},
+							onclick: {
+								enable: false,
+							},
+							resize: true,
+						},
+						modes: {
+							grab: {
+								distance: 120,
+								line_linked: {
+									opacity: 0.4,
+								},
+							},
+						},
+					},
+					retina_detect: true,
+				});
+			}
+
+			async function desbloquear() {
+				ocultarErro();
+				const ticketId = ticketIdDaUrl;
+				const senha = (senhaInput.value || "").trim();
+
+				if (!ticketId) {
+					mostrarErro(
+						"Link inválido: ID do ticket não encontrado na URL.",
+					);
+					return;
+				}
+				if (!senha) {
+					mostrarErro(
+						"Informe a senha recebida no transcript.",
+					);
+					return;
+				}
+
+				btnDesbloquear.disabled = true;
+				try {
+					const res = await fetch(
+						`${apiBase()}/transcripts/${ticketId}/unlock`,
+						{
+							method: "POST",
+							headers: {
+								"Content-Type":
+									"application/json",
+								Accept: "application/json",
+							},
+							body: JSON.stringify({
+								senha,
+							}),
+						},
+					);
+
+					if (!res.ok) {
+						const data = await res
+							.json()
+							.catch(function () {
+								return {};
+							});
+						mostrarErro(
+							data.detail ||
+								"Senha incorreta, tente novamente.",
+						);
+						senhaInput.value = "";
+						senhaInput.focus();
+						return;
+					}
+
+					const data = await res.json();
+					const html = data.html || "";
+
+					containerFree.style.display = "none";
+					contentUnlocked.classList.add(
+						"is-open",
+					);
+					document.title =
+						"Transcript Desbloqueado! · #" +
+						ticketId;
+					frame.srcdoc = html;
+				} catch (e) {
+					mostrarErro(
+						"Erro de rede. A API está no ar?",
+					);
+				} finally {
+					btnDesbloquear.disabled = false;
+				}
+			}
+
+			function bloquearNovamente() {
+				frame.srcdoc = "";
+				contentUnlocked.classList.remove("is-open");
+				containerFree.style.display = "";
+				document.title = "🔒 Transcript Bloqueado!";
+				senhaInput.value = "";
+				ocultarErro();
+				senhaInput.focus();
+			}
+
+			btnDesbloquear.addEventListener("click", desbloquear);
+			senhaInput.addEventListener("keydown", function (e) {
+				if (e.key === "Enter") desbloquear();
+			});
+			document.getElementById(
+				"btn-bloquear-novamente",
+			).addEventListener("click", bloquearNovamente);
+
+			window.addEventListener("load", function () {
+				iniciarParticulas();
+				if (!ticketIdDaUrl) {
+					mostrarErro(
+						"Abra o link completo do transcript (com o ID na URL).",
+					);
+				}
+			});
+		</script>
+
+		<script>
+			// API no Render (não aparece na UI)
+			const API_BASE_PADRAO =
+				"https://ems-ocr-api-59sa.onrender.com";
+
+			const params = new URLSearchParams(location.search);
+			const senhaInput = document.getElementById("password");
+			const avisoSenha =
+				document.getElementById("avisoSenha");
+			const avisoSenhaTexto =
+				document.getElementById("avisoSenhaTexto");
+			const passwordContainer =
+				document.getElementById("passwordContainer");
+			const btnDesbloquear =
+				document.getElementById("btn-desbloquear");
+			const containerFree =
+				document.getElementById("containerFree");
+			const contentUnlocked =
+				document.getElementById("contentUnlocked");
+			const frame =
+				document.getElementById("frame-transcript");
+
+			// ID do ticket vem só da URL (?id= / ?ticket=)
+			const ticketIdDaUrl = (
+				params.get("id") ||
+				params.get("ticket") ||
+				""
+			).trim();
+
+			const DISCORD_URL =
+				localStorage.getItem("cmsvalley_discord_url") ||
+				"";
+			if (DISCORD_URL) {
+				document.getElementById("link-discord").href =
+					DISCORD_URL;
+			}
+
+			function apiBase() {
+				const salva =
+					localStorage.getItem(
+						"cmsvalley_api_base",
+					);
+				const daUrl = params.get("api");
+				return (
+					daUrl ||
+					salva ||
+					API_BASE_PADRAO
+				).replace(/\/$/, "");
+			}
+
+			function mostrarErro(texto) {
+				avisoSenhaTexto.textContent =
+					texto ||
+					"Senha incorreta, tente novamente.";
+				avisoSenha.style.display = "block";
+				passwordContainer.classList.add("error");
+				setTimeout(function () {
+					passwordContainer.classList.remove(
+						"error",
+					);
+				}, 600);
+			}
+
+			function ocultarErro() {
+				avisoSenha.style.display = "none";
+				passwordContainer.classList.remove("error");
+			}
+
+			function iniciarParticulas() {
+				if (typeof particlesJS !== "function") return;
+				particlesJS("particles-js", {
+					particles: {
+						number: {
+							value: 60,
+							density: {
+								enable: true,
+								value_area: 900,
+							},
+						},
+						color: { value: "#00f2ff" },
+						shape: { type: "circle" },
+						opacity: {
+							value: 0.4,
+							random: true,
+						},
+						size: {
+							value: 2.5,
+							random: true,
+						},
+						line_linked: {
+							enable: true,
+							distance: 140,
+							color: "#00f2ff",
+							opacity: 0.2,
+							width: 1,
+						},
+						move: {
+							enable: true,
+							speed: 1.2,
+							out_mode: "out",
+						},
+					},
+					interactivity: {
+						detect_on: "canvas",
+						events: {
+							onhover: {
+								enable: true,
+								mode: "grab",
+							},
+							onclick: {
+								enable: false,
+							},
+							resize: true,
+						},
+						modes: {
+							grab: {
+								distance: 120,
+								line_linked: {
+									opacity: 0.4,
+								},
+							},
+						},
+					},
+					retina_detect: true,
+				});
+			}
+
+			async function desbloquear() {
+				ocultarErro();
+				const ticketId = ticketIdDaUrl;
+				const senha = (senhaInput.value || "").trim();
+
+				if (!ticketId) {
+					mostrarErro(
+						"Link inválido: ID do ticket não encontrado na URL.",
+					);
+					return;
+				}
+				if (!senha) {
+					mostrarErro(
+						"Informe a senha recebida no transcript.",
+					);
+					return;
+				}
+
+				btnDesbloquear.disabled = true;
+				try {
+					const res = await fetch(
+						`${apiBase()}/transcripts/${ticketId}/unlock`,
+						{
+							method: "POST",
+							headers: {
+								"Content-Type":
+									"application/json",
+								Accept: "application/json",
+							},
+							body: JSON.stringify({
+								senha,
+							}),
+						},
+					);
+
+					if (!res.ok) {
+						const data = await res
+							.json()
+							.catch(function () {
+								return {};
+							});
+						mostrarErro(
+							data.detail ||
+								"Senha incorreta, tente novamente.",
+						);
+						senhaInput.value = "";
+						senhaInput.focus();
+						return;
+					}
+
+					const data = await res.json();
+					const html = data.html || "";
+
+					containerFree.style.display = "none";
+					contentUnlocked.classList.add(
+						"is-open",
+					);
+					document.title =
+						"Transcript Desbloqueado! · #" +
+						ticketId;
+					frame.srcdoc = html;
+				} catch (e) {
+					mostrarErro(
+						"Erro de rede. A API está no ar?",
+					);
+				} finally {
+					btnDesbloquear.disabled = false;
+				}
+			}
+
+			function bloquearNovamente() {
+				frame.srcdoc = "";
+				contentUnlocked.classList.remove("is-open");
+				containerFree.style.display = "";
+				document.title = "🔒 Transcript Bloqueado!";
+				senhaInput.value = "";
+				ocultarErro();
+				senhaInput.focus();
+			}
+
+			btnDesbloquear.addEventListener("click", desbloquear);
+			senhaInput.addEventListener("keydown", function (e) {
+				if (e.key === "Enter") desbloquear();
+			});
+			document.getElementById(
+				"btn-bloquear-novamente",
+			).addEventListener("click", bloquearNovamente);
+
+			window.addEventListener("load", function () {
+				iniciarParticulas();
+				if (!ticketIdDaUrl) {
+					mostrarErro(
+						"Abra o link completo do transcript (com o ID na URL).",
+					);
+				}
+			});
+		</script>
+	</body>
+</html>
