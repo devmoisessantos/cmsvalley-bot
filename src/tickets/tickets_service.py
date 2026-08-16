@@ -78,7 +78,12 @@ async def buscar_ticket_aberto_do_autor(
     autor_discord_id: int,
     categoria_chave: str | None = None,
 ) -> Ticket | None:
-    """Retorna ticket ainda aberto/assumido do autor (opcionalmente da mesma categoria)."""
+    """
+    Retorna ticket ainda aberto/assumido do autor.
+
+    Por padrão (categoria_chave=None) busca em QUALQUER categoria —
+    só pode existir 1 ticket aberto por membro no servidor.
+    """
     async with async_session() as sessao:
         consulta = select(Ticket).where(
             Ticket.autor_discord_id == autor_discord_id,
@@ -88,6 +93,37 @@ async def buscar_ticket_aberto_do_autor(
             consulta = consulta.where(Ticket.categoria_chave == categoria_chave)
         resultado = await sessao.execute(consulta)
         return resultado.scalar_one_or_none()
+
+
+def membro_tem_cargo_obrigatorio_ticket(
+    membro: discord.Member,
+    definicao: dict,
+) -> bool:
+    """
+    Verifica se o membro tem ao menos um dos cargos exigidos pela categoria.
+
+    Lista vazia / ausente = liberado para qualquer um.
+    """
+    from src.config import CARGOS_PUNICOES
+
+    nomes_obrigatorios = definicao.get("cargos_obrigatorios") or []
+    if not nomes_obrigatorios:
+        return True
+
+    ids_permitidos: set[int] = set()
+    for nome_cargo in nomes_obrigatorios:
+        cargo_id = CARGOS_PUNICOES.get(nome_cargo)
+        if cargo_id:
+            ids_permitidos.add(int(cargo_id))
+        for cargo_membro in membro.roles:
+            if cargo_membro.name == nome_cargo:
+                ids_permitidos.add(cargo_membro.id)
+
+    if not ids_permitidos:
+        return True
+
+    ids_do_membro = {cargo.id for cargo in membro.roles}
+    return bool(ids_do_membro & ids_permitidos)
 
 
 async def criar_ticket(
@@ -102,6 +138,9 @@ async def criar_ticket(
     """
     definicao = TICKETS_CATEGORIAS.get(categoria_chave)
     if definicao is None:
+        return None
+
+    if not membro_tem_cargo_obrigatorio_ticket(autor, definicao):
         return None
 
     chave_categoria_config = definicao["categoria_config"]
@@ -1520,7 +1559,6 @@ def montar_html_transcript(
             tags_html.append('<span class="staff-tag">STAFF</span>')
         if not autor.bot and autor.id != ticket.autor_discord_id and not eh_staff:
             classes_mensagem.append("membro")
-            tags_html.append('<span class="staff-tag">Membro</span>')
 
         partes_mensagens.append('<div class="message-container">')
         partes_mensagens.append(

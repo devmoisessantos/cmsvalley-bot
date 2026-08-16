@@ -12,6 +12,7 @@ from src.config import TICKETS_CATEGORIAS
 from src.tickets.tickets_service import (
     buscar_ticket_aberto_do_autor,
     criar_ticket,
+    membro_tem_cargo_obrigatorio_ticket,
 )
 from src.tickets.tickets_views import enviar_mensagens_abertura_ticket
 from src.utils.mensagens import (
@@ -22,12 +23,26 @@ from src.utils.mensagens import (
 )
 
 
+def _montar_linha_botao_canal(canal: discord.TextChannel) -> discord.ui.ActionRow:
+    """Botão de link que leva direto ao canal do ticket."""
+    linha = discord.ui.ActionRow()
+    linha.add_item(
+        discord.ui.Button(
+            label="Ir para o canal do ticket",
+            style=discord.ButtonStyle.link,
+            url=canal.jump_url,
+            emoji="🔗",
+        )
+    )
+    return linha
+
+
 async def abrir_ticket_por_categoria(
     interacao: discord.Interaction,
     categoria_chave: str,
 ) -> None:
     """
-    Fluxo comum: valida, cria canal e envia os 3 cards de abertura.
+    Fluxo comum: valida (1 aberto + cargos), cria canal e envia cards de abertura.
     """
     if interacao.response.is_done() is False:
         await interacao.response.defer(ephemeral=True)
@@ -50,9 +65,25 @@ async def abrir_ticket_por_categoria(
         )
         return
 
+    # Trava de cargo (revogar_adv / revogar_exo etc.)
+    if not membro_tem_cargo_obrigatorio_ticket(membro, definicao):
+        nomes = definicao.get("cargos_obrigatorios") or []
+        lista_legivel = ", ".join(f"`{nome.strip()}`" for nome in nomes) or "—"
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão para esta categoria",
+            linhas=[
+                f"Para abrir **{definicao['emoji']} {definicao['rotulo']}** "
+                "você precisa ter um destes cargos:",
+                lista_legivel,
+            ],
+        )
+        return
+
+    # Apenas 1 ticket aberto por membro (qualquer categoria)
     ticket_existente = await buscar_ticket_aberto_do_autor(
         autor_discord_id=membro.id,
-        categoria_chave=categoria_chave,
+        categoria_chave=None,
     )
     if ticket_existente is not None:
         await responder_card(
@@ -61,9 +92,13 @@ async def abrir_ticket_por_categoria(
             linhas=[
                 f"Categoria: **{ticket_existente.categoria_rotulo}**",
                 f"Canal: <#{ticket_existente.canal_id}>",
-                "Finalize o ticket atual antes de abrir outro nesta categoria.",
+                "Só é permitido **1 ticket aberto** por vez.",
+                "Finalize o atual antes de abrir outro (em qualquer categoria).",
             ],
             cor=COR_AVISO,
+            extra_row=_montar_linha_botao_canal_id(
+                ticket_existente.canal_id, interacao.guild
+            ),
         )
         return
 
@@ -109,7 +144,22 @@ async def abrir_ticket_por_categoria(
             "Descreva o ocorrido no canal que acabamos de criar.",
         ],
         cor=COR_SUCESSO,
+        extra_row=_montar_linha_botao_canal(canal),
+        delay=None,
     )
+
+
+def _montar_linha_botao_canal_id(
+    canal_id: int,
+    guilda: discord.Guild | None,
+) -> discord.ui.ActionRow | None:
+    """Monta botão de link quando ainda temos só o ID do canal."""
+    if guilda is None:
+        return None
+    canal = guilda.get_channel(int(canal_id))
+    if canal is None or not isinstance(canal, discord.TextChannel):
+        return None
+    return _montar_linha_botao_canal(canal)
 
 
 class PainelTicketSuporteLayout(discord.ui.LayoutView):

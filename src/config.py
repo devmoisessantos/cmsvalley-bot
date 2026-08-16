@@ -408,6 +408,8 @@ TICKETS_CATEGORIAS = {
         "categoria_config": "CATEG_SUPORTE_DUVIDAS",
         "segmento": "suporte",
         "prefixo_canal": "🙋・suporte",
+        # Sem lista = qualquer membro pode abrir
+        "cargos_obrigatorios": [],
     },
     "revogar_adv": {
         "rotulo": "Revogar Advertência",
@@ -415,6 +417,12 @@ TICKETS_CATEGORIAS = {
         "categoria_config": "CATEG_REVOGAR_ADV",
         "segmento": "suporte",
         "prefixo_canal": "📝・revogar-adv",
+        # Precisa ter AO MENOS um destes cargos (CARGOS_PUNICOES)
+        "cargos_obrigatorios": [
+            "⛔┇ADV VERBAL ",
+            "🚫┇Adv 01",
+            "🚫┇Adv 02",
+        ],
     },
     "revogar_exo": {
         "rotulo": "Revogar Exoneração",
@@ -422,6 +430,10 @@ TICKETS_CATEGORIAS = {
         "categoria_config": "CATEG_REVOGAR_EXO",
         "segmento": "suporte",
         "prefixo_canal": "🔓・revogar-exo",
+        "cargos_obrigatorios": [
+            "🚫┇Adv 03",
+            "🚫┇Exonerado",
+        ],
     },
     "denuncias_jogador": {
         "rotulo": "Denúncias Jogador",
@@ -429,6 +441,7 @@ TICKETS_CATEGORIAS = {
         "categoria_config": "CATEG_DENUNCIAS_JOGADOR",
         "segmento": "denuncias",
         "prefixo_canal": "⛔・denuncia-jogador",
+        "cargos_obrigatorios": [],
     },
     "denuncias_diretoria": {
         "rotulo": "Denúncias Diretoria",
@@ -436,6 +449,7 @@ TICKETS_CATEGORIAS = {
         "categoria_config": "CATEG_DENUNCIAS_DIRETORIA",
         "segmento": "denuncias",
         "prefixo_canal": "🛡️・denuncia-diretoria",
+        "cargos_obrigatorios": [],
     },
 }
 

@@ -1496,9 +1496,15 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
         except Exception as erro_dm:
             print(f"⚠️ [transcript] falha ao enviar DM do autor: {erro_dm}")
 
-        await interacao.followup.send(
-            content="Ticket finalizado. O canal será apagado em instantes.",
-            ephemeral=True,
+        await responder_card(
+            interacao,
+            titulo="Ticket finalizado",
+            linhas=[
+                "O canal será apagado em instantes.",
+                "Transcript processado e arquivado com sucesso.",
+            ],
+            cor=COR_SUCESSO,
+            delay=8,
         )
 
         await asyncio.sleep(5)
