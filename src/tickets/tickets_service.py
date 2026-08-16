@@ -2286,53 +2286,75 @@ MEDIA QUERIES ============ */
                 f"</div>"
             )
         for embed in mensagem.embeds[:6]:
-            if embed.image and embed.image.url:
-                saida.append(
-                    f"<img class='embed-image' src='{esc(embed.image.url)}' "
-                    f"loading='lazy'>"
+            titulo_do_embed = esc(getattr(embed, "title", None) or "")
+            descricao_bruta = getattr(embed, "description", None) or ""
+            if descricao_bruta:
+                descricao_do_embed = markdown_simples_para_html(
+                    descricao_bruta, mapa_usuarios, mapa_cargos
                 )
-            if embed.video and embed.video.url:
-                saida.append(
-                    f"<video class='video-embed' controls preload='metadata' "
-                    f"src='{esc(embed.video.url)}'></video>"
-                )
-            saida.append("<div class='embed'>")
+            else:
+                descricao_do_embed = ""
+
+            autor_do_embed = ""
             if embed.author and embed.author.name:
+                autor_do_embed = esc(embed.author.name)
+
+            tem_campos = bool(getattr(embed, "fields", None))
+            tem_rodape = bool(embed.footer and getattr(embed.footer, "text", None))
+            url_imagem = ""
+            if embed.image and embed.image.url:
+                url_imagem = esc(embed.image.url)
+            url_video = ""
+            if embed.video and embed.video.url:
+                url_video = esc(embed.video.url)
+
+            tem_conteudo = any(
+                [
+                    titulo_do_embed,
+                    descricao_do_embed,
+                    autor_do_embed,
+                    tem_campos,
+                    tem_rodape,
+                    url_imagem,
+                    url_video,
+                ]
+            )
+            if not tem_conteudo:
+                continue
+
+            saida.append("<div class='embed'>")
+            if autor_do_embed:
+                saida.append(f"<div class='embed-author'>{autor_do_embed}</div>")
+            if titulo_do_embed:
+                saida.append(f"<div class='embed-title'>{titulo_do_embed}</div>")
+            if descricao_do_embed:
                 saida.append(
-                    f"<div class='embed-author'>{esc(embed.author.name)}</div>"
+                    f"<div class='embed-description'>{descricao_do_embed}</div>"
                 )
-            if titulo:
-                saida.append(f"<div class='embed-title'>{titulo}</div>")
-            if desc:
-                saida.append(f"<div class='embed-description'>{desc}</div>")
-            for campo in embed.fields[:25]:
+            for campo in (embed.fields or [])[:25]:
+                nome_campo = esc(campo.name or "")
+                valor_campo = markdown_simples_para_html(
+                    campo.value or "", mapa_usuarios, mapa_cargos
+                )
                 saida.append(
                     "<div class='embed-field'>"
-                    f"<div class='embed-field-name'>{esc(campo.name)}</div>"
-                    f"<div class='embed-field-value'>{markdown_simples_para_html(campo.value, mapa_usuarios, mapa_cargos)}</div>"
+                    f"<div class='embed-field-name'>{nome_campo}</div>"
+                    f"<div class='embed-field-value'>{valor_campo}</div>"
                     "</div>"
                 )
-            if embed.footer and embed.footer.text:
+            if tem_rodape:
                 saida.append(
                     f"<div class='embed-footer'>{esc(embed.footer.text)}</div>"
                 )
-            saida.append("</div>")
-            titulo = esc(embed.title or "")
-            desc_raw = embed.description or ""
-            desc = (
-                markdown_simples_para_html(desc_raw, mapa_usuarios, mapa_cargos)
-                if desc_raw
-                else ""
-            )
-            if not (
-                titulo or desc or embed.fields or (embed.author and embed.author.name)
-            ):
-                continue
-            saida.append("<div class='embed'>")
-            if titulo:
-                saida.append(f"<div class='embed-title'>{titulo}</div>")
-            if desc:
-                saida.append(f"<div class='embed-description'>{desc}</div>")
+            if url_imagem:
+                saida.append(
+                    f"<img class='embed-image' src='{url_imagem}' loading='lazy'>"
+                )
+            if url_video:
+                saida.append(
+                    f"<video class='video-embed' controls preload='metadata' "
+                    f"src='{url_video}'></video>"
+                )
             saida.append("</div>")
 
         if getattr(mensagem, "stickers", None):
