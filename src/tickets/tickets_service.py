@@ -32,6 +32,14 @@ def _ids_cargos_staff(guilda: discord.Guild) -> list[discord.Object]:
     return objetos
 
 
+def _eh_no_separador(objeto) -> bool:
+    """True se o nó é um Separator (Components V2, type 14)."""
+    if isinstance(objeto, dict):
+        return objeto.get("type") == 14
+    tipo = getattr(objeto, "type", None)
+    return tipo is not None and getattr(tipo, "value", tipo) == 14
+
+
 def membro_eh_staff_ticket(membro: discord.Member) -> bool:
     """True se o membro tem cargo de equipe de ticket ou diretoria."""
     nomes_dos_cargos = {cargo.name for cargo in membro.roles}
@@ -537,6 +545,9 @@ def _coletar_textos_de_componente(
     if ignorar_botoes and _eh_no_botao(objeto):
         return []
 
+    if _eh_no_separador(objeto):
+        return ["\x00HR\x00"]
+
     if isinstance(objeto, dict):
         # type 2 = botão → não puxa label para o texto
         if ignorar_botoes and objeto.get("type") == 2:
@@ -859,6 +870,7 @@ def montar_html_transcript(
         """
         preparado = preparar_texto_com_mencoes(texto, mapa_usuarios, mapa_cargos)
         seguro = esc(preparado)
+        seguro = seguro.replace("\x00HR\x00", "<hr class='container-divider'>")
 
         # Emoji custom Discord → <img>
         def html_emoji(match) -> str:
@@ -877,6 +889,35 @@ def montar_html_transcript(
             html_emoji,
             seguro,
         )
+
+        # Canais <#id>
+        def html_canal(match) -> str:
+            id_canal = match.group(1)
+            canal_obj = guilda.get_channel(int(id_canal)) if guilda else None
+            nome_canal = f"#{canal_obj.name}" if canal_obj else "canal-desconhecido"
+            return f"<span class='channel'>{esc(nome_canal)}</span>"
+
+        seguro = modulo_re.sub(r"&lt;#(\d+)&gt;", html_canal, seguro)
+
+        # Slash command mentions </comando:id>
+        seguro = modulo_re.sub(
+            r"&lt;/([a-zA-Z0-9_ -]+):(\d+)&gt;",
+            lambda m: f"<span class='channel'>/{esc(m.group(1))}</span>",
+            seguro,
+        )
+
+        # Timestamps <t:UNIX:formato>
+        def html_timestamp(match) -> str:
+            unix = int(match.group(1))
+            from datetime import (
+                datetime,
+                timezone,
+            )
+
+            dt = datetime.fromtimestamp(unix, tz=timezone.utc)
+            return f"<span class='timestamp' style='display:inline'>{dt.strftime('%d/%m/%Y %H:%M')}</span>"
+
+        seguro = modulo_re.sub(r"&lt;t:(\d+)(?::[a-zA-Z])?&gt;", html_timestamp, seguro)
 
         def html_usuario(match) -> str:
             id_usuario = match.group(1)
@@ -913,12 +954,38 @@ def montar_html_transcript(
             seguro,
             flags=modulo_re.DOTALL,
         )
-
+        seguro = modulo_re.sub(
+            r'(https?://[^\s<>"]+)',
+            lambda m: (
+                f"<a href='{m.group(0)}' target='_blank' rel='noopener' class='msg-link'>{m.group(0)}</a>"
+            ),
+            seguro,
+        )
         # Código inline
         seguro = modulo_re.sub(r"`([^`\n]+)`", r"<code>\1</code>", seguro)
 
         # Títulos e subtexto (ordem: -# → ### → ## → #)
         # Tags alinhadas ao HTML final do modelo (h1/h2/h3 + classes)
+
+        # Blockquote >>> (multiline) — verifica primeiro
+        seguro = modulo_re.sub(
+            r"(?ms)^&gt;&gt;&gt;\s?(.+)",
+            r"<blockquote class='quote'>\1</blockquote>",
+            seguro,
+        )
+        # Blockquote > (linha única)
+        seguro = modulo_re.sub(
+            r"(?m)^&gt;\s+(.+)$",
+            r"<blockquote class='quote'>\1</blockquote>",
+            seguro,
+        )
+        # Lista numerada
+        seguro = modulo_re.sub(
+            r"(?m)^\d+\.\s+(.+)$",
+            r"<li class='list-item'>\1</li>",
+            seguro,
+        )
+
         seguro = modulo_re.sub(
             r"(?m)^-#\s+(.+)$",
             r"<span class='small-text'>\1</span>",
@@ -949,6 +1016,11 @@ def montar_html_transcript(
 
         # Formatação inline (mais externo → interno)
         # **__texto__** e __**texto**__
+
+        seguro = modulo_re.sub(
+            r"\*\*\*(.+?)\*\*\*", r"<strong><em>\1</em></strong>", seguro
+        )
+
         seguro = modulo_re.sub(
             r"\*\*__(.+?)__\*\*",
             r"<strong><u>\1</u></strong>",
@@ -1890,8 +1962,9 @@ def montar_html_transcript(
         border-left: 4px solid rgb(88, 101, 242);
     }
     .message-content {
+        display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
         width: 100%;
     }
     .modal {
@@ -1958,7 +2031,17 @@ def montar_html_transcript(
     .perdeuSenha:hover {
         opacity: 1;
         color: rgb(255, 255, 255);
-    } /* ============
+    } 
+    
+    /* =========== CLASSES  - Q =============== */
+    .quote {
+        border-left: 4px solid rgb(79, 84, 92);
+        margin: 4px 0;
+        padding-left: 10px;
+        color: rgb(185, 187, 190);
+    }
+    
+    /* ============
 CLASSES - R ============ */
     .role {
         color: rgb(255, 255, 255);
@@ -2202,8 +2285,38 @@ MEDIA QUERIES ============ */
                 f"{markdown_simples_para_html(texto_bruto, mapa_usuarios, mapa_cargos)}"
                 f"</div>"
             )
-
         for embed in mensagem.embeds[:6]:
+            if embed.image and embed.image.url:
+                saida.append(
+                    f"<img class='embed-image' src='{esc(embed.image.url)}' "
+                    f"loading='lazy'>"
+                )
+            if embed.video and embed.video.url:
+                saida.append(
+                    f"<video class='video-embed' controls preload='metadata' "
+                    f"src='{esc(embed.video.url)}'></video>"
+                )
+            saida.append("<div class='embed'>")
+            if embed.author and embed.author.name:
+                saida.append(
+                    f"<div class='embed-author'>{esc(embed.author.name)}</div>"
+                )
+            if titulo:
+                saida.append(f"<div class='embed-title'>{titulo}</div>")
+            if desc:
+                saida.append(f"<div class='embed-description'>{desc}</div>")
+            for campo in embed.fields[:25]:
+                saida.append(
+                    "<div class='embed-field'>"
+                    f"<div class='embed-field-name'>{esc(campo.name)}</div>"
+                    f"<div class='embed-field-value'>{markdown_simples_para_html(campo.value, mapa_usuarios, mapa_cargos)}</div>"
+                    "</div>"
+                )
+            if embed.footer and embed.footer.text:
+                saida.append(
+                    f"<div class='embed-footer'>{esc(embed.footer.text)}</div>"
+                )
+            saida.append("</div>")
             titulo = esc(embed.title or "")
             desc_raw = embed.description or ""
             desc = (
@@ -2211,13 +2324,25 @@ MEDIA QUERIES ============ */
                 if desc_raw
                 else ""
             )
-            if not titulo and not desc:
+            if not (
+                titulo or desc or embed.fields or (embed.author and embed.author.name)
+            ):
                 continue
             saida.append("<div class='embed'>")
             if titulo:
                 saida.append(f"<div class='embed-title'>{titulo}</div>")
             if desc:
                 saida.append(f"<div class='embed-description'>{desc}</div>")
+            saida.append("</div>")
+
+        if getattr(mensagem, "stickers", None):
+            saida.append("<div class='attachments'>")
+            for sticker in mensagem.stickers:
+                url_sticker = esc(str(sticker.url))
+                saida.append(
+                    f"<img class='sticker' src='{url_sticker}' "
+                    f"alt='{esc(sticker.name)}' loading='lazy'>"
+                )
             saida.append("</div>")
 
         if mensagem.attachments:
@@ -2229,11 +2354,24 @@ MEDIA QUERIES ============ */
                 eh_imagem = tipo.startswith("image/") or nome_arq.lower().endswith(
                     (".png", ".jpg", ".jpeg", ".gif", ".webp")
                 )
+                eh_video = tipo.startswith("video/") or nome_arq.lower().endswith(
+                    (".mp4", ".webm", ".mov")
+                )
+                eh_audio = tipo.startswith("audio/") or nome_arq.lower().endswith(
+                    (".mp3", ".ogg", ".wav")
+                )
                 if eh_imagem:
                     saida.append(
                         f"<a href='{url_anexo}' target='_blank' rel='noopener'>"
                         f"<img src='{url_anexo}' alt='{nome_arq}' loading='lazy'></a>"
                     )
+                elif eh_video:
+                    saida.append(
+                        f"<video class='video-embed' controls preload='metadata' "
+                        f"src='{url_anexo}'></video>"
+                    )
+                elif eh_audio:
+                    saida.append(f"<audio controls src='{url_anexo}'></audio>")
                 else:
                     saida.append(
                         f"<a class='file-link' href='{url_anexo}' "
@@ -2311,7 +2449,10 @@ MEDIA QUERIES ============ */
         if autor.id == ticket.autor_discord_id:
             classes_mensagem.append("autor")
             tags_html.append("<span class='autor-tag'>Autor</span>")
-        if autor.id in ids_staff:
+        eh_staff = autor.id in ids_staff
+        if not eh_staff and isinstance(autor, discord.Member):
+            eh_staff = membro_eh_staff_ticket(autor)
+        if eh_staff:
             classes_mensagem.append("staff")
             tags_html.append("<span class='staff-tag'>STAFF</span>")
 
