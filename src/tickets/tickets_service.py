@@ -1962,7 +1962,6 @@ def montar_html_transcript(
         border-left: 4px solid rgb(88, 101, 242);
     }
     .message-content {
-        display: flex;
         flex-direction: column;
         gap: 12px;
         width: 100%;
