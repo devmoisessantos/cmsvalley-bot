@@ -13,10 +13,12 @@ from dataclasses import dataclass
 import discord
 from sqlalchemy import select
 
+from src.ausencia.ausencia_setup import garantir_painel_ausencia
 from src.bau.bau_setup import garantir_painel_bau
 from src.cursos.cursos_setup import garantir_painel_cursos
 from src.database.connection import async_session
 from src.database.models import PainelPostado
+from src.demissao.demissao_setup import garantir_painel_demissao
 from src.guia.guia_setup import (
     garantir_painel_boas_vindas,
     garantir_painel_tutoriais,
@@ -58,6 +60,8 @@ FUNCOES_GARANTIR_PAINEL = {
     "bau": garantir_painel_bau,
     "cursos": garantir_painel_cursos,
     "promocao": garantir_painel_promocao,
+    "demissao": garantir_painel_demissao,
+    "ausencia": garantir_painel_ausencia,
     "ticket_suporte": garantir_painel_ticket_suporte,
     "ticket_denuncias": garantir_painel_ticket_denuncias,
 }

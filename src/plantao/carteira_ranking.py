@@ -17,7 +17,10 @@ from src.config import (
     GUILD_ID,
 )
 from src.database.connection import async_session
-from src.database.models import PainelPostado
+from src.database.models import (
+    PainelPostado,
+    Usuario,
+)
 from src.plantao.carteira_service import (
     equivalente_em_reais,
     ranking_top_moedas,
@@ -61,14 +64,54 @@ async def _salvar_registro(canal_id: int, message_id: int) -> None:
         await sessao.commit()
 
 
+async def _nicknames_do_banco(discord_ids: list[int]) -> dict[int, str]:
+    """Busca nickname_atual em usuarios para quem não está no cache da guild."""
+    if not discord_ids:
+        return {}
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Usuario.discord_id, Usuario.nickname_atual).where(
+                Usuario.discord_id.in_(discord_ids),
+                Usuario.nickname_atual.is_not(None),
+            )
+        )
+        return {int(row[0]): str(row[1]) for row in resultado.all() if row[1]}
+
+
+def _rotulo_membro(
+    guilda: discord.Guild,
+    discord_id: int,
+    nick_banco: str | None,
+) -> str:
+    """
+    Resolve como mostrar o membro no ranking.
+
+    1) Membro na guild → mention (melhor UX)
+    2) Nickname salvo no banco → nome formatado + mention oculta
+    3) Fallback → mention por ID (<@id> o Discord ainda resolve se conhecer o user)
+    """
+    membro = guilda.get_member(discord_id)
+    if membro is not None:
+        return membro.mention
+
+    # Fora do cache / saiu do servidor: evita ID cru
+    if nick_banco:
+        return f"**{nick_banco}** (<@{discord_id}>)"
+    return f"<@{discord_id}>"
+
+
 async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.LayoutView:
     top = await ranking_top_moedas(15)
     medalhas = {1: "🥇", 2: "🥈", 3: "🥉"}
     linhas_rank: list[str] = []
 
+    ids_fora_cache = [
+        discord_id for discord_id, _ in top if guilda.get_member(discord_id) is None
+    ]
+    nicknames = await _nicknames_do_banco(ids_fora_cache)
+
     for posicao, (discord_id, saldo) in enumerate(top, start=1):
-        membro = guilda.get_member(discord_id)
-        mencao = membro.mention if membro else f"`{discord_id}`"
+        mencao = _rotulo_membro(guilda, discord_id, nicknames.get(discord_id))
         fid = await resolver_id_fivem(discord_id) or "—"
         prefixo = medalhas.get(posicao, f"`{posicao}.`")
         if posicao <= 3:

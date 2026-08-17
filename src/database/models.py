@@ -736,6 +736,45 @@ class SolicitacaoDemissao(Base):
     )
 
 
+class SolicitacaoAusencia(Base):
+    """Pedido de afastamento / ausência (aprovação da Diretoria)."""
+
+    __tablename__ = "solicitacoes_ausencia"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    membro_nome: Mapped[str] = mapped_column(String(120))
+    # viagem_ferias | motivos_pessoais | emergencia
+    tipo: Mapped[str] = mapped_column(String(40), index=True)
+    # 3 | 7 | 15 | 30plus
+    periodo_chave: Mapped[str] = mapped_column(String(20))
+    periodo_rotulo: Mapped[str] = mapped_column(String(40))
+    data_inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    data_fim: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    motivo: Mapped[str] = mapped_column(Text, default="")
+    # JSON lista de role_ids e role_names no momento da aprovação
+    cargos_anteriores_ids: Mapped[str] = mapped_column(Text, default="[]")
+    cargos_anteriores_nomes: Mapped[str] = mapped_column(Text, default="[]")
+    cargo_principal: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # pendente | aprovada | negada | finalizada
+    status: Mapped[str] = mapped_column(String(20), default="pendente", index=True)
+    aprovado_por_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    aprovado_por_nome: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    data_solicitacao: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+    data_decisao: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    mensagem_canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mensagem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+
+
 class PedidoDepositoMoeda(Base):
     """Pedido de depósito: $ in-game → moedas (aprovação staff)."""
 

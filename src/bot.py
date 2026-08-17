@@ -4,6 +4,8 @@ import traceback
 import discord
 from discord.ext import commands
 
+from src.ausencia.ausencia_panel import PainelAusenciaLayout
+from src.ausencia.ausencia_setup import garantir_painel_ausencia
 from src.bau.bau_panel import PainelBauLayout
 from src.bau.bau_setup import garantir_painel_bau
 from src.chamada.painel_chamada_persistente import PainelFazerChamadaLayout
@@ -121,6 +123,7 @@ class CmsValleyBot(commands.Bot):
             "src.cursos.cursos_cogs",
             "src.promocoes.promocoes_cogs",
             "src.demissao.demissao_cogs",
+            "src.ausencia.ausencia_cogs",
             "src.tickets.tickets_cogs",
         ]
 
@@ -161,6 +164,7 @@ class CmsValleyBot(commands.Bot):
         self.painel_ticket_suporte_view = None
         self.painel_ticket_denuncias_view = None
         self.botoes_ticket_view = None
+        self.painel_ausencia_view = None
 
         @self.tree.error
         async def on_app_command_error(
@@ -217,6 +221,7 @@ class CmsValleyBot(commands.Bot):
                 guilda=guild
             )
             self.botoes_ticket_view = CardBotoesStaffView()
+            self.painel_ausencia_view = PainelAusenciaLayout(guilda=guild)
 
         # ═══════════════════════════════════════════════════════════════
         # REGISTRA as views persistentes (SEMPRE, em todo reinício)
@@ -241,6 +246,7 @@ class CmsValleyBot(commands.Bot):
         self.add_view(self.painel_ticket_suporte_view)
         self.add_view(self.painel_ticket_denuncias_view)
         self.add_view(self.botoes_ticket_view)
+        self.add_view(self.painel_ausencia_view)
 
         # painéis de presença têm custom_id dinâmico por evento — sempre
         # precisa reconstruir e re-registrar, um por evento aberto
@@ -269,6 +275,7 @@ class CmsValleyBot(commands.Bot):
         await garantir_painel_cursos(self)
         await garantir_painel_promocao(self)
         await garantir_painel_demissao(self)
+        await garantir_painel_ausencia(self)
         await garantir_painel_notificacao(self)
         await garantir_painel_ticket_suporte(self)
         await garantir_painel_ticket_denuncias(self)
