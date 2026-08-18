@@ -4,6 +4,7 @@ Log visual de tickets finalizados no canal LOG_TICKETS.
 
 from __future__ import annotations
 
+import logging
 from datetime import (
     datetime,
     timezone,
@@ -15,6 +16,8 @@ from src.config import CANAIS
 from src.database.models import Ticket
 from src.tickets.tickets_service import nome_usuario_discord
 from src.utils.formatacao import para_horario_brasilia
+
+registrador = logging.getLogger(__name__)
 
 DIAS_SEMANA = (
     "segunda-feira",
@@ -190,7 +193,7 @@ async def enviar_log_ticket_finalizado(
     """Publica o log no canal LOG_TICKETS."""
     canal_id = CANAIS.get("LOG_TICKETS") or 0
     if not canal_id:
-        print("⚠️ LOG_TICKETS não configurado.")
+        registrador.warning("⚠️ LOG_TICKETS não configurado.")
         return
 
     canal = bot.get_channel(int(canal_id))
@@ -201,7 +204,7 @@ async def enviar_log_ticket_finalizado(
             canal = None
 
     if canal is None:
-        print(f"⚠️ Canal LOG_TICKETS ({canal_id}) não encontrado.")
+        registrador.warning(f"⚠️ Canal LOG_TICKETS ({canal_id}) não encontrado.")
         return
 
     guilda = getattr(canal, "guild", None) or staff.guild
@@ -217,4 +220,4 @@ async def enviar_log_ticket_finalizado(
     try:
         await canal.send(view=view)
     except discord.HTTPException as erro:
-        print(f"⚠️ Falha ao enviar log de ticket: {erro}")
+        registrador.warning(f"⚠️ Falha ao enviar log de ticket: {erro}")

@@ -47,17 +47,20 @@ _sessoes: dict[int, SessaoNotificacao] = {}
 
 
 def obter_sessao(id_do_executor: int) -> SessaoNotificacao:
+    """Obtém ou cria a sessão isolada que guarda o destino do executor."""
     if id_do_executor not in _sessoes:
         _sessoes[id_do_executor] = SessaoNotificacao(id_do_executor=id_do_executor)
     return _sessoes[id_do_executor]
 
 
 def limpar_sessao(id_do_executor: int) -> None:
+    """Descarta o destino e o rascunho para impedir reutilização acidental."""
     _sessoes.pop(id_do_executor, None)
     limpar_rascunho(id_do_executor)
 
 
 def registrar_envio_do_executor(id_do_executor: int) -> None:
+    """Registra um envio e remove marcas fora da janela de uma hora."""
     agora = time.time()
     lista = _historico_envios.setdefault(id_do_executor, [])
     lista.append(agora)
@@ -67,6 +70,7 @@ def registrar_envio_do_executor(id_do_executor: int) -> None:
 
 
 def quantidade_envios_na_hora(id_do_executor: int) -> int:
+    """Conta somente envios recentes e purga registros vencidos da memória."""
     agora = time.time()
     lista = _historico_envios.get(id_do_executor, [])
     validos = [marca for marca in lista if agora - marca < _janela_segundos]
@@ -75,10 +79,12 @@ def quantidade_envios_na_hora(id_do_executor: int) -> int:
 
 
 def ainda_pode_enviar(id_do_executor: int) -> bool:
+    """Indica se o executor ainda está abaixo do limite anti-spam por hora."""
     return quantidade_envios_na_hora(id_do_executor) < LIMITE_NOTIFICACOES_POR_HORA
 
 
 def destino_esta_pronto(sessao: SessaoNotificacao) -> bool:
+    """Confere se o tipo escolhido possui o identificador necessário para envio."""
     if sessao.tipo_destino == "membro":
         return sessao.id_do_membro is not None
     if sessao.tipo_destino == "cargo":
@@ -87,6 +93,7 @@ def destino_esta_pronto(sessao: SessaoNotificacao) -> bool:
 
 
 def resumo_destino(sessao: SessaoNotificacao) -> str:
+    """Produz uma descrição legível sem supor que a escolha já foi completada."""
     if sessao.tipo_destino == "membro" and sessao.id_do_membro:
         return f"{sessao.mencao_do_membro or 'membro'} (`{sessao.id_do_membro}`)"
     if sessao.tipo_destino == "cargo" and sessao.id_do_cargo:
@@ -96,6 +103,7 @@ def resumo_destino(sessao: SessaoNotificacao) -> str:
 
 
 def rascunho_tem_conteudo(id_do_usuario: int) -> bool:
+    """Verifica se existe ao menos um bloco antes de liberar a notificação."""
     return bool(obter_rascunho(id_do_usuario).blocos)
 
 
@@ -103,6 +111,11 @@ async def resolver_membros_destino(
     guilda: discord.Guild,
     sessao: SessaoNotificacao,
 ) -> list[discord.Member]:
+    """Resolve destinatários válidos para membro único ou cargo selecionado.
+
+    Busca o membro fora do cache quando necessário e exclui bots ao expandir
+    cargos, evitando DMs para contas automáticas ou destinos que já sumiram.
+    """
     if sessao.tipo_destino == "membro" and sessao.id_do_membro:
         membro = guilda.get_member(sessao.id_do_membro)
         if membro is None:

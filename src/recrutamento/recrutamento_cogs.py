@@ -21,13 +21,13 @@ from src.config import (
     CANAIS,
     CARGOS,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     Recrutamento,
     Usuario,
 )
 from src.recrutamento.recrutamento_class import NovoRecrutamento
-from src.recrutamento.recrutamento_logs import NovoRecrutamentoManualLog
+from src.recrutamento.recrutamento_logger import NovoRecrutamentoManualLog
 from src.recrutamento.recrutamento_service import (
     STATUS_RECRUTAMENTO_ATIVOS,
     buscar_recrutamento_ativo,
@@ -35,6 +35,7 @@ from src.recrutamento.recrutamento_service import (
 )
 from src.utils.formatacao import formatar_data_hora_local
 from src.utils.mensagens import (
+    responder_aviso,
     responder_erro,
     responder_info,
     responder_sucesso,
@@ -74,6 +75,12 @@ class RecrutamentoCog(commands.Cog):
         interacao: discord.Interaction,
         membro: discord.Member,
     ):
+        """Mostra o processo atual e os últimos registros do candidato.
+
+        Consulta o banco para apresentar tanto o recrutamento ativo quanto um
+        pequeno histórico, ajudando administradores a diferenciar uma falha de
+        um processo já concluído antes de tomar qualquer ação corretiva.
+        """
         ativo = await buscar_recrutamento_ativo(membro.id)
         async with async_session() as session:
             resultado = await session.execute(
@@ -99,7 +106,8 @@ class RecrutamentoCog(commands.Cog):
                 f"**Status:** `{ativo.status}`",
                 f"**Recrutador:** <@{ativo.discord_id_recrutador}>",
                 f"**FiveM:** `{ativo.id_fivem or '—'}`",
-                f"**Formulário:** `{'aberto' if ativo.formulario_aberto else 'fechado'}`",
+                f"**Formulário:** `{'aberto' if ativo.formulario_aberto else 'fechado'}"
+                f"`",
                 f"**Início:** `{formatar_data_hora_local(ativo.data_inicio)}`",
             ]
         else:
@@ -140,6 +148,12 @@ class RecrutamentoCog(commands.Cog):
         membro: discord.Member,
         motivo: str = "Cancelado por administrador",
     ):
+        """Cancela um processo pendente e restaura o candidato para recomeçar.
+
+        Delega a remoção de cargos temporários e das respostas ao serviço, que
+        também registra a decisão. O motivo é limitado antes de ser gravado
+        para manter o registro administrativo curto e seguro para exibição.
+        """
         cancelado = await cancelar_recrutamento_ativo(
             membro.id,
             motivo=motivo[:80],
@@ -182,6 +196,12 @@ class RecrutamentoCog(commands.Cog):
         interacao: discord.Interaction,
         membro: discord.Member,
     ):
+        """Destrava uma prova marcada como formulário aberto no banco.
+
+        Se o processo ficou em prova, retorna-o à etapa liberada e zera a
+        pergunta atual; isso permite uma nova tentativa sem apagar todo o
+        recrutamento. A alteração é persistida antes da confirmação no Discord.
+        """
         async with async_session() as session:
             resultado = await session.execute(
                 select(Recrutamento)
@@ -206,16 +226,17 @@ class RecrutamentoCog(commands.Cog):
                 recrutamento.status = "PROVA_LIBERADA"
                 recrutamento.pergunta_atual = 0
             await session.commit()
-            rid = recrutamento.id
+            id_do_cargo = recrutamento.id
             status = recrutamento.status
 
         await responder_sucesso(
             interacao,
             titulo="Formulário liberado",
             linhas=[
-                f"**Registro:** `#{rid}`",
+                f"**Registro:** `#{id_do_cargo}`",
                 f"**Status:** `{status}`",
-                "`formulario_aberto` = false — o candidato pode tentar iniciar a avaliação de novo.",
+                "`formulario_aberto` = false — o candidato pode tentar iniciar a "
+                "avaliação de novo.",
             ],
         )
 
@@ -225,7 +246,8 @@ class RecrutamentoCog(commands.Cog):
 
     @app_commands.command(
         name="recrutamento-manual",
-        description="Registra manualmente um Recrutamento Realizado (uso em caso de bot fora do ar)",
+        description="Registra manualmente um Recrutamento Realizado (uso em caso de "
+        "bot fora do ar)",
     )
     @app_commands.describe(
         recrutador="Quem realizou o recrutamento (ex: [ REC ] Leo Valley | 1186)",
@@ -248,14 +270,25 @@ class RecrutamentoCog(commands.Cog):
         id_fivem: str,
         cargo: app_commands.Choice[str],
     ):
+        """Reconstrói manualmente uma aprovação quando o fluxo automático falhou.
+
+        Evita associar um mesmo ID FiveM a outro processo ativo, atualiza os
+        registros no banco e atribui os cargos finais no Discord. Também publica
+        os painéis e logs para que a aprovação manual mantenha o mesmo rastro
+        administrativo do recrutamento realizado pelo bot.
+        """
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
 
         cargo_role = guild.get_role(CARGOS[CARGOS_FINAIS[cargo.value]])
         if cargo_role is None:
-            await interaction.followup.send(
-                "❌ Cargo final não encontrado no servidor. Confira o CARGOS no config.py.",
-                ephemeral=True,
+            await responder_erro(
+                interaction,
+                titulo="Não encontrado",
+                linhas=[
+                    "Cargo final não encontrado no servidor. Confira o CARGOS no "
+                    "config.py.",
+                ],
             )
             return
 
@@ -271,10 +304,14 @@ class RecrutamentoCog(commands.Cog):
             )
             conflito = resultado_duplicidade.scalar_one_or_none()
             if conflito is not None:
-                await interaction.followup.send(
-                    f"⚠️ O ID FiveM `{id_fivem}` já está associado a <@{conflito.discord_id_candidato}>. "
-                    f"Confira antes de continuar.",
-                    ephemeral=True,
+                await responder_aviso(
+                    interaction,
+                    titulo="Já em andamento",
+                    linhas=[
+                        f"O ID FiveM `{id_fivem}` já está associado a "
+                        f"<@{conflito.discord_id_candidato}>. "
+                        f"Confira antes de continuar.",
+                    ],
                 )
                 return
 
@@ -318,9 +355,12 @@ class RecrutamentoCog(commands.Cog):
             reason=f"Recrutamento manual registrado por {interaction.user}",
         )
 
-        await interaction.followup.send(
-            f"✅ Recrutamento manual registrado para {membro.mention} ({cargo.name}).",
-            ephemeral=True,
+        await responder_sucesso(
+            interaction,
+            titulo="Recrutamento registrado",
+            linhas=[
+                f"Recrutamento manual registrado para {membro.mention} ({cargo.name}).",
+            ],
         )
 
         try:
@@ -357,4 +397,5 @@ class RecrutamentoCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Adiciona ao bot os comandos administrativos de recrutamento."""
     await bot.add_cog(RecrutamentoCog(bot))

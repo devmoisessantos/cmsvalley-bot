@@ -51,6 +51,7 @@ class PlantaoCog(commands.Cog):
         description="Veja seu status atual de plantão",
     )
     async def plantao_info(self, interacao: discord.Interaction):
+        """Mostra ao membro o painel privado baseado no estado salvo no banco."""
         estado = await _buscar_estado(interacao.user.id)
         view = InformacoesPlantaoView(interacao.user, estado)
         await responder_view(interacao, view, ephemeral=True)
@@ -70,6 +71,12 @@ class PlantaoCog(commands.Cog):
         interacao: discord.Interaction,
         membro: discord.Member,
     ):
+        """Exibe ao administrador o estado detalhado de plantão de outro membro.
+
+        Busca pelo ID estável do Discord e apresenta inclusive indicadores internos de
+        call e ociosidade. A consulta não cria registros ausentes, evitando que apenas
+        inspecionar um membro modifique a base de dados.
+        """
         estado = await consultar_estado_plantao(membro.id)
         if estado is None:
             await responder_info(
@@ -88,12 +95,17 @@ class PlantaoCog(commands.Cog):
             f"**Membro:** {membro.mention}",
             f"**FiveM:** `{estado.id_fivem or '—'}`",
             f"**Toggle:** `{'ligado' if estado.toggle_ligado else 'desligado'}`",
-            f"**Call válida:** `{'sim' if estado.em_call_valida else 'não'}` · {canal_txt}",
-            f"**Moedas:** `{estado.saldo_moedas}` · **Segundos no segmento:** `{estado.segundos_acumulados}`",
+            f"**Call válida:** `{'sim' if estado.em_call_valida else 'não'}` · "
+            f"{canal_txt}",
+            f"**Moedas:** `{estado.saldo_moedas}` · **Segundos no segmento:** "
+            f"`{estado.segundos_acumulados}"
+            f"`",
             f"**Coordenação:** `{'sim' if estado.modo_coordenacao else 'não'}`",
             f"**Lembretes ociosidade (1/2/3):** "
             f"`{int(estado.lembrete_1_enviado)}/{int(estado.lembrete_2_enviado)}/{int(estado.lembrete_3_enviado)}`",
-            f"**Última atualização:** `{formatar_data_hora_local(estado.ultima_atualizacao)}`",
+            f"**Última atualização:** "
+            f"`{formatar_data_hora_local(estado.ultima_atualizacao)}"
+            f"`",
         ]
         await responder_info(
             interacao,
@@ -108,6 +120,12 @@ class PlantaoCog(commands.Cog):
     )
     @apenas_administrador()
     async def plantao_ativos(self, interacao: discord.Interaction):
+        """Lista os membros cujo toggle continua ligado no banco.
+
+        Envia um recorte de até quarenta estados recentes para facilitar a supervisão,
+        sem assumir que a chamada de voz ainda é válida. A separação ajuda a encontrar
+        casos em que o toggle persistiu após uma saída inesperada.
+        """
         lista = await listar_em_servico(limite=40)
         if not lista:
             await responder_info(
@@ -151,6 +169,12 @@ class PlantaoCog(commands.Cog):
         membro: discord.Member,
         saldo: app_commands.Range[int, 0, 1_000_000],
     ):
+        """Define administrativamente o saldo e confirma a alteração no Discord.
+
+        Persiste o valor informado para o membro, por isso só está disponível a
+        administradores. O limite não negativo evita criar um saldo inválido que
+        quebraria as regras de ganhos e transferências posteriores.
+        """
         estado = await admin_definir_moedas(membro.id, saldo)
         await responder_sucesso(
             interacao,
@@ -172,6 +196,12 @@ class PlantaoCog(commands.Cog):
         interacao: discord.Interaction,
         membro: discord.Member,
     ):
+        """Encerra no banco um plantão que não pôde ser desligado normalmente.
+
+        Além do toggle, o serviço limpa os campos de call e ociosidade associados ao
+        membro. A resposta diferencia um desligamento efetivo de uma solicitação sem
+        estado ativo, para a equipe não acreditar que uma correção foi aplicada.
+        """
         desligou = await admin_forcar_desligar(membro.id)
         if not desligou:
             await responder_erro(
@@ -202,6 +232,12 @@ class PlantaoCog(commands.Cog):
         interacao: discord.Interaction,
         membro: discord.Member,
     ):
+        """Exclui o estado persistido do membro para corrigir um registro corrompido.
+
+        A remoção é um efeito permanente no banco e não apenas um desligamento do
+        toggle. Por isso o comando confirma se havia uma linha antes de informar
+        sucesso, evitando que uma exclusão inexistente pareça uma limpeza realizada.
+        """
         existia = await admin_limpar_estado(membro.id)
         if not existia:
             await responder_erro(
@@ -220,4 +256,5 @@ class PlantaoCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra os comandos de plantão quando o bot carrega este domínio."""
     await bot.add_cog(PlantaoCog(bot))

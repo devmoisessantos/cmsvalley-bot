@@ -1,3 +1,19 @@
+"""
+Tarefas que rodam sozinhas de tempo em tempo, cuidando dos plantoes.
+
+O que elas fazem
+----------------
+- Avisam quem esta parado na call ha muito tempo (os lembretes de ociosidade).
+- Fecham plantao de quem sumiu sem bater ponto de saida.
+- `executar_housekeeping_plantao` faz a limpeza: estados orfaos, sessoes que
+  ficaram abertas de um dia para o outro.
+
+Sem essa faxina, um plantao esquecido ficaria contando hora para sempre.
+
+`_resetar_lembretes_ociosidade` zera os avisos quando a pessoa volta a se mexer,
+senao ela receberia o mesmo aviso repetido.
+"""
+
 import logging
 from datetime import (
     datetime,
@@ -27,7 +43,7 @@ from src.config import (
     LEMBRETE_3_MINUTOS,
     PENALIDADE_AFK_MOEDAS,
 )
-from src.database.connection import (
+from src.database.conexao import (
     async_session,
     reiniciar_pool_se_preciso,
 )
@@ -73,6 +89,7 @@ class PlantaoTasks(commands.Cog):
         )
 
     def cog_unload(self):
+        """Cancela os loops para impedir tarefas duplicadas ao descarregar o cog."""
         self.verificar_ociosos.cancel()
         self.verificar_afk.cancel()
 
@@ -82,6 +99,12 @@ class PlantaoTasks(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def verificar_ociosos(self):
+        """Avisa e desliga estados ociosos conforme os limites configurados.
+
+        Percorre no banco somente quem mantém o toggle ligado fora de call, envia cada
+        lembrete uma vez e persiste o desligamento automático. Isso evita que um
+        plantão esquecido continue ativo indefinidamente e distorça a operação.
+        """
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
             logger.error("Guild %s não encontrada", GUILD_ID)
@@ -174,11 +197,15 @@ class PlantaoTasks(commands.Cog):
 
     @verificar_ociosos.error
     async def verificar_ociosos_error(self, error):
+        """
+        Registra falhas do loop de ociosidade e tenta recuperar conexões encerradas.
+        """
         logger.error("Loop ociosos quebrou: %s", error, exc_info=True)
         await self._recuperar_pool_se_conexao_morta(error)
 
     @verificar_ociosos.before_loop
     async def antes_de_comecar(self):
+        """Espera o Discord ficar pronto antes da primeira verificação de ociosidade."""
         await self.bot.wait_until_ready()
         logger.info("Bot pronto — loop de ociosidade ativo")
 
@@ -188,6 +215,12 @@ class PlantaoTasks(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def verificar_afk(self):
+        """Pausa moedas e desconecta membros surdos pelo tempo configurado.
+
+        Distingue ficar apenas mutado de ficar surdo, pois apenas o segundo caso deixa
+        de contar tempo. Persiste os marcos de AFK para que avisos e penalidades não
+        sejam repetidos a cada execução do loop.
+        """
         guild = self.bot.get_guild(GUILD_ID)
         if guild is None:
             return
@@ -311,6 +344,7 @@ class PlantaoTasks(commands.Cog):
 
     @verificar_afk.error
     async def verificar_afk_error(self, error):
+        """Registra falhas do monitor AFK e tenta restaurar o pool quando necessário."""
         logger.error("Loop AFK quebrou: %s", error, exc_info=True)
         await self._recuperar_pool_se_conexao_morta(error)
 
@@ -334,6 +368,7 @@ class PlantaoTasks(commands.Cog):
 
     @verificar_afk.before_loop
     async def antes_de_comecar_afk(self):
+        """Aguarda a conexão do bot antes de iniciar o monitor de AFK."""
         await self.bot.wait_until_ready()
 
 
@@ -379,4 +414,5 @@ async def executar_housekeeping_plantao(bot: commands.Bot):
 
 
 async def setup(bot: commands.Bot):
+    """Registra e inicia as tarefas periódicas que protegem o estado de plantão."""
     await bot.add_cog(PlantaoTasks(bot))

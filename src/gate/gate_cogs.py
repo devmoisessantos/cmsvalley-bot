@@ -14,6 +14,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from src.database.conexao import tentar_reanimar_as_conexoes
 from src.gate.gate_logger import atualizar_log_evento
 from src.gate.gate_modals import (
     ModalConfirmarPresenca,
@@ -21,7 +22,7 @@ from src.gate.gate_modals import (
     ModalFacXFac,
     ModalTreino,
 )
-from src.gate.gate_presenca import atualizar_painel_presenca
+from src.gate.gate_presenca_service import atualizar_painel_presenca
 from src.gate.gate_service import (
     buscar_evento_por_id,
     cancelar_presenca,
@@ -39,6 +40,7 @@ from src.utils.mensagens import (
     COR_INFO,
     COR_SUCESSO,
     CardView,
+    editar_mensagem_original,
     enviar_card,
     excluir_mensagem,
     responder_aviso,
@@ -66,6 +68,12 @@ class SelectEncerrarEvento(discord.ui.Select):
         )
 
     async def callback(self, interacao: discord.Interaction):
+        """Encerra o evento escolhido e atualiza seus cards de log e presença.
+
+        O select usa o ID persistido para evitar encerrar outro evento com título
+        parecido. Depois substitui a resposta temporária por um resultado e a agenda
+        para exclusão, deixando o canal sem mensagens administrativas acumuladas.
+        """
         evento_id = int(self.values[0])
         evento = await encerrar_evento(evento_id)
 
@@ -86,7 +94,12 @@ class SelectEncerrarEvento(discord.ui.Select):
                 timeout=None,
             )
 
-        await interacao.response.edit_message(content=None, view=view_do_card)
+        # texto=None apaga o texto antigo: o card V2 agora traz tudo.
+        await editar_mensagem_original(
+            interacao,
+            view=view_do_card,
+            texto=None,
+        )
         mensagem = await interacao.original_response()
         asyncio.create_task(excluir_mensagem(mensagem, delay=10))
 
@@ -108,6 +121,12 @@ class GateCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_interaction(self, interacao: discord.Interaction):
+        """Encaminha componentes persistentes do GATE aos fluxos corretos após reinícios.
+
+        Filtra apenas interações de componente e reconhece os prefixos estáveis dos
+        botões. Centralizar esse roteamento mantém os botões publicados funcionando
+        mesmo quando suas views originais não estão mais guardadas em memória.
+        """
         if interacao.type != discord.InteractionType.component:
             return
 
@@ -214,6 +233,12 @@ class GateCog(commands.Cog):
         description="Lista os eventos GATE abertos no momento",
     )
     async def listar(self, interacao: discord.Interaction):
+        """Lista eventos ainda abertos com a ocupação atual de cada um.
+
+        Consulta a quantidade de presenças por evento para não confiar apenas no limite
+        configurado. A resposta é temporária e não altera inscrições nem o estado dos
+        eventos, servindo apenas para orientar a escolha dos membros.
+        """
         eventos = await listar_eventos_abertos()
 
         if not eventos:
@@ -255,6 +280,12 @@ class GateCog(commands.Cog):
     )
     @app_commands.describe(evento_id="ID numérico do evento")
     async def status(self, interacao: discord.Interaction, evento_id: int):
+        """Mostra os dados e a ocupação de um evento identificado pelo banco.
+
+        Usa o ID em vez do título para evitar ambiguidades entre eventos parecidos e
+        responde com erro quando não encontra o registro. A consulta permanece segura
+        mesmo para eventos encerrados, pois não depende de um card ainda publicado.
+        """
         evento = await buscar_evento_por_id(evento_id)
 
         if evento is None:
@@ -300,6 +331,9 @@ class GateCog(commands.Cog):
         description="Mostra em quais eventos abertos você confirmou presença",
     )
     async def meus(self, interacao: discord.Interaction):
+        """
+        Exibe as inscrições abertas do próprio membro sem mostrar dados de terceiros.
+        """
         pares = await listar_presencas_do_membro(interacao.user.id)
 
         if not pares:
@@ -338,6 +372,12 @@ class GateCog(commands.Cog):
         interacao: discord.Interaction,
         quantidade: app_commands.Range[int, 1, 15] = 8,
     ):
+        """Mostra eventos recentes e recupera o pool quando a consulta falha.
+
+        Faz o defer antes da leitura do banco para proteger a interação lenta e limita
+        a lista a ``quantidade``. Caso a conexão esteja fria ou encerrada, tenta
+        reanimá-la e avisa em vez de apresentar um histórico vazio como definitivo.
+        """
         # Defer imediato — a consulta ao banco pode demorar se o pool estiver frio
         if not interacao.response.is_done():
             try:
@@ -350,18 +390,19 @@ class GateCog(commands.Cog):
         try:
             eventos = await listar_ultimos_eventos(limite=quantidade)
         except Exception as erro_db:
-            from src.database.connection import reiniciar_pool_se_preciso
-
-            try:
-                await reiniciar_pool_se_preciso()
-            except Exception:
-                pass
+            # A consulta falhou. Descarta as conexoes velhas para que a
+            # proxima tentativa abra conexoes novas. O helper ja cuida
+            # de registrar tudo no log, com ou sem sucesso.
+            await tentar_reanimar_as_conexoes(
+                contexto="listar os ultimos eventos do GATE",
+            )
             await responder_aviso(
                 interacao,
                 titulo="Histórico GATE",
                 linhas=[
                     "Não foi possível consultar o banco agora.",
-                    f"Detalhe: `{type(erro_db).__name__}` — tente de novo em instantes.",
+                    f"Detalhe: `{type(erro_db).__name__}` — tente de novo em "
+                    f"instantes.",
                 ],
             )
             return
@@ -399,11 +440,13 @@ class GateCog(commands.Cog):
         description="Explica os comandos e o fluxo dos eventos GATE",
     )
     async def ajuda(self, interacao: discord.Interaction):
+        """Envia um resumo temporário para orientar uso e permissões do domínio GATE."""
         await enviar_card(
             interacao,
             titulo="🛡️ Ajuda · GATE",
             linhas=[
-                "**Painel** — use os botões no canal de eventos para criar ou encerrar.",
+                "**Painel** — use os botões no canal de eventos para criar ou "
+                "encerrar.",
                 "**Lista de presença** — confirme com o botão e informe seu ID FiveM.",
                 "`/gate listar` — eventos abertos agora.",
                 "`/gate status <id>` — detalhes de um evento.",
@@ -418,4 +461,5 @@ class GateCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra os comandos e o roteador de componentes persistentes do GATE."""
     await bot.add_cog(GateCog(bot))

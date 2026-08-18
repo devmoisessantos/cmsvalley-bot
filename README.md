@@ -1,85 +1,211 @@
-# Discord Backup Bot — Cidade RP
+# CMS Valley Bot
 
-Bot de backup e restauração para servidores Discord de Roleplay, feito em Python (discord.py 2.x).
+Bot Discord oficial do servidor **CMS Valley**, uma comunidade de roleplay
+hospitalar. O bot cuida de plantões, chamadas, recrutamento, cursos, punições,
+whitelist, hierarquia, baú, finanças, tickets e backups.
 
-## Recursos
+- **Linguagem:** Python 3.10 ou mais novo
+- **Framework:** discord.py 2.7 com Components V2
+- **Banco:** PostgreSQL 14 ou mais novo, acessado por SQLAlchemy 2 (assíncrono)
+- **Tamanho:** 175 módulos, 34 cogs, cerca de 93 comandos, 24 domínios
 
-- `/backup criar` — backup manual instantâneo
-- `/backup listar` — lista backups salvos
-- `/backup exportar` — baixa um backup como arquivo `.json`
-- `/backup deletar` — remove um backup específico
-- Backup automático agendado (intervalo configurável, padrão 24h)
-- `/diff` — compara um backup com o estado atual do servidor, sem alterar nada
-- `/restore cargos` / `/restore canais` / `/restore membros` / `/restore tudo` — restauração seletiva, sempre com prévia (dry-run) e confirmação por botão
-- Backup de segurança automático criado antes de qualquer restauração
-- Logs detalhados em um canal `#backup-logs`
-- Controle de permissão: só Administradores ou cargos configurados podem usar `/backup` e `/restore`
+Todo o código é escrito em português e segue a constituição do projeto, que está
+em [`AGENTS.md`](AGENTS.md). Leia esse arquivo antes de escrever qualquer linha.
 
-## O que é salvo no backup
+---
 
-Cargos (nome, cor, permissões, hierarquia), categorias, canais (nome, tópico, permissões, slowmode etc.), emojis, configurações gerais do servidor, e cargos/apelidos dos membros atuais.
+## Como rodar na sua máquina
 
-**Limitação importante do Discord:** não é possível re-adicionar ao servidor membros que saíram — isso não é permitido pela API para nenhum bot. O `/restore membros` só reaplica cargos/apelidos de quem ainda está no servidor.
-
-## Configuração inicial
-
-1. Crie uma aplicação em https://discord.com/developers/applications
-2. Na aba **Bot**, ative os **Privileged Gateway Intents**: `SERVER MEMBERS INTENT`
-3. Gere o link de convite em **OAuth2 > URL Generator** com os escopos `bot` e `applications.commands`, e permissões: `Manage Roles`, `Manage Channels`, `Manage Nicknames`, `View Channels`, `Send Messages`, `Attach Files`
-4. Copie o token do bot para o arquivo `.env` (baseado em `.env.example`)
-5. Crie manualmente um canal de texto chamado `backup-logs` no seu servidor (ou mude `LOG_CHANNEL_NAME` no `.env`)
-
-## Rodando localmente
+### 1. Preparar o ambiente
 
 ```bash
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate          # no Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env  # edite com seu token
-python bot.py
 ```
+
+### 2. Preencher a configuração
+
+```bash
+cp .env.example .env
+```
+
+Abra o `.env` e preencha os valores. Os três obrigatórios são:
+
+| Variável | Para que serve |
+|----------|----------------|
+| `DISCORD_TOKEN` | Token do bot, pego no Discord Developer Portal |
+| `GUILD_ID` | ID do servidor onde os comandos são sincronizados |
+| `DATABASE_URL` | Endereço do PostgreSQL, no formato `postgresql+asyncpg://usuario:senha@servidor:porta/banco` |
+
+O arquivo `.env.example` explica todas as outras variáveis, uma por uma.
+
+### 3. Ligar o bot
+
+```bash
+python main.py
+```
+
+Na primeira vez, o bot cria as tabelas que faltam e aplica as migrações
+pendentes automaticamente. Você não precisa rodar nada à mão.
+
+### 4. Permissões no Discord
+
+Na aba **Bot** do Developer Portal, ligue os *Privileged Gateway Intents*:
+
+- `SERVER MEMBERS INTENT`
+- `MESSAGE CONTENT INTENT`
+
+No convite (OAuth2 > URL Generator), use os escopos `bot` e
+`applications.commands`, com as permissões `Manage Roles`, `Manage Channels`,
+`Manage Nicknames`, `View Channels`, `Send Messages`, `Attach Files` e
+`Embed Links`.
+
+---
+
+## Como o projeto está organizado
+
+O código é dividido **por domínio**: cada assunto do servidor mora na sua
+própria pasta, e cada pasta tem sempre os mesmos tipos de arquivo.
+
+```
+cmsvalley-bot/
+├── main.py                     # ponto de entrada; só chama src/bot.py
+├── src/
+│   ├── bot.py                  # cria o cliente e carrega os 34 cogs
+│   ├── config.py               # TODA configuração e TODO id do Discord
+│   ├── database/
+│   │   ├── models.py           # tabelas (SQLAlchemy)
+│   │   ├── conexao.py          # sessão do banco e migrações
+│   │   └── migracoes.py        # migrações numeradas
+│   ├── utils/                  # código compartilhado entre domínios
+│   │   ├── mensagens.py        # TODA resposta ao usuário passa por aqui
+│   │   ├── formatacao.py       # datas, valores, menções
+│   │   ├── permissoes.py       # quem pode usar o quê
+│   │   └── views.py            # componentes reaproveitados
+│   ├── plantao/                # exemplo de domínio completo
+│   │   ├── plantao_cogs.py     # comandos
+│   │   ├── plantao_panel.py    # painéis (Components V2)
+│   │   ├── plantao_service.py  # regra de negócio e banco
+│   │   ├── plantao_logger.py   # logs visuais em canal do Discord
+│   │   └── chamada/            # subdomínio, quando o domínio cresce
+│   └── ...                     # ausencia, avaliacao, backup, bau, cursos,
+│                               # demissao, financas, gate, guia, hierarquia,
+│                               # laudos, manutencao, membros, notificacoes,
+│                               # promocoes, punicoes, recrutamento, templates,
+│                               # tickets, utilidade, whitelist
+├── tests/                      # 31 testes automatizados
+├── ferramentas/
+│   └── guardiao.py             # verifica se o código segue o AGENTS.md
+├── requirements.txt
+└── AGENTS.md                   # a constituição do projeto
+```
+
+### O padrão de arquivos de cada domínio
+
+| Sufixo | Responsabilidade |
+|--------|------------------|
+| `_cogs.py` | Comandos e listeners que o Discord chama |
+| `_panel.py` / `_views.py` | Painéis e componentes visuais (Components V2) |
+| `_service.py` | Regra de negócio e conversa com o banco |
+| `_logger.py` | Log visual em canal do Discord (só nos domínios que têm) |
+| `_tasks.py` | Tarefas que rodam sozinhas, de tempo em tempo |
+| `_listener.py` | Reação a eventos do Discord |
+
+---
+
+## Antes de enviar qualquer mudança
+
+Rode estes quatro comandos, nesta ordem. Se algum reclamar, conserte antes de
+seguir.
+
+```bash
+# 1. Formata e procura erro de sintaxe e import morto
+python -m ruff format src
+python -m ruff check src --select F,E9
+
+# 2. Roda os 31 testes automatizados
+python -m pytest tests -q
+
+# 3. Verifica se o código respeita o AGENTS.md
+python ferramentas/guardiao.py
+```
+
+### O guardião
+
+`ferramentas/guardiao.py` é um verificador escrito para este projeto. Ele lê
+todo o código e avisa quando alguma regra do `AGENTS.md` foi quebrada.
+
+```bash
+python ferramentas/guardiao.py                    # placar completo
+python ferramentas/guardiao.py --regra linha-longa # detalha uma regra só
+python ferramentas/guardiao.py --tudo             # mostra todos os achados
+```
+
+Ele separa as regras em dois grupos:
+
+- **Regras obrigatórias** — se alguma falhar, o guardião reprova a mudança.
+  Exemplos: `discord.Embed` novo, `print()` solto, `except` silencioso,
+  resposta direta ao usuário sem passar pelo `mensagens.py`, id do Discord
+  escrito no meio do código, nome de variável abreviado.
+- **Pendências conhecidas** — dívidas já mapeadas, que aparecem no placar mas
+  não reprovam. Estão listadas em [`DIVIDA_TECNICA.md`](DIVIDA_TECNICA.md).
+
+### Os testes
+
+Os 31 testes não precisam de banco nem de conexão com o Discord. Eles conferem
+formatação, permissões, migrações, configuração, o estado da chamada e a
+arquitetura (por exemplo: nenhum domínio importa outro domínio por dentro).
+
+---
+
+## Banco de dados e migrações
+
+As tabelas são criadas na primeira execução. Depois disso, qualquer mudança de
+estrutura entra como uma **migração numerada** em `src/database/migracoes.py`:
+
+```python
+Migracao(
+    numero=4,
+    descricao="Explique aqui o que a migração faz e por quê",
+    comandos_sql=[...],
+)
+```
+
+O bot guarda o número da última migração aplicada na tabela
+`migracoes_aplicadas` e roda somente as que faltam. Nunca edite uma migração
+já publicada — crie a próxima.
+
+---
+
+## Backups
+
+O bot faz dois tipos de backup automático:
+
+- **Cargos e canais do servidor**, em JSON, a cada `AUTO_BACKUP_INTERVAL_HOURS`
+  horas (padrão 12).
+- **Banco de dados**, a cada `AUTO_BACKUP_DB_INTERVAL_MINUTES` minutos
+  (padrão 360).
+
+Os arquivos ficam na pasta indicada por `BACKUP_DIR`. Se você hospeda o bot em
+um serviço que apaga o disco a cada publicação, use um disco persistente — sem
+isso os backups desaparecem.
+
+**Limite do próprio Discord:** nenhum bot consegue trazer de volta um membro que
+saiu do servidor. A restauração de membros só devolve cargos e apelidos de quem
+ainda está lá.
+
+---
 
 ## Hospedagem
 
-**Vercel não é compatível** com este tipo de bot: Vercel roda funções serverless de curta duração, e um bot Discord precisa manter uma conexão WebSocket persistente 24/7.
+Um bot Discord mantém uma conexão aberta o tempo todo, então ele precisa rodar
+como **processo contínuo** (worker), e não como função serverless de vida curta.
+Plataformas de função serverless não servem para este projeto.
 
-**Render funciona bem**, mas é preciso:
-1. Criar o serviço como **Background Worker** (não "Web Service")
-2. Usar um **disco persistente** (veja `render.yaml`, plano pago a partir de poucos dólares/mês) — sem isso, os backups em JSON são apagados a cada novo deploy
-3. Configurar a variável `DISCORD_TOKEN` no painel do Render (não vai no `render.yaml` por segurança)
+O que a hospedagem precisa oferecer:
 
-Deploy com o arquivo incluso:
-```bash
-# No painel do Render: New > Blueprint > conecte o repositório
-# Ele vai detectar o render.yaml automaticamente
-```
-
-## Estrutura do projeto
-
-```
-discord-backup-bot/
-├── bot.py                  # entrada principal
-├── config.py                # variáveis de ambiente
-├── core/
-│   ├── backup_manager.py    # criação/salvamento/leitura de backups
-│   ├── diff_engine.py       # comparação backup vs atual
-│   ├── restore_manager.py   # aplica restaurações (com dry_run)
-│   └── logger.py            # logs em canal Discord
-├── cogs/
-│   ├── backup.py             # /backup ...
-│   ├── restore.py            # /restore ...
-│   ├── diff.py                # /diff
-│   └── status.py              # /status
-├── utils/
-│   ├── permissions.py        # checagem de cargo/admin
-│   └── views.py                # botões de confirmação
-├── data/backups/              # arquivos JSON (criado automaticamente)
-├── render.yaml
-└── requirements.txt
-```
-
-## Próximos passos sugeridos
-
-- Restaurar overwrites de permissão por canal/categoria (atualmente só é comparado no `/diff`, não reaplicado no restore — pode ser adicionado)
-- Exportar backups automaticamente para um repositório Git privado ou S3, como camada extra de segurança
-- Comando `/backup agendar` para o próprio staff ajustar o intervalo sem mexer no `.env`
+1. Processo que fica ligado sem tempo limite
+2. PostgreSQL acessível
+3. Disco persistente, se você quiser guardar os backups em JSON
+4. As variáveis do `.env` configuradas no painel, nunca no repositório

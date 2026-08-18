@@ -10,16 +10,26 @@ from __future__ import annotations
 
 import discord
 
-from src.config import GUIA_DE_TUTORIAIS
+from src.config import CARGOS, GUIA_DE_TUTORIAIS
 from src.guia.guia_helpers import (
     montar_linha_de_botoes_link,
     montar_thumbnail_do_servidor,
 )
 from src.utils.error_handling import LoggingViewMixin
+from src.utils.formatacao import mencionar_cargo, mencionar_cargo_do_curso
 from src.utils.mensagens import (
     responder_erro,
     responder_view,
 )
+
+# As mencoes de cargo vem de src/config.py, nunca escritas a mao aqui.
+MENCAO_CARGO_INSTRUTOR = mencionar_cargo_do_curso("instrutor")
+MENCAO_CARGO_RECRUTADOR = mencionar_cargo_do_curso("recrutador")
+MENCAO_CARGO_PSICOLOGO = mencionar_cargo_do_curso("psicologo")
+MENCAO_CARGO_DOUTOR = mencionar_cargo_do_curso("doutor")
+MENCAO_CARGO_ENFERMEIRO = mencionar_cargo(CARGOS["🔰・Enfermeiro (a)"])
+MENCAO_CARGO_PARAMEDICO = mencionar_cargo(CARGOS["🚑・Paramédico"])
+
 
 # ---------------------------------------------------------------------------
 # Conteúdo de cada tópico do select
@@ -47,16 +57,16 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "deve **OBRIGATORIAMENTE** escolher uma área de atuação:",
             "**🎓 Instrutor(a)**\n"
             "`•` Requisito: Cursos Práticos 1.0 e 2.0\n"
-            "`•` Cargo: <@&1522579028526239744>\n\n"
+            f"`•` Cargo: {MENCAO_CARGO_INSTRUTOR}\n\n"
             "**📋 Recrutador(a)**\n"
             "`•` Requisito: Cursos Práticos 1.0\n"
-            "`•` Cargo: <@&1522579072197197966>\n\n"
+            f"`•` Cargo: {MENCAO_CARGO_RECRUTADOR}\n\n"
             "**🧠 Psicólogo(a)**\n"
             "`•` Requisito: Cursos Práticos 1.0\n"
-            "`•` Cargo: <@&1486368771017805996>\n\n"
+            f"`•` Cargo: {MENCAO_CARGO_PSICOLOGO}\n\n"
             "**🩺 Doutor(a)**\n"
             "`•` Requisito: Cursos Práticos 1.0\n"
-            "`•` Cargo: <@&1486368771860856882>",
+            f"`•` Cargo: {MENCAO_CARGO_DOUTOR}",
             "**Observações importantes:**\n"
             "`•` Enfermeiros trabalham **somente no atendimento interno**.\n"
             "`•` ❌ Não podem sair do HP uniformizados.",
@@ -132,10 +142,13 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
         "blocos": [
             "# 📻 Rádio e Comunicação\n"
             "## 🔊 Obrigatoriedade\n"
-            "📌 O uso da rádio durante o serviço é **OBRIGATÓRIO** para todos os membros.",
+            "📌 O uso da rádio durante o serviço é **OBRIGATÓRIO** para todos os "
+            "membros.",
             "## 📻 Canais de Rádio (In-Game)\n"
-            "`•` **Canal 1 — Interno** — Frequência **12** — Assuntos internos do hospital\n"
-            "`•` **Canal 2 — Externo** — Frequência **13** — Atendimentos e comunicação externa",
+            "`•` **Canal 1 — Interno** — Frequência **12** — Assuntos internos do "
+            "hospital\n"
+            "`•` **Canal 2 — Externo** — Frequência **13** — Atendimentos e "
+            "comunicação externa",
             "## 🎧 Canais de Voz (Discord)\n"
             "É importante conectar-se às calls ao iniciar o serviço:\n"
             "`•` ┃🔇・INTERNA 12 — Assuntos do hospital\n"
@@ -146,7 +159,8 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "`•` ❌ **Evite conversas paralelas.**\n"
             "`•` Microfone mutado é **permitido** durante atendimento interno.\n\n"
             "### Obrigatoriedade\n"
-            "`•` É obrigatório o uso da rádio **IN-GAME** enquanto estiver com toggle **ativo**.",
+            "`•` É obrigatório o uso da rádio **IN-GAME** enquanto estiver com toggle "
+            "**ativo**.",
             "## ⚠️ Penalidade\n"
             "> O descumprimento das regras de rádio e comunicação acarreta: **ADV1**",
             "## 🤝 Benefícios da Call no Discord\n"
@@ -157,7 +171,8 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "`•` Permite contato rápido com outros membros\n"
             "`•` Você participa dos **sorteios** realizados pela equipe\n"
             "`•` Demonstra maior **comprometimento** e presença na corporação\n\n"
-            "> 💡 **A boa comunicação faz toda a diferença no atendimento e no trabalho em equipe.**",
+            "> 💡 **A boa comunicação faz toda a diferença no atendimento e no trabalho "
+            "em equipe.**",
             "## 🚫 Conduta\n"
             "### Art. 20\n"
             "> **PROIBIDO** aceitar propina, seja dinheiro ou itens.",
@@ -187,12 +202,14 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "`•` É **PROIBIDO** usar o toggle para **evitar ser saqueado**.\n"
             "`•` É **PROIBIDO** permanecer com toggle ligado ao **sair da cidade**.\n\n"
             "### ✅ Obrigações\n"
-            "`•` Sempre que sair da cidade, **desligar o toggle** pelo F7 (caso esteja ligado).\n"
+            "`•` Sempre que sair da cidade, **desligar o toggle** pelo F7 (caso esteja "
+            "ligado).\n"
             "`•` Ao iniciar serviço na cidade, **iniciar também o plantão no Discord**.",
             "## 💰 Sistema de Recompensa — Plantão no Discord\n"
             "Ao entrar em serviço no Discord, você acumula benefícios:\n"
             "`•` Recebe **salário na cidade**.\n"
-            "`•` É recompensado por cada **30 minutos** de permanência na call enquanto em serviço.",
+            "`•` É recompensado por cada **30 minutos** de permanência na call "
+            "enquanto em serviço.",
             "> 📌 **Resumo:** Sempre que entrar em serviço na cidade, inicie seu "
             "plantão no canal do Discord para acumular tempo e garantir sua recompensa.",
         ],
@@ -213,24 +230,27 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "Para se tornar paramédico no **Centro Médico Sul Valley**, é necessário "
             "cumprir uma série de requisitos progressivos.",
             "## 🟢 Estagiário → Enfermeiro\n"
-            "**Cargo:** <@&1486368782585954405> → <@&1522567683269333012>\n\n"
+            f"**Cargo:** {MENCAO_CARGO_ENFERMEIRO} → {MENCAO_CARGO_PARAMEDICO}\n\n"
             "### 📌 Requisitos Obrigatórios\n"
-            "`•` ⏱️ **Horas em serviço ativo:** 2 horas completas **dentro do hospital** "
+            "`•` ⏱️ **Horas em serviço ativo:** 2 horas completas **dentro do "
+            "hospital** "
             "(atendendo, auxiliando ou exercendo função — **não conta AFK**)\n"
             "`•` 🎧 **Horas na call interna:** 2 horas completas na call INTERNA 12\n"
             "`•` ✅ **Conduta:** boa conduta e respeito à hierarquia\n"
             "`•` ❌ **Advertências:** não possuir advertência ativa",
             "## 🔴 Enfermeiro → Paramédico\n"
-            "**Cargo:** <@&1522567683269333012>\n\n"
+            f"**Cargo:** {MENCAO_CARGO_PARAMEDICO}\n\n"
             "### 📌 Requisitos Obrigatórios\n"
-            "`•` ⏱️ **Horas em serviço ativo:** mínimo de 2 horas **dentro do hospital** "
+            "`•` ⏱️ **Horas em serviço ativo:** mínimo de 2 horas **dentro do "
+            "hospital** "
             "(atendendo ou exercendo função — **não conta AFK**)\n"
             "`•` 🎧 **Horas na call interna:** mínimo de 2 horas na call INTERNA 12",
             "## 🎓 Curso de Resgate\n"
             "> **OBRIGATÓRIO** para progressão a Paramédico.\n\n"
             "### 💰 Formas de Aquisição\n"
             "`•` 💵 **Pago:** R$ 200.000 (duzentos mil)\n"
-            "`•` 🆓 **Gratuito:** após cumprir **2 horas de serviço ativo** dentro do hospital",
+            "`•` 🆓 **Gratuito:** após cumprir **2 horas de serviço ativo** dentro do "
+            "hospital",
             "## 🔓 Liberação de Atendimento Externo\n"
             "Após cumprir **todos os requisitos** e concluir o **Curso de Resgate**:\n"
             "`•` ✅ **Atendimento externo autorizado**\n"
@@ -250,7 +270,8 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
         "blocos": [
             "# 🚨 Curso de Resgate\n"
             "## 📋 Visão Geral\n"
-            "Para atuar como **Paramédico**, é **obrigatório** realizar o **Curso de Resgate**.",
+            "Para atuar como **Paramédico**, é **obrigatório** realizar o **Curso de "
+            "Resgate**.",
             "## 🔄 Fluxo Completo do Processo\n"
             "### 1️⃣ Solicitação do Curso\n"
             "Solicite seu curso no canal dedicado (botão abaixo).\n\n"

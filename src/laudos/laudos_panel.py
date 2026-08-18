@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 
 from src.laudos.laudos_logger import publicar_laudo_nos_canais
@@ -20,7 +22,10 @@ from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
     responder_sucesso,
+    responder_view,
 )
+
+registrador = logging.getLogger(__name__)
 
 TEXTO_PAINEL = (
     "# 🧠 Painel de Avaliação Psicológica\n\n"
@@ -102,7 +107,8 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Sem permissão",
                 linhas=[
-                    "Apenas **Psicólogo** ou **Responsável Psicólogo** podem usar este painel.",
+                    "Apenas **Psicólogo** ou **Responsável Psicólogo** podem usar "
+                    "este painel.",
                 ],
             )
             return False
@@ -112,14 +118,15 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         try:
             if not await self._checar_psicologo(interacao):
                 return
-            await interacao.response.send_message(
-                view=ViewSelecionarPaciente(interacao.user.id),
+            await responder_view(
+                interacao,
+                ViewSelecionarPaciente(interacao.user.id),
                 ephemeral=True,
             )
         except discord.NotFound:
             return
         except discord.HTTPException as erro_http:
-            print(f"⚠️ [laudos] iniciar consulta HTTP: {erro_http}")
+            registrador.warning(f"⚠️ [laudos] iniciar consulta HTTP: {erro_http}")
 
     async def _ao_gerar_laudo(self, interacao: discord.Interaction):
         """Abre o modal do laudo se houver consulta aberta."""
@@ -136,7 +143,8 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
                     interacao,
                     titulo="Sem permissão",
                     linhas=[
-                        "Apenas **Psicólogo** ou **Responsável Psicólogo** podem usar este painel.",
+                        "Apenas **Psicólogo** ou **Responsável Psicólogo** podem "
+                        "usar este painel.",
                     ],
                 )
                 return
@@ -147,7 +155,8 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
                     interacao,
                     titulo="Consulta não iniciada",
                     linhas=[
-                        "Você precisa clicar em **Iniciar Consulta** e selecionar o paciente "
+                        "Você precisa clicar em **Iniciar Consulta** e selecionar o "
+                        "paciente "
                         "antes de gerar o laudo.",
                     ],
                 )
@@ -164,7 +173,7 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         except discord.NotFound:
             return
         except discord.HTTPException as erro_http:
-            print(f"⚠️ [laudos] gerar laudo HTTP: {erro_http}")
+            registrador.warning(f"⚠️ [laudos] gerar laudo HTTP: {erro_http}")
 
     async def _ao_cancelar_consulta(self, interacao: discord.Interaction):
         try:
@@ -186,7 +195,7 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         except discord.NotFound:
             return
         except discord.HTTPException as erro_http:
-            print(f"⚠️ [laudos] cancelar consulta HTTP: {erro_http}")
+            registrador.warning(f"⚠️ [laudos] cancelar consulta HTTP: {erro_http}")
 
 
 class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
@@ -243,7 +252,7 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
         except discord.NotFound:
             return
         except discord.HTTPException as erro_http:
-            print(f"⚠️ [laudos] modal buscar ID HTTP: {erro_http}")
+            registrador.warning(f"⚠️ [laudos] modal buscar ID HTTP: {erro_http}")
 
     async def _ao_escolher_paciente(self, interacao: discord.Interaction):
         if interacao.user.id != self.id_do_psicologo:
@@ -346,8 +355,9 @@ async def _finalizar_inicio_consulta_com_id(
         and paciente.id != interacao.user.id
     )
     if precisa_passaporte:
-        await interacao.followup.send(
-            view=ViewInformarPassaporte(
+        await responder_view(
+            interacao,
+            ViewInformarPassaporte(
                 id_do_psicologo=id_do_psicologo,
                 id_paciente=paciente.id,
                 texto_erro=mensagem,
@@ -379,6 +389,7 @@ class ModalBuscarPacientePorDiscordId(
         self.id_do_psicologo = id_do_psicologo
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Valida o Discord ID digitado e inicia a busca do paciente escolhido."""
         texto = self.discord_id_input.value.strip()
         if not texto.isdigit():
             await responder_erro(
@@ -465,6 +476,12 @@ class ModalInformarPassaportePaciente(
         self.id_paciente = id_paciente
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Registra um passaporte informado manualmente e inicia a consulta.
+
+        Revalida o psicólogo, o servidor e o paciente para impedir que um modal
+        antigo seja usado por outra pessoa. Ao delegar ao serviço, o passaporte
+        é gravado no banco antes de a consulta ser aberta.
+        """
         texto = self.passaporte_input.value.strip()
         if not texto.isdigit():
             await responder_erro(
@@ -549,6 +566,12 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
         self.paciente_id = paciente_id
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Gera o laudo clínico da consulta e tenta publicá-lo nos canais.
+
+        O serviço valida o parecer e grava o resultado no banco antes da
+        publicação. Caso os canais falhem, avisa que o registro permaneceu
+        salvo; no sucesso, devolve um bloco pronto para copiar ao servidor.
+        """
         if not isinstance(interacao.user, discord.Member):
             await responder_erro(
                 interacao,
@@ -589,7 +612,9 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
                 titulo="Laudo salvo com aviso",
                 linhas=[
                     mensagem,
-                    f"O registro foi gravado, mas a publicação falhou: `{type(erro_pub).__name__}`.",
+                    f"O registro foi gravado, mas a publicação falhou: "
+                    f"`{type(erro_pub).__name__}"
+                    f"`.",
                 ],
             )
             return

@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 from sqlalchemy import delete
 
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.promocoes.promocoes_setup import garantir_painel_promocao
 from src.promocoes.promocoes_views import view_persistente_promocao
@@ -25,6 +25,17 @@ class PromocoesCog(commands.Cog):
     )
     @apenas_administrador()
     async def painel_promocao(self, interacao: discord.Interaction):
+        """
+        Apaga o registro do painel de promocao e o publica de novo.
+
+        Serve para consertar o painel quando a mensagem original foi apagada do canal.
+        O bot guarda numa tabela qual painel ja foi postado; enquanto esse registro
+        existe, ele nao posta outro. Este comando remove o registro e obriga a
+        republicacao.
+
+        Mexe no banco e manda mensagem no canal. Responde so para quem usou o
+        comando.
+        """
         await interacao.response.defer(ephemeral=True)
         async with async_session() as sessao:
             await sessao.execute(

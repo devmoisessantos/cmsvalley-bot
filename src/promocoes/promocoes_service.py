@@ -16,7 +16,7 @@ from src.cursos.cursos_service import (
     listar_cursos_que_faltam,
     menção_cargo_curso,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     HistoricoPromocao,
     SolicitacaoPromocao,
@@ -94,6 +94,14 @@ def obter_trilha_por_destino_e_origem(
 
 
 def id_cargo_por_nome(nome: str) -> int | None:
+    """
+    Encontra o id de um cargo a partir do nome escrito.
+
+    Devolve None quando o nome nao existe em CARGOS. Antes de desistir, tenta de
+    novo ignorando espacos e maiusculas, porque os nomes dos cargos deste servidor
+    tem emoji e espacos especiais, e uma diferenca invisivel de digitacao fazia a
+    promocao falhar sem explicacao.
+    """
     if not nome:
         return None
     if nome in CARGOS:
@@ -106,8 +114,11 @@ def id_cargo_por_nome(nome: str) -> int | None:
     return None
 
 
-def _nomes_cargo_equivalentes(a: str, b: str) -> bool:
-    return "".join(str(a).split()).lower() == "".join(str(b).split()).lower()
+def _nomes_cargo_equivalentes(primeiro_nome: str, segundo_nome: str) -> bool:
+    return (
+        "".join(str(primeiro_nome).split()).lower()
+        == "".join(str(segundo_nome).split()).lower()
+    )
 
 
 def resolver_cargo_na_guilda(
@@ -127,6 +138,12 @@ def resolver_cargo_na_guilda(
 
 
 def membro_tem_cargo_nome(membro: discord.Member, nome_cargo: str) -> bool:
+    """
+    Diz se o membro tem o cargo com aquele nome.
+
+    Devolve False tambem quando o nome do cargo nao existe na configuracao. Assim,
+    um nome errado nunca vira "sim, tem o cargo" por acidente.
+    """
     cargo_id = id_cargo_por_nome(nome_cargo)
     if cargo_id is None:
         return False
@@ -175,11 +192,12 @@ def montar_checklist_trilha(
     # ── Situação atual ─────────────────────────────────────────────
     bloco_situacao: list[str] = ["## 📌 Situação Atual"]
 
-    advs = membro_tem_advertencia_bloqueante(membro)
-    if advs:
+    advertencias = membro_tem_advertencia_bloqueante(membro)
+    if advertencias:
         pode_enviar = False
         bloco_situacao.append(
-            f"- ❌ **Advertência ativa:** {', '.join(f'`{a}`' for a in advs)}"
+            f"- ❌ **Advertência ativa:** "
+            f"{', '.join(f'`{advertencia}`' for advertencia in advertencias)}"
         )
         pendencias.append("Regularizar advertência (Adv 01 / Adv 02)")
     else:
@@ -262,7 +280,9 @@ def montar_checklist_trilha(
                 "> 🔔 Permaneça em call válida até atingir o tempo mínimo."
             )
             pendencias.append(
-                f"Completar o tempo de plantão (faltam **{_formatar_falta_legivel(falta)}**)"
+                f"Completar o tempo de plantão (faltam "
+                f"**{_formatar_falta_legivel(falta)}"
+                f"**)"
             )
     else:
         bloco_plantao.append(
@@ -366,6 +386,15 @@ async def atualizar_mensagem_solicitacao(
     canal_id: int,
     mensagem_id: int,
 ) -> None:
+    """
+    Guarda no banco onde ficou a mensagem do pedido de promocao.
+
+    Grava o canal e a mensagem na solicitacao, para o bot conseguir voltar e editar
+    esse card depois que a diretoria decidir. Sem esse endereco, a decisao seria
+    gravada mas o card no canal continuaria mostrando "pendente".
+
+    Se a solicitacao nao existir mais, sai sem gravar nada.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoPromocao).where(SolicitacaoPromocao.id == solicitacao_id)
@@ -380,6 +409,12 @@ async def atualizar_mensagem_solicitacao(
 
 
 async def obter_solicitacao(solicitacao_id: int) -> SolicitacaoPromocao | None:
+    """
+    Busca uma solicitacao de promocao pelo seu numero.
+
+    Devolve None quando nao existe, em vez de levantar erro. Quem chama decide o que
+    dizer ao membro nesse caso.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoPromocao).where(SolicitacaoPromocao.id == solicitacao_id)
@@ -449,6 +484,14 @@ async def registrar_historico(
     executado_por: int | None,
     solicitacao_id: int | None = None,
 ) -> None:
+    """
+    Grava no banco uma linha do historico de promocoes do membro.
+
+    Guarda de qual cargo para qual cargo, o motivo, quem executou e o numero da
+    solicitacao quando houver. Esse historico e o que permite conferir depois por
+    que alguem subiu de cargo — e por isso ele so cresce, nunca e apagado nem
+    reescrito.
+    """
     async with async_session() as sessao:
         sessao.add(
             HistoricoPromocao(

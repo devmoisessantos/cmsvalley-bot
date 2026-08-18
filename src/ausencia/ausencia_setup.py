@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from sqlalchemy import select
 
@@ -11,14 +13,22 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
+
+registrador = logging.getLogger(__name__)
 
 
 async def garantir_painel_ausencia(
     bot: discord.Client,
     interacao: discord.Interaction | None = None,
 ) -> None:
+    """Publica o painel uma única vez e registra sua mensagem no banco.
+
+    Verifica a referência persistida antes de enviar ao Discord, evitando
+    painéis duplicados em reinícios. A interação é opcional e só ajuda a obter
+    a guilda quando a publicação é solicitada por um comando administrativo.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(PainelPostado).where(PainelPostado.nome_painel == "ausencia")
@@ -28,12 +38,14 @@ async def garantir_painel_ausencia(
 
         canal_id = CANAIS.get("CANAL_REGISTRAR_AUSENCIA") or 0
         if not canal_id:
-            print("⚠️ CANAL_REGISTRAR_AUSENCIA ainda não configurado (0).")
+            registrador.warning("⚠️ CANAL_REGISTRAR_AUSENCIA ainda não configurado (0).")
             return
 
         canal = bot.get_channel(int(canal_id))
         if canal is None:
-            print(f"❌ CANAL_REGISTRAR_AUSENCIA não encontrado ({canal_id}).")
+            registrador.error(
+                f"❌ CANAL_REGISTRAR_AUSENCIA não encontrado ({canal_id})."
+            )
             return
 
         guilda = (
@@ -42,7 +54,7 @@ async def garantir_painel_ausencia(
             else bot.get_guild(int(GUILD_ID))
         )
         if guilda is None:
-            print("❌ Guild não encontrada ao publicar painel de ausência.")
+            registrador.error("❌ Guild não encontrada ao publicar painel de ausência.")
             return
 
         mensagem = await canal.send(view=PainelAusenciaLayout(guilda=guilda))
@@ -54,4 +66,6 @@ async def garantir_painel_ausencia(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel de ausência postado em #{getattr(canal, 'name', canal.id)}.")
+        registrador.info(
+            f"✅ Painel de ausência postado em #{getattr(canal, 'name', canal.id)}."
+        )

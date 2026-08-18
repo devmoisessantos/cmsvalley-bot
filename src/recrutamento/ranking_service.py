@@ -20,18 +20,21 @@ import discord
 from sqlalchemy import select
 
 from src.config import (
-    MESES_ABREV,
     RANKING_HORA_INICIO_CICLO,
     TIMEZONE_LOCAL,
     VALOR_POR_RECRUTAMENTO,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     RankingHistorico,
     Recrutamento,
     agora,
 )
-from src.utils.formatacao import formatar_reais
+from src.utils.formatacao import (
+    formatar_data_curta,
+    formatar_mes_e_ano,
+    formatar_reais,
+)
 
 # ── Tempo / períodos ─────────────────────────────────────────────────────
 
@@ -50,8 +53,8 @@ def obter_periodo_ciclo_semanal(
     referencia: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """Ciclo em andamento: sábado 12h → próximo sábado 12h (UTC)."""
-    tz = _tz()
-    agora_local = (referencia or datetime.now(tz)).astimezone(tz)
+    fuso_horario = _tz()
+    agora_local = (referencia or datetime.now(fuso_horario)).astimezone(fuso_horario)
 
     dias_desde_sabado = (agora_local.weekday() - 5) % 7
     sabado_atual = (agora_local - timedelta(days=dias_desde_sabado)).replace(
@@ -73,8 +76,8 @@ def obter_periodo_postagem_semanal(
     referencia: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """Semana que está terminando (sáb anterior 12h → sáb atual 12h)."""
-    tz = _tz()
-    agora_local = (referencia or datetime.now(tz)).astimezone(tz)
+    fuso_horario = _tz()
+    agora_local = (referencia or datetime.now(fuso_horario)).astimezone(fuso_horario)
 
     dias_desde_sabado = (agora_local.weekday() - 5) % 7
     sabado_atual_12h = (agora_local - timedelta(days=dias_desde_sabado)).replace(
@@ -90,8 +93,8 @@ def obter_periodo_ciclo_mensal(
     referencia: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """Mês calendário em andamento (dia 1 00h → dia 1 do próximo mês 00h)."""
-    tz = _tz()
-    agora_local = (referencia or datetime.now(tz)).astimezone(tz)
+    fuso_horario = _tz()
+    agora_local = (referencia or datetime.now(fuso_horario)).astimezone(fuso_horario)
     inicio = agora_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     if agora_local.month == 12:
         fim = inicio.replace(year=inicio.year + 1, month=1)
@@ -104,8 +107,8 @@ def obter_periodo_postagem_mensal(
     referencia: datetime | None = None,
 ) -> tuple[datetime, datetime]:
     """Mês anterior completo (para postagem no dia 1 às 11h)."""
-    tz = _tz()
-    agora_local = (referencia or datetime.now(tz)).astimezone(tz)
+    fuso_horario = _tz()
+    agora_local = (referencia or datetime.now(fuso_horario)).astimezone(fuso_horario)
     primeiro_este_mes = agora_local.replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
     )
@@ -148,22 +151,22 @@ async def buscar_contagem_por_recrutador(
 # ── Formatação de texto (corpo do Container) ─────────────────────────────
 
 
-def _formatar_data_curta(dt: datetime) -> str:
-    local = dt.astimezone(_tz())
-    return f"{local.day:02d}/{local.month:02d}"
+def _formatar_data_curta(data_e_hora: datetime) -> str:
+    """Data curta DD/MM. Delega para o formatador comum do projeto."""
+    return formatar_data_curta(data_e_hora)
 
 
-def _formatar_mes_ano(dt: datetime) -> str:
-    local = dt.astimezone(_tz())
-    return f"{MESES_ABREV[local.month]}/{local.year}"
+def _formatar_mes_ano(data_e_hora: datetime) -> str:
+    """Mes abreviado com ano. Delega para o formatador comum do projeto."""
+    return formatar_mes_e_ano(data_e_hora)
 
 
 def _medalha(posicao: int) -> str:
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(posicao, "🏅")
 
 
-def _plural_recrutamento(n: int) -> str:
-    return "recrutamento" if n == 1 else "recrutamentos"
+def _plural_recrutamento(numero: int) -> str:
+    return "recrutamento" if numero == 1 else "recrutamentos"
 
 
 def _formatar_mencoes(ids: list[int]) -> str:
@@ -201,23 +204,24 @@ def _linhas_ranking(
         return cabecalho, corpo, 0, 0
 
     por_qtd: dict[int, list[int]] = defaultdict(list)
-    for recrutador_id, qtd in contagem.items():
-        por_qtd[qtd].append(recrutador_id)
+    for recrutador_id, quantidade in contagem.items():
+        por_qtd[quantidade].append(recrutador_id)
 
     blocos: list[str] = []
     posicao = 1
     total_recrutamentos = 0
 
-    for qtd in sorted(por_qtd.keys(), reverse=True):
-        ids = sorted(por_qtd[qtd])
+    for quantidade in sorted(por_qtd.keys(), reverse=True):
+        ids = sorted(por_qtd[quantidade])
         medalha = _medalha(posicao)
         mencoes = _formatar_mencoes(ids)
-        valor = qtd * VALOR_POR_RECRUTAMENTO
+        valor = quantidade * VALOR_POR_RECRUTAMENTO
         blocos.append(
             f"{medalha} {mencoes}\n"
-            f"↳ **{qtd} {_plural_recrutamento(qtd)}** • 💰 **{formatar_reais(valor)}**"
+            f"↳ **{quantidade} {_plural_recrutamento(quantidade)}** • 💰 "
+            f"**{formatar_reais(valor)}**"
         )
-        total_recrutamentos += qtd * len(ids)
+        total_recrutamentos += quantidade * len(ids)
         posicao += len(ids)
 
     total_pago = total_recrutamentos * VALOR_POR_RECRUTAMENTO
@@ -244,19 +248,30 @@ def montar_view_ranking(
     titulo_override: str | None = None,
     cor: discord.Color | None = None,
 ) -> tuple[discord.ui.LayoutView, int, int]:
-    """Monta LayoutView com Container. Retorna (view, total_recrutamentos, total_pago)."""
+    """
+    Monta LayoutView com Container. Retorna (view, total_recrutamentos, total_pago).
+    """
 
     if tipo == "mensal":
         titulo = titulo_override or "🏆 **RANKING MENSAL DE RECRUTADORES**"
-        sub = f"**Mês:** **{_formatar_mes_ano(inicio_utc)}** ({_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)})"
+        sub = (
+            f"**Mês:** **{_formatar_mes_ano(inicio_utc)}** "
+            f"({_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)})"
+        )
         cor = cor or discord.Color.gold()
     elif tipo == "tempo_real":
         titulo = titulo_override or "🏆 **RANKING EM TEMPO REAL**"
-        sub = f"**Ciclo atual:** **{_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)}** _(parcial)_"
+        sub = (
+            f"**Ciclo atual:** **{_formatar_data_curta(inicio_utc)} até "
+            f"{_formatar_data_curta(fim_utc)}** _(parcial)_"
+        )
         cor = cor or discord.Color.blurple()
     else:  # semanal
         titulo = titulo_override or "🏆 **RANKING DE RECRUTADORES**"
-        sub = f"**Início:** **{_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)}**"
+        sub = (
+            f"**Início:** **{_formatar_data_curta(inicio_utc)} até "
+            f"{_formatar_data_curta(fim_utc)}**"
+        )
         cor = cor or discord.Color.red()
 
     cabecalho, corpo, total_rec, total_pago = _linhas_ranking(contagem, titulo, sub)
@@ -288,8 +303,17 @@ def montar_view_historico_item(
     registro: RankingHistorico,
     guild: discord.Guild | None = None,
 ) -> discord.ui.LayoutView:
+    """Reconstrói o cartão de um ranking salvo a partir do conteúdo persistido.
+
+    Converte o JSON armazenado de volta para contagens numéricas e reutiliza a
+    montagem normal do ranking. Assim, o histórico continua fiel ao período
+    fechado, em vez de ser recalculado com dados que podem ter mudado depois.
+    """
     contagem = {
-        int(k): int(v) for k, v in json.loads(registro.payload_json or "{}").items()
+        int(id_do_membro): int(quantidade_contada)
+        for id_do_membro, quantidade_contada in json.loads(
+            registro.payload_json or "{}"
+        ).items()
     }
     titulo = (
         "📜 **HISTÓRICO — RANKING MENSAL**"
@@ -317,16 +341,23 @@ def montar_view_lista_historico(
         linhas = "_Nenhum ranking histórico encontrado._"
     else:
         blocos = []
-        for r in registros:
-            periodo = f"{_formatar_data_curta(r.periodo_inicio)} → {_formatar_data_curta(r.periodo_fim)}"
-            tipo_emoji = "📅" if r.tipo == "semanal" else "🗓️"
+        for registro in registros:
+            periodo = (
+                f"{_formatar_data_curta(registro.periodo_inicio)} → "
+                f"{_formatar_data_curta(registro.periodo_fim)}"
+            )
+            tipo_emoji = "📅" if registro.tipo == "semanal" else "🗓️"
             link = ""
-            if r.channel_id and r.message_id:
+            if registro.channel_id and registro.message_id:
                 gid = guild.id if guild else 0
-                link = f" • [abrir](https://discord.com/channels/{gid}/{r.channel_id}/{r.message_id})"
+                link = (
+                    f" • "
+                    f"[abrir](https://discord.com/channels/{gid}/{registro.channel_id}/{registro.message_id})"
+                )
             blocos.append(
-                f"{tipo_emoji} **{r.tipo.upper()}** `{periodo}`\n"
-                f"↳ 👥 **{r.total_recrutamentos}** • 💰 **{formatar_reais(r.total_pago)}**{link}"
+                f"{tipo_emoji} **{registro.tipo.upper()}** `{periodo}`\n"
+                f"↳ 👥 **{registro.total_recrutamentos}** • 💰 "
+                f"**{formatar_reais(registro.total_pago)}**{link}"
             )
         linhas = "\n\n".join(blocos)
 
@@ -416,13 +447,24 @@ async def salvar_historico(
     channel_id: int | None = None,
     message_id: int | None = None,
 ) -> RankingHistorico:
+    """Guarda o fechamento de um ranking e devolve seu registro persistido.
+
+    Salva também a distribuição por recrutador como JSON e os identificadores
+    opcionais da mensagem publicada. Esses dados permitem abrir o histórico sem
+    depender de uma nova consulta que poderia incluir aprovações posteriores.
+    """
     registro = RankingHistorico(
         tipo=tipo,
         periodo_inicio=inicio,
         periodo_fim=fim,
         total_recrutamentos=total_recrutamentos,
         total_pago=total_pago,
-        payload_json=json.dumps({str(k): v for k, v in contagem.items()}),
+        payload_json=json.dumps(
+            {
+                str(id_do_membro): quantidade_contada
+                for id_do_membro, quantidade_contada in contagem.items()
+            }
+        ),
         channel_id=channel_id,
         message_id=message_id,
         criado_em=agora(),
@@ -438,6 +480,12 @@ async def listar_historico(
     tipo: str | None = None,
     limite: int = 10,
 ) -> list[RankingHistorico]:
+    """Recupera os rankings mais recentes, com filtro opcional de periodicidade.
+
+    O limite padrão impede que a tela de histórico tente carregar todos os
+    fechamentos de uma vez. Quando informado, ``tipo`` aceita somente semanal
+    ou mensal; outros valores preservam a consulta completa.
+    """
     async with async_session() as session:
         stmt = (
             select(RankingHistorico)
@@ -451,6 +499,7 @@ async def listar_historico(
 
 
 async def buscar_historico_por_id(historico_id: int) -> RankingHistorico | None:
+    """Localiza um fechamento específico sem falhar quando ele já não existe."""
     async with async_session() as session:
         resultado = await session.execute(
             select(RankingHistorico).where(RankingHistorico.id == historico_id)

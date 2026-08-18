@@ -5,6 +5,8 @@ Modais do GATE: criação de eventos e confirmação de presença (ID FiveM).
 
 from __future__ import annotations
 
+import logging
+
 import discord
 
 from src.utils.error_handling import LoggingModalMixin
@@ -12,6 +14,8 @@ from src.utils.mensagens import (
     responder_erro,
     responder_sucesso,
 )
+
+registrador = logging.getLogger(__name__)
 
 
 class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
@@ -40,8 +44,14 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
         self.tipo = tipo
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Valida e cria o evento antes de publicar seus painéis auxiliares.
+
+        Confere data, horário, limite e adversário quando aplicável, depois grava o
+        evento pelo serviço. Só após confirmar a criação tenta enviar os cards de
+        presença e log, evitando painéis sem evento correspondente no banco.
+        """
         from src.gate.gate_logger import enviar_log_evento
-        from src.gate.gate_presenca import enviar_painel_presenca
+        from src.gate.gate_presenca_service import enviar_painel_presenca
         from src.gate.gate_service import (
             criar_evento,
             validar_adversario,
@@ -114,7 +124,7 @@ class ModalEventoBase(LoggingModalMixin, discord.ui.Modal):
 
         if not painel_ok or not log_ok:
             # Já respondeu sucesso da criação; só avisa no console
-            print(
+            registrador.info(
                 "[GATE] Evento criado, mas algum canal "
                 "(presença/log) não foi encontrado."
             )
@@ -155,7 +165,13 @@ class ModalConfirmarPresenca(discord.ui.Modal, title="Confirmar Presença"):
         self.evento_id = evento_id
 
     async def on_submit(self, interacao: discord.Interaction):
-        from src.gate.gate_presenca import atualizar_painel_presenca
+        """Registra a presença se o FiveM e a elegibilidade do membro forem válidos.
+
+        Converte o campo em número antes de chamar o serviço, que também verifica
+        limite e duplicidade. Após o sucesso, atualiza o painel público para que a
+        contagem apresentada não fique defasada em relação ao banco.
+        """
+        from src.gate.gate_presenca_service import atualizar_painel_presenca
         from src.gate.gate_service import (
             confirmar_presenca,
             membro_pertence_a_gate,

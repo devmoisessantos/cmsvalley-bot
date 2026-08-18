@@ -1,3 +1,23 @@
+"""
+O coracao do plantao: cronometrar o tempo e creditar as moedas.
+
+Como o tempo e contado
+----------------------
+O plantao nao e um cronometro so. Ele e feito de pedacos: a pessoa entra na
+call, sai, volta. `_acumular_segmento_atual` fecha o pedaco que estava aberto e
+soma no total, para que sair da call nao apague o tempo ja trabalhado.
+
+Quem conta tempo e quem nao conta
+---------------------------------
+As funcoes `_membro_surdo`, `_membro_mutado_e_surdo` e
+`_membro_conta_tempo_moeda` respondem essa pergunta. Quem esta na call com o
+fone desligado nao esta atendendo ninguem, e por isso nao ganha moeda.
+
+`garantir_aware` conserta datas que vieram do banco sem fuso horario. Comparar
+uma data com fuso com outra sem fuso quebra em Python, e esse erro aparecia na
+virada do dia.
+"""
+
 from datetime import (
     datetime,
     timezone,
@@ -14,23 +34,27 @@ from src.config import (
     VALOR_MOEDA_INGAME,
     obter_todos_ids_canais_plantao,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_logger import registrar_evento_plantao
+from src.utils.error_handling import capturar_erro_e_logar
 from src.utils.formatacao import (
     formatar_dinheiro,
     formatar_reais,
 )
 
 
-def garantir_aware(dt: datetime) -> datetime:
+def garantir_aware(data_e_hora: datetime) -> datetime:
     """Se o datetime veio sem timezone (naive), assume que já era UTC e anexa isso."""
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
+    if data_e_hora.tzinfo is None:
+        return data_e_hora.replace(tzinfo=timezone.utc)
+    return data_e_hora
 
 
 def membro_e_doutor_ou_acima(membro: discord.Member) -> bool:
+    """
+    Confere os IDs de cargos aptos a iniciar chamadas, sem depender da posição visual.
+    """
     ids_permitidos = {CARGOS[nome] for nome in CARGOS_DOUTOR_OU_ACIMA if nome in CARGOS}
     return any(cargo.id in ids_permitidos for cargo in membro.roles)
 
@@ -82,7 +106,10 @@ def _acumular_segmento_atual(estado: EstadoPlantao) -> int:
 def _creditar_moedas_de_acumulado(
     estado: EstadoPlantao,
 ) -> int:
-    """Converte segundos_acumulados em moedas (1 / SEGUNDOS_PARA_MOEDA). Retorna moedas ganhas."""
+    """
+    Converte segundos_acumulados em moedas (1 / SEGUNDOS_PARA_MOEDA). Retorna moedas
+    ganhas.
+    """
     moedas_ganhas = 0
     while int(estado.segundos_acumulados or 0) >= SEGUNDOS_PARA_MOEDA:
         estado.segundos_acumulados -= SEGUNDOS_PARA_MOEDA
@@ -92,7 +119,10 @@ def _creditar_moedas_de_acumulado(
 
 
 def membro_pode_informar_id_manualmente(membro: discord.Member) -> bool:
-    """True se o membro tiver algum cargo da hierarquia (Visitante já está fora dessa lista)."""
+    """
+    True se o membro tiver algum cargo da hierarquia (Visitante já está fora dessa
+    lista).
+    """
     if membro.guild_permissions.administrator:
         return True
     ids_hierarquia = {CARGOS[nome] for nome in CARGOS_HIERARQUIA if nome in CARGOS}
@@ -113,7 +143,10 @@ async def _obter_ou_criar_estado(session, discord_id: int) -> EstadoPlantao:
 
 
 def _membro_esta_em_call_valida(membro: discord.Member) -> discord.VoiceChannel | None:
-    """Se o membro está atualmente numa call configurada como válida, retorna o canal. Senão, None."""
+    """
+    Se o membro está atualmente numa call configurada como válida, retorna o canal.
+    Senão, None.
+    """
     if membro.voice is None or membro.voice.channel is None:
         return None
 
@@ -186,6 +219,12 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
 
 
 async def desligar_servico(membro: discord.Member) -> str:
+    """Encerra o plantão, consolida o tempo em call e registra os eventos gerados.
+
+    Atualiza o estado no banco e pode creditar moedas pelo segmento aberto antes de
+    desligar o toggle. Também grava eventos de auditoria para que sair da call não
+    elimine o histórico nem deixe tempo pendente sem processamento.
+    """
     async with async_session() as session:
         estado = await _obter_ou_criar_estado(session, membro.id)
 
@@ -233,7 +272,8 @@ async def desligar_servico(membro: discord.Member) -> str:
         "TOGGLE_OFF",
         id_fivem_atual,
         campos_extra={
-            "Saldo Final": f"{saldo_final} moedas ({formatar_dinheiro(saldo_final * VALOR_MOEDA_INGAME)})"
+            "Saldo Final": f"{saldo_final} moedas ({formatar_dinheiro(saldo_final * VALOR_MOEDA_INGAME)}"
+            f")"
         },
     )
 
@@ -314,8 +354,17 @@ async def _finalizar_periodo_em_call(
                 saldo_apos=int(estado.saldo_moedas),
                 referencia=f"+{moedas_ganhas} plantão",
             )
-        except Exception:
-            pass
+        except Exception as erro_ao_registrar_ganho:
+            # ATENCAO: aqui as moedas JA foram creditadas ao membro. Se o
+            # extrato falha, o saldo e o extrato ficam divergentes, e isso
+            # precisa gritar no log para alguem conferir na mao.
+            await capturar_erro_e_logar(
+                erro_ao_registrar_ganho,
+                contexto=(
+                    "registrar no extrato o ganho de plantao de "
+                    f"{moedas_ganhas} moedas do membro {discord_id}"
+                ),
+            )
 
 
 async def pausar_cronometro_moeda(
@@ -385,8 +434,16 @@ async def admin_definir_moedas(discord_id: int, novo_saldo: int) -> EstadoPlanta
                 saldo_apos=saldo_depois,
                 referencia="admin set_moedas",
             )
-    except Exception:
-        pass
+    except Exception as erro_ao_registrar_ajuste:
+        # ATENCAO: o saldo JA foi alterado pelo administrador. Sem o extrato,
+        # ninguem consegue auditar depois quem mexeu e por que.
+        await capturar_erro_e_logar(
+            erro_ao_registrar_ajuste,
+            contexto=(
+                "registrar no extrato o ajuste de moedas feito pela staff "
+                f"no membro {discord_id}"
+            ),
+        )
     return estado
 
 
@@ -431,8 +488,17 @@ async def solicitar_troca_moedas(
             saldo_apos=saldo_restante,
             referencia=f"{quantidade_moedas} moedas → {formatar_dinheiro(valor_ingame)}",
         )
-    except Exception:
-        pass
+    except Exception as erro_ao_registrar_troca:
+        # ATENCAO: as moedas JA foram debitadas. Sem o extrato, o membro pode
+        # cobrar a troca e ninguem consegue provar que ela aconteceu.
+        await capturar_erro_e_logar(
+            erro_ao_registrar_troca,
+            contexto=(
+                f"registrar no extrato a troca de {quantidade_moedas} moedas "
+                f"do membro {membro.id}"
+            ),
+            guilda=membro.guild,
+        )
 
     # Log não pode derrubar a troca se falhar
     try:
@@ -511,6 +577,12 @@ def montar_texto_solicitacao_troca_moedas(
     quantidade_moedas: int,
     valor_ingame: int,
 ) -> str:
+    """Mantém o formato antigo de texto usando o construtor atual do card financeiro.
+
+    Reúne título e corpo em uma única string para compatibilidade com importações
+    antigas. Assim, integrações legadas continuam exibindo os mesmos dados sem duplicar
+    a regra de cálculo e formatação da solicitação.
+    """
     titulo, corpo = montar_corpo_solicitacao_troca_moedas(
         membro=membro,
         id_fivem=id_fivem,

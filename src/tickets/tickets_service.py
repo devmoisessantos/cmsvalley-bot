@@ -4,6 +4,7 @@ Lógica de tickets: criar canal, assumir, finalizar e preparar transcript.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from pathlib import Path
 
@@ -16,11 +17,14 @@ from src.config import (
     CARGOS_TICKET_STAFF,
     TICKETS_CATEGORIAS,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     Ticket,
     agora,
 )
+from src.utils.error_handling import ignorar_falha_cosmetica
+
+registrador = logging.getLogger(__name__)
 
 
 def _ids_cargos_staff(guilda: discord.Guild) -> list[discord.Object]:
@@ -67,6 +71,7 @@ def sanitizar_nome_canal(texto: str) -> str:
 
 
 async def buscar_ticket_por_canal(canal_id: int) -> Ticket | None:
+    """Obtém o ticket ligado ao canal para evitar tratar canais comuns como suporte."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Ticket).where(Ticket.canal_id == canal_id)
@@ -239,7 +244,7 @@ async def assumir_ticket(
         )
         nome_aplicado = canal_editado.name
     except discord.HTTPException as erro:
-        print(f"⚠️ Falha ao renomear canal do ticket: {erro}")
+        registrador.warning(f"⚠️ Falha ao renomear canal do ticket: {erro}")
 
     async with async_session() as sessao:
         ticket_db = await sessao.get(Ticket, ticket.id)
@@ -331,6 +336,7 @@ async def salvar_call_canal_id(ticket_id: int, call_canal_id: int | None) -> Non
 
 
 async def buscar_ticket_por_id(ticket_id: int) -> Ticket | None:
+    """Obtém um ticket pela chave primária sem lançar erro quando não existe."""
     async with async_session() as sessao:
         return await sessao.get(Ticket, ticket_id)
 
@@ -380,8 +386,13 @@ async def apagar_call_do_ticket(
     if canal_voz is not None:
         try:
             await canal_voz.delete(reason=f"Call do ticket #{ticket.id} encerrada")
-        except discord.HTTPException:
-            pass
+        except discord.HTTPException as erro_em_apagar_call_do_ticket:
+            # Enfeite que falhou: apagar a call de voz do ticket.
+            # A acao principal ja tinha dado certo, entao so registro.
+            ignorar_falha_cosmetica(
+                erro_em_apagar_call_do_ticket,
+                o_que_falhou="apagar a call de voz do ticket",
+            )
     await salvar_call_canal_id(ticket.id, None)
 
 
@@ -797,31 +808,41 @@ def montar_html_transcript(
     }
 
     def esc(texto: str) -> str:
+        """Neutraliza caracteres HTML para que mensagens não alterem o transcript."""
         return modulo_html.escape(texto or "")
 
     def url_avatar(usuario: discord.abc.User) -> str:
+        """Obtém uma imagem de avatar com alternativa segura para falhas da API."""
         try:
             return str(usuario.display_avatar.replace(size=64).url)
         except Exception:
             return f"https://cdn.discordapp.com/embed/avatars/{int(usuario.id) % 6}.png"
 
     def url_icone_guilda() -> str:
+        """Fornece o ícone da guilda ou uma imagem padrão para o cabeçalho HTML."""
         if guilda is not None and guilda.icon is not None:
             return str(guilda.icon.replace(size=128).url)
         return "https://cdn.discordapp.com/embed/avatars/0.png"
 
-    def formatar_horario(dt) -> str:
-        if dt is None:
+    def formatar_horario(data_e_hora) -> str:
+        """Converte horários ao fuso local sem impedir o transcript se isso falhar."""
+        if data_e_hora is None:
             return "—"
-        local = dt
+        local = data_e_hora
         try:
             from src.utils.formatacao import para_horario_brasilia
 
-            convertido = para_horario_brasilia(dt)
+            convertido = para_horario_brasilia(data_e_hora)
             if convertido is not None:
                 local = convertido
-        except Exception:
-            pass
+        except Exception as erro_ao_converter_fuso:
+            # Se a conversao de fuso falha, mostro o horario como veio (UTC)
+            # em vez de derrubar o transcript inteiro por causa de um horario.
+            logging.warning(
+                "Nao consegui converter %s para o fuso de Brasilia: %s",
+                data_e_hora,
+                erro_ao_converter_fuso,
+            )
         return local.strftime("%d/%m/%Y, %H:%M:%S")
 
     def mapa_usuarios_mencionados(
@@ -834,8 +855,14 @@ def montar_html_transcript(
             mapa[str(usuario.id)] = nome_usuario_discord(usuario)
         try:
             mapa[str(mensagem.author.id)] = nome_usuario_discord(mensagem.author)
-        except Exception:
-            pass
+        except AttributeError as erro_sem_autor:
+            # Mensagem de sistema pode nao ter autor utilizavel. O transcript
+            # continua valido sem esse nome no mapa.
+            logging.debug(
+                "Mensagem %s sem autor utilizavel para o transcript: %s",
+                getattr(mensagem, "id", "?"),
+                erro_sem_autor,
+            )
         # Resolve IDs soltos no texto via cache da guilda
         texto_busca = f"{mensagem.content or ''}\n{texto_extra or ''}"
         if guilda is not None:
@@ -856,6 +883,7 @@ def montar_html_transcript(
         mapa: dict[str, tuple[str, str]] = {}
 
         def registrar_cargo(cargo) -> None:
+            """Inclui no mapa cargos disponíveis para resolver menções do HTML."""
             if cargo is None:
                 return
             cor = getattr(cargo, "color", None)
@@ -889,12 +917,15 @@ def montar_html_transcript(
             return ""
 
         def trocar_usuario(match) -> str:
+            """Protege menções de usuário até a etapa de renderização HTML."""
             return f"{{{{U:{match.group(1)}}}}}"
 
         def trocar_cargo(match) -> str:
+            """Protege menções de cargo até a etapa de renderização HTML."""
             return f"{{{{R:{match.group(1)}}}}}"
 
         def trocar_emoji(match) -> str:
+            """Troca emoji personalizado por marcador com animação e identidade."""
             animado = match.group(1) == "a"
             nome = match.group(2)
             emoji_id = match.group(3)
@@ -932,15 +963,16 @@ def montar_html_transcript(
         # (se rodar depois, o regex engole o src e quebra o GIF)
         seguro = modulo_re.sub(
             r"(?<![\"'=])(https?://[^\s<>\"']+)",
-            lambda m: (
-                f'<a href="{m.group(1)}" target="_blank" '
-                f'rel="noopener" class="msg-link">{m.group(1)}</a>'
+            lambda trecho_encontrado: (
+                f'<a href="{trecho_encontrado.group(1)}" target="_blank" '
+                f'rel="noopener" class="msg-link">{trecho_encontrado.group(1)}</a>'
             ),
             seguro,
         )
 
         # Emoji custom Discord → <img>
         def html_emoji(match) -> str:
+            """Transforma marcações de emoji em imagens fora do Discord."""
             animado = match.group(1) == "a"
             nome = match.group(2)
             emoji_id = match.group(3)
@@ -959,6 +991,7 @@ def montar_html_transcript(
 
         # Canais <#id>
         def html_canal(match) -> str:
+            """Renderiza a menção de canal com nome legível mesmo quando ele sumiu."""
             id_canal = match.group(1)
             canal_obj = guilda.get_channel(int(id_canal)) if guilda else None
             nome_canal = f"#{canal_obj.name}" if canal_obj else "canal-desconhecido"
@@ -969,24 +1002,28 @@ def montar_html_transcript(
         # Slash command mentions </comando:id>
         seguro = modulo_re.sub(
             r"&lt;/([a-zA-Z0-9_ -]+):(\d+)&gt;",
-            lambda m: f"<span class='channel'>/{esc(m.group(1))}</span>",
+            lambda trecho_encontrado: (
+                f"<span class='channel'>/{esc(trecho_encontrado.group(1))}</span>"
+            ),
             seguro,
         )
 
         # Timestamps <t:UNIX:formato>
         def html_timestamp(match) -> str:
+            """Converte o horário Unix da mensagem em texto estável no transcript."""
             unix = int(match.group(1))
             from datetime import (
                 datetime,
                 timezone,
             )
 
-            dt = datetime.fromtimestamp(unix, tz=timezone.utc)
-            return f"<span class='timestamp' style='display:inline'>{dt.strftime('%d/%m/%Y %H:%M')}</span>"
+            data_e_hora = datetime.fromtimestamp(unix, tz=timezone.utc)
+            return f"<span class='timestamp' style='display:inline'>{data_e_hora.strftime('%d/%m/%Y %H:%M')}</span>"
 
         seguro = modulo_re.sub(r"&lt;t:(\d+)(?::[a-zA-Z])?&gt;", html_timestamp, seguro)
 
         def html_usuario(match) -> str:
+            """Renderiza usuários pelo mapa local sem acesso futuro ao Discord."""
             id_usuario = match.group(1)
             nome = mapa_usuarios.get(id_usuario) or "usuário"
             return f"<span class='author'>@{esc(nome)}</span>"
@@ -994,6 +1031,7 @@ def montar_html_transcript(
         seguro = modulo_re.sub(r"\{\{U:(\d+)\}\}", html_usuario, seguro)
 
         def html_cargo(match) -> str:
+            """Renderiza cargos com cor salva e alternativa para cargos removidos."""
             id_cargo = match.group(1)
             dados_cargo = mapa_cargos.get(id_cargo)
             if dados_cargo:
@@ -1011,6 +1049,7 @@ def montar_html_transcript(
         blocos_codigo: list[str] = []
 
         def guardar_bloco(match) -> str:
+            """Isola código para preservar seu conteúdo durante substituições."""
             indice = len(blocos_codigo)
             blocos_codigo.append(f"<pre class='code-block'>{match.group(1)}</pre>")
             return f"{{{{CODE{indice}}}}}"
@@ -1179,6 +1218,12 @@ def montar_html_transcript(
             desativado: bool,
             emoji_obj,
         ) -> None:
+            """Normaliza um botão encontrado, descartando duplicatas e ações internas.
+
+            Converte estilo e emoji para a representação HTML e impede que
+            marcadores técnicos de ticket apareçam no transcript destinado à
+            leitura humana.
+            """
             chave = rotulo.strip().lower()
             if not chave or chave in vistos:
                 return
@@ -1208,6 +1253,7 @@ def montar_html_transcript(
             )
 
         def percorrer_dict(no) -> None:
+            """Visita estruturas serializadas para encontrar botões em cada nível."""
             if not isinstance(no, dict):
                 return
             # type 2 = Button no payload da API
@@ -1227,6 +1273,12 @@ def montar_html_transcript(
                     percorrer_dict(filhos)
 
         def percorrer_objeto(no, profundidade: int = 0) -> None:
+            """Visita componentes de objetos sem recursão infinita ou dados privados.
+
+            Aceita objetos e dicionários porque o Discord pode expor a mesma
+            interface em ambos os formatos. O limite de profundidade protege a
+            exportação contra estruturas inesperadamente circulares ou extensas.
+            """
             if no is None or profundidade > 14:
                 return
             if isinstance(no, dict):
@@ -1285,7 +1337,7 @@ def montar_html_transcript(
     def preparar_conteudo_mensagem(mensagem: discord.Message) -> dict:
         """Extrai texto, botões e mapas de menção de uma mensagem."""
         botoes = coletar_botoes(mensagem)
-        rotulos_botoes = {b["label"].strip().lower() for b in botoes}
+        rotulos_botoes = {botao["label"].strip().lower() for botao in botoes}
         texto_bruto = _texto_da_mensagem_discord(mensagem)
         if texto_bruto and rotulos_botoes:
             linhas_filtradas: list[str] = []
@@ -1492,7 +1544,7 @@ def montar_html_transcript(
             not texto_bruto
             and not texto_opcoes_staff
             and not mensagem.attachments
-            and not any(e.title or e.description for e in mensagem.embeds)
+            and not any(erro.title or erro.description for erro in mensagem.embeds)
             and not botoes
             and not getattr(mensagem, "stickers", None)
         ):

@@ -71,6 +71,12 @@ class NotificarCog(commands.Cog):
         mensagem: str,
         cor: app_commands.Choice[str] | None = None,
     ):
+        """Envia um card personalizado por DM e relata o resultado ao administrador.
+
+        Converte barras verticais em linhas para tornar o parâmetro de mensagem
+        prático no comando e limita o título antes do envio. A DM é registrada
+        pelo serviço central, enquanto a resposta privada orienta sobre falhas.
+        """
         await interacao.response.defer(ephemeral=True, thinking=True)
 
         chave_cor = cor.value if cor else "info"
@@ -125,6 +131,11 @@ class NotificarCog(commands.Cog):
         membro: discord.Member,
         texto: str,
     ):
+        """Entrega uma mensagem curta com título padrão e confirma o desfecho.
+
+        Limita o texto ao máximo aceito pelo card e usa a cor de aviso, evitando
+        que um alerta operacional pareça uma notificação personalizada comum.
+        """
         await interacao.response.defer(ephemeral=True, thinking=True)
         enviou = await enviar_dm_card(
             membro,
@@ -147,6 +158,7 @@ class NotificarCog(commands.Cog):
     )
     @apenas_administrador()
     async def ajuda(self, interacao: discord.Interaction):
+        """Mostra o guia privado dos formatos e do registro das notificações."""
         await enviar_card(
             interacao,
             titulo="📨 Ajuda · Notificar",
@@ -162,4 +174,5 @@ class NotificarCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra no bot os comandos administrativos de notificação por DM."""
     await bot.add_cog(NotificarCog(bot))

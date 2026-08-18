@@ -1,3 +1,16 @@
+"""
+Painel de plantao: bater ponto de entrada e de saida.
+
+E o painel que o membro mais usa no servidor. Tem tres partes:
+- `PainelPlantaoLayout`: o card fixo do canal, com os botoes.
+- `AcaoServicoView`: a confirmacao depois do clique.
+- `InformacoesPlantaoView`: o resumo de horas da pessoa.
+
+`ModalInformarIDFivem` aparece quando o bot ainda nao sabe o ID FiveM de quem
+esta batendo ponto. Sem esse ID, a hora nao pode ser lancada, por isso o
+formulario e obrigatorio antes de continuar.
+"""
+
 import logging
 from datetime import (
     datetime,
@@ -13,7 +26,7 @@ from src.config import (
     VALOR_MOEDA_INGAME,
     obter_ids_canais_plantao_em_ordem,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_service import (
     desligar_servico,
@@ -27,15 +40,19 @@ from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
     enviar_erro_para_log_erros,
+    ignorar_falha_cosmetica,
 )
 from src.utils.formatacao import (
     formatar_dinheiro,
     formatar_hms,
 )
 from src.utils.mensagens import (
+    editar_mensagem_original,
     responder_aviso,
     responder_erro,
+    responder_info,
     responder_sucesso,
+    responder_view,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,12 +80,22 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
         )
 
     async def on_submit(self, interaction: discord.Interaction):
+        """Valida o FiveM informado manualmente antes de iniciar o plantão.
+
+        Só permite números curtos e entrega a ativação ao serviço central, que grava
+        o estado necessário. A origem define qual painel será atualizado, para que o
+        membro continue no fluxo que iniciou em vez de receber uma resposta desconexa.
+        """
         valor = self.id_fivem_input.value.strip()
 
         if not valor.isdigit() or len(valor) > 6:
-            await interaction.response.send_message(
-                "❌ ID FiveM inválido. Deve conter apenas números, no máximo 6 dígitos.",
-                ephemeral=True,
+            await responder_erro(
+                interaction,
+                titulo="Sem permissão",
+                linhas=[
+                    "ID FiveM inválido. Deve conter apenas números, no máximo 6 "
+                    "dígitos.",
+                ],
             )
             return
 
@@ -76,24 +103,37 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
         resultado_texto = await ligar_servico(self.membro, valor)
 
         if not resultado_texto.startswith("✅"):
-            await interaction.followup.send(resultado_texto, ephemeral=True)
+            await responder_info(
+                interaction,
+                titulo="Resultado do plantão",
+                linhas=[
+                    resultado_texto,
+                ],
+            )
             return
 
         if self.origem == "painel":
             card = AcaoServicoView(
                 titulo="✅ Entrou em Serviço",
                 linhas=[
-                    "Conecte-se a uma das calls disponíveis para começar a contar tempo."
+                    "Conecte-se a uma das calls disponíveis para começar a contar "
+                    "tempo."
                 ],
                 cor=discord.Color.green(),
                 incluir_select_call=True,
             )
-            await interaction.followup.send(view=card, ephemeral=True)
+            await responder_view(
+                interaction,
+                card,
+                ephemeral=True,
+            )
         else:
             novo_estado = await _buscar_estado(self.membro.id)
             nova_view = InformacoesPlantaoView(self.membro, novo_estado)
-            await interaction.followup.send(
-                view=nova_view, ephemeral=True
+            await responder_view(
+                interaction,
+                nova_view,
+                ephemeral=True,
             )  # 👈 sem "resultado_texto" no content
 
 
@@ -136,10 +176,10 @@ class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
         select = discord.ui.Select(
             placeholder="📞 Escolha uma call para se conectar", options=opcoes
         )
-        select.callback = self._callback_selecionar_call
+        select.callback = self._ao_selecionar_call
         return select
 
-    async def _callback_selecionar_call(self, interaction: discord.Interaction):
+    async def _ao_selecionar_call(self, interaction: discord.Interaction):
         canal_id = int(interaction.data["values"][0])
         nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
 
@@ -161,7 +201,10 @@ class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
         view_link = discord.ui.LayoutView(timeout=None)
         view_link.add_item(container_link)
 
-        await interaction.response.edit_message(view=view_link)
+        await editar_mensagem_original(
+            interaction,
+            view=view_link,
+        )
 
 
 class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -185,7 +228,8 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 "## Sistema de Recompensas\n\n"
                 "Utilize os botões abaixo para iniciar ou encerrar seu plantão.\n"
-                "**Lembre-se:** você deve estar em uma call de voz para acumular tempo!\n\n\n"
+                "**Lembre-se:** você deve estar em uma call de voz para acumular "
+                "tempo!\n\n\n"
                 "💰 **Recompensa:** 1 Moeda (Valor: $100.000) a cada **30 min**.\n"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
@@ -200,13 +244,17 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             style=discord.ButtonStyle.primary,
             custom_id="plantao:toggle",
         )
-        botao.callback = self._callback_toggle
+        botao.callback = self._ao_toggle
         return botao
 
-    async def _callback_toggle(self, interaction: discord.Interaction):
+    async def _ao_toggle(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "❌ Este comando só pode ser usado em servidores.", ephemeral=True
+            await responder_erro(
+                interaction,
+                titulo="Comando indisponível aqui",
+                linhas=[
+                    "Este comando só pode ser usado em servidores.",
+                ],
             )
             return
 
@@ -223,9 +271,19 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                     linhas=["Seu cronômetro foi encerrado.", "Obrigado pelo plantão!"],
                     cor=discord.Color.red(),
                 )
-                await interaction.followup.send(view=card, ephemeral=True)
+                await responder_view(
+                    interaction,
+                    card,
+                    ephemeral=True,
+                )
             else:
-                await interaction.followup.send(resultado_texto, ephemeral=True)
+                await responder_info(
+                    interaction,
+                    titulo="Resultado do plantão",
+                    linhas=[
+                        resultado_texto,
+                    ],
+                )
             return
 
         id_fivem = await resolver_id_fivem(interaction.user.id)
@@ -236,8 +294,12 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                     ModalInformarIDFivem(interaction.user, origem="painel")
                 )
                 return
-            await interaction.response.send_message(
-                MENSAGEM_SEM_PERMISSAO, ephemeral=True
+            await responder_erro(
+                interaction,
+                titulo="Sem permissão",
+                linhas=[
+                    MENSAGEM_SEM_PERMISSAO,
+                ],
             )
             return
 
@@ -248,14 +310,25 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             card = AcaoServicoView(
                 titulo="✅ Entrou em Serviço",
                 linhas=[
-                    "Conecte-se a uma das calls disponíveis para começar a contar tempo."
+                    "Conecte-se a uma das calls disponíveis para começar a contar "
+                    "tempo."
                 ],
                 cor=discord.Color.green(),
                 incluir_select_call=True,
             )
-            await interaction.followup.send(view=card, ephemeral=True)
+            await responder_view(
+                interaction,
+                card,
+                ephemeral=True,
+            )
         else:
-            await interaction.followup.send(resultado_texto, ephemeral=True)
+            await responder_info(
+                interaction,
+                titulo="Resultado do plantão",
+                linhas=[
+                    resultado_texto,
+                ],
+            )
 
     def _botao_informacoes(self) -> discord.ui.Button:
         botao = discord.ui.Button(
@@ -263,25 +336,29 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             style=discord.ButtonStyle.secondary,
             custom_id="plantao:ver_info",
         )
-        botao.callback = self._callback_ver_informacoes
+        botao.callback = self._ao_ver_informacoes
         return botao
 
-    async def _callback_ver_informacoes(self, interaction: discord.Interaction):
+    async def _ao_ver_informacoes(self, interaction: discord.Interaction):
         from sqlalchemy import func
 
         from src.database.models import LogPlantao
 
         estado = await _buscar_estado(interaction.user.id)
         async with async_session() as session:
-            r = await session.execute(
+            resultado_da_consulta = await session.execute(
                 select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
                     LogPlantao.discord_id == interaction.user.id,
                     LogPlantao.duracao_segundos.is_not(None),
                 )
             )
-            tempo_total = int(r.scalar_one() or 0)
+            tempo_total = int(resultado_da_consulta.scalar_one() or 0)
         view = InformacoesPlantaoView(interaction.user, estado, tempo_total)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await responder_view(
+            interaction,
+            view,
+            ephemeral=True,
+        )
 
 
 async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
@@ -293,7 +370,9 @@ async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
 
 
 class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
-    """Status pessoal do plantão — sem coordenação/chamada (isso vive em outros canais)."""
+    """
+    Status pessoal do plantão — sem coordenação/chamada (isso vive em outros canais).
+    """
 
     def __init__(
         self,
@@ -327,7 +406,8 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         linhas = (
             f"`⏱️` **Status:** {status_texto}\n"
             f"`⏳` **Tempo do ciclo:** `{formatar_hms(segundos_ciclo + tempo_call)}`\n"
-            f"`🗓️` **Tempo total (histórico):** `{formatar_hms(tempo_total_segundos)}`\n"
+            f"`🗓️` **Tempo total (histórico):** "
+            f"`{formatar_hms(tempo_total_segundos)}`\n"
             f"`💰` **Moedas (saldo):** **{saldo}** "
             f"({formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
             f"`💵` **Valor por moeda:** {formatar_dinheiro(VALOR_MOEDA_INGAME)} / 30 min"
@@ -344,7 +424,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             botao = discord.ui.Button(
                 label="🟢 Entrar em Serviço", style=discord.ButtonStyle.success
             )
-        botao.callback = self._callback_toggle
+        botao.callback = self._ao_toggle
         row_botao.add_item(botao)
 
         botao_carteira = discord.ui.Button(
@@ -352,7 +432,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             style=discord.ButtonStyle.primary,
             emoji="💰",
         )
-        botao_carteira.callback = self._callback_carteira
+        botao_carteira.callback = self._ao_carteira
         row_botao.add_item(botao_carteira)
 
         avatar_url = membro.display_avatar.url
@@ -386,10 +466,10 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         select_menu = discord.ui.Select(
             placeholder="📍 Clique aqui para trocar de call", options=opcoes
         )
-        select_menu.callback = self._callback_selecionar_call
+        select_menu.callback = self._ao_selecionar_call
         return select_menu
 
-    async def _callback_toggle(self, interaction: discord.Interaction):
+    async def _ao_toggle(self, interaction: discord.Interaction):
         estado_antes = await _buscar_estado(interaction.user.id)
         ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
 
@@ -398,7 +478,10 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             await desligar_servico(interaction.user)
             novo_estado = await _buscar_estado(interaction.user.id)
             nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
-            await interaction.edit_original_response(view=nova_view)
+            await editar_mensagem_original(
+                interaction,
+                view=nova_view,
+            )
             return
 
         id_fivem = await resolver_id_fivem(interaction.user.id)
@@ -409,8 +492,12 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                     ModalInformarIDFivem(interaction.user, origem="info")
                 )
                 return
-            await interaction.response.send_message(
-                MENSAGEM_SEM_PERMISSAO, ephemeral=True
+            await responder_erro(
+                interaction,
+                titulo="Sem permissão",
+                linhas=[
+                    MENSAGEM_SEM_PERMISSAO,
+                ],
             )
             return
 
@@ -418,14 +505,17 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         await ligar_servico(interaction.user, id_fivem)
         novo_estado = await _buscar_estado(interaction.user.id)
         nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
-        await interaction.edit_original_response(view=nova_view)
+        await editar_mensagem_original(
+            interaction,
+            view=nova_view,
+        )
 
-    async def _callback_carteira(self, interaction: discord.Interaction):
+    async def _ao_carteira(self, interaction: discord.Interaction):
         from src.plantao.carteira_panel import abrir_carteira
 
         await abrir_carteira(interaction)
 
-    async def _callback_selecionar_call(self, interaction: discord.Interaction):
+    async def _ao_selecionar_call(self, interaction: discord.Interaction):
         canal_id = int(interaction.data["values"][0])
         nome_call = NOMES_CANAIS_PLANTAO.get(canal_id, "Call")
 
@@ -448,7 +538,11 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                 accent_color=discord.Color.blurple(),
             )
         )
-        await interaction.response.send_message(view=view_link, ephemeral=True)
+        await responder_view(
+            interaction,
+            view_link,
+            ephemeral=True,
+        )
 
 
 class ModalTrocarMoedasPlantao(
@@ -467,6 +561,12 @@ class ModalTrocarMoedasPlantao(
         self.quantidade_input.placeholder = f"Saldo disponível: {saldo_disponivel}"
 
     async def on_submit(self, interaction: discord.Interaction):
+        """Executa a troca com uma barreira de erro para não deixar a interação sem resposta.
+
+        Delega a regra financeira a um método separado e registra qualquer falha no
+        canal de erros, informando o membro de modo seguro. Essa proteção é importante
+        porque a operação pode debitar moedas e acionar o canal de finanças.
+        """
         try:
             await self._executar_troca(interaction)
         except Exception as erro:
@@ -483,7 +583,8 @@ class ModalTrocarMoedasPlantao(
                 interaction,
                 titulo="Erro na troca de moedas",
                 linhas=[
-                    "Ocorreu um erro inesperado. A equipe foi notificada no log de erros.",
+                    "Ocorreu um erro inesperado. A equipe foi notificada no log de "
+                    "erros.",
                     f"`{type(erro).__name__}: {erro}`",
                 ],
                 delay=20,
@@ -545,7 +646,8 @@ class ModalTrocarMoedasPlantao(
                 titulo="Solicitação enviada",
                 linhas=[
                     mensagem,
-                    "Pedido publicado no **canal de finanças** (com botão de confirmação).",
+                    "Pedido publicado no **canal de finanças** (com botão de "
+                    "confirmação).",
                     "Aguarde a equipe processar o pagamento in-game.",
                 ],
                 delay=15,
@@ -566,6 +668,14 @@ class ModalTrocarMoedasPlantao(
         try:
             novo_estado = await _buscar_estado(interaction.user.id)
             nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
-            await interaction.edit_original_response(view=nova_view)
-        except discord.HTTPException:
-            pass
+            await editar_mensagem_original(
+                interaction,
+                view=nova_view,
+            )
+        except discord.HTTPException as erro_em_executar_troca:
+            # Enfeite que falhou: atualizar o card da troca de moedas.
+            # A acao principal ja tinha dado certo, entao so registro.
+            ignorar_falha_cosmetica(
+                erro_em_executar_troca,
+                o_que_falhou="atualizar o card da troca de moedas",
+            )

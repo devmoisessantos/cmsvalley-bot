@@ -15,13 +15,13 @@ from src.bau.bau_service import (
     obter_tolerancia_extra,
     salvar_config_bau,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     AdvertenciaVerbalBau,
     CasoBau,
     ContadorItemBau,
 )
-from src.services.paineis_manutencao import recriar_painel
+from src.manutencao.manutencao_paineis import recriar_painel
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
@@ -49,10 +49,17 @@ class BauCog(commands.Cog):
 
     @grupo_bau.command(
         name="publicar",
-        description="[Admin] Publica ou recria o painel de controle no CANAL_PAINEL_BAU",
+        description="[Admin] Publica ou recria o painel de controle no "
+        "CANAL_PAINEL_BAU",
     )
     @apenas_administrador()
     async def publicar(self, interacao: discord.Interaction):
+        """Reconstrói o painel administrativo do baú no canal configurado.
+
+        Delega a recriação ao mecanismo central de painéis para não deixar uma
+        mensagem antiga com componentes inválidos. Responde ao administrador de
+        forma privada com o resultado da publicação no Discord.
+        """
         await interacao.response.defer(ephemeral=True)
         resultado = await recriar_painel(self.bot, "bau")
         if resultado.ok:
@@ -74,6 +81,11 @@ class BauCog(commands.Cog):
     )
     @apenas_administrador()
     async def painel(self, interacao: discord.Interaction):
+        """Abre os controles avançados apenas para o administrador que pediu.
+
+        A visualização recebe o identificador do solicitante para impedir que
+        outra pessoa use os botões de uma sessão administrativa privada.
+        """
         await responder_view(
             interacao,
             PainelAdminBauView(interacao.user.id),
@@ -95,6 +107,13 @@ class BauCog(commands.Cog):
         id_fivem: str,
         item: str,
     ):
+        """Autoriza excepcionalmente uma nova contagem de um item para alguém.
+
+        Confere se o item informado pertence aos limites conhecidos antes de
+        delegar a liberação. A operação altera os registros do baú e vincula o
+        administrador executor, evitando liberações para nomes digitados de
+        forma incompatível com a configuração.
+        """
         item_limpo = item.strip().lower()
         limites = await obter_limites_camada_1()
         if item_limpo not in limites:
@@ -119,13 +138,20 @@ class BauCog(commands.Cog):
         description="Mostra a chave do ciclo de contagem atual",
     )
     async def ciclo(self, interacao: discord.Interaction):
+        """Explica o período de contagem vigente e sua margem de alerta.
+
+        A resposta privada também esclarece que a reinicialização dos
+        contadores não apaga casos pendentes, evitando a impressão de que uma
+        ocorrência deixou de exigir acompanhamento.
+        """
         tolerancia = await obter_tolerancia_extra()
         await responder_info(
             interacao,
             titulo="Ciclo atual do baú",
             linhas=[
                 f"Chave: `{chave_ciclo_atual()}`",
-                f"Tolerância extra: **+{tolerancia}** (alerta só acima de limite+{tolerancia})",
+                f"Tolerância extra: **+{tolerancia}** (alerta só acima de "
+                f"limite+{tolerancia})",
                 "Resets locais: 00:00, 11:00 e 17:00.",
                 "Casos abertos **não** são apagados no reset.",
             ],
@@ -228,8 +254,9 @@ class PainelAdminBauView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         linhas = [
-            f"• `#{c.id}` · `{c.id_fivem}` · **{c.quantidade_atual}** un. · `{c.status}`"
-            for c in casos
+            f"• `#{caso.id}` · `{caso.id_fivem}` · **{caso.quantidade_atual}** un. · "
+            f"`{caso.status}`"
+            for caso in casos
         ]
         await responder_info(
             interacao, titulo=f"Casos abertos ({len(casos)})", linhas=linhas, delay=60
@@ -258,8 +285,10 @@ class PainelAdminBauView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         linhas = [
-            f"• `{r.id_fivem}` · **{r.item_canonico}** x{r.quantidade} · {r.nome_cidade or '—'}"
-            for r in rows
+            f"• `{linha_do_banco.id_fivem}` · **{linha_do_banco.item_canonico}** "
+            f"x{linha_do_banco.quantidade} "
+            f"· {linha_do_banco.nome_cidade or '—'}"
+            for linha_do_banco in rows
         ]
         await responder_info(
             interacao, titulo=f"Contadores · {ciclo}", linhas=linhas, delay=60
@@ -276,15 +305,16 @@ class PainelAdminBauView(LoggingViewMixin, discord.ui.LayoutView):
         tol = await obter_tolerancia_extra()
         linhas = [f"**Tolerância extra:** +{tol} (alerta se qtd > limite+{tol})", ""]
         linhas.append("**Camada 1 (diário)**")
-        for item, val in sorted(l1.items()):
-            teto = val + tol
+        for item, valor in sorted(l1.items()):
+            teto = valor + tol
             linhas.append(
-                f"• `{item}`: limite **{val}** → sem alerta até **{teto}** · alerta **{teto + 1}+**"
+                f"• `{item}`: limite **{valor}** → sem alerta até **{teto}** · "
+                f"alerta **{teto + 1}+**"
             )
         linhas.append("")
         linhas.append("**Camada 2 (grave)**")
-        for item, val in sorted(l2.items()):
-            linhas.append(f"• `{item}`: **{val}**")
+        for item, valor in sorted(l2.items()):
+            linhas.append(f"• `{item}`: **{valor}**")
         await responder_info(
             interacao, titulo="Limites do baú", linhas=linhas, delay=90
         )
@@ -309,15 +339,17 @@ class PainelAdminBauView(LoggingViewMixin, discord.ui.LayoutView):
                     .order_by(AdvertenciaVerbalBau.id.desc())
                     .limit(15)
                 )
-                regs = list(resultado.scalars().all())
-            if not regs:
+                registros = list(resultado.scalars().all())
+            if not registros:
                 await responder_info(
                     interacao, titulo="Verbais", linhas=["Nenhuma verbal registrada."]
                 )
                 return
             linhas = [
-                f"• `#{r.id}` · `{r.id_fivem}` · `{r.tipo}` · {r.item_canonico or '—'} · {r.motivo[:60]}"
-                for r in regs
+                f"• `#{registro.id}` · `{registro.id_fivem}` · `{registro.tipo}` · "
+                f"{registro.item_canonico or '—'} "
+                f"· {registro.motivo[:60]}"
+                for registro in registros
             ]
             await responder_info(
                 interacao, titulo="Prontuário verbal", linhas=linhas, delay=60
@@ -331,6 +363,7 @@ class PainelAdminBauView(LoggingViewMixin, discord.ui.LayoutView):
 
 
 async def responder_aviso_safe(interacao, texto: str):
+    """Envia um aviso padronizado do baú pela resposta centralizada."""
     from src.utils.mensagens import responder_aviso
 
     await responder_aviso(interacao, titulo="Baú", linhas=[texto])
@@ -347,6 +380,12 @@ class ModalEditarTolerancia(
     )
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Valida e persiste a margem adicional usada antes de abrir alertas.
+
+        Recusa valores que não sejam inteiros não negativos para impedir uma
+        configuração ambígua. Ao salvar no banco, registra quem fez a mudança
+        e mostra o impacto prático da nova tolerância.
+        """
         if not self.valor.value.strip().isdigit():
             await responder_erro(
                 interacao,
@@ -354,16 +393,17 @@ class ModalEditarTolerancia(
                 linhas=["Use um número inteiro ≥ 0."],
             )
             return
-        n = int(self.valor.value.strip())
+        numero = int(self.valor.value.strip())
         await salvar_config_bau(
-            "tolerancia_extra", str(n), atualizado_por=interacao.user.id
+            "tolerancia_extra", str(numero), atualizado_por=interacao.user.id
         )
         await responder_sucesso(
             interacao,
             titulo="Tolerância salva",
             linhas=[
-                f"Tolerância = **+{n}**.",
-                f"Ex.: limite 1 → sem alerta até **{1 + n}**; alerta a partir de **{2 + n}**.",
+                f"Tolerância = **+{numero}**.",
+                f"Ex.: limite 1 → sem alerta até **{1 + numero}**; alerta a partir "
+                f"de **{2 + numero}**.",
             ],
         )
 
@@ -382,19 +422,29 @@ class ModalEditarLimite(LoggingModalMixin, discord.ui.Modal, title="Editar limit
         self.title = f"Editar limite camada {camada}"
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Atualiza no banco o limite da camada escolhida para um item.
+
+        Normaliza o nome do item e aceita somente quantidades inteiras, pois a
+        chave de configuração precisa coincidir com a consultada pelo monitor.
+        A resposta confirma o valor salvo como substituição da configuração.
+        """
         item = self.item.value.strip().lower()
         if not self.quantidade.value.strip().isdigit():
             await responder_erro(
                 interacao, titulo="Quantidade inválida", linhas=["Use só números."]
             )
             return
-        qtd = int(self.quantidade.value.strip())
+        quantidade = int(self.quantidade.value.strip())
         chave = f"limite_{self.camada}_{item}"
-        await salvar_config_bau(chave, str(qtd), atualizado_por=interacao.user.id)
+        await salvar_config_bau(
+            chave, str(quantidade), atualizado_por=interacao.user.id
+        )
         await responder_sucesso(
             interacao,
             titulo="Limite salvo",
-            linhas=[f"`{item}` camada {self.camada} = **{qtd}** (override no banco)."],
+            linhas=[
+                f"`{item}` camada {self.camada} = **{quantidade}** (override no banco)."
+            ],
         )
 
 
@@ -409,6 +459,12 @@ class ModalConsultarStatus(
     )
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Consulta os casos persistidos que têm o estado escolhido.
+
+        Converte o estado para maiúsculas antes da busca para acompanhar o
+        formato salvo no banco e retorna no máximo quinze ocorrências, evitando
+        uma resposta do Discord grande demais.
+        """
         st = self.status.value.strip().upper()
         async with async_session() as sessao:
             resultado = await sessao.execute(
@@ -424,8 +480,9 @@ class ModalConsultarStatus(
             )
             return
         linhas = [
-            f"• `#{c.id}` · `{c.id_fivem}` · **{c.item_canonico}** x{c.quantidade_atual}"
-            for c in casos
+            f"• `#{caso.id}` · `{caso.id_fivem}` · **{caso.item_canonico}** "
+            f"x{caso.quantidade_atual}"
+            for caso in casos
         ]
         await responder_info(interacao, titulo=f"Casos · {st}", linhas=linhas, delay=60)
 
@@ -439,14 +496,22 @@ class ModalLiberarItem(LoggingModalMixin, discord.ui.Modal, title="Liberar item"
     )
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Executa a liberação pontual informada no formulário.
+
+        A operação altera os contadores e casos relacionados no banco por meio
+        do serviço central, mantendo o identificador de quem autorizou a ação.
+        """
         item = self.item.value.strip().lower()
-        msg = await liberar_limite_manual(
+        mensagem_de_retorno = await liberar_limite_manual(
             id_fivem=self.id_fivem.value.strip(),
             item_canonico=item,
             executor_id=interacao.user.id,
         )
-        await responder_sucesso(interacao, titulo="Liberado", linhas=[msg])
+        await responder_sucesso(
+            interacao, titulo="Liberado", linhas=[mensagem_de_retorno]
+        )
 
 
 async def setup(bot: commands.Bot):
+    """Registra os comandos administrativos do baú no bot."""
     await bot.add_cog(BauCog(bot))

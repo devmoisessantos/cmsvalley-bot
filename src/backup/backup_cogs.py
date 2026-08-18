@@ -18,6 +18,7 @@ Apenas Administradores.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 import discord
@@ -27,9 +28,9 @@ from discord.ext import (
     tasks,
 )
 
+from src.backup.backup_gerenciador_service import BackupManager
 from src.backup.backup_logger import BackupLogger
-from src.backup.backup_manager import BackupManager
-from src.backup.banco_discord_backup import (
+from src.backup.banco_no_discord_service import (
     PainelBancoBackupView,
     exportar_banco_para_canal,
     importar_snapshot_aditivo,
@@ -37,15 +38,15 @@ from src.backup.banco_discord_backup import (
     listar_backups_do_canal,
     verificar_banco_vs_canal,
 )
-from src.backup.diff_engine import DiffEngine
-from src.backup.member_snapshot import (
+from src.backup.comparacao_service import DiffEngine
+from src.backup.restauracao_service import RestoreManager
+from src.backup.retrato_de_membros_service import (
     definir_rejoin,
     rejoin_esta_ativo,
     restaurar_cargos_no_rejoin,
     salvar_snapshot_membro,
     sincronizar_todos_os_membros,
 )
-from src.backup.restore_manager import RestoreManager
 from src.config import (
     AUTO_BACKUP_DB_INTERVAL_MINUTES,
     AUTO_BACKUP_INTERVAL_HOURS,
@@ -53,7 +54,7 @@ from src.config import (
     CONFIRMATION_TIMEOUT,
     MAX_BACKUPS_PER_GUILD,
 )
-from src.services.sincronizar_usuarios import (
+from src.membros.sincronizar_usuarios_service import (
     garantir_usuario_basico,
     sincronizar_usuarios_do_servidor,
 )
@@ -67,7 +68,9 @@ from src.utils.mensagens import (
     responder_view,
 )
 from src.utils.permissions import apenas_administrador
-from src.utils.views import ConfirmView
+from src.utils.views import ViewDeConfirmacao
+
+registrador = logging.getLogger(__name__)
 
 
 class BackupCog(commands.Cog):
@@ -92,6 +95,9 @@ class BackupCog(commands.Cog):
         self.tarefa_backup_banco.start()
 
     def cog_unload(self):
+        """
+        Cancela as tarefas periódicas para evitar execuções após descarregar o cog.
+        """
         self.tarefa_backup_automatico.cancel()
         self.tarefa_backup_banco.cancel()
 
@@ -125,20 +131,27 @@ class BackupCog(commands.Cog):
 
         A mensagem não some enquanto a pessoa não clicar.
         """
-        view_dos_botoes = ConfirmView(
-            autor_id=interacao.user.id,
-            timeout=CONFIRMATION_TIMEOUT,
-        )
         corpo = "\n".join(f"`•` {linha}" for linha in linhas if linha is not None)
 
-        mensagem = await interacao.followup.send(
-            content=f"**{titulo}**\n{corpo}",
-            view=view_dos_botoes,
+        # O titulo e o corpo vao DENTRO da view. Em Components V2 nao se manda
+        # texto solto junto de uma LayoutView: o Discord recusa a mensagem.
+        view_dos_botoes = ViewDeConfirmacao(
+            autor_id=interacao.user.id,
+            timeout=CONFIRMATION_TIMEOUT,
+            titulo=titulo,
+            pergunta=corpo,
+        )
+
+        mensagem = await responder_view(
+            interacao,
+            view_dos_botoes,
             ephemeral=True,
         )
         await view_dos_botoes.wait()
         asyncio.create_task(excluir_mensagem(mensagem, delay=3))
-        return bool(view_dos_botoes.value)
+
+        pessoa_confirmou = view_dos_botoes.confirmado is True
+        return pessoa_confirmou
 
     def _backup_de_seguranca(self, guilda: discord.Guild, autor: str) -> None:
         """Cria um backup automático antes de restaurar algo."""
@@ -191,7 +204,7 @@ class BackupCog(commands.Cog):
         diferencas = self.comparador.comparar(guilda, backup_anterior)
         if not self.comparador.tem_diferenca(diferencas):
             # Silencioso: nada mudou desde o último snapshot
-            print(
+            registrador.warning(
                 f"[backup] {guilda.name}: sem alterações estruturais — "
                 "backup JSON ignorado."
             )
@@ -228,7 +241,7 @@ class BackupCog(commands.Cog):
             try:
                 await self._backup_estrutural_se_mudou(guilda)
             except Exception as erro:
-                print(f"Erro no backup estrutural de {guilda.name}: {erro}")
+                registrador.error(f"Erro no backup estrutural de {guilda.name}: {erro}")
 
     @tarefa_backup_automatico.before_loop
     async def _antes_do_backup_automatico(self):
@@ -251,15 +264,16 @@ class BackupCog(commands.Cog):
                     forcar=False,
                 )
                 if resultado_banco.get("enviado"):
-                    # Só um print no console — o próprio anexo no LOG_BACKUP já é o registro
-                    print(
+                    # Só um print no console — o próprio anexo no LOG_BACKUP já é o
+                    # registro
+                    registrador.info(
                         f"[backup-db] atualizado: {resultado_banco.get('arquivo')} "
                         f"hash={str(resultado_banco.get('hash') or '')[:12]} "
                         f"linhas={resultado_banco.get('linhas')}"
                     )
                 # Sem alteração → nada no console (silencioso)
             except Exception as erro:
-                print(f"[backup-db] erro em {guilda.name}: {erro}")
+                registrador.error(f"[backup-db] erro em {guilda.name}: {erro}")
 
     @tarefa_backup_banco.before_loop
     async def _antes_do_backup_banco(self):
@@ -275,6 +289,13 @@ class BackupCog(commands.Cog):
         antes: discord.Member,
         depois: discord.Member,
     ):
+        """
+        Atualiza o retrato de recuperação quando cargos ou apelido mudam.
+
+        O evento recebe o membro antes e depois da alteração e grava o estado novo
+        no banco. Isso preserva informações suficientes para devolver cargos em um
+        rejoin, sem criar gravações desnecessárias para mudanças sem relevância.
+        """
         cargos_antes = {cargo.id for cargo in antes.roles}
         cargos_depois = {cargo.id for cargo in depois.roles}
         cargos_mudaram = cargos_antes != cargos_depois
@@ -285,6 +306,14 @@ class BackupCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, membro: discord.Member):
+        """
+        Conserva os dados de quem saiu e encerra seu recrutamento pendente.
+
+        Grava no banco o último retrato do membro, necessário para recuperar seus
+        cargos em uma volta ao servidor. Também tenta cancelar o recrutamento ativo
+        para que uma saída não bloqueie um processo futuro; falhas nessa limpeza
+        são registradas, mas não impedem a preservação do retrato.
+        """
         # Cancela recrutamento ativo no banco (não trava reentrada / novo processo)
         try:
             from src.recrutamento.recrutamento_service import (
@@ -293,14 +322,23 @@ class BackupCog(commands.Cog):
 
             await cancelar_por_saida_do_servidor(membro.id)
         except Exception as erro_cancel:
-            print(
-                f"⚠️ [rejoin] falha ao cancelar recrutamento de {membro.id}: {erro_cancel}"
+            registrador.warning(
+                f"⚠️ [rejoin] falha ao cancelar recrutamento de {membro.id}: "
+                f"{erro_cancel}"
             )
 
         await salvar_snapshot_membro(membro)
 
     @commands.Cog.listener()
     async def on_member_join(self, membro: discord.Member):
+        """
+        Prepara a conta que retornou e tenta devolver seus cargos salvos.
+
+        Ignora bots, garante a linha básica do membro no banco e consulta o
+        retrato preservado para restaurar cargos quando o rejoin estiver ativado.
+        A restauração e seu resultado são registrados no canal de logs, evitando
+        que uma mudança automática de permissões passe despercebida.
+        """
         if membro.bot:
             return
 
@@ -308,7 +346,7 @@ class BackupCog(commands.Cog):
         try:
             await garantir_usuario_basico(membro)
         except Exception as erro:
-            print(f"Aviso ao criar usuario no join: {erro}")
+            registrador.warning(f"Aviso ao criar usuario no join: {erro}")
 
         relatorio = await restaurar_cargos_no_rejoin(membro)
         if relatorio:
@@ -330,6 +368,14 @@ class BackupCog(commands.Cog):
     )
     @apenas_administrador()
     async def criar(self, interacao: discord.Interaction):
+        """
+        Produz um retrato manual do servidor e confirma o resultado ao administrador.
+
+        Salva em disco cargos, canais, categorias e membros do servidor da
+        interação. Depois atualiza os retratos individuais no banco e envia tanto
+        uma resposta temporária quanto um registro no canal de backup, para que o
+        arquivo criado possa ser localizado e auditado mais tarde.
+        """
         await interacao.response.defer(thinking=True, ephemeral=True)
 
         backup = self.gerenciador.criar_backup(
@@ -342,7 +388,7 @@ class BackupCog(commands.Cog):
         try:
             await sincronizar_todos_os_membros(interacao.guild)
         except Exception as erro:
-            print(f"Aviso ao sincronizar snapshots: {erro}")
+            registrador.warning(f"Aviso ao sincronizar snapshots: {erro}")
 
         await enviar_card(
             interacao,
@@ -375,6 +421,13 @@ class BackupCog(commands.Cog):
     )
     @apenas_administrador()
     async def listar(self, interacao: discord.Interaction):
+        """
+        Mostra até vinte retratos disponíveis para a guilda da interação.
+
+        A resposta é enviada como card temporário no Discord. Quando não há
+        arquivos, informa isso explicitamente para evitar que o administrador
+        tente restaurar ou exportar um backup inexistente.
+        """
         arquivos = self.gerenciador.listar_backups(interacao.guild.id)
 
         if not arquivos:
@@ -413,6 +466,14 @@ class BackupCog(commands.Cog):
         interacao: discord.Interaction,
         arquivo: str | None = None,
     ):
+        """
+        Entrega ao administrador um arquivo de backup para download privado.
+
+        Usa o nome indicado ou, se ele estiver vazio, escolhe o backup mais
+        recente da guilda. Envia o JSON como anexo efêmero e agenda sua exclusão;
+        assim o arquivo fica acessível por tempo suficiente sem permanecer exposto
+        no histórico do Discord.
+        """
         nome = arquivo or self.gerenciador.nome_backup_mais_recente(interacao.guild.id)
         if not nome:
             await enviar_card(
@@ -455,6 +516,13 @@ class BackupCog(commands.Cog):
     @app_commands.describe(arquivo="Nome exato do arquivo JSON")
     @apenas_administrador()
     async def deletar(self, interacao: discord.Interaction, arquivo: str):
+        """
+        Remove do disco somente o arquivo de backup escolhido pelo administrador.
+
+        O nome recebido precisa identificar o arquivo da guilda atual. A resposta
+        diferencia a remoção bem-sucedida de um nome ausente, evitando a impressão
+        enganosa de que um retrato ainda recuperável foi apagado.
+        """
         sucesso = self.gerenciador.deletar_backup(interacao.guild.id, arquivo)
 
         if sucesso:
@@ -489,6 +557,13 @@ class BackupCog(commands.Cog):
         interacao: discord.Interaction,
         arquivo: str | None = None,
     ):
+        """
+        Exibe diferenças entre o servidor atual e um retrato sem alterar nada.
+
+        Carrega o arquivo indicado, ou o mais recente, e transforma a comparação
+        em linhas legíveis no card temporário. Essa prévia permite avaliar perdas
+        ou mudanças antes de iniciar uma restauração que modificaria o Discord.
+        """
         await interacao.response.defer(thinking=True, ephemeral=True)
         backup, nome = await self._carregar_backup_alvo(interacao, arquivo)
 
@@ -523,6 +598,14 @@ class BackupCog(commands.Cog):
     )
     @apenas_administrador()
     async def status(self, interacao: discord.Interaction):
+        """
+        Reúne indicadores que ajudam a conferir se a proteção está funcionando.
+
+        Calcula quantos arquivos existem e quanto espaço ocupam no disco, identifica
+        o último backup e informa a frequência automática, o limite de retenção, o
+        canal de logs e o estado do rejoin. Envia esses dados somente à pessoa que
+        executou o comando.
+        """
         arquivos = self.gerenciador.listar_backups(interacao.guild.id)
         ultimo = arquivos[0] if arquivos else "Nenhum"
 
@@ -569,6 +652,14 @@ class BackupCog(commands.Cog):
         interacao: discord.Interaction,
         arquivo: str | None = None,
     ):
+        """
+        Recria cargos ausentes após mostrar uma prévia e pedir confirmação.
+
+        O arquivo opcional seleciona o backup; sem ele, é usado o mais recente.
+        Antes de modificar o Discord, simula as alterações, pede confirmação e
+        grava um backup de segurança. Só então cria os cargos necessários, responde
+        ao administrador e registra a intervenção no canal de logs.
+        """
         await interacao.response.defer(thinking=True, ephemeral=True)
         backup, nome = await self._carregar_backup_alvo(interacao, arquivo)
 
@@ -633,6 +724,14 @@ class BackupCog(commands.Cog):
         interacao: discord.Interaction,
         arquivo: str | None = None,
     ):
+        """
+        Recupera categorias e canais depois de uma prévia confirmada.
+
+        A função combina as simulações de categorias e canais para revelar o efeito
+        antes da mudança. Com a confirmação, salva um backup de segurança e altera
+        a estrutura do Discord; por fim, envia o relatório ao administrador e ao
+        canal de logs para deixar a restauração rastreável.
+        """
         await interacao.response.defer(thinking=True, ephemeral=True)
         backup, nome = await self._carregar_backup_alvo(interacao, arquivo)
 
@@ -707,6 +806,14 @@ class BackupCog(commands.Cog):
         interacao: discord.Interaction,
         arquivo: str | None = None,
     ):
+        """
+        Repõe cargos e apelidos apenas de membros ainda presentes na guilda.
+
+        O backup opcional define a origem do retrato e a função mostra uma simulação
+        antes de pedir confirmação. Após criar um backup de segurança, modifica os
+        perfis que ainda podem ser encontrados no Discord e avisa que pessoas que
+        saíram não podem ser adicionadas novamente por esse processo.
+        """
         await interacao.response.defer(thinking=True, ephemeral=True)
         backup, nome = await self._carregar_backup_alvo(interacao, arquivo)
 
@@ -776,6 +883,14 @@ class BackupCog(commands.Cog):
         interacao: discord.Interaction,
         arquivo: str | None = None,
     ):
+        """
+        Reconstitui a estrutura da guilda com uma confirmação reforçada.
+
+        Carrega o backup indicado ou o mais recente e deixa claro que a operação
+        inclui cargos, categorias e canais, mas não membros. Uma confirmação evita
+        alterações acidentais; depois dela, grava um backup de segurança, modifica
+        o Discord e registra o relatório completo no canal de logs.
+        """
         await interacao.response.defer(thinking=True, ephemeral=True)
         backup, nome = await self._carregar_backup_alvo(interacao, arquivo)
 
@@ -841,6 +956,13 @@ class BackupCog(commands.Cog):
     @app_commands.describe(ativo="True = ligado, False = desligado")
     @apenas_administrador()
     async def rejoin(self, interacao: discord.Interaction, ativo: bool):
+        """
+        Define se retornos ao servidor podem receber cargos do retrato salvo.
+
+        O booleano recebido liga ou desliga essa proteção para a guilda atual. A
+        escolha é persistida pela configuração de rejoin e divulgada em uma resposta
+        temporária e no canal de logs, para que a equipe saiba quem a alterou.
+        """
         definir_rejoin(interacao.guild.id, ativo)
         estado = "ligado ✅" if ativo else "desligado ⏸️"
 
@@ -869,6 +991,14 @@ class BackupCog(commands.Cog):
     )
     @apenas_administrador()
     async def sincronizar_membros(self, interacao: discord.Interaction):
+        """
+        Atualiza no banco os retratos de todos os membros atualmente presentes.
+
+        A operação grava cargos e dados necessários para a recuperação individual,
+        portanto pode levar algum tempo e começa com uma resposta adiada. Ao final,
+        informa a quantidade processada e o estado do rejoin, evitando confundir
+        sincronização de dados com a ativação da restauração automática.
+        """
         await interacao.response.defer(thinking=True, ephemeral=True)
         quantidade = await sincronizar_todos_os_membros(interacao.guild)
         estado_rejoin = (
@@ -905,7 +1035,7 @@ class BackupCog(commands.Cog):
         if resultado.erros:
             linhas.append(f"Avisos/erros: **{len(resultado.erros)}** (ver console)")
             for trecho in resultado.erros[:5]:
-                print(f"[sincronizar-usuarios] {trecho}")
+                registrador.info(f"[sincronizar-usuarios] {trecho}")
 
         await enviar_card(
             interacao,
@@ -929,10 +1059,18 @@ class BackupCog(commands.Cog):
 
     @grupo_backup.command(
         name="banco-painel",
-        description="Painel ephemeral: exportar, listar, verificar e importar o banco (JSON)",
+        description="Painel ephemeral: exportar, listar, verificar e importar o "
+        "banco (JSON)",
     )
     @apenas_administrador()
     async def banco_painel(self, interacao: discord.Interaction):
+        """
+        Abre controles privados para administrar o cofre JSON do banco.
+
+        Cria uma view vinculada ao identificador de quem executou o comando e a
+        envia de modo efêmero. Essa vinculação impede que outro membro use botões
+        capazes de exportar, conferir ou importar dados do banco.
+        """
         view = PainelBancoBackupView(self.bot, interacao.user.id)
         await responder_view(interacao, view, ephemeral=True)
 
@@ -949,6 +1087,14 @@ class BackupCog(commands.Cog):
         interacao: discord.Interaction,
         forcar: bool = False,
     ):
+        """
+        Publica no canal de backup um JSON do banco apenas quando necessário.
+
+        Calcula o retrato do Postgres e compara seu hash com o último anexo do
+        canal. O argumento booleano `forcar` permite publicar mesmo sem mudanças;
+        sem ele, evita duplicatas. Quando envia, grava uma mensagem e um anexo no
+        Discord e informa ao administrador o resultado.
+        """
         await interacao.response.defer(ephemeral=True)
         resultado = await exportar_banco_para_canal(
             interacao.guild,
@@ -984,7 +1130,8 @@ class BackupCog(commands.Cog):
 
     @grupo_backup.command(
         name="banco-importar",
-        description="Importa JSON do banco (só adiciona linhas que faltam — nunca apaga)",
+        description="Importa JSON do banco (só adiciona linhas que faltam — nunca "
+        "apaga)",
     )
     @app_commands.describe(
         arquivo="Arquivo .json exportado (pode ter sido editado no VS Code)"
@@ -995,6 +1142,14 @@ class BackupCog(commands.Cog):
         interacao: discord.Interaction,
         arquivo: discord.Attachment,
     ):
+        """
+        Acrescenta ao banco as linhas válidas presentes em um anexo JSON.
+
+        O anexo deve terminar em `.json`; depois de lido, seus registros ausentes
+        são inseridos no banco sem apagar nem atualizar os que já existem. Esse
+        comportamento aditivo reduz o risco de perder dados locais ao recuperar um
+        arquivo editado ou exportado anteriormente.
+        """
         await interacao.response.defer(ephemeral=True)
         nome = (arquivo.filename or "").lower()
         if not nome.endswith(".json"):
@@ -1048,6 +1203,13 @@ class BackupCog(commands.Cog):
     )
     @apenas_administrador()
     async def banco_verificar(self, interacao: discord.Interaction):
+        """
+        Compara o estado do banco com o último cofre publicado no canal de backup.
+
+        Gera e confronta hashes sem modificar dados, exibindo o motivo, as contagens
+        e o link do anexo encontrado. Assim, a equipe pode decidir se deve exportar
+        ou importar antes de executar uma sincronização desnecessária.
+        """
         await interacao.response.defer(ephemeral=True)
         resultado = await verificar_banco_vs_canal(interacao.guild)
         if resultado.get("igual"):
@@ -1077,6 +1239,13 @@ class BackupCog(commands.Cog):
     )
     @apenas_administrador()
     async def banco_listar(self, interacao: discord.Interaction):
+        """
+        Apresenta os últimos cofres JSON do banco com links de consulta e download.
+
+        Busca até dez anexos no canal de backup e monta cards com o nome e o hash
+        curto de cada um. Ao informar a ausência de anexos, evita que a equipe tente
+        conferir ou restaurar um cofre que ainda não foi criado.
+        """
         await interacao.response.defer(ephemeral=True)
         lista = await listar_backups_do_canal(interacao.guild, limite=10)
         if not lista:
@@ -1107,4 +1276,5 @@ class BackupCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra o cog de backup para disponibilizar seus comandos e tarefas."""
     await bot.add_cog(BackupCog(bot))

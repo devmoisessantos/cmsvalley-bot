@@ -6,6 +6,8 @@ Usa botões (não select) para cada categoria.
 
 from __future__ import annotations
 
+import logging
+
 import discord
 
 from src.config import TICKETS_CATEGORIAS
@@ -21,6 +23,8 @@ from src.utils.mensagens import (
     responder_card,
     responder_erro,
 )
+
+registrador = logging.getLogger(__name__)
 
 
 def _montar_linha_botao_canal(canal: discord.TextChannel) -> discord.ui.ActionRow:
@@ -51,7 +55,7 @@ async def abrir_ticket_por_categoria(
     if not isinstance(membro, discord.Member):
         await responder_erro(
             interacao,
-            titulo="Erro",
+            titulo="Comando indisponível aqui",
             linhas=["Só é possível abrir ticket dentro do servidor."],
         )
         return
@@ -106,7 +110,7 @@ async def abrir_ticket_por_categoria(
     if guilda is None:
         await responder_erro(
             interacao,
-            titulo="Erro",
+            titulo="Servidor não encontrado",
             linhas=["Guilda não encontrada."],
         )
         return
@@ -133,7 +137,9 @@ async def abrir_ticket_por_categoria(
             ticket_id=ticket.id,
         )
     except discord.HTTPException as erro_envio:
-        print(f"⚠️ Falha ao enviar cards de abertura do ticket: {erro_envio}")
+        registrador.warning(
+            f"⚠️ Falha ao enviar cards de abertura do ticket: {erro_envio}"
+        )
 
     await responder_card(
         interacao,

@@ -2,7 +2,8 @@
 """
 Perguntas da prova de recrutamento.
 
-- seed_perguntas_se_vazio: usado na subida do bot (só preenche se a tabela estiver vazia)
+- seed_perguntas_se_vazio: usado na subida do bot (só preenche se a tabela estiver
+vazia)
 - seed: script manual para inserir de novo (via python -m)
 """
 
@@ -10,17 +11,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from sqlalchemy import (
     func,
     select,
 )
 
-from src.database.connection import (
+from src.database.conexao import (
     async_session,
     init_db,
 )
 from src.database.models import Pergunta
+
+registrador = logging.getLogger(__name__)
 
 # Cada item: (enunciado, lista de opções, letra da resposta correta)
 PERGUNTAS = [
@@ -39,7 +43,8 @@ PERGUNTAS = [
         "B",
     ),
     (
-        "Um enfermeiro decide sair do hospital uniformizado para ajudar na rua. Isso é:",
+        "Um enfermeiro decide sair do hospital uniformizado para ajudar na rua. Isso "
+        "é:",
         [
             "Permitido em emergências",
             "Permitido com autorização",
@@ -57,7 +62,8 @@ PERGUNTAS = [
         "C",
     ),
     (
-        "Você saiu do hospital rapidamente para resolver algo fora e esqueceu o toggle ligado. O correto seria:",
+        "Você saiu do hospital rapidamente para resolver algo fora e esqueceu o "
+        "toggle ligado. O correto seria:",
         [
             "Manter ligado pois foi rápido",
             "Desligar o toggle antes de sair do hospital",
@@ -85,7 +91,8 @@ PERGUNTAS = [
         "B",
     ),
     (
-        "Você sendo membro do HP, pode se envolver com outras organizações (ilegais) durante o serviço?",
+        "Você sendo membro do HP, pode se envolver com outras organizações (ilegais) "
+        "durante o serviço?",
         ["Sim, se não for pego", "Não, é totalmente proibido", "Depende da situação"],
         "B",
     ),
@@ -137,7 +144,7 @@ async def seed_perguntas_se_vazio():
             return
 
         quantidade_inserida = await _inserir_perguntas(sessao)
-        print(
+        registrador.info(
             f"{quantidade_inserida} perguntas inseridas automaticamente "
             "(tabela estava vazia)."
         )
@@ -153,7 +160,7 @@ async def seed():
     await init_db()
     async with async_session() as sessao:
         quantidade_inserida = await _inserir_perguntas(sessao)
-    print(f"{quantidade_inserida} perguntas foram inseridas com sucesso.")
+    registrador.info(f"{quantidade_inserida} perguntas foram inseridas com sucesso.")
 
 
 if __name__ == "__main__":

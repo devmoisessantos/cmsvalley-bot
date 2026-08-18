@@ -37,7 +37,7 @@ class BauListener(commands.Cog):
 
             from src.bau.bau_views import ViewCasoBau
             from src.config import GUILD_ID
-            from src.database.connection import async_session
+            from src.database.conexao import async_session
             from src.database.models import CasoBau
 
             async with async_session() as sessao:
@@ -60,6 +60,13 @@ class BauListener(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, mensagem: discord.Message):
+        """Transforma logs do canal do baú em casos e alertas acompanháveis.
+
+        Aceita conteúdo de mensagens e de embeds porque diferentes integrações
+        publicam o log de formas distintas. Ao identificar eventos, atualiza o
+        banco, publica ou edita alertas no Discord e tenta avisar o membro por
+        mensagem direta, sem interromper os demais eventos se um deles falhar.
+        """
         if mensagem.author.bot and mensagem.author.id == getattr(
             self.bot.user, "id", None
         ):
@@ -112,7 +119,7 @@ class BauListener(commands.Cog):
                         LIMITES_BAU_CAMADA_1,
                         LIMITES_BAU_CAMADA_2,
                     )
-                    from src.database.connection import async_session
+                    from src.database.conexao import async_session
                     from src.database.models import CasoBau
 
                     async with async_session() as sessao:
@@ -155,7 +162,7 @@ class BauListener(commands.Cog):
                             await marcar_dm_resultado(caso.id, falhou=not ok_dm)
                             if not ok_dm and mensagem_alerta is not None:
                                 # re-publica com flag dm_falhou
-                                from src.database.connection import async_session
+                                from src.database.conexao import async_session
                                 from src.database.models import CasoBau
 
                                 async with async_session() as sessao:
@@ -175,4 +182,5 @@ class BauListener(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra o ouvinte contínuo dos logs do baú no bot."""
     await bot.add_cog(BauListener(bot))

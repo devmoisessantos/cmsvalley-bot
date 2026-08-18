@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from sqlalchemy import select
 
@@ -10,8 +12,10 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
+
+registrador = logging.getLogger(__name__)
 
 
 async def garantir_painel_bau(
@@ -30,7 +34,7 @@ async def garantir_painel_bau(
         canal_id = CANAIS.get("CANAL_PAINEL_BAU") or 0
         canal = bot.get_channel(canal_id) if canal_id else None
         if canal is None:
-            print(
+            registrador.error(
                 "❌ Canal CANAL_PAINEL_BAU não encontrado. "
                 f"Confira config CANAIS['CANAL_PAINEL_BAU']={canal_id}."
             )
@@ -41,7 +45,7 @@ async def garantir_painel_bau(
         else:
             guilda = bot.get_guild(int(GUILD_ID))
         if guilda is None:
-            print("❌ Guild não encontrada ao publicar painel do baú.")
+            registrador.error("❌ Guild não encontrada ao publicar painel do baú.")
             return
 
         view = PainelBauLayout(guild=guilda)
@@ -54,4 +58,6 @@ async def garantir_painel_bau(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel de Controle do Baú postado no canal #{canal.name}.")
+        registrador.info(
+            f"✅ Painel de Controle do Baú postado no canal #{canal.name}."
+        )

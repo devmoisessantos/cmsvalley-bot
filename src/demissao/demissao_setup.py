@@ -3,19 +3,29 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from sqlalchemy import select
 
 from src.config import CANAIS, GUILD_ID
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.demissao.demissao_panel import PainelDemissaoLayout
+
+registrador = logging.getLogger(__name__)
 
 
 async def garantir_painel_demissao(
     bot: discord.Client,
     interacao: discord.Interaction | None = None,
 ) -> None:
+    """Publica o painel de desligamento somente quando não há referência salva.
+
+    A consulta ao banco torna a inicialização idempotente e impede painéis
+    duplicados após reinícios. Quando consegue enviar o card, grava seu canal e
+    identificador para que futuras execuções reconheçam a publicação existente.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(PainelPostado).where(PainelPostado.nome_painel == "demissao")
@@ -25,12 +35,12 @@ async def garantir_painel_demissao(
 
         canal_id = CANAIS.get("CANAL_PAINEL_DEMISSAO") or 0
         if not canal_id:
-            print("⚠️ CANAL_PAINEL_DEMISSAO ainda não configurado (0).")
+            registrador.warning("⚠️ CANAL_PAINEL_DEMISSAO ainda não configurado (0).")
             return
 
         canal = bot.get_channel(int(canal_id))
         if canal is None:
-            print(f"❌ CANAL_PAINEL_DEMISSAO não encontrado ({canal_id}).")
+            registrador.error(f"❌ CANAL_PAINEL_DEMISSAO não encontrado ({canal_id}).")
             return
 
         guilda = (
@@ -39,7 +49,7 @@ async def garantir_painel_demissao(
             else bot.get_guild(int(GUILD_ID))
         )
         if guilda is None:
-            print("❌ Guild não encontrada ao publicar painel de demissão.")
+            registrador.error("❌ Guild não encontrada ao publicar painel de demissão.")
             return
 
         mensagem = await canal.send(view=PainelDemissaoLayout(guilda=guilda))
@@ -51,4 +61,6 @@ async def garantir_painel_demissao(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel de demissão postado em #{getattr(canal, 'name', canal.id)}.")
+        registrador.info(
+            f"✅ Painel de demissão postado em #{getattr(canal, 'name', canal.id)}."
+        )

@@ -26,6 +26,7 @@ class TicketsCog(commands.Cog):
         self.bot = bot
 
     async def cog_load(self) -> None:
+        """Registra interfaces persistentes para que botões sobrevivam a reinícios."""
         # Views persistentes dos painéis e dos botões dentro do canal
         self.bot.add_view(PainelTicketSuporteLayout())
         self.bot.add_view(PainelTicketDenunciasLayout())
@@ -55,4 +56,5 @@ class TicketsCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
+    """Adiciona ao bot os listeners e as interfaces do domínio de tickets."""
     await bot.add_cog(TicketsCog(bot))

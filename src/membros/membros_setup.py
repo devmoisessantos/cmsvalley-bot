@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from sqlalchemy import select
 
@@ -13,10 +15,12 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.membros.cargos_panel import PainelGerenciarCargoLayout
 from src.membros.membros_panel import PainelGerenciarMembrosLayout
+
+registrador = logging.getLogger(__name__)
 
 
 async def _resolver_guilda(
@@ -41,7 +45,7 @@ async def garantir_painel_gerenciar_cargos(
 
         canal = bot.get_channel(CANAIS["MANAGE_ROLE_CHANNEL_ID"])
         if canal is None:
-            print(
+            registrador.error(
                 "❌ Canal de Gerenciamento de Cargos não encontrado. "
                 "Confira CANAIS['MANAGE_ROLE_CHANNEL_ID']."
             )
@@ -52,7 +56,7 @@ async def garantir_painel_gerenciar_cargos(
 
         guilda = await _resolver_guilda(bot, interacao)
         if guilda is None:
-            print("❌ Guild não encontrada!")
+            registrador.error("❌ Guild não encontrada!")
             return
 
         view_do_painel = PainelGerenciarCargoLayout(guild=guilda)
@@ -66,7 +70,9 @@ async def garantir_painel_gerenciar_cargos(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel de Gerenciamento de Cargos postado no canal #{canal.name}.")
+        registrador.info(
+            f"✅ Painel de Gerenciamento de Cargos postado no canal #{canal.name}."
+        )
 
 
 async def garantir_painel_gerenciar_membros(
@@ -86,7 +92,9 @@ async def garantir_painel_gerenciar_membros(
         canal_id = CANAIS.get("CANAL_GERENCIAR_MEMBROS") or 0
         canal = bot.get_channel(canal_id) if canal_id else None
         if canal is None:
-            print("⚠️ Canal #gerenciar-membros não configurado/encontrado.")
+            registrador.warning(
+                "⚠️ Canal #gerenciar-membros não configurado/encontrado."
+            )
             return
 
         guilda = await _resolver_guilda(bot, interacao)
@@ -102,4 +110,4 @@ async def garantir_painel_gerenciar_membros(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel Gerenciar Membros postado em #{canal.name}.")
+        registrador.info(f"✅ Painel Gerenciar Membros postado em #{canal.name}.")

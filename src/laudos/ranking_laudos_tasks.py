@@ -31,6 +31,12 @@ from src.laudos.ranking_laudos_service import (
     salvar_historico_laudos,
 )
 from src.utils.formatacao import formatar_data_hora_local
+from src.utils.mensagens import (
+    responder_aviso,
+    responder_erro,
+    responder_sucesso,
+    responder_view,
+)
 from src.utils.permissions import is_authorized
 
 logger = logging.getLogger(__name__)
@@ -50,10 +56,17 @@ class RankingLaudosTasks(commands.Cog):
         logger.info("🧠 RankingLaudosTasks inicializado")
 
     def cog_unload(self):
+        """Cancela o agendamento para não deixar loop ativo após descarregar o cog."""
         self.loop_ranking_laudos.cancel()
 
     @tasks.loop(minutes=1)
     async def loop_ranking_laudos(self):
+        """Dispara rankings semanais e mensais uma única vez no horário definido.
+
+        Compara chaves de data e mês para não publicar repetidamente durante o
+        minuto de execução. A publicação automática também salva o histórico e
+        tenta acionar o fechamento financeiro sem bloquear o ranking se falhar.
+        """
         fuso = ZoneInfo(TIMEZONE_LOCAL)
         agora = datetime.now(fuso)
 
@@ -76,6 +89,7 @@ class RankingLaudosTasks(commands.Cog):
 
     @loop_ranking_laudos.before_loop
     async def antes_loop_ranking_laudos(self):
+        """Espera a conexão do bot antes de verificar horários de publicação."""
         await self.bot.wait_until_ready()
         logger.info("Bot pronto — loop ranking de laudos ativo")
 
@@ -156,6 +170,11 @@ class RankingLaudosTasks(commands.Cog):
         interacao: discord.Interaction,
         escopo: app_commands.Choice[str] | None = None,
     ):
+        """Mostra privadamente o ranking parcial semanal ou mensal solicitado.
+
+        Adia a resposta para acomodar a consulta ao banco e trata erros de
+        geração sem expor uma exceção bruta ao membro que executou o comando.
+        """
         if not interacao.response.is_done():
             try:
                 await interacao.response.defer(ephemeral=True)
@@ -172,11 +191,18 @@ class RankingLaudosTasks(commands.Cog):
                 guild=interacao.guild,
                 modo_postagem=False,
             )
-            await interacao.followup.send(view=view, ephemeral=True)
-        except Exception as erro:
-            await interacao.followup.send(
-                f"❌ Erro ao gerar ranking: `{type(erro).__name__}: {erro}`",
+            await responder_view(
+                interacao,
+                view,
                 ephemeral=True,
+            )
+        except Exception as erro:
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=[
+                    f"Erro ao gerar ranking: `{type(erro).__name__}: {erro}`",
+                ],
             )
 
     @grupo_ranking_laudos.command(
@@ -200,6 +226,12 @@ class RankingLaudosTasks(commands.Cog):
         periodo: app_commands.Choice[str],
         no_canal: bool = False,
     ):
+        """Gera o ranking oficial e, opcionalmente, publica-o no canal do domínio.
+
+        A prévia permanece privada quando `no_canal` é falso. Ao publicar,
+        envia o card ao Discord e grava seus identificadores e a contagem no
+        histórico, preservando uma referência administrativa da edição.
+        """
         if not interacao.response.is_done():
             try:
                 await interacao.response.defer(ephemeral=True)
@@ -213,14 +245,21 @@ class RankingLaudosTasks(commands.Cog):
                 modo_postagem=True,
             )
         except Exception as erro:
-            await interacao.followup.send(
-                f"❌ Erro: `{type(erro).__name__}: {erro}`",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Falha inesperada",
+                linhas=[
+                    f"Erro: `{type(erro).__name__}: {erro}`",
+                ],
             )
             return
 
         if not no_canal:
-            await interacao.followup.send(view=view, ephemeral=True)
+            await responder_view(
+                interacao,
+                view,
+                ephemeral=True,
+            )
             return
 
         canal_id = CANAIS.get("CANAL_RANKING_LAUDOS") or 0
@@ -230,9 +269,12 @@ class RankingLaudosTasks(commands.Cog):
             else None
         )
         if canal is None:
-            await interacao.followup.send(
-                "❌ `CANAL_RANKING_LAUDOS` não configurado ou canal inválido.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Dado inválido",
+                linhas=[
+                    "`CANAL_RANKING_LAUDOS` não configurado ou canal inválido.",
+                ],
             )
             return
 
@@ -246,10 +288,13 @@ class RankingLaudosTasks(commands.Cog):
             channel_id=canal.id,
             message_id=mensagem.id,
         )
-        await interacao.followup.send(
-            f"✅ Ranking de laudos **{periodo.value}** postado em {canal.mention} "
-            f"(total **{total}** laudos).",
-            ephemeral=True,
+        await responder_sucesso(
+            interacao,
+            titulo="Ranking postado",
+            linhas=[
+                f"Ranking de laudos **{periodo.value}** postado em {canal.mention} "
+                f"(total **{total}** laudos).",
+            ],
         )
 
     @grupo_ranking_laudos.command(
@@ -262,6 +307,11 @@ class RankingLaudosTasks(commands.Cog):
         interacao: discord.Interaction,
         limite: app_commands.Range[int, 1, 25] = 10,
     ):
+        """Exibe privadamente os últimos rankings de laudos já persistidos.
+
+        O limite tipado pelo comando impede consultas excessivas e cada linha
+        mostra a data local, o tipo e o total, facilitando auditorias rápidas.
+        """
         if not interacao.response.is_done():
             try:
                 await interacao.response.defer(ephemeral=True)
@@ -271,16 +321,22 @@ class RankingLaudosTasks(commands.Cog):
         try:
             registros = await listar_historico_laudos(limite=limite)
         except Exception as erro:
-            await interacao.followup.send(
-                f"❌ Banco indisponível (`{type(erro).__name__}`).",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Banco de dados indisponível",
+                linhas=[
+                    f"Banco indisponível (`{type(erro).__name__}`).",
+                ],
             )
             return
 
         if not registros:
-            await interacao.followup.send(
-                "_Nenhum ranking de laudos salvo ainda._",
-                ephemeral=True,
+            await responder_aviso(
+                interacao,
+                titulo="Nada para mostrar",
+                linhas=[
+                    "_Nenhum ranking de laudos salvo ainda._",
+                ],
             )
             return
 
@@ -299,8 +355,13 @@ class RankingLaudosTasks(commands.Cog):
                 accent_color=discord.Color.blurple(),
             )
         )
-        await interacao.followup.send(view=layout, ephemeral=True)
+        await responder_view(
+            interacao,
+            layout,
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):
+    """Registra o cog responsável pelos rankings e suas tarefas agendadas."""
     await bot.add_cog(RankingLaudosTasks(bot))

@@ -157,3 +157,76 @@ def formatar_data_solicitacao(data_hora: datetime | None = None) -> str:
         f"{local.day} de {MESES_ABREV[local.month]} "
         f"{local.year} {local.strftime('%H:%M')}"
     )
+
+
+def formatar_data_completa(data_hora: datetime | None) -> str:
+    """
+    Data completa em Brasília: DD/MM/AAAA.
+
+    Exemplo: 10/08/2026
+    """
+    local = para_horario_brasilia(data_hora)
+    if local is None:
+        return "—"
+    return local.strftime("%d/%m/%Y")
+
+
+def formatar_mes_e_ano(data_hora: datetime | None) -> str:
+    """
+    Mês abreviado com ano, em Brasília.
+
+    Exemplo: Ago/2026
+    """
+    local = para_horario_brasilia(data_hora)
+    if local is None:
+        return "—"
+    return f"{MESES_ABREV[local.month]}/{local.year}"
+
+
+def formatar_intervalo_de_datas(
+    data_de_inicio: datetime | None,
+    data_de_fim: datetime | None,
+    separador: str = " até ",
+) -> str:
+    """
+    Junta duas datas curtas em um texto de período.
+
+    Exemplo: 01/08 até 07/08
+    """
+    inicio_formatado = formatar_data_curta(data_de_inicio)
+    fim_formatado = formatar_data_curta(data_de_fim)
+    return f"{inicio_formatado}{separador}{fim_formatado}"
+
+
+def mencionar_cargo(id_do_cargo: int) -> str:
+    """
+    Escreve a mencao de um cargo do jeito que o Discord entende.
+
+    O Discord mostra o nome colorido do cargo quando recebe o texto
+    ``<@&123>``. Escrever isso na mao dentro de cada card e perigoso: se o id
+    mudar, alguem precisa cacar todos os lugares. Com esta funcao, o id vem
+    sempre de src/config.py e o formato fica escrito num lugar so.
+    """
+    return f"<@&{id_do_cargo}>"
+
+
+def mencionar_cargo_do_curso(chave_do_curso: str) -> str:
+    """
+    Menciona o cargo que o membro recebe ao concluir um curso.
+
+    Recebe a chave do curso como ela aparece em CURSOS, em src/config.py (por
+    exemplo "doutor" ou "instrutor") e devolve a mencao do cargo daquele curso.
+    Quando a chave nao existe no catalogo, devolve um travessao em vez de
+    quebrar o card inteiro por causa de um texto.
+    """
+    from src.config import CURSOS
+
+    dados_do_curso = CURSOS.get(chave_do_curso)
+    if dados_do_curso is None:
+        return "—"
+
+    id_do_cargo = dados_do_curso.get("cargo_id")
+    if id_do_cargo is None:
+        return "—"
+
+    return mencionar_cargo(id_do_cargo)

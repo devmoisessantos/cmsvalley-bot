@@ -34,18 +34,21 @@ from src.cursos.cursos_service import (
     rotulo_curso,
     soma_valor_ingame,
 )
-from src.plantao.permissoes import e_diretoria
+from src.plantao.plantao_permissoes import e_diretoria
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
     enviar_erro_para_log_erros,
+    ignorar_falha_cosmetica,
 )
 from src.utils.formatacao import formatar_reais
 from src.utils.mensagens import (
     COR_SUCESSO,
+    editar_mensagem_original,
     responder_aviso,
     responder_erro,
     responder_sucesso,
+    responder_view,
 )
 from src.utils.notificacao import enviar_dm_card
 
@@ -123,7 +126,8 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
                     "✅ Informe data/horário se quiser (ou deixe em branco).\n"
                     "✅ Pague com **moedas de plantão** ou registre **in-game**.\n"
                     "✅ Curso concluído = você recebe o **cargo** correspondente.\n"
-                    "✅ Se já tiver um pedido aberto, novos cursos **entram no mesmo card**."
+                    "✅ Se já tiver um pedido aberto, novos cursos **entram no mesmo "
+                    "card**."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 linha_botoes,
@@ -133,8 +137,9 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _ao_abrir_selecao(self, interacao: discord.Interaction):
         try:
-            await interacao.response.send_message(
-                view=SeletorMultiCursosView(interacao.user.id),
+            await responder_view(
+                interacao,
+                SeletorMultiCursosView(interacao.user.id),
                 ephemeral=True,
             )
         except Exception as erro:
@@ -287,6 +292,12 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
         self.add_item(self.campo_observacao)
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Leva a seleção do aluno para a confirmação de pagamento privada.
+
+        Confere o autor da solicitação para impedir que alguém aproveite um
+        modal alheio. Depois envia a visualização com os cursos e tenta apagar
+        a mensagem transitória do seletor, sem desfazer o pedido se isso falhar.
+        """
         if interacao.user.id != self.solicitante_id:
             await responder_erro(
                 interacao,
@@ -301,14 +312,23 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
             observacao_aluno=observacao,
         )
         # Uma única mensagem efêmera de confirmação (substitui o fluxo anterior)
-        await interacao.response.send_message(view=view, ephemeral=True)
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
 
         # Tenta apagar a mensagem do select (reduz spam)
         if self.id_mensagem_seletor is not None:
             try:
                 await interacao.followup.delete_message(self.id_mensagem_seletor)
-            except (discord.HTTPException, discord.NotFound):
-                pass
+            except (discord.HTTPException, discord.NotFound) as erro_em_on_submit:
+                # Enfeite que falhou: atualizar a mensagem depois do formulario.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_on_submit,
+                    o_que_falhou="atualizar a mensagem depois do formulario",
+                )
 
 
 class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
@@ -330,7 +350,8 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
         moedas = moedas_necessarias_para_pacote(chaves)
 
         lista = "\n".join(
-            f"• {rotulo_curso(chave)} — {formatar_reais(int((obter_curso(chave) or {}).get('valor_ingame') or 0))}"
+            f"• {rotulo_curso(chave)} — "
+            f"{formatar_reais(int((obter_curso(chave) or {}).get('valor_ingame') or 0))}"
             for chave in chaves
         )
         obs_txt = observacao_aluno if observacao_aluno else "_Sem observação_"
@@ -444,6 +465,13 @@ async def finalizar_pedido(
     forma: str,
     observacao_aluno: str,
 ) -> None:
+    """Cria ou amplia o pedido de cursos e o encaminha para agendamento.
+
+    Evita cobrar cursos que o membro já concluiu ou que já constam em um pedido
+    aberto. Debita moedas quando escolhido, persiste o pedido no banco e
+    publica ou atualiza seu card no Discord, registrando falhas inesperadas
+    para a equipe sem deixar o solicitante sem resposta.
+    """
     membro = interacao.user
     if not isinstance(membro, discord.Member):
         await responder_erro(
@@ -495,7 +523,9 @@ async def finalizar_pedido(
                 titulo="Cursos já estão no seu pedido aberto",
                 linhas=[
                     f"Pedido `#{pedido_aberto.id}` já inclui: "
-                    + ", ".join(rotulo_curso(c) for c in chaves_novas),
+                    + ", ".join(
+                        rotulo_curso(chave_do_curso) for chave_do_curso in chaves_novas
+                    ),
                     "Não é criado um segundo card.",
                 ],
                 delay=18,
@@ -539,7 +569,10 @@ async def finalizar_pedido(
             linhas_ok = [
                 f"Pedido `#{registro.id}` **atualizado** (sem segundo card).",
                 "Novos cursos: "
-                + ", ".join(rotulo_curso(c) for c in chaves_para_adicionar),
+                + ", ".join(
+                    rotulo_curso(chave_do_curso)
+                    for chave_do_curso in chaves_para_adicionar
+                ),
                 f"Forma: `{forma}`"
                 + (
                     f" · Moedas debitadas agora: `{moedas}` · Saldo: `{saldo_restante}`"
@@ -577,7 +610,8 @@ async def finalizar_pedido(
                 interacao,
                 titulo="Pedido salvo, falha no canal",
                 linhas=[
-                    f"Pedido `#{registro.id}` gravado, mas o card de agendamento falhou.",
+                    f"Pedido `#{registro.id}` gravado, mas o card de agendamento "
+                    f"falhou.",
                     "A equipe foi notificada no log de erros.",
                 ],
             )
@@ -734,6 +768,12 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
         self.add_item(self.campo)
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Aceita o agendamento e entrega o pedido ao fluxo de decisão final.
+
+        Reserva o pedido no banco para este instrutor, desativa o botão no card
+        original e publica o próximo card no canal de aprovar ou reprovar.
+        Também tenta avisar o aluno por DM e registra qualquer falha inesperada.
+        """
         try:
             await interacao.response.defer(ephemeral=True)
             obs = (self.campo.value or "").strip()
@@ -973,7 +1013,8 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
         if not await self._checar_perm(interacao):
             return
         chaves = self.chaves_cursos or await self._carregar_chaves()
-        await interacao.response.edit_message(
+        await editar_mensagem_original(
+            interacao,
             view=ViewDecisaoCurso(
                 titulo=self.titulo,
                 corpo=self.corpo,
@@ -982,14 +1023,15 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 url_avatar=self.url_avatar,
                 modo="selecionar_aprovar",
                 chaves_cursos=chaves,
-            )
+            ),
         )
 
     async def _ao_abrir_select_reprovar(self, interacao: discord.Interaction):
         if not await self._checar_perm(interacao):
             return
         chaves = self.chaves_cursos or await self._carregar_chaves()
-        await interacao.response.edit_message(
+        await editar_mensagem_original(
+            interacao,
             view=ViewDecisaoCurso(
                 titulo=self.titulo,
                 corpo=self.corpo,
@@ -998,7 +1040,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 url_avatar=self.url_avatar,
                 modo="selecionar_reprovar",
                 chaves_cursos=chaves,
-            )
+            ),
         )
 
     async def _carregar_chaves(self) -> list[str]:
@@ -1011,7 +1053,8 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
         if not await self._checar_perm(interacao):
             return
         chaves = self.chaves_cursos or await self._carregar_chaves()
-        await interacao.response.edit_message(
+        await editar_mensagem_original(
+            interacao,
             view=ViewDecisaoCurso(
                 titulo=self.titulo,
                 corpo=self.corpo,
@@ -1020,7 +1063,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 url_avatar=self.url_avatar,
                 modo="normal",
                 chaves_cursos=chaves,
-            )
+            ),
         )
 
     async def _ao_select_aprovar(self, interacao: discord.Interaction):
@@ -1028,8 +1071,12 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             return
         marcados = list((interacao.data or {}).get("values") or [])
         todas = self.chaves_cursos or await self._carregar_chaves()
-        aprovadas = [c for c in todas if c in marcados]
-        reprovadas = [c for c in todas if c not in marcados]
+        aprovadas = [
+            chave_do_curso for chave_do_curso in todas if chave_do_curso in marcados
+        ]
+        reprovadas = [
+            chave_do_curso for chave_do_curso in todas if chave_do_curso not in marcados
+        ]
         await self._aplicar_decisao_parcial(interacao, aprovadas, reprovadas)
 
     async def _ao_select_reprovar(self, interacao: discord.Interaction):
@@ -1037,8 +1084,12 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             return
         marcados = list((interacao.data or {}).get("values") or [])
         todas = self.chaves_cursos or await self._carregar_chaves()
-        reprovadas = [c for c in todas if c in marcados]
-        aprovadas = [c for c in todas if c not in marcados]
+        reprovadas = [
+            chave_do_curso for chave_do_curso in todas if chave_do_curso in marcados
+        ]
+        aprovadas = [
+            chave_do_curso for chave_do_curso in todas if chave_do_curso not in marcados
+        ]
         await self._aplicar_decisao_parcial(interacao, aprovadas, reprovadas)
 
     async def _aplicar_decisao_parcial(
@@ -1126,8 +1177,10 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             )
 
             resumo = (
-                f"Aprovados: {', '.join(rotulo_curso(c) for c in aprovadas) or '—'}\n"
-                f"Reprovados: {', '.join(rotulo_curso(c) for c in reprovadas) or '—'}"
+                f"Aprovados: "
+                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in aprovadas) or '—'}\n"
+                f"Reprovados: "
+                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in reprovadas) or '—'}"
             )
             try:
                 await interacao.message.edit(
@@ -1142,8 +1195,13 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                         chaves_cursos=self.chaves_cursos,
                     )
                 )
-            except discord.HTTPException:
-                pass
+            except discord.HTTPException as erro_em_aplicar_decisao_parcial:
+                # Enfeite que falhou: atualizar o card da decisao parcial.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_aplicar_decisao_parcial,
+                    o_que_falhou="atualizar o card da decisao parcial",
+                )
 
             await responder_sucesso(
                 interacao,
@@ -1172,6 +1230,12 @@ async def publicar_no_agendamentos(
     membro: discord.Member,
     registro,
 ) -> bool:
+    """Publica no canal de agendamentos o card que instrutores podem aceitar.
+
+    Retorna falso quando a guilda ou o canal não estão disponíveis e envia o
+    detalhe ao log de erros. Quando a publicação funciona, grava no banco os
+    identificadores do canal e da mensagem para futuras atualizações.
+    """
     if guilda is None:
         return False
     canal_id = CANAIS.get("CANAL_AGENDAMENTOS_DE_CURSO")
@@ -1253,6 +1317,12 @@ async def publicar_para_decisao(
     registro,
     aluno: discord.Member | None,
 ) -> None:
+    """Envia o pedido aceito ao canal onde cursos serão aprovados ou reprovados.
+
+    Usa o aluno conhecido ou um substituto mínimo quando ele não está em cache,
+    preservando menção e avatar quando possível. A função publica um novo card
+    no Discord e registra no canal de erros caso a configuração ou envio falhe.
+    """
     if guilda is None:
         return
     canal_id = CANAIS.get("CANAL_APROVAR_REPROVAR_CURSO")
@@ -1336,9 +1406,14 @@ async def publicar_resultado_final(
     mencao_aluno = aluno.mention if aluno else f"<@{registro.discord_id}>"
     if len(chaves) <= 1:
         chave = chaves[0] if chaves else registro.chave_curso
-        bloco_cursos = f"**{'🌄 Curso aplicado' if aprovado else 'Curso'}:** {menção_cargo_curso(chave)}"
+        bloco_cursos = (
+            f"**{'🌄 Curso aplicado' if aprovado else 'Curso'}:** "
+            f"{menção_cargo_curso(chave)}"
+        )
     else:
-        lista = "\n".join(f"> {menção_cargo_curso(c)}" for c in chaves)
+        lista = "\n".join(
+            f"> {menção_cargo_curso(chave_do_curso)}" for chave_do_curso in chaves
+        )
         bloco_cursos = (
             f"**📚 Cursos {'aplicados' if aprovado else 'reprovados'}:**\n{lista}"
         )
@@ -1383,4 +1458,5 @@ async def publicar_resultado_final(
 
 
 def view_persistente_cursos() -> PainelCursosLayout:
+    """Cria o painel sem prazo para sobreviver a reinicializações do bot."""
     return PainelCursosLayout()

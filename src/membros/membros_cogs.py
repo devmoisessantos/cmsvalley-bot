@@ -11,7 +11,10 @@ from discord.ext import commands
 
 from src.membros.cargos_panel import GerenciarCargosView
 from src.membros.cargos_service import determinar_escopos
-from src.utils.mensagens import responder_erro
+from src.utils.mensagens import (
+    responder_erro,
+    responder_view,
+)
 
 
 class MembrosCog(commands.Cog):
@@ -30,6 +33,12 @@ class MembrosCog(commands.Cog):
         description="Abre o painel para adicionar ou remover cargos de um membro",
     )
     async def painel_cargos(self, interacao: discord.Interaction):
+        """Abre um painel privado somente para quem possui escopos de gerenciamento.
+
+        Calcula as permissões antes de criar a interface para não expor ações
+        de cargos a membros sem autorização. O painel é efêmero, preservando a
+        privacidade das alterações administrativas.
+        """
         membro_executor = interacao.user
         escopos_do_executor = determinar_escopos(membro_executor)
 
@@ -42,8 +51,13 @@ class MembrosCog(commands.Cog):
             return
 
         view_do_painel = GerenciarCargosView(membro_executor)
-        await interacao.response.send_message(view=view_do_painel, ephemeral=True)
+        await responder_view(
+            interacao,
+            view_do_painel,
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):
+    """Adiciona ao bot os comandos de gerenciamento de membros."""
     await bot.add_cog(MembrosCog(bot))

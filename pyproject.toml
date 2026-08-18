@@ -7,3 +7,7 @@ select = ["E", "F", "I"]
 [tool.ruff.lint.isort]
 combine-as-imports = true
 force-wrap-aliases = true
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["teste_*.py"]

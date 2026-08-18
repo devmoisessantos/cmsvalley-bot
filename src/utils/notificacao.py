@@ -387,7 +387,10 @@ async def notificar_dm_remocao_punicao(
     motivo_remocao: str | None = None,
 ) -> bool:
     """DM quando uma punição é removida."""
-    lista = ", ".join(f"`{c.strip()}`" for c in cargos_removidos) or "—"
+    lista = (
+        ", ".join(f"`{nome_do_cargo.strip()}`" for nome_do_cargo in cargos_removidos)
+        or "—"
+    )
     motivo_txt = (motivo_remocao or "Sem motivo informado")[:500]
     linhas = [
         f"### > **🧹 Punições removidas:**\n{lista}",
@@ -438,7 +441,8 @@ async def notificar_dm_plantao_lembrete_ocioso(
         )
 
     linhas = [
-        f"Já se passaram **`{minutos} minutos`** sem você estar em uma call de plantão.",
+        f"Já se passaram **`{minutos} minutos`** sem você estar em uma call de "
+        f"plantão.",
         "",
         extra,
     ]

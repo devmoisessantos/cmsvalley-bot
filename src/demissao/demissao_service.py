@@ -19,11 +19,12 @@ from src.config import (
     CARGOS_DIRETORIA,
     CARGOS_HIERARQUIA,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     Punicao,
     SolicitacaoDemissao,
 )
+from src.utils.error_handling import ignorar_falha_cosmetica
 from src.utils.nickname import remover_prefixo_existente
 
 
@@ -43,11 +44,17 @@ def membro_pode_solicitar_demissao(membro: discord.Member) -> bool:
 
 
 def membro_e_diretoria(membro: discord.Member) -> bool:
+    """Confere cargos de diretoria para proteger decisões de desligamento."""
     nomes = {cargo.name for cargo in membro.roles}
     return bool(nomes.intersection(set(CARGOS_DIRETORIA)))
 
 
 async def contar_advertencias_ativas(discord_id: int) -> int:
+    """Conta punições ainda ativas para registrar o contexto do pedido.
+
+    Executa a agregação no banco em vez de carregar punições individuais, pois
+    o total é apenas um dado histórico apresentado na análise da diretoria.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(func.count())
@@ -58,6 +65,11 @@ async def contar_advertencias_ativas(discord_id: int) -> int:
 
 
 async def obter_pedido_pendente(discord_id: int) -> SolicitacaoDemissao | None:
+    """Busca o pedido pendente mais recente do membro para impedir duplicidade.
+
+    Considera somente o status pendente, de modo que uma pessoa possa solicitar
+    novamente depois de uma decisão sem confundir solicitações já finalizadas.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoDemissao)
@@ -76,6 +88,12 @@ async def criar_solicitacao(
     membro: discord.Member,
     motivo: str,
 ) -> SolicitacaoDemissao:
+    """Cria no banco uma solicitação voluntária com o contexto atual do membro.
+
+    Congela cargo, nome e advertências ativas no momento do pedido, pois esses
+    dados podem mudar antes da decisão. O motivo é limitado ao campo persistido
+    e o registro nasce pendente para ser encaminhado à diretoria.
+    """
     advertencias = await contar_advertencias_ativas(membro.id)
     cargo = cargo_atual_hierarquia(membro)
     async with async_session() as sessao:
@@ -101,6 +119,11 @@ async def marcar_mensagem_pedido(
     canal_id: int,
     mensagem_id: int,
 ) -> None:
+    """Vincula ao pedido o card publicado para que a decisão possa localizá-lo.
+
+    Ignora a gravação se a solicitação não existir mais, prevenindo erro numa
+    publicação que correu em paralelo com outra ação administrativa.
+    """
     async with async_session() as sessao:
         registro = await sessao.get(SolicitacaoDemissao, solicitacao_id)
         if registro is None:
@@ -112,6 +135,7 @@ async def marcar_mensagem_pedido(
 
 
 async def obter_solicitacao(solicitacao_id: int) -> SolicitacaoDemissao | None:
+    """Busca uma solicitação pelo identificador, retornando `None` se foi removida."""
     async with async_session() as sessao:
         return await sessao.get(SolicitacaoDemissao, solicitacao_id)
 
@@ -191,8 +215,16 @@ async def aplicar_cargos_demissao(
         nick_atual = membro.nick or membro.display_name
         if nick_limpo and nick_limpo != nick_atual:
             await membro.edit(nick=nick_limpo, reason=motivo_discord)
-    except (discord.Forbidden, discord.HTTPException):
+    except (
+        discord.Forbidden,
+        discord.HTTPException,
+    ) as erro_em_aplicar_cargos_demissao:
         # Nick não é crítico — demissão segue mesmo se falhar
-        pass
+        # Enfeite que falhou: aplicar cargos demissao.
+        # A acao principal ja tinha dado certo, entao so registro.
+        ignorar_falha_cosmetica(
+            erro_em_aplicar_cargos_demissao,
+            o_que_falhou="aplicar cargos demissao",
+        )
 
     return True, "Cargos ajustados (restou Visitantes) e prefixo removido do nick."

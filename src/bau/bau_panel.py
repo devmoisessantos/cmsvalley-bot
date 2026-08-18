@@ -12,7 +12,7 @@ from src.bau.bau_service import (
     obter_limites_camada_2,
     obter_tolerancia_extra,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     CasoBau,
     ContadorItemBau,
@@ -141,8 +141,9 @@ class PainelBauLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         linhas = [
-            f"• `#{c.id}` · `{c.id_fivem}` · **{c.quantidade_atual}** un. · `{c.status}`"
-            for c in casos
+            f"• `#{caso.id}` · `{caso.id_fivem}` · **{caso.quantidade_atual}** un. · "
+            f"`{caso.status}`"
+            for caso in casos
         ]
         await responder_info(
             interacao,
@@ -169,8 +170,10 @@ class PainelBauLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         linhas = [
-            f"• `{r.id_fivem}` · **{r.item_canonico}** x{r.quantidade} · {r.nome_cidade or '—'}"
-            for r in rows
+            f"• `{linha_do_banco.id_fivem}` · **{linha_do_banco.item_canonico}** "
+            f"x{linha_do_banco.quantidade} "
+            f"· {linha_do_banco.nome_cidade or '—'}"
+            for linha_do_banco in rows
         ]
         await responder_info(
             interacao,
@@ -189,15 +192,16 @@ class PainelBauLayout(LoggingViewMixin, discord.ui.LayoutView):
             "",
             "**Limite diário (camada 1)**",
         ]
-        for item, val in sorted(l1.items()):
-            teto = val + tol
+        for item, valor in sorted(l1.items()):
+            teto = valor + tol
             linhas.append(
-                f"• `{item}`: limite **{val}** · ok até **{teto}** · alerta **{teto + 1}+**"
+                f"• `{item}`: limite **{valor}** · ok até **{teto}** · alerta "
+                f"**{teto + 1}+**"
             )
         linhas.append("")
         linhas.append("**Limite grave (camada 2)**")
-        for item, val in sorted(l2.items()):
-            linhas.append(f"• `{item}`: **{val}**")
+        for item, valor in sorted(l2.items()):
+            linhas.append(f"• `{item}`: **{valor}**")
         await responder_info(
             interacao,
             titulo="Limites do baú",
@@ -266,6 +270,12 @@ class ModalLiberarDoPainel(
     )
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Valida o item e aplica pelo painel uma liberação excepcional.
+
+        Confere a lista de limites da primeira camada antes de alterar os dados
+        do baú, evitando criar liberações para itens inexistentes. O serviço
+        registra no banco o passaporte, o item normalizado e o executor.
+        """
         item = self.item.value.strip().lower()
         limites = await obter_limites_camada_1()
         if item not in limites:
@@ -275,9 +285,11 @@ class ModalLiberarDoPainel(
                 linhas=["Itens: " + ", ".join(sorted(limites.keys()))],
             )
             return
-        msg = await liberar_limite_manual(
+        mensagem_de_retorno = await liberar_limite_manual(
             id_fivem=self.id_fivem.value.strip(),
             item_canonico=item,
             executor_id=interacao.user.id,
         )
-        await responder_sucesso(interacao, titulo="Limite liberado", linhas=[msg])
+        await responder_sucesso(
+            interacao, titulo="Limite liberado", linhas=[mensagem_de_retorno]
+        )

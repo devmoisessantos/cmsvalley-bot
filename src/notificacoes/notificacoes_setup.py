@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from sqlalchemy import select
 
@@ -9,9 +11,11 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.notificacoes.notificacoes_panel import PainelNotificacaoLayout
+
+registrador = logging.getLogger(__name__)
 
 
 async def _resolver_guilda(
@@ -40,7 +44,7 @@ async def garantir_painel_notificacao(
         canal_id = CANAIS.get("CANAL_ENVIAR_NOTIFICACAO") or 0
         canal = bot.get_channel(canal_id) if canal_id else None
         if canal is None:
-            print(
+            registrador.warning(
                 "⚠️ Canal de enviar notificação não configurado/encontrado. "
                 "Confira CANAIS['CANAL_ENVIAR_NOTIFICACAO']."
             )
@@ -48,7 +52,9 @@ async def garantir_painel_notificacao(
 
         guilda = await _resolver_guilda(bot, interacao)
         if guilda is None:
-            print("❌ Guild não encontrada ao postar painel de notificação.")
+            registrador.error(
+                "❌ Guild não encontrada ao postar painel de notificação."
+            )
             return
 
         mensagem = await canal.send(view=PainelNotificacaoLayout(guilda=guilda))
@@ -60,4 +66,4 @@ async def garantir_painel_notificacao(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel de Notificação por DM postado em #{canal.name}.")
+        registrador.info(f"✅ Painel de Notificação por DM postado em #{canal.name}.")

@@ -10,8 +10,10 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import Ticket
+
+registrador = logging.getLogger(__name__)
 
 logger = logging.getLogger("cmsvalley-bot.tickets.transcript")
 
@@ -53,30 +55,33 @@ async def enviar_transcript_para_api(
     Também grava ticket.url_transcript no banco quando obtém a URL.
     """
     if not CMSVALLEY_API_URL:
-        msg = "CMSVALLEY_API_URL/EMS_OCR_API_URL não configurada — transcript não enviado."
-        logger.error(msg)
-        print(f"⚠️ [transcript] {msg}")
+        mensagem = (
+            "CMSVALLEY_API_URL/EMS_OCR_API_URL não configurada — transcript não "
+            "enviado."
+        )
+        logger.error(mensagem)
+        registrador.warning(f"⚠️ [transcript] {mensagem}")
         return None
 
     if not BACKUP_API_TOKEN:
-        msg = (
+        mensagem = (
             "BACKUP_API_TOKEN não configurado no BOT — a API rejeita com 401. "
             "Defina a mesma senha do Render no ambiente do bot."
         )
-        logger.error(msg)
-        print(f"⚠️ [transcript] {msg}")
+        logger.error(mensagem)
+        registrador.warning(f"⚠️ [transcript] {mensagem}")
         return None
 
     if not ticket.senha_transcript:
-        msg = f"Ticket #{ticket.id} sem senha de transcript."
-        logger.error(msg)
-        print(f"⚠️ [transcript] {msg}")
+        mensagem = f"Ticket #{ticket.id} sem senha de transcript."
+        logger.error(mensagem)
+        registrador.warning(f"⚠️ [transcript] {mensagem}")
         return None
 
     if not html or not str(html).strip():
-        msg = f"Ticket #{ticket.id} HTML de transcript vazio."
-        logger.error(msg)
-        print(f"⚠️ [transcript] {msg}")
+        mensagem = f"Ticket #{ticket.id} HTML de transcript vazio."
+        logger.error(mensagem)
+        registrador.warning(f"⚠️ [transcript] {mensagem}")
         return None
 
     payload = {
@@ -89,7 +94,7 @@ async def enviar_transcript_para_api(
     }
 
     url = f"{CMSVALLEY_API_URL}/transcripts"
-    print(f"📤 [transcript] POST {url} ticket=#{ticket.id}")
+    registrador.info(f"📤 [transcript] POST {url} ticket=#{ticket.id}")
 
     try:
         async with aiohttp.ClientSession() as sessao_http:
@@ -101,36 +106,36 @@ async def enviar_transcript_para_api(
             ) as resposta:
                 texto = await resposta.text()
                 if resposta.status == 401:
-                    msg = (
+                    mensagem = (
                         f"Token inválido ao enviar transcript #{ticket.id}. "
                         "BACKUP_API_TOKEN do bot deve ser idêntico ao do Render."
                     )
-                    logger.error(msg)
-                    print(f"⚠️ [transcript] {msg}")
+                    logger.error(mensagem)
+                    registrador.warning(f"⚠️ [transcript] {mensagem}")
                     return None
                 if resposta.status >= 400:
-                    msg = (
+                    mensagem = (
                         f"Falha ao enviar transcript #{ticket.id}: "
                         f"HTTP {resposta.status} — {texto[:300]}"
                     )
-                    logger.error(msg)
-                    print(f"⚠️ [transcript] {msg}")
+                    logger.error(mensagem)
+                    registrador.warning(f"⚠️ [transcript] {mensagem}")
                     return None
 
                 try:
                     dados = await resposta.json(content_type=None)
                 except Exception:
-                    msg = (
+                    mensagem = (
                         f"Resposta inválida ao enviar transcript #{ticket.id}: "
                         f"{texto[:200]}"
                     )
-                    logger.error(msg)
-                    print(f"⚠️ [transcript] {msg}")
+                    logger.error(mensagem)
+                    registrador.warning(f"⚠️ [transcript] {mensagem}")
                     return None
     except Exception as erro:
-        msg = f"Erro de rede ao enviar transcript #{ticket.id}: {erro}"
-        logger.error(msg)
-        print(f"⚠️ [transcript] {msg}")
+        mensagem = f"Erro de rede ao enviar transcript #{ticket.id}: {erro}"
+        logger.error(mensagem)
+        registrador.warning(f"⚠️ [transcript] {mensagem}")
         return None
 
     # Preferir página do site (Vercel); a API só guarda o HTML.
@@ -153,5 +158,5 @@ async def enviar_transcript_para_api(
             await sessao.refresh(ticket_db)
 
     logger.info("Transcript #%s publicado em %s", ticket.id, url_visualizacao)
-    print(f"✅ [transcript] Ticket #{ticket.id} → {url_visualizacao}")
+    registrador.info(f"✅ [transcript] Ticket #{ticket.id} → {url_visualizacao}")
     return url_visualizacao

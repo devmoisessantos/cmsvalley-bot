@@ -17,7 +17,7 @@ from src.config import (
     CARGOS_CRIACAO_EVENTO_GATE,
     HIERARQUIA_GATE,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     EventosGate,
     Presenca,
@@ -194,7 +194,8 @@ async def confirmar_presenca(
         if evento.status != "aberto":
             return ResultadoPresenca(
                 ok=False,
-                mensagem="Este evento já foi encerrado. Não é possível confirmar presença.",
+                mensagem="Este evento já foi encerrado. Não é possível confirmar "
+                "presença.",
             )
 
         if not membro_e_da_gate:
@@ -260,7 +261,8 @@ async def cancelar_presenca(evento_id: int, discord_id: int) -> ResultadoPresenc
         if evento.status != "aberto":
             return ResultadoPresenca(
                 ok=False,
-                mensagem="Este evento já foi encerrado. Não é possível cancelar a presença.",
+                mensagem="Este evento já foi encerrado. Não é possível cancelar a "
+                "presença.",
             )
 
         resultado_consulta = await sessao.execute(

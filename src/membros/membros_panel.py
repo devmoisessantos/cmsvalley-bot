@@ -21,7 +21,7 @@ from src.config import (
     NOMES_CANAIS_PLANTAO,
     VALOR_MOEDA_INGAME,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     EstadoPlantao,
     Usuario,
@@ -48,8 +48,8 @@ from src.membros.membros_service import (
     tempo_total_segundos_plantao,
     ultimos_logs_plantao,
 )
-from src.plantao.auditoria import registrar_auditoria_admin
-from src.plantao.permissoes import (
+from src.plantao.auditoria_service import registrar_auditoria_admin
+from src.plantao.plantao_permissoes import (
     e_diretoria,
     mensagem_sem_permissao,
 )
@@ -57,8 +57,8 @@ from src.plantao.plantao_service import (
     desligar_servico,
     garantir_aware,
 )
-from src.punicoes.helpers import resolver_id_fivem
-from src.punicoes.services import executar_exoneracao
+from src.punicoes.punicoes_helpers import resolver_id_fivem
+from src.punicoes.punicoes_service import executar_exoneracao
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
@@ -68,9 +68,11 @@ from src.utils.formatacao import (
     formatar_hms,
 )
 from src.utils.mensagens import (
+    editar_mensagem_original,
     responder_aviso,
     responder_erro,
     responder_sucesso,
+    responder_view,
 )
 
 # ── Identificadores dos blocos expansíveis ───────────────────────────────
@@ -189,12 +191,15 @@ async def _texto_recrutamento_candidato(membro: discord.Member) -> str:
         return "## 📝 Recrutamento (como candidato)\n_Nenhum registro._"
     return (
         f"## 📝 Recrutamento (como candidato)\n"
-        f"**Status:** `{rec_cand.status}` · **Cargo final:** `{rec_cand.cargo_final or '—'}`\n"
+        f"**Status:** `{rec_cand.status}` · **Cargo final:** "
+        f"`{rec_cand.cargo_final or '—'}`\n"
         f"**Recrutador:** <@{rec_cand.discord_id_recrutador}>\n"
         f"**Início:** {formatar_timestamp(rec_cand.data_inicio)} · "
         f"**Fim:** {formatar_timestamp(rec_cand.data_fim)}\n"
-        f"**Nota:** `{rec_cand.nota_percentual if rec_cand.nota_percentual is not None else '—'}` "
-        f"· **Acertos:** `{rec_cand.acertos if rec_cand.acertos is not None else '—'}`\n"
+        f"**Nota:** "
+        f"`{rec_cand.nota_percentual if rec_cand.nota_percentual is not None else '—'}` "
+        f"· **Acertos:** "
+        f"`{rec_cand.acertos if rec_cand.acertos is not None else '—'}`\n"
         f"**ID FiveM (rec):** `{rec_cand.id_fivem or '—'}`"
     )
 
@@ -204,10 +209,11 @@ async def _texto_recrutador(membro: discord.Member) -> str:
     if total_rec == 0:
         return "## ✈️ Recrutamentos feitos\n**Total:** `0` · **Última semana:** `0`"
     linhas_ult = []
-    for r in ultimos:
-        fid = r.id_fivem or "?"
+    for registro in ultimos:
+        fid = registro.id_fivem or "?"
         linhas_ult.append(
-            f"`{fid}` — <@{r.discord_id_candidato}> · {formatar_timestamp(r.data_fim)}"
+            f"`{fid}` — <@{registro.discord_id_candidato}> · "
+            f"{formatar_timestamp(registro.data_fim)}"
         )
     resto = total_rec - len(ultimos)
     extra = f"\n... e mais **{resto}**." if resto > 0 else ""
@@ -240,10 +246,12 @@ async def _texto_plantao(membro: discord.Member, estado: EstadoPlantao | None) -
     return (
         f"## ⏱️ Plantão\n"
         f"{linha_st}\n"
-        f"**Saldo moedas:** `{saldo}` ({formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
+        f"**Saldo moedas:** `{saldo}` "
+        f"({formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
         f"**Segundos do ciclo:** `{segs}`\n"
         f"**Tempo total (logs):** `{formatar_hms(tempo_total)}`\n"
-        f"**ID FiveM (plantão):** `{(estado.id_fivem if estado and estado.id_fivem else '—')}`"
+        f"**ID FiveM (plantão):** "
+        f"`{(estado.id_fivem if estado and estado.id_fivem else '—')}`"
     )
 
 
@@ -262,8 +270,8 @@ async def _texto_hist_plantao(membro: discord.Member) -> str:
         return "## 📜 Histórico recente (plantão)\n_Sem eventos._"
     linhas_log = []
     for log in logs:
-        ts = formatar_timestamp_relativo(log.criado_em)
-        linhas_log.append(f"`{log.evento}` {ts}")
+        marca_de_tempo = formatar_timestamp_relativo(log.criado_em)
+        linhas_log.append(f"`{log.evento}` {marca_de_tempo}")
     return "## 📜 Histórico recente (plantão)\n" + "\n".join(linhas_log)
 
 
@@ -273,20 +281,23 @@ async def _texto_punicoes(membro: discord.Member) -> str:
     linhas = ["## ⚠️ Punições / Advertências\n"]
     if ativas:
         linhas.append("**Ativas:**")
-        for p in ativas:
+        for punicao in ativas:
             linhas.append(
-                f"• `#{p.id}` **{p.cargo_nome}** · {formatar_timestamp(p.criada_em)}\n"
-                f"  _{p.motivo[:120]}{'…' if len(p.motivo) > 120 else ''}_ · por <@{p.executor_id}>"
+                f"• `#{punicao.id}` **{punicao.cargo_nome}** · "
+                f"{formatar_timestamp(punicao.criada_em)}\n"
+                f"  _{punicao.motivo[:120]}{'…' if len(punicao.motivo) > 120 else ''}_ "
+                f"· por <@{punicao.executor_id}>"
             )
     else:
         linhas.append("**Ativas:** nenhuma")
 
-    inativas = [p for p in recentes if not p.ativa][:5]
+    inativas = [punicao for punicao in recentes if not punicao.ativa][:5]
     if inativas:
         linhas.append("\n**Histórico (removidas / antigas):**")
-        for p in inativas:
+        for punicao in inativas:
             linhas.append(
-                f"• `#{p.id}` ~~{p.cargo_nome}~~ · {formatar_timestamp(p.criada_em)}"
+                f"• `#{punicao.id}` ~~{punicao.cargo_nome}~~ · "
+                f"{formatar_timestamp(punicao.criada_em)}"
             )
     return "\n".join(linhas)
 
@@ -314,10 +325,11 @@ async def _texto_bau(membro: discord.Member) -> str:
 
     if verbais:
         linhas.append("\n**Advertências verbais:**")
-        for v in verbais:
+        for advertencia_verbal in verbais:
             linhas.append(
-                f"• `{v.tipo}` · {formatar_timestamp(v.criada_em)} · "
-                f"_{v.motivo[:80]}{'…' if len(v.motivo) > 80 else ''}_"
+                f"• `{advertencia_verbal.tipo}` · "
+                f"{formatar_timestamp(advertencia_verbal.criada_em)} · "
+                f"_{advertencia_verbal.motivo[:80]}{'…' if len(advertencia_verbal.motivo) > 80 else ''}_"
             )
     else:
         linhas.append("\n**Advertências verbais:** nenhuma")
@@ -329,11 +341,12 @@ async def _texto_hist_cargos(membro: discord.Member) -> str:
     if not historico:
         return "## 🏷️ Histórico de cargos\n_Nenhuma movimentação registrada._"
     linhas = ["## 🏷️ Histórico de cargos\n"]
-    for h in historico:
-        simbolo = "➕" if h.acao == "ADICIONADO" else "➖"
+    for item_do_historico in historico:
+        simbolo = "➕" if item_do_historico.acao == "ADICIONADO" else "➖"
         linhas.append(
-            f"{simbolo} **{h.cargo}** · {h.acao} · "
-            f"{formatar_timestamp_relativo(h.data_hora)} · por <@{h.executor_id}>"
+            f"{simbolo} **{item_do_historico.cargo}** · {item_do_historico.acao} · "
+            f"{formatar_timestamp_relativo(item_do_historico.data_hora)} · por "
+            f"<@{item_do_historico.executor_id}>"
         )
     return "\n".join(linhas)
 
@@ -389,7 +402,7 @@ class PainelGerenciarMembrosLayout(LoggingViewMixin, discord.ui.LayoutView):
             custom_id="admin:gerenciar_membros",
             emoji="🛡️",
         )
-        botao.callback = self._callback_abrir
+        botao.callback = self._ao_abrir
         row.add_item(botao)
 
         self.container = discord.ui.Container(
@@ -410,7 +423,7 @@ class PainelGerenciarMembrosLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
         self.add_item(self.container)
 
-    async def _callback_abrir(self, interacao: discord.Interaction):
+    async def _ao_abrir(self, interacao: discord.Interaction):
         if not isinstance(interacao.user, discord.Member):
             await responder_erro(
                 interacao,
@@ -425,8 +438,9 @@ class PainelGerenciarMembrosLayout(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=[mensagem_sem_permissao("acessar o gerenciamento de membros")],
             )
             return
-        await interacao.response.send_message(
-            view=SeletorMembroAdminView(),
+        await responder_view(
+            interacao,
+            SeletorMembroAdminView(),
             ephemeral=True,
         )
 
@@ -529,6 +543,12 @@ class ModalBuscarDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
     )
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Abre a ficha administrativa a partir de um ID Discord válido.
+
+        Permite consultar também usuários que saíram do servidor, criando uma
+        representação mínima quando ainda existem dados no Discord. Isso evita
+        perder acesso ao histórico apenas porque o membro não está na guilda.
+        """
         if not e_diretoria(interacao.user):
             await responder_erro(
                 interacao,
@@ -568,11 +588,11 @@ class ModalBuscarDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
             )
 
             class _Proxy:
-                def __init__(self, u):
-                    self.id = u.id
-                    self.display_name = u.display_name
-                    self.mention = u.mention
-                    self.display_avatar = u.display_avatar
+                def __init__(self, usuario):
+                    self.id = usuario.id
+                    self.display_name = usuario.display_name
+                    self.mention = usuario.mention
+                    self.display_avatar = usuario.display_avatar
                     self.joined_at = None
                     self.roles = []
                     self.guild = interacao.guild
@@ -591,6 +611,12 @@ class ModalBuscarFivemId(discord.ui.Modal, title="Buscar por ID FiveM"):
     )
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Converte um ID FiveM em membro e abre sua ficha administrativa.
+
+        Confere o formato e o vínculo persistido antes de consultar o Discord.
+        Quando o usuário já saiu, preserva a consulta com uma representação
+        mínima para que a diretoria ainda possa verificar seus dados.
+        """
         if not e_diretoria(interacao.user):
             await responder_erro(
                 interacao,
@@ -628,11 +654,11 @@ class ModalBuscarFivemId(discord.ui.Modal, title="Buscar por ID FiveM"):
                 return
 
             class _Proxy:
-                def __init__(self, u):
-                    self.id = u.id
-                    self.display_name = u.display_name
-                    self.mention = u.mention
-                    self.display_avatar = u.display_avatar
+                def __init__(self, usuario):
+                    self.id = usuario.id
+                    self.display_name = usuario.display_name
+                    self.mention = usuario.mention
+                    self.display_avatar = usuario.display_avatar
                     self.joined_at = None
                     self.roles = []
                     self.guild = interacao.guild
@@ -657,9 +683,15 @@ async def _abrir_ficha(
     view = FichaMembroAdminView(membro, estado, bloco_ativo=bloco)
     await view.preparar()
     if interacao.response.is_done():
-        await interacao.edit_original_response(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
     else:
-        await interacao.response.edit_message(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
 
 
 # ── Ficha + blocos expansíveis + ações ───────────────────────────────────
@@ -809,13 +841,19 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         estado = await buscar_estado_plantao(self.alvo.id)
         view = FichaMembroAdminView(self.alvo, estado, bloco_ativo=novo_bloco)
         await view.preparar()
-        await interacao.edit_original_response(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
 
     async def _refresh(self, interacao: discord.Interaction):
         estado = await buscar_estado_plantao(self.alvo.id)
         view = FichaMembroAdminView(self.alvo, estado, bloco_ativo=self.bloco_ativo)
         await view.preparar()
-        await interacao.edit_original_response(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
 
     async def _forcar_desligar(self, interacao: discord.Interaction):
         if not await self._garantir_perm(interacao):
@@ -844,10 +882,10 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             return
         await interacao.response.defer(ephemeral=True)
         async with async_session() as session:
-            r = await session.execute(
+            resultado_da_consulta = await session.execute(
                 select(EstadoPlantao).where(EstadoPlantao.discord_id == self.alvo.id)
             )
-            estado = r.scalar_one_or_none()
+            estado = resultado_da_consulta.scalar_one_or_none()
             if estado:
                 estado.segundos_acumulados = 0
                 estado.segmento_iniciado_em = (
@@ -897,7 +935,11 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         view_cargos = GerenciarCargosView(interacao.user)
-        await interacao.response.send_message(view=view_cargos, ephemeral=True)
+        await responder_view(
+            interacao,
+            view_cargos,
+            ephemeral=True,
+        )
 
     async def _abrir_modal_exonerar(self, interacao: discord.Interaction):
         if not await self._garantir_perm(interacao):
@@ -916,7 +958,10 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
     async def _voltar(self, interacao: discord.Interaction):
         if not await self._garantir_perm(interacao):
             return
-        await interacao.response.edit_message(view=SeletorMembroAdminView())
+        await editar_mensagem_original(
+            interacao,
+            view=SeletorMembroAdminView(),
+        )
 
 
 class ModalAjustarMoedas(discord.ui.Modal, title="Ajustar moedas"):
@@ -933,6 +978,12 @@ class ModalAjustarMoedas(discord.ui.Modal, title="Ajustar moedas"):
         self.bloco_ativo = bloco_ativo
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Substitui o saldo de moedas e registra a correção administrativa.
+
+        Cria o estado de plantão se ele ainda não existir, grava o novo valor no
+        banco e envia uma auditoria com o saldo anterior. Em seguida atualiza a
+        ficha para evitar que a tela continue exibindo dados desatualizados.
+        """
         if not e_diretoria(interacao.user):
             await responder_erro(
                 interacao,
@@ -950,10 +1001,10 @@ class ModalAjustarMoedas(discord.ui.Modal, title="Ajustar moedas"):
         await interacao.response.defer(ephemeral=True)
         antigo = 0
         async with async_session() as session:
-            r = await session.execute(
+            resultado_da_consulta = await session.execute(
                 select(EstadoPlantao).where(EstadoPlantao.discord_id == self.alvo.id)
             )
-            estado = r.scalar_one_or_none()
+            estado = resultado_da_consulta.scalar_one_or_none()
             if estado is None:
                 estado = EstadoPlantao(discord_id=self.alvo.id)
                 session.add(estado)
@@ -972,7 +1023,10 @@ class ModalAjustarMoedas(discord.ui.Modal, title="Ajustar moedas"):
         estado = await buscar_estado_plantao(self.alvo.id)
         view = FichaMembroAdminView(self.alvo, estado, bloco_ativo=self.bloco_ativo)
         await view.preparar()
-        await interacao.edit_original_response(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
 
 
 class ModalEditarFivem(discord.ui.Modal, title="Editar ID FiveM"):
@@ -989,6 +1043,12 @@ class ModalEditarFivem(discord.ui.Modal, title="Editar ID FiveM"):
         self.bloco_ativo = bloco_ativo
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Atualiza o identificador FiveM em todos os registros que o utilizam.
+
+        Mantém EstadoPlantao e Usuario sincronizados, criando registros ausentes
+        quando necessário. A auditoria e a atualização da ficha impedem que a
+        correção administrativa fique sem rastreabilidade ou pareça incompleta.
+        """
         if not e_diretoria(interacao.user):
             await responder_erro(
                 interacao,
@@ -1005,10 +1065,10 @@ class ModalEditarFivem(discord.ui.Modal, title="Editar ID FiveM"):
         await interacao.response.defer(ephemeral=True)
         antigo = None
         async with async_session() as session:
-            r = await session.execute(
+            resultado_da_consulta = await session.execute(
                 select(EstadoPlantao).where(EstadoPlantao.discord_id == self.alvo.id)
             )
-            estado = r.scalar_one_or_none()
+            estado = resultado_da_consulta.scalar_one_or_none()
             if estado is None:
                 estado = EstadoPlantao(discord_id=self.alvo.id)
                 session.add(estado)
@@ -1036,7 +1096,10 @@ class ModalEditarFivem(discord.ui.Modal, title="Editar ID FiveM"):
         estado = await buscar_estado_plantao(self.alvo.id)
         view = FichaMembroAdminView(self.alvo, estado, bloco_ativo=self.bloco_ativo)
         await view.preparar()
-        await interacao.edit_original_response(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
 
 
 class ModalEditarStatus(discord.ui.Modal, title="Editar status (tabela usuarios)"):
@@ -1058,6 +1121,12 @@ class ModalEditarStatus(discord.ui.Modal, title="Editar status (tabela usuarios)
         self.bloco_ativo = bloco_ativo
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Altera o status administrativo e, opcionalmente, o apelido salvo.
+
+        Persiste as mudanças no usuário, marca aprovações definitivas e registra
+        quem fez a alteração. A ficha é reconstruída depois para refletir o
+        estado já confirmado pelo banco.
+        """
         if not e_diretoria(interacao.user):
             await responder_erro(
                 interacao,
@@ -1070,10 +1139,10 @@ class ModalEditarStatus(discord.ui.Modal, title="Editar status (tabela usuarios)
         await interacao.response.defer(ephemeral=True)
 
         async with async_session() as session:
-            r = await session.execute(
+            resultado_da_consulta = await session.execute(
                 select(Usuario).where(Usuario.discord_id == self.alvo.id)
             )
-            usuario = r.scalar_one_or_none()
+            usuario = resultado_da_consulta.scalar_one_or_none()
             if usuario is None:
                 usuario = Usuario(discord_id=self.alvo.id)
                 session.add(usuario)
@@ -1096,7 +1165,10 @@ class ModalEditarStatus(discord.ui.Modal, title="Editar status (tabela usuarios)
         estado = await buscar_estado_plantao(self.alvo.id)
         view = FichaMembroAdminView(self.alvo, estado, bloco_ativo=self.bloco_ativo)
         await view.preparar()
-        await interacao.edit_original_response(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
 
 
 class ModalExonerarMembro(
@@ -1123,6 +1195,12 @@ class ModalExonerarMembro(
         self.bloco_ativo = bloco_ativo
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Executa a exoneração com justificativa, provas e rastreio administrativo.
+
+        Resolve o ID FiveM por mais de uma fonte antes de acionar o serviço, que
+        pode alterar cargos e registros no Discord e no banco. Depois registra
+        a auditoria e atualiza a ficha mesmo quando a operação retorna falha.
+        """
         if not e_diretoria(interacao.user):
             await responder_erro(
                 interacao,
@@ -1175,7 +1253,10 @@ class ModalExonerarMembro(
             membro_atualizado, estado, bloco_ativo=self.bloco_ativo
         )
         await view.preparar()
-        await interacao.edit_original_response(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
 
         if ok:
             await responder_sucesso(

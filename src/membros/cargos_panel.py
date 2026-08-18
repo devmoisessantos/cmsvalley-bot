@@ -1,3 +1,14 @@
+"""
+Painel de gerenciar cargos: dar e tirar cargo de um membro.
+
+Sao dois cards. `PainelGerenciarCargoLayout` e o painel fixo do canal, e
+`GerenciarCargosView` e o card que aparece depois de escolher o membro, com os
+cargos disponiveis.
+
+As regras de quem pode dar qual cargo nao ficam aqui: elas moram em
+cargos_service.py. Este arquivo so desenha e chama.
+"""
+
 import discord
 
 from src.membros.cargos_service import (
@@ -7,6 +18,12 @@ from src.membros.cargos_service import (
     remover_cargo,
 )
 from src.utils.error_handling import LoggingViewMixin
+from src.utils.mensagens import (
+    editar_mensagem_original,
+    responder_aviso,
+    responder_erro,
+    responder_view,
+)
 
 
 class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
@@ -124,7 +141,10 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
 
         # Reconstroi o painel para atualizar o resumo
         self._montar_componentes()
-        await interaction.response.edit_message(view=self)
+        await editar_mensagem_original(
+            interaction,
+            view=self,
+        )
 
     async def _ao_selecionar_cargo(self, interaction: discord.Interaction):
         """Callback quando o executor seleciona um cargo no Select."""
@@ -132,7 +152,10 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
 
         # Reconstroi o painel para atualizar o resumo
         self._montar_componentes()
-        await interaction.response.edit_message(view=self)
+        await editar_mensagem_original(
+            interaction,
+            view=self,
+        )
 
     async def _validar_selecoes(self, interaction: discord.Interaction) -> bool:
         """
@@ -140,8 +163,12 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         Retorna True se ambos estão selecionados, False caso contrário.
         """
         if self.candidato_selecionado is None or self.cargo_selecionado is None:
-            await interaction.response.send_message(
-                "❌ Selecione um membro e um cargo antes de continuar.", ephemeral=True
+            await responder_aviso(
+                interaction,
+                titulo="Falta escolher",
+                linhas=[
+                    "Selecione um membro e um cargo antes de continuar.",
+                ],
             )
             return False
         return True
@@ -209,8 +236,10 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 (
                     "- Esse painel é dedicado e de uso exclusivo da Diretoria e GATE.\n"
                     "- Utilizado para **Adicionar** e **Remover** cargos de membros.\n"
-                    "- Todo e qualquer uso abusivo desse Sistema pode gerar punições ao executor.\n"
-                    "- Toda atividade é registrada, o sistema liberará seu acesso e ajustará os cargos automaticamente.\n"
+                    "- Todo e qualquer uso abusivo desse Sistema pode gerar punições "
+                    "ao executor.\n"
+                    "- Toda atividade é registrada, o sistema liberará seu acesso e "
+                    "ajustará os cargos automaticamente.\n"
                     "- Clique no botão abaixo para iniciar um novo gerenciamento.\n"
                 ),
                 accessory=discord.ui.Thumbnail(url_do_icone) if url_do_icone else None,
@@ -240,9 +269,12 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         if not escopos_do_usuario:
             # Usuário sem permissão — avisa e não abre a view
-            await interaction.followup.send(
-                "❌ Você não possui permissão para gerenciar cargos.",
-                ephemeral=True,
+            await responder_erro(
+                interaction,
+                titulo="Sem permissão",
+                linhas=[
+                    "Você não possui permissão para gerenciar cargos.",
+                ],
             )
             return
 
@@ -251,7 +283,8 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
         view_de_gerenciamento = GerenciarCargosView(membro_executor=interaction.user)
 
         # Usa followup.send porque a resposta inicial já foi usada pelo defer
-        await interaction.followup.send(
-            view=view_de_gerenciamento,
+        await responder_view(
+            interaction,
+            view_de_gerenciamento,
             ephemeral=True,
         )

@@ -29,7 +29,8 @@ OPCOES_DO_GUIA: dict[str, dict] = {
         "titulo": "Uniforme de Estagiário",
         "descricao": "Vestir o uniforme de estagiário",
         "texto": (
-            "Antes de começar qualquer atividade, **vista o uniforme de Estagiário**.\n\n"
+            "Antes de começar qualquer atividade, **vista o uniforme de "
+            "Estagiário**.\n\n"
             "Isso identifica você como membro em formação do CMS Valley e é "
             "obrigatório para atuar no hospital."
         ),
@@ -41,7 +42,8 @@ OPCOES_DO_GUIA: dict[str, dict] = {
         "titulo": "Regras do Hospital Sul",
         "descricao": "Regras do hospital antes do serviço",
         "texto": (
-            "Esteja **ciente das regras do Hospital Sul** antes de entrar em serviço.\n\n"
+            "Esteja **ciente das regras do Hospital Sul** antes de entrar em "
+            "serviço.\n\n"
             "O descumprimento pode gerar advertências. Leia com atenção e tire "
             "dúvidas com a equipe se necessário."
         ),

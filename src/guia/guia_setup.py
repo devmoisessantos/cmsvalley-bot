@@ -8,6 +8,8 @@ e grava o registro em PainelPostado (não duplica se já existir).
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from sqlalchemy import select
 
@@ -15,10 +17,12 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.guia.boas_vindas_panel import PainelBoasVindasLayout
 from src.guia.tutoriais_panel import PainelTutoriaisLayout
+
+registrador = logging.getLogger(__name__)
 
 
 async def _resolver_guilda(
@@ -74,17 +78,19 @@ async def garantir_painel_boas_vindas(
     canal_id = CANAIS.get("PAINEL_BOAS_VINDAS") or 0
     canal_esta_configurado = canal_id > 0
     if not canal_esta_configurado:
-        print("⚠️ CANAIS['PAINEL_BOAS_VINDAS'] não configurado — painel não postado.")
+        registrador.warning(
+            "⚠️ CANAIS['PAINEL_BOAS_VINDAS'] não configurado — painel não postado."
+        )
         return
 
     canal = bot.get_channel(canal_id)
     if canal is None:
-        print(f"❌ Canal de boas-vindas ({canal_id}) não encontrado.")
+        registrador.error(f"❌ Canal de boas-vindas ({canal_id}) não encontrado.")
         return
 
     guilda = await _resolver_guilda(bot, interacao)
     if guilda is None:
-        print("❌ Guild não encontrada!")
+        registrador.error("❌ Guild não encontrada!")
         return
 
     mensagem = await canal.send(view=PainelBoasVindasLayout(guilda))
@@ -93,7 +99,7 @@ async def garantir_painel_boas_vindas(
         canal_id=canal.id,
         message_id=mensagem.id,
     )
-    print(f"✅ Painel de Boas-Vindas postado no canal #{canal.name}.")
+    registrador.info(f"✅ Painel de Boas-Vindas postado no canal #{canal.name}.")
 
 
 async def garantir_painel_tutoriais(
@@ -110,17 +116,19 @@ async def garantir_painel_tutoriais(
     canal_id = CANAIS.get("PAINEL_TUTORIAIS") or CANAIS.get("GUIA_TUTORIAIS") or 0
     canal_esta_configurado = canal_id > 0
     if not canal_esta_configurado:
-        print("⚠️ CANAIS['PAINEL_TUTORIAIS'] não configurado — painel não postado.")
+        registrador.warning(
+            "⚠️ CANAIS['PAINEL_TUTORIAIS'] não configurado — painel não postado."
+        )
         return
 
     canal = bot.get_channel(canal_id)
     if canal is None:
-        print(f"❌ Canal de tutoriais ({canal_id}) não encontrado.")
+        registrador.error(f"❌ Canal de tutoriais ({canal_id}) não encontrado.")
         return
 
     guilda = await _resolver_guilda(bot, interacao)
     if guilda is None:
-        print("❌ Guild não encontrada!")
+        registrador.error("❌ Guild não encontrada!")
         return
 
     mensagem = await canal.send(view=PainelTutoriaisLayout(guilda))
@@ -129,4 +137,4 @@ async def garantir_painel_tutoriais(
         canal_id=canal.id,
         message_id=mensagem.id,
     )
-    print(f"✅ Painel de Tutoriais postado no canal #{canal.name}.")
+    registrador.info(f"✅ Painel de Tutoriais postado no canal #{canal.name}.")

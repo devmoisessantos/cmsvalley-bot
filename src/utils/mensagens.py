@@ -7,6 +7,7 @@ Usa Components V2 (LayoutView + Container + TextDisplay).
 """
 
 import asyncio
+import logging
 
 import discord
 
@@ -83,11 +84,20 @@ async def excluir_mensagem(mensagem: discord.Message, delay: int | None = 120):
 
     try:
         await mensagem.delete()
-    except discord.NotFound:
-        # A mensagem já foi apagada por outra pessoa ou pelo próprio bot.
-        pass
+    except discord.NotFound as erro_ao_excluir:
+        # A mensagem ja foi apagada por outra pessoa ou pelo proprio bot.
+        # Nao uso ignorar_falha_cosmetica aqui de proposito: este modulo e a
+        # base de tudo e nao pode importar error_handling, que importa daqui.
+        logging.debug(
+            "Mensagem %s ja nao existia ao tentar excluir: %s",
+            mensagem.id,
+            erro_ao_excluir,
+        )
     except discord.Forbidden:
-        print("Sem permissão para excluir a mensagem")
+        logging.warning(
+            "Sem permissão para excluir a mensagem %s.",
+            mensagem.id,
+        )
 
 
 async def destruir_print_com_aviso(mensagem_print: discord.Message, delay: int = 10):
@@ -104,8 +114,12 @@ async def destruir_print_com_aviso(mensagem_print: discord.Message, delay: int =
         mensagem_aviso = await mensagem_print.reply(
             f"⚠️ Esta mensagem e o print do `/ems` serão destruídos em {delay} segundos."
         )
-    except discord.HTTPException:
-        pass
+    except discord.HTTPException as falha_ao_avisar:
+        # Se o aviso nao pode ser enviado, o print ainda precisa ser apagado.
+        logging.warning(
+            "Não foi possível avisar sobre a destruição do print: %s",
+            falha_ao_avisar,
+        )
 
     async def _destruir_as_duas_mensagens():
         await asyncio.sleep(delay)
@@ -114,8 +128,19 @@ async def destruir_print_com_aviso(mensagem_print: discord.Message, delay: int =
                 continue
             try:
                 await mensagem_para_apagar.delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
+            except discord.NotFound as erro_ao_apagar_par:
+                # A mensagem ja foi apagada por outra pessoa. Nada a fazer.
+                logging.debug(
+                    "Mensagem %s ja nao existia ao tentar apagar: %s",
+                    mensagem_para_apagar.id,
+                    erro_ao_apagar_par,
+                )
+            except (discord.Forbidden, discord.HTTPException) as falha_ao_apagar:
+                logging.warning(
+                    "Não foi possível apagar a mensagem %s: %s",
+                    mensagem_para_apagar.id,
+                    falha_ao_apagar,
+                )
 
     asyncio.create_task(_destruir_as_duas_mensagens())
 
@@ -208,7 +233,9 @@ async def responder_erro(
     com_marcador: bool = True,
     delay: int | None = 15,
 ) -> discord.Message:
-    """Responde com card vermelho de erro. Delay um pouco maior para dar tempo de ler."""
+    """
+    Responde com card vermelho de erro. Delay um pouco maior para dar tempo de ler.
+    """
     return await enviar_card(
         interacao=interacao,
         titulo=titulo,
@@ -266,7 +293,7 @@ async def responder_info(
 
 
 async def responder_card(
-    interaction: discord.Interaction,
+    interacao: discord.Interaction,
     titulo: str,
     linhas: list[str],
     cor: discord.Color = COR_INFO,
@@ -281,7 +308,7 @@ async def responder_card(
     em código novo. Este ainda funciona e agora também trata followup automaticamente.
     """
     return await enviar_card(
-        interacao=interaction,
+        interacao=interacao,
         titulo=titulo,
         linhas=linhas,
         cor=cor,
@@ -292,8 +319,8 @@ async def responder_card(
 
 
 async def responder_ephemera(
-    interaction: discord.Interaction,
-    content: str,
+    interacao: discord.Interaction,
+    texto: str,
     view: discord.ui.View | None = None,
     delay: int = 10,
 ):
@@ -303,21 +330,21 @@ async def responder_ephemera(
     Mantida por compatibilidade. Em código novo, prefira os cards.
     Também trata response vs followup automaticamente.
     """
-    interacao_ja_foi_respondida = interaction.response.is_done()
+    interacao_ja_foi_respondida = interacao.response.is_done()
 
     if interacao_ja_foi_respondida:
-        mensagem_enviada = await interaction.followup.send(
-            content=content,
+        mensagem_enviada = await interacao.followup.send(
+            content=texto,
             view=view,
             ephemeral=True,
         )
     else:
-        await interaction.response.send_message(
-            content=content,
+        await interacao.response.send_message(
+            content=texto,
             view=view,
             ephemeral=True,
         )
-        mensagem_enviada = await interaction.original_response()
+        mensagem_enviada = await interacao.original_response()
 
     asyncio.create_task(excluir_mensagem(mensagem_enviada, delay=delay))
 
@@ -327,24 +354,202 @@ async def responder_view(
     view: discord.ui.LayoutView | discord.ui.View,
     *,
     ephemeral: bool = True,
+    texto: str | None = None,
 ) -> discord.Message:
     """
-    Responde a interação só com uma View (sem texto).
+    Responde a interação com uma View, com ou sem texto acima dela.
 
     Útil para painéis efêmeros em Components V2 (ex.: resposta do select do guia).
     Trata response vs followup automaticamente.
+
+    O parâmetro `texto` existe para as views clássicas antigas, que precisam de
+    uma frase explicando o que escolher. Em Components V2 o texto já vai dentro
+    da própria view, então lá ele não é necessário.
     """
     interacao_ja_foi_respondida = interacao.response.is_done()
 
     if interacao_ja_foi_respondida:
         mensagem_enviada = await interacao.followup.send(
+            content=texto,
             view=view,
             ephemeral=ephemeral,
         )
         return mensagem_enviada
 
-    await interacao.response.send_message(view=view, ephemeral=ephemeral)
+    await interacao.response.send_message(
+        content=texto,
+        view=view,
+        ephemeral=ephemeral,
+    )
     return await interacao.original_response()
+
+
+# ---------------------------------------------------------------------------
+# Followup, edicao e card personalizado
+# ---------------------------------------------------------------------------
+
+# Marcador interno para "nao mexa no texto atual da mensagem".
+#
+# Nao da para usar None como padrao porque None e um valor valido e significa
+# outra coisa para o Discord: apagar o texto que estava la. Este objeto vazio
+# serve so para o codigo distinguir "nao passaram nada" de "passaram None".
+_MANTER_O_TEXTO_ATUAL = object()
+
+
+async def enviar_followup(
+    interacao: discord.Interaction,
+    titulo: str,
+    linhas: list[str],
+    cor: discord.Color = COR_INFO,
+    extra_row: discord.ui.ActionRow | None = None,
+    delay: int | None = 10,
+    ephemeral: bool = True,
+    com_marcador: bool = True,
+) -> discord.Message:
+    """
+    Envia uma mensagem de acompanhamento (followup) depois de um defer.
+
+    Use quando a interacao JA foi respondida ou adiada (`defer`) e voce quer
+    mandar mais uma mensagem para o membro.
+
+    Nao e preciso conferir nada antes: se por acaso a interacao ainda nao tiver
+    sido respondida, esta funcao adia sozinha e depois manda o followup. Assim
+    nunca acontece o erro "InteractionResponded" nem o "Esta interacao falhou".
+    """
+    interacao_ainda_nao_foi_respondida = not interacao.response.is_done()
+
+    if interacao_ainda_nao_foi_respondida:
+        # Sem este defer, o followup.send falharia porque o Discord ainda
+        # espera a primeira resposta da interacao.
+        await interacao.response.defer(ephemeral=ephemeral)
+
+    return await enviar_card(
+        interacao=interacao,
+        titulo=titulo,
+        linhas=linhas,
+        cor=cor,
+        extra_row=extra_row,
+        delay=delay,
+        ephemeral=ephemeral,
+        com_marcador=com_marcador,
+    )
+
+
+async def enviar_followup_de_texto(
+    interacao: discord.Interaction,
+    texto: str,
+    *,
+    ephemeral: bool = True,
+    delay: int | None = 10,
+) -> discord.Message | None:
+    """
+    Envia um followup de texto simples, sem card.
+
+    Mantida para os casos em que a mensagem e curta e um card seria exagero.
+    Em codigo novo, prefira `enviar_followup`, que ja monta o card padrao.
+    """
+    interacao_ainda_nao_foi_respondida = not interacao.response.is_done()
+
+    if interacao_ainda_nao_foi_respondida:
+        await interacao.response.defer(ephemeral=ephemeral)
+
+    mensagem_enviada = await interacao.followup.send(
+        content=texto,
+        ephemeral=ephemeral,
+    )
+
+    if delay is not None and mensagem_enviada is not None:
+        asyncio.create_task(excluir_mensagem(mensagem_enviada, delay=delay))
+
+    return mensagem_enviada
+
+
+async def editar_mensagem_original(
+    interacao: discord.Interaction,
+    titulo: str | None = None,
+    linhas: list[str] | None = None,
+    cor: discord.Color = COR_INFO,
+    extra_row: discord.ui.ActionRow | None = None,
+    view: discord.ui.LayoutView | discord.ui.View | None = None,
+    com_marcador: bool = True,
+    texto: str | None = _MANTER_O_TEXTO_ATUAL,
+) -> discord.Message | None:
+    """
+    Troca o conteudo da mensagem que a interacao ja respondeu.
+
+    Duas formas de usar:
+
+    1. Passando titulo e linhas: um CardView novo e montado para voce.
+    2. Passando `view`: aquela view especifica substitui a mensagem.
+
+    Serve para avancar etapas de um painel sem enviar mensagem nova.
+
+    Sobre o parâmetro `texto`:
+
+    - Não passar nada  → o texto que já estava na mensagem continua igual.
+    - Passar `texto=None` → o texto antigo é APAGADO (usado ao trocar uma
+      mensagem antiga de texto puro por um card Components V2).
+    - Passar uma frase → aquele texto substitui o antigo.
+
+    Esses três casos precisam ser diferentes porque `None` já significa
+    "apague o texto" para o Discord; por isso existe o marcador interno
+    `_MANTER_O_TEXTO_ATUAL` como valor padrão.
+    """
+    if view is None:
+        if titulo is None:
+            raise ValueError(
+                "editar_mensagem_original precisa de um titulo (ou de uma view)."
+            )
+
+        view = CardView(
+            titulo=titulo,
+            linhas=linhas or [],
+            cor=cor,
+            timeout=None,
+            extra_row=extra_row,
+            com_marcador=com_marcador,
+        )
+
+    o_texto_deve_mudar = texto is not _MANTER_O_TEXTO_ATUAL
+    interacao_ainda_nao_foi_respondida = not interacao.response.is_done()
+
+    if interacao_ainda_nao_foi_respondida:
+        # A forma mais barata de editar a mensagem do proprio componente
+        # clicado: responde a interacao ja com o conteudo novo.
+        if o_texto_deve_mudar:
+            await interacao.response.edit_message(content=texto, view=view)
+        else:
+            await interacao.response.edit_message(view=view)
+        return await interacao.original_response()
+
+    if o_texto_deve_mudar:
+        return await interacao.edit_original_response(content=texto, view=view)
+
+    return await interacao.edit_original_response(view=view)
+
+
+def criar_card_personalizado(
+    titulo: str,
+    linhas: list[str],
+    cor: discord.Color = COR_INFO,
+    extra_row: discord.ui.ActionRow | None = None,
+    com_marcador: bool = True,
+    timeout: int | None = None,
+) -> CardView:
+    """
+    Monta um CardView sem enviar nada.
+
+    Use quando o card vai ser guardado, reaproveitado ou enviado por outro
+    caminho (por exemplo em uma DM, ou dentro de uma view maior).
+    """
+    return CardView(
+        titulo=titulo,
+        linhas=linhas,
+        cor=cor,
+        timeout=timeout,
+        extra_row=extra_row,
+        com_marcador=com_marcador,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -380,3 +585,14 @@ async def enviar_card_no_canal(
         asyncio.create_task(excluir_mensagem(mensagem_enviada, delay=delay))
 
     return mensagem_enviada
+
+
+# ---------------------------------------------------------------------------
+# Apelidos em portugues exigidos pelo AGENTS.md
+#
+# Os nomes originais continuam existindo acima porque ja sao usados em varios
+# arquivos. Estes apelidos apontam para a mesma funcao e sao os nomes que o
+# AGENTS.md pede na secao 7.
+# ---------------------------------------------------------------------------
+
+enviar_no_canal = enviar_card_no_canal

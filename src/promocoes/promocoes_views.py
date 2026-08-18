@@ -5,7 +5,7 @@ from __future__ import annotations
 import discord
 
 from src.config import CANAIS
-from src.plantao.permissoes import e_diretoria
+from src.plantao.plantao_permissoes import e_diretoria
 from src.promocoes.promocoes_service import (
     aplicar_promocao_cargos,
     atualizar_mensagem_solicitacao,
@@ -23,13 +23,16 @@ from src.promocoes.promocoes_service import (
 from src.utils.error_handling import (
     LoggingViewMixin,
     enviar_erro_para_log_erros,
+    ignorar_falha_cosmetica,
 )
 from src.utils.mensagens import (
     COR_ERRO,
     COR_SUCESSO,
+    editar_mensagem_original,
     responder_aviso,
     responder_erro,
     responder_sucesso,
+    responder_view,
 )
 
 CUSTOM_ID_BOTAO_SOLICITAR = "promocoes:botao_solicitar"
@@ -84,7 +87,8 @@ class PainelPromocaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                     "✅ Tenha o cargo de origem da promoção desejada.\n"
                     "✅ Conclua os **cursos obrigatórios** da trilha.\n"
                     "✅ Use **cargo pretendido** para escolher o destino direto.\n"
-                    "✅ Use **Seguir trilha** para ver só o que parte do seu cargo atual."
+                    "✅ Use **Seguir trilha** para ver só o que parte do seu cargo "
+                    "atual."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 linha,
@@ -102,8 +106,9 @@ class PainelPromocaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         try:
-            await interacao.response.send_message(
-                view=ViewEscolhaPromocao(membro),
+            await responder_view(
+                interacao,
+                ViewEscolhaPromocao(membro),
                 ephemeral=True,
             )
         except Exception as erro:
@@ -171,7 +176,8 @@ class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
                 discord.ui.TextDisplay(
                     "# Solicitar promoção\n"
                     "Escolha o **cargo pretendido** na lista **ou** "
-                    "use **Seguir trilha** para ver só as opções a partir do seu cargo atual."
+                    "use **Seguir trilha** para ver só as opções a partir do seu cargo "
+                    "atual."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha_select,
@@ -239,14 +245,16 @@ class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Nenhuma trilha a partir do seu cargo",
                 linhas=[
-                    "Não há promoção cadastrada partindo dos cargos que você possui agora.",
+                    "Não há promoção cadastrada partindo dos cargos que você possui "
+                    "agora.",
                     "Você ainda pode escolher um **cargo pretendido** no menu acima.",
                 ],
                 delay=60,
             )
             return
-        await interacao.response.edit_message(
-            view=ViewSelectTrilha(membro, disponiveis)
+        await editar_mensagem_original(
+            interacao,
+            view=ViewSelectTrilha(membro, disponiveis),
         )
 
 
@@ -276,13 +284,15 @@ class ViewSelectTrilha(LoggingViewMixin, discord.ui.LayoutView):
         seletor.callback = self._ao_escolher
         linha.add_item(seletor)
 
-        lista_txt = "\n".join(f"• **{t['rotulo']}**" for t in trilhas)
+        lista_de_trilhas = "\n".join(
+            f"• **{trilha_disponivel['rotulo']}**" for trilha_disponivel in trilhas
+        )
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# 🛤️ Seguir trilha\n"
                     "Opções a partir do **seu cargo atual**:\n"
-                    f"{lista_txt}"
+                    f"{lista_de_trilhas}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha,
@@ -374,7 +384,8 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                     interacao,
                     titulo="Pedido já decidido",
                     linhas=[
-                        f"Solicitação `#{registro.id}` já está como `{registro.status}`.",
+                        f"Solicitação `#{registro.id}` já está como `{registro.status}"
+                        f"`.",
                         "Não é possível aprovar ou reprovar de novo.",
                     ],
                     delay=12,
@@ -382,8 +393,17 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                 try:
                     if interacao.message is not None:
                         await interacao.message.delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    pass
+                except (
+                    discord.NotFound,
+                    discord.Forbidden,
+                    discord.HTTPException,
+                ) as erro_em_decidir:
+                    # Enfeite que falhou: atualizar o card da decisao.
+                    # A acao principal ja tinha dado certo, entao so registro.
+                    ignorar_falha_cosmetica(
+                        erro_em_decidir,
+                        o_que_falhou="atualizar o card da decisao",
+                    )
                 return
 
             registro, foi_decidido_agora = await decidir_solicitacao(
@@ -395,7 +415,7 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
             if registro is None:
                 await responder_erro(
                     interacao,
-                    titulo="Falha",
+                    titulo="Falha ao atualizar pedido",
                     linhas=["Não foi possível atualizar o pedido."],
                 )
                 return
@@ -405,7 +425,8 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                     interacao,
                     titulo="Pedido já decidido",
                     linhas=[
-                        f"Solicitação `#{registro.id}` já está como `{registro.status}`.",
+                        f"Solicitação `#{registro.id}` já está como `{registro.status}"
+                        f"`.",
                         "Outra pessoa da diretoria já registrou a decisão.",
                     ],
                     delay=12,
@@ -413,8 +434,17 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                 try:
                     if interacao.message is not None:
                         await interacao.message.delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    pass
+                except (
+                    discord.NotFound,
+                    discord.Forbidden,
+                    discord.HTTPException,
+                ) as erro_em_decidir:
+                    # Enfeite que falhou: atualizar o card da decisao.
+                    # A acao principal ja tinha dado certo, entao so registro.
+                    ignorar_falha_cosmetica(
+                        erro_em_decidir,
+                        o_que_falhou="atualizar o card da decisao",
+                    )
                 return
 
             guilda = interacao.guild
@@ -496,8 +526,17 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
             try:
                 if interacao.message is not None:
                     await interacao.message.delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
+            except (
+                discord.NotFound,
+                discord.Forbidden,
+                discord.HTTPException,
+            ) as erro_em_decidir:
+                # Enfeite que falhou: atualizar o card da decisao.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_decidir,
+                    o_que_falhou="atualizar o card da decisao",
+                )
 
             await responder_sucesso(
                 interacao,
@@ -524,6 +563,16 @@ async def processar_escolha_trilha(
     interacao: discord.Interaction,
     chave_trilha: str,
 ) -> None:
+    """
+    Atende o clique do membro numa trilha de carreira.
+
+    Confere que quem clicou e um membro do servidor e que a trilha escolhida existe
+    na configuracao. Depois segue para as regras de promocao daquela trilha.
+
+    A conferencia de que a pessoa e membro existe porque o painel pode ser clicado
+    na mensagem direta, onde o Discord nao informa cargos — e sem cargo nao ha como
+    decidir promocao.
+    """
     membro = interacao.user
     if not isinstance(membro, discord.Member):
         await responder_erro(
@@ -567,9 +616,12 @@ async def processar_escolha_trilha(
                 interacao,
                 titulo="Solicitação já enviada",
                 linhas=[
-                    f"Você já tem o pedido `#{pedido_aberto.id}` aguardando a diretoria.",
+                    f"Você já tem o pedido `#{pedido_aberto.id}` aguardando a "
+                    f"diretoria.",
                     f"**Trilha:** `{pedido_aberto.chave_trilha}`",
-                    f"**De:** `{pedido_aberto.cargo_de}` → **Para:** `{pedido_aberto.cargo_para}`",
+                    f"**De:** `{pedido_aberto.cargo_de}` → **Para:** "
+                    f"`{pedido_aberto.cargo_para}"
+                    f"`",
                     "Espere a análise (aprovar / reprovar) antes de enviar outro.",
                 ],
                 delay=20,
@@ -597,7 +649,8 @@ async def processar_escolha_trilha(
             f"> - **👤 Membro:** {membro.mention} (`{membro.id}`)\n"
             f"> - **📋 Solicitação:** `#{registro.id}`\n"
             f"> - **🛤️ Trilha:** {checklist.get('rotulo', trilha['rotulo'])}\n"
-            f"> - **🎯 De:** `{trilha['de_cargo']}` → **Para:** `{trilha['para_cargo']}`\n\n"
+            f"> - **🎯 De:** `{trilha['de_cargo']}` → **Para:** "
+            f"`{trilha['para_cargo']}`\n\n"
             f"**Checklist:**\n{resumo}"
         )
 
@@ -624,7 +677,8 @@ async def processar_escolha_trilha(
                     interacao,
                     titulo="Falha ao enviar à diretoria",
                     linhas=[
-                        "Pedido salvo no banco, mas não postou no canal. Veja LOG_ERROS."
+                        "Pedido salvo no banco, mas não postou no canal. Veja "
+                        "LOG_ERROS."
                     ],
                 )
                 return
@@ -643,7 +697,8 @@ async def processar_escolha_trilha(
             linhas=[
                 f"Pedido `#{registro.id}` · **{trilha['rotulo']}**",
                 f"**De:** `{trilha['de_cargo']}` → **Para:** `{trilha['para_cargo']}`",
-                "A diretoria vai analisar **Aprovar / Reprovar** no canal de promoções.",
+                "A diretoria vai analisar **Aprovar / Reprovar** no canal de "
+                "promoções.",
                 "",
                 "### Requisitos no momento do envio",
                 *(checklist.get("linhas") or []),
@@ -729,11 +784,11 @@ class _ViewPedidoPromocao(LoggingViewMixin, discord.ui.LayoutView):
 
 
 def _bind_decidir(solicitacao_id: int, aprovada: bool):
-    async def _callback(interacao: discord.Interaction):
+    async def _ao_clicar(interacao: discord.Interaction):
         view = ViewDecisaoPromocao(solicitacao_id)
         await view._decidir(interacao, aprovada=aprovada)
 
-    return _callback
+    return _ao_clicar
 
 
 async def _postar_resultado_publico(
@@ -797,7 +852,8 @@ async def _postar_resultado_publico(
         f"> - **👤 Membro:** {mencao_alvo}\n"
         f"> - **📋 Solicitação:** `#{solicitacao_id}`\n"
         f"> - **🎯 De:** `{cargo_de}` → **Para:** `{cargo_para}`\n"
-        f"> - **👮 Responsável pela {'aprovação' if aprovada else 'reprovação'}:** {staff.mention}"
+        f"> - **👮 Responsável pela {'aprovação' if aprovada else 'reprovação'}:** "
+        f"{staff.mention}"
     )
 
     from datetime import (
@@ -838,4 +894,10 @@ async def _postar_resultado_publico(
 
 
 def view_persistente_promocao() -> PainelPromocaoLayout:
+    """
+    Cria o painel de promocao para o bot registrar ao ligar.
+
+    Existe como funcao, e nao como valor pronto, porque o bot precisa de uma
+    instancia nova a cada vez que registra a view persistente.
+    """
     return PainelPromocaoLayout()

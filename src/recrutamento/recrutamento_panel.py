@@ -1,8 +1,18 @@
 # src/recrutamento/recrutamento_panel.py
+"""
+Painel fixo do canal de recrutamento, com o botao de se candidatar.
+
+E a porta de entrada de quem quer trabalhar no hospital. Um card, um botao. O
+que acontece depois do clique esta em recrutamento_service.py.
+"""
+
 import discord
 
-from src.recrutamento.selecionar_candidato import SelecionarCandidatoView
+from src.recrutamento.selecionar_candidato_views import SelecionarCandidatoView
 from src.utils.error_handling import LoggingViewMixin
+from src.utils.mensagens import (
+    responder_view,
+)
 
 
 class PainelRecrutamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -39,8 +49,10 @@ class PainelRecrutamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.Section(
                 "# 📋 Painel de Recrutamento",
                 (
-                    "Este painel é destinado exclusivamente aos recrutadores autorizados.\n\n"
-                    "Ao iniciar o processo, o sistema registrará automaticamente todas as alterações "
+                    "Este painel é destinado exclusivamente aos recrutadores "
+                    "autorizados.\n\n"
+                    "Ao iniciar o processo, o sistema registrará automaticamente todas "
+                    "as alterações "
                     "de cargos e manterá o histórico do candidato."
                 ),
                 accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
@@ -57,7 +69,8 @@ class PainelRecrutamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "✅ O candidato deve possuir o cargo **Visitante**.\n"
                 "✅ A WhiteList deve estar aprovada.\n"
                 "✅ Tenha o **ID do Discord** do candidato em mãos.\n"
-                "✅ Certifique-se de que o candidato está presente na call de recrutamento."
+                "✅ Certifique-se de que o candidato está presente na call de "
+                "recrutamento."
             ),
             # ────────────────────────────────────────────────
             # Separator
@@ -72,13 +85,19 @@ class PainelRecrutamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(self.container)
 
     async def iniciar_recrutamento(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            "Selecione o candidato:",
-            view=SelecionarCandidatoView(recrutador=interaction.user),
+        """Abre o seletor privado do candidato antes de iniciar o processo.
+
+        Mantém a escolha fora do painel público para que somente o recrutador
+        que clicou informe o candidato e siga para as validações necessárias.
+        """
+        await responder_view(
+            interaction,
+            SelecionarCandidatoView(recrutador=interaction.user),
             ephemeral=True,
         )
 
     async def liberar_avaliacao(self, interaction: discord.Interaction):
-        from src.services.liberacao_service import liberar_avaliacao_click
+        """Encaminha o clique ao serviço que valida e libera a avaliação."""
+        from src.recrutamento.liberacao_service import liberar_avaliacao_click
 
         await liberar_avaliacao_click(interaction)

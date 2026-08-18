@@ -1,3 +1,15 @@
+"""
+Monta os cards do quadro de hierarquia, sem falar com o Discord.
+
+Este arquivo so desenha: recebe cargo e lista de membros, devolve o container
+pronto. Quem envia e edita as mensagens e hierarquia_service.py. Separar as
+duas coisas deixa o desenho facil de testar e de mudar.
+
+`montar_cards_cargo_paginado` existe porque um cargo pode ter mais membros do
+que cabe num card. Ela quebra a lista em varias paginas em vez de deixar o
+Discord recusar a mensagem por tamanho.
+"""
+
 import math
 from datetime import (
     datetime,
@@ -43,7 +55,7 @@ def montar_cards_cargo_paginado(
         return [montar_card_cargo(cargo, membros)]
 
     # Ordena membros por nome
-    membros_ordenados = sorted(membros, key=lambda m: m.display_name.lower())
+    membros_ordenados = sorted(membros, key=lambda membro: membro.display_name.lower())
     total_membros = len(membros_ordenados)
 
     # Calcula quantas páginas são necessárias
@@ -56,7 +68,7 @@ def montar_cards_cargo_paginado(
         membros_pagina = membros_ordenados[inicio:fim]
 
         # Monta a lista de membros desta página
-        linhas = "\n".join(f"- {m.mention}" for m in membros_pagina)
+        linhas = "\n".join(f"- {membro.mention}" for membro in membros_pagina)
 
         # Se tem mais de uma página, adiciona indicação
         if total_paginas > 1:

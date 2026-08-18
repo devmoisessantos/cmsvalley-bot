@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 
 from src.config import CANAIS
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import Laudo
 from src.utils.log_container import LogContainerView
+
+registrador = logging.getLogger(__name__)
 
 
 async def publicar_laudo_nos_canais(
@@ -39,7 +43,10 @@ async def publicar_laudo_nos_canais(
         else:
             url_thumbnail = psicologo.display_avatar.url
 
-        rodape = f"-# **{guild.name}** · Registro `#{laudo.id}` · Consulta `#{laudo.consulta_id}`"
+        rodape = (
+            f"-# **{guild.name}** · Registro `#{laudo.id}` · Consulta "
+            f"`#{laudo.consulta_id}`"
+        )
         # Section aceita *strings/TextDisplay*, NÃO tuple — isso gerava TypeError
         cabecalho = discord.ui.Section(
             "# 📋 CMS Valley — LAUDO PSICOLÓGICO",
@@ -66,7 +73,7 @@ async def publicar_laudo_nos_canais(
                         registro.canal_laudo_message_id = mensagem_publica.id
                         await sessao.commit()
             except Exception as erro:
-                print(f"⚠️ [laudos] não gravou message_id: {erro}")
+                registrador.warning(f"⚠️ [laudos] não gravou message_id: {erro}")
 
     canal_log = guild.get_channel(CANAIS.get("LOG_LAUDO", 0))
     if canal_log is not None:
@@ -76,8 +83,10 @@ async def publicar_laudo_nos_canais(
         linhas = (
             f"- **Laudo:** `#{laudo.id}`\n"
             f"- **Consulta:** `#{laudo.consulta_id}`\n"
-            f"- **Paciente:** {mencao_paciente} · passaporte `{laudo.id_fivem_paciente or '—'}`\n"
-            f"- **Psicólogo:** {psicologo.mention} · passaporte `{laudo.id_fivem_psicologo or '—'}`\n"
+            f"- **Paciente:** {mencao_paciente} · passaporte "
+            f"`{laudo.id_fivem_paciente or '—'}`\n"
+            f"- **Psicólogo:** {psicologo.mention} · passaporte "
+            f"`{laudo.id_fivem_psicologo or '—'}`\n"
             f"- **Parecer:** `{laudo.parecer}`\n"
             f"- **CRP:** `{laudo.registro_profissional}`"
         )

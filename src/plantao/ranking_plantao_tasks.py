@@ -2,7 +2,8 @@
 
 Auto:
 - Ranking de horas TEMPO REAL: mensagem persistente no canal, atualiza a cada 1 min
-- Sábado 11h00: fecha ciclo (apaga tempo real, envia ganhadores às finanças, posta semanal)
+- Sábado 11h00: fecha ciclo (apaga tempo real, envia ganhadores às finanças, posta
+semanal)
 - Sábado 11h05: publica novo ranking tempo real (novo ciclo)
 - Dia 1 às 11h: ranking mensal
 """
@@ -30,7 +31,7 @@ from src.config import (
     RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO,
     TIMEZONE_LOCAL,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session, tentar_reanimar_as_conexoes
 from src.database.models import PainelPostado
 from src.plantao.ranking_plantao_service import (
     gerar_view_ranking_chamadas,
@@ -44,7 +45,12 @@ from src.utils.formatacao import (
     formatar_reais,
 )
 from src.utils.log_container import LogContainerView
-from src.utils.mensagens import COR_SUCESSO
+from src.utils.mensagens import (
+    COR_SUCESSO,
+    responder_erro,
+    responder_sucesso,
+    responder_view,
+)
 from src.utils.permissions import is_authorized
 
 logger = logging.getLogger(__name__)
@@ -69,10 +75,14 @@ class RankingPlantaoTasks(commands.Cog):
         self.loop_tempo_real_horas.start()
         self.loop_ranking_moedas.start()
         logger.info(
-            "🏆 RankingPlantaoTasks (chamadas + horas + tempo real + moedas) inicializado"
+            "🏆 RankingPlantaoTasks (chamadas + horas + tempo real + moedas) "
+            "inicializado"
         )
 
     def cog_unload(self):
+        """
+        Interrompe os três loops para evitar publicações duplicadas após recarregar.
+        """
         self.loop_rankings.cancel()
         self.loop_tempo_real_horas.cancel()
         self.loop_ranking_moedas.cancel()
@@ -81,6 +91,9 @@ class RankingPlantaoTasks(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def loop_tempo_real_horas(self):
+        """
+        Atualiza o card persistente de horas sem deixar uma falha parar o próximo ciclo.
+        """
         try:
             await self._atualizar_ou_criar_tempo_real_horas()
         except Exception as erro:
@@ -88,13 +101,15 @@ class RankingPlantaoTasks(commands.Cog):
 
     @loop_tempo_real_horas.before_loop
     async def before_tempo_real(self):
+        """Espera o bot conectar antes de publicar ou editar o ranking de horas."""
         await self.bot.wait_until_ready()
         logger.info("✅ Loop ranking HORAS tempo real (1 min) ativo")
 
     @tasks.loop(minutes=1)
     async def loop_ranking_moedas(self):
+        """Mantém o ranking de moedas atualizado, isolando falhas do ciclo seguinte."""
         try:
-            from src.plantao.carteira_ranking import atualizar_ranking_moedas
+            from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
 
             await atualizar_ranking_moedas(self.bot)
         except Exception as erro:
@@ -102,6 +117,7 @@ class RankingPlantaoTasks(commands.Cog):
 
     @loop_ranking_moedas.before_loop
     async def before_ranking_moedas(self):
+        """Aguarda a conexão do bot antes de iniciar as atualizações de moedas."""
         await self.bot.wait_until_ready()
         logger.info("✅ Loop ranking MOEDAS tempo real (1 min) ativo")
 
@@ -261,7 +277,7 @@ class RankingPlantaoTasks(commands.Cog):
         # 3) Ranking semanal oficial
         if canal is not None:
             try:
-                msg = await canal.send(view=view)
+                mensagem_publicada = await canal.send(view=view)
                 await salvar_historico_plantao(
                     tipo="horas_semanal",
                     inicio=inicio,
@@ -269,7 +285,7 @@ class RankingPlantaoTasks(commands.Cog):
                     contagem=contagem,
                     total=total,
                     channel_id=canal.id,
-                    message_id=msg.id,
+                    message_id=mensagem_publicada.id,
                 )
                 logger.info("Ranking HORAS semanal oficial postado em #%s", canal.name)
             except discord.HTTPException as erro:
@@ -334,8 +350,14 @@ class RankingPlantaoTasks(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def loop_rankings(self):
-        tz = ZoneInfo(TIMEZONE_LOCAL)
-        agora = datetime.now(tz)
+        """Fecha ciclos e publica rankings nos horários configurados.
+
+        Usa chaves em memória para executar cada fechamento semanal, mensal ou reinício
+        de tempo real uma só vez. Isso evita publicar dois rankings ou pagar prêmios
+        repetidos quando o loop roda mais de uma vez dentro do mesmo minuto.
+        """
+        fuso_horario = ZoneInfo(TIMEZONE_LOCAL)
+        agora = datetime.now(fuso_horario)
 
         # Sábado 11h00 — fecha horas + ranking semanal chamadas/horas
         if (
@@ -383,6 +405,7 @@ class RankingPlantaoTasks(commands.Cog):
 
     @loop_rankings.before_loop
     async def before_loop(self):
+        """Espera a conexão do bot antes de acompanhar os horários de fechamento."""
         await self.bot.wait_until_ready()
         logger.info("✅ Loop ranking chamadas/horas (sábado/mensal) ativo")
 
@@ -418,7 +441,7 @@ class RankingPlantaoTasks(commands.Cog):
             view, contagem, inicio, fim, total = await gerador(
                 periodo, guild=guild, referencia=referencia, modo_postagem=True
             )
-            msg = await canal.send(view=view)
+            mensagem = await canal.send(view=view)
             await salvar_historico_plantao(
                 tipo=tipo_hist,
                 inicio=inicio,
@@ -426,7 +449,7 @@ class RankingPlantaoTasks(commands.Cog):
                 contagem=contagem,
                 total=total,
                 channel_id=canal.id,
-                message_id=msg.id,
+                message_id=mensagem.id,
             )
             if categoria == "chamada":
                 try:
@@ -450,8 +473,8 @@ class RankingPlantaoTasks(commands.Cog):
 
             logger.info("✅ Ranking %s postado em #%s", tipo_hist, canal.name)
             return True
-        except Exception as e:
-            logger.exception("❌ Ranking %s/%s: %s", categoria, periodo, e)
+        except Exception as erro:
+            logger.exception("❌ Ranking %s/%s: %s", categoria, periodo, erro)
             return False
 
     # ── /ranking-chamadas ────────────────────────────────────────────────
@@ -460,14 +483,30 @@ class RankingPlantaoTasks(commands.Cog):
         name="tempo-real", description="Ranking parcial do ciclo atual"
     )
     async def chamadas_tempo_real(self, interaction: discord.Interaction):
+        """Mostra uma prévia privada das chamadas do ciclo ainda em andamento.
+
+        Gera a view sem gravar histórico ou enviar ao canal oficial, pois os números
+        mudam até o fechamento. Falhas são respondidas na interação para que o comando
+        não termine silenciosamente.
+        """
         await interaction.response.defer(ephemeral=True)
         try:
             view, *_ = await gerar_view_ranking_chamadas(
                 "tempo_real", guild=interaction.guild, modo_postagem=False
             )
-            await interaction.followup.send(view=view, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
+            await responder_view(
+                interaction,
+                view,
+                ephemeral=True,
+            )
+        except Exception as erro:
+            await responder_erro(
+                interaction,
+                titulo="Falha inesperada",
+                linhas=[
+                    f"Erro: `{erro}`",
+                ],
+            )
 
     @ranking_chamadas.command(
         name="postar", description="Gera ranking oficial e opcionalmente posta"
@@ -489,17 +528,33 @@ class RankingPlantaoTasks(commands.Cog):
         periodo: app_commands.Choice[str],
         no_canal: bool = False,
     ):
+        """Gera um ranking oficial de chamadas e o publica apenas se solicitado.
+
+        Com ``no_canal`` falso, devolve uma prévia privada para conferência. Quando
+        verdadeiro, envia a view ao canal configurado e grava o vínculo no histórico,
+        impedindo que a visualização de teste seja confundida com um ciclo publicado.
+        """
         await interaction.response.defer(ephemeral=True)
         try:
             view, contagem, inicio, fim, total = await gerar_view_ranking_chamadas(
                 periodo.value, guild=interaction.guild, modo_postagem=True
             )
-        except Exception as e:
-            await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
+        except Exception as erro:
+            await responder_erro(
+                interaction,
+                titulo="Falha inesperada",
+                linhas=[
+                    f"Erro: `{erro}`",
+                ],
+            )
             return
 
         if not no_canal:
-            await interaction.followup.send(view=view, ephemeral=True)
+            await responder_view(
+                interaction,
+                view,
+                ephemeral=True,
+            )
             return
 
         canal_id = CANAIS.get("RANKING_CHAMADAS") or 0
@@ -509,12 +564,15 @@ class RankingPlantaoTasks(commands.Cog):
             else None
         )
         if canal is None:
-            await interaction.followup.send(
-                "❌ `CANAIS['RANKING_CHAMADAS']` não configurado ou canal inválido.",
-                ephemeral=True,
+            await responder_erro(
+                interaction,
+                titulo="Dado inválido",
+                linhas=[
+                    "`CANAIS['RANKING_CHAMADAS']` não configurado ou canal inválido.",
+                ],
             )
             return
-        msg = await canal.send(view=view)
+        mensagem = await canal.send(view=view)
         await salvar_historico_plantao(
             tipo=f"chamada_{periodo.value}",
             inicio=inicio,
@@ -522,11 +580,14 @@ class RankingPlantaoTasks(commands.Cog):
             contagem=contagem,
             total=total,
             channel_id=canal.id,
-            message_id=msg.id,
+            message_id=mensagem.id,
         )
-        await interaction.followup.send(
-            f"✅ Ranking de chamadas **{periodo.value}** postado em {canal.mention}.",
-            ephemeral=True,
+        await responder_sucesso(
+            interaction,
+            titulo="Ranking postado",
+            linhas=[
+                f"Ranking de chamadas **{periodo.value}** postado em {canal.mention}.",
+            ],
         )
 
     @ranking_chamadas.command(
@@ -538,6 +599,13 @@ class RankingPlantaoTasks(commands.Cog):
         interaction: discord.Interaction,
         limite: app_commands.Range[int, 1, 25] = 10,
     ):
+        """Exibe os últimos rankings de chamadas salvos, com recuperação do banco.
+
+        Adia a resposta para ter tempo de consultar até ``limite`` registros e, se a
+        conexão falhar, tenta reanimar o pool antes de avisar. Assim, uma
+        indisponibilidade
+        temporária não vira silêncio nem uma lista histórica enganosa.
+        """
         if not interaction.response.is_done():
             try:
                 await interaction.response.defer(ephemeral=True)
@@ -546,23 +614,31 @@ class RankingPlantaoTasks(commands.Cog):
             except discord.HTTPException:
                 return
         try:
-            regs = await listar_historico_plantao("chamada", limite=limite)
+            registros_do_historico = await listar_historico_plantao(
+                "chamada", limite=limite
+            )
         except Exception as erro_db:
-            from src.database.connection import reiniciar_pool_se_preciso
-
-            try:
-                await reiniciar_pool_se_preciso()
-            except Exception:
-                pass
-            await interaction.followup.send(
-                f"❌ Banco indisponível no momento (`{type(erro_db).__name__}`). "
-                "Tente novamente em alguns segundos.",
-                ephemeral=True,
+            # A consulta falhou. Descarta as conexoes velhas para que a
+            # proxima tentativa abra conexoes novas. O helper ja cuida
+            # de registrar tudo no log, com ou sem sucesso.
+            await tentar_reanimar_as_conexoes(
+                contexto="listar o historico de chamadas",
+            )
+            await responder_erro(
+                interaction,
+                titulo="Banco de dados indisponível",
+                linhas=[
+                    f"Banco indisponível no momento (`{type(erro_db).__name__}`). "
+                    "Tente novamente em alguns segundos.",
+                ],
             )
             return
-        await interaction.followup.send(
-            view=_lista_historico(
-                regs, interaction.guild, titulo="🩺 HISTÓRICO — CHAMADAS"
+        await responder_view(
+            interaction,
+            _lista_historico(
+                registros_do_historico,
+                interaction.guild,
+                titulo="🩺 HISTÓRICO — CHAMADAS",
             ),
             ephemeral=True,
         )
@@ -573,14 +649,30 @@ class RankingPlantaoTasks(commands.Cog):
         name="tempo-real", description="Horas de plantão no ciclo atual (relatório)"
     )
     async def horas_tempo_real(self, interaction: discord.Interaction):
+        """Mostra em privado as horas válidas acumuladas no ciclo atual.
+
+        Trata o resultado como relatório parcial, sem publicar nem salvar uma versão
+        definitiva. Isso permite verificar filtros de membros antes que o ciclo seja
+        fechado e a premiação correspondente seja encaminhada.
+        """
         await interaction.response.defer(ephemeral=True)
         try:
             view, *_ = await gerar_view_ranking_horas(
                 "tempo_real", guild=interaction.guild, modo_postagem=False
             )
-            await interaction.followup.send(view=view, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
+            await responder_view(
+                interaction,
+                view,
+                ephemeral=True,
+            )
+        except Exception as erro:
+            await responder_erro(
+                interaction,
+                titulo="Falha inesperada",
+                linhas=[
+                    f"Erro: `{erro}`",
+                ],
+            )
 
     @ranking_horas.command(
         name="postar", description="Gera ranking oficial de horas (relatório)"
@@ -602,17 +694,33 @@ class RankingPlantaoTasks(commands.Cog):
         periodo: app_commands.Choice[str],
         no_canal: bool = False,
     ):
+        """Gera o relatório oficial de horas e publica somente com confirmação explícita.
+
+        A prévia privada evita divulgar por acidente dados ainda em conferência. Ao
+        publicar, envia a mensagem ao canal configurado e persiste o intervalo, total
+        e identificador da mensagem para a auditoria posterior.
+        """
         await interaction.response.defer(ephemeral=True)
         try:
             view, contagem, inicio, fim, total = await gerar_view_ranking_horas(
                 periodo.value, guild=interaction.guild, modo_postagem=True
             )
-        except Exception as e:
-            await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
+        except Exception as erro:
+            await responder_erro(
+                interaction,
+                titulo="Falha inesperada",
+                linhas=[
+                    f"Erro: `{erro}`",
+                ],
+            )
             return
 
         if not no_canal:
-            await interaction.followup.send(view=view, ephemeral=True)
+            await responder_view(
+                interaction,
+                view,
+                ephemeral=True,
+            )
             return
 
         canal_id = CANAIS.get("RANKING_HORAS_PLANTAO") or 0
@@ -622,12 +730,16 @@ class RankingPlantaoTasks(commands.Cog):
             else None
         )
         if canal is None:
-            await interaction.followup.send(
-                "❌ `CANAIS['RANKING_HORAS_PLANTAO']` não configurado ou canal inválido.",
-                ephemeral=True,
+            await responder_erro(
+                interaction,
+                titulo="Dado inválido",
+                linhas=[
+                    "`CANAIS['RANKING_HORAS_PLANTAO']` não configurado ou canal "
+                    "inválido.",
+                ],
             )
             return
-        msg = await canal.send(view=view)
+        mensagem = await canal.send(view=view)
         await salvar_historico_plantao(
             tipo=f"horas_{periodo.value}",
             inicio=inicio,
@@ -635,12 +747,15 @@ class RankingPlantaoTasks(commands.Cog):
             contagem=contagem,
             total=total,
             channel_id=canal.id,
-            message_id=msg.id,
+            message_id=mensagem.id,
         )
-        await interaction.followup.send(
-            f"✅ Ranking de horas **{periodo.value}** postado em {canal.mention} "
-            f"(relatório · total `{formatar_hms(total)}`).",
-            ephemeral=True,
+        await responder_sucesso(
+            interaction,
+            titulo="Ranking postado",
+            linhas=[
+                f"Ranking de horas **{periodo.value}** postado em {canal.mention} "
+                f"(relatório · total `{formatar_hms(total)}`).",
+            ],
         )
 
     @ranking_horas.command(
@@ -652,6 +767,12 @@ class RankingPlantaoTasks(commands.Cog):
         interaction: discord.Interaction,
         limite: app_commands.Range[int, 1, 25] = 10,
     ):
+        """Exibe rankings de horas arquivados e relata indisponibilidade do banco.
+
+        Consulta até ``limite`` registros após confirmar a interação; se a consulta
+        falhar, tenta restaurar conexões antes de responder com erro. Esse caminho evita
+        exibir uma lista incompleta como se fosse todo o histórico disponível.
+        """
         if not interaction.response.is_done():
             try:
                 await interaction.response.defer(ephemeral=True)
@@ -660,23 +781,29 @@ class RankingPlantaoTasks(commands.Cog):
             except discord.HTTPException:
                 return
         try:
-            regs = await listar_historico_plantao("horas", limite=limite)
+            registros_do_historico = await listar_historico_plantao(
+                "horas", limite=limite
+            )
         except Exception as erro_db:
-            from src.database.connection import reiniciar_pool_se_preciso
-
-            try:
-                await reiniciar_pool_se_preciso()
-            except Exception:
-                pass
-            await interaction.followup.send(
-                f"❌ Banco indisponível no momento (`{type(erro_db).__name__}`). "
-                "Tente novamente em alguns segundos.",
-                ephemeral=True,
+            # A consulta falhou. Descarta as conexoes velhas para que a
+            # proxima tentativa abra conexoes novas. O helper ja cuida
+            # de registrar tudo no log, com ou sem sucesso.
+            await tentar_reanimar_as_conexoes(
+                contexto="listar o historico de horas",
+            )
+            await responder_erro(
+                interaction,
+                titulo="Banco de dados indisponível",
+                linhas=[
+                    f"Banco indisponível no momento (`{type(erro_db).__name__}`). "
+                    "Tente novamente em alguns segundos.",
+                ],
             )
             return
-        await interaction.followup.send(
-            view=_lista_historico(
-                regs,
+        await responder_view(
+            interaction,
+            _lista_historico(
+                registros_do_historico,
                 interaction.guild,
                 titulo="⏱️ HISTÓRICO — HORAS DE PLANTÃO",
                 horas=True,
@@ -698,16 +825,24 @@ def _lista_historico(
         linhas = "_Nenhum ranking histórico encontrado._"
     else:
         blocos = []
-        for r in registros:
-            periodo = f"{_formatar_data_curta(r.periodo_inicio)} → {_formatar_data_curta(r.periodo_fim)}"
+        for registro in registros:
+            periodo = (
+                f"{_formatar_data_curta(registro.periodo_inicio)} → "
+                f"{_formatar_data_curta(registro.periodo_fim)}"
+            )
             if horas:
-                metrica = f"⏱️ **{formatar_hms(r.total_recrutamentos)}**"
+                metrica = f"⏱️ **{formatar_hms(registro.total_recrutamentos)}**"
             else:
-                metrica = f"🩺 **{r.total_recrutamentos}** chamadas"
+                metrica = f"🩺 **{registro.total_recrutamentos}** chamadas"
             link = ""
-            if r.channel_id and r.message_id and guild:
-                link = f" • [abrir](https://discord.com/channels/{guild.id}/{r.channel_id}/{r.message_id})"
-            blocos.append(f"`#{r.id}` **{r.tipo}** `{periodo}`\n↳ {metrica}{link}")
+            if registro.channel_id and registro.message_id and guild:
+                link = (
+                    f" • "
+                    f"[abrir](https://discord.com/channels/{guild.id}/{registro.channel_id}/{registro.message_id})"
+                )
+            blocos.append(
+                f"`#{registro.id}` **{registro.tipo}** `{periodo}`\n↳ {metrica}{link}"
+            )
         linhas = "\n\n".join(blocos)
 
     agora_ts = int(datetime.now(ZoneInfo("UTC")).timestamp())
@@ -732,4 +867,5 @@ def _lista_historico(
 
 
 async def setup(bot: commands.Bot):
+    """Registra as tarefas e comandos responsáveis pelos rankings de plantão."""
     await bot.add_cog(RankingPlantaoTasks(bot))

@@ -23,4 +23,5 @@ class FinancasCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra o cog que restaura o botão persistente de pagamentos."""
     await bot.add_cog(FinancasCog(bot))

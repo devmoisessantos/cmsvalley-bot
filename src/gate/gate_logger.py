@@ -7,12 +7,16 @@ Usa LogContainerView (Components V2).
 
 from __future__ import annotations
 
+import logging
+
 import discord
 
 from src.config import CANAIS
 from src.gate.gate_service import salvar_log_message_id
 from src.utils.formatacao import formatar_data_hora
 from src.utils.log_container import LogContainerView
+
+registrador = logging.getLogger(__name__)
 
 
 def _montar_linhas_do_log(evento) -> str:
@@ -46,7 +50,7 @@ async def enviar_log_evento(
     """
     canal = bot.get_channel(CANAIS["LOG_GATE"])
     if canal is None:
-        print("[GATE] Canal LOG_GATE não encontrado — log não enviado.")
+        registrador.error("[GATE] Canal LOG_GATE não encontrado — log não enviado.")
         return False
 
     view_do_log = LogContainerView(
@@ -70,7 +74,7 @@ async def atualizar_log_evento(
 
     canal = bot.get_channel(CANAIS["LOG_GATE"])
     if canal is None:
-        print("[GATE] Canal LOG_GATE não encontrado — log não atualizado.")
+        registrador.error("[GATE] Canal LOG_GATE não encontrado — log não atualizado.")
         return False
 
     try:

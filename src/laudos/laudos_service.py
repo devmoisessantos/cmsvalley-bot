@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 
 from src.config import CARGOS
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     ConsultaLaudo,
     EstadoPlantao,
@@ -24,7 +24,7 @@ from src.database.models import (
     Recrutamento,
     Usuario,
 )
-from src.chamada.ocr.scraping_membros import extrair_id_do_apelido
+from src.plantao.chamada.ocr.leitura_de_membros_service import extrair_id_do_apelido
 
 NOMES_CARGOS_PSICOLOGO = (
     "🩺・Psicólogo",
@@ -144,6 +144,12 @@ async def resolver_e_persistir_id_fivem(membro: discord.Member) -> str | None:
 
 
 async def buscar_consulta_aberta(discord_id_psicologo: int) -> ConsultaLaudo | None:
+    """Obtém a consulta mais recente ainda aberta para um psicólogo.
+
+    A ordenação descendente protege contra registros antigos e permite impor a
+    regra de uma consulta ativa por profissional sem confundir atendimentos já
+    finalizados ou cancelados.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(ConsultaLaudo)
@@ -188,8 +194,10 @@ async def iniciar_consulta(
         return (
             False,
             (
-                f"Você já tem uma consulta **aberta** com <@{consulta_existente.discord_id_paciente}> "
-                f"(#{consulta_existente.id}). Finalize o laudo ou cancele antes de iniciar outra."
+                f"Você já tem uma consulta **aberta** com "
+                f"<@{consulta_existente.discord_id_paciente}> "
+                f"(#{consulta_existente.id}). Finalize o laudo ou cancele antes de "
+                f"iniciar outra."
             ),
             consulta_existente,
         )
@@ -241,7 +249,8 @@ async def iniciar_consulta(
             return (
                 True,
                 (
-                    f"Consulta **#{nova_consulta.id}** iniciada com {paciente.mention}.\n"
+                    f"Consulta **#{nova_consulta.id}** iniciada com "
+                    f"{paciente.mention}.\n"
                     f"Passaporte do paciente: `{id_fivem_paciente}`.\n"
                     "Agora você pode clicar em **Gerar Laudo**."
                 ),
@@ -256,6 +265,12 @@ async def iniciar_consulta(
 
 
 async def cancelar_consulta_aberta(discord_id_psicologo: int) -> tuple[bool, str]:
+    """Marca como cancelada a consulta aberta do psicólogo e informa o resultado.
+
+    Reconsulta o registro dentro da transação antes de alterá-lo, evitando
+    cancelar algo finalizado por outro fluxo. A operação grava a data no banco
+    e converte falhas de persistência em uma mensagem segura para a interface.
+    """
     consulta = await buscar_consulta_aberta(discord_id_psicologo)
     if consulta is None:
         return False, "Você não tem consulta aberta para cancelar."
@@ -282,10 +297,16 @@ def montar_texto_laudo(
     parecer: str,
     motivo: str,
 ) -> str:
+    """Monta o texto completo do laudo para publicação no Discord.
+
+    Recebe identificadores já validados e escolhe a indicação visual conforme o
+    parecer, separando paciente, profissional e fundamentação de forma legível.
+    """
     emoji_parecer = "✅ **APROVADO**" if parecer == "APROVADO" else "❌ **REPROVADO**"
     return (
         "### `👤` **Identificação do Paciente:**\n"
-        f"> - **Nome:** <@{discord_id_paciente}> · **Passaporte:** `{id_fivem_paciente}`\n\n"
+        f"> - **Nome:** <@{discord_id_paciente}> · **Passaporte:** "
+        f"`{id_fivem_paciente}`\n\n"
         "### `🥼` **Psicólogo Responsável:**\n"
         f"> - **Nome:** <@{discord_id_psicologo}>\n"
         f"> - **Passaporte:** `{id_fivem_psicologo}`\n"
@@ -400,7 +421,8 @@ async def gerar_laudo(
             if registro_consulta is None or registro_consulta.status != "ABERTA":
                 return (
                     False,
-                    "A consulta aberta não foi encontrada (pode ter sido finalizada por outro fluxo).",
+                    "A consulta aberta não foi encontrada (pode ter sido finalizada "
+                    "por outro fluxo).",
                     None,
                     None,
                     None,
@@ -440,6 +462,11 @@ async def gerar_laudo(
 
 
 async def contar_laudos_psicologo(discord_id_psicologo: int) -> int:
+    """Conta os laudos emitidos pelo psicólogo para consultas administrativas.
+
+    Usa uma contagem no banco em vez de carregar todos os documentos, mantendo
+    o comando leve mesmo quando o histórico clínico crescer.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(func.count())

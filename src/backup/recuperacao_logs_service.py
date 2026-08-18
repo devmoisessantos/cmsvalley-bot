@@ -22,7 +22,7 @@ from src.config import (
     CARGOS,
     TOTAL_PERGUNTAS_PROVA,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     Chamada,
     ConsultaLaudo,
@@ -64,6 +64,9 @@ def extrair_texto_mensagem(mensagem: discord.Message) -> str:
             pedacos.append(f"{campo.name}: {campo.value}")
 
     def percorrer(objeto: object) -> None:
+        """
+        Visita componentes aninhados para não perder texto dos cards Components V2.
+        """
         if objeto is None:
             return
         if isinstance(objeto, str):
@@ -103,6 +106,13 @@ def parsear_hms_para_segundos(texto: str) -> int | None:
 
 
 def parsear_discord_id(texto: str) -> int | None:
+    """
+    Extrai o identificador de membro dos formatos usados pelos cards de log.
+
+    Aceita menções e campos `Membro` com número entre crases, pois logs antigos e
+    novos não seguem exatamente o mesmo modelo. Retorna `None` quando não há um ID
+    confiável, impedindo que uma recuperação associe dados à pessoa errada.
+    """
     match = re.search(r"<@!?(\d{15,25})>", texto)
     if match:
         return int(match.group(1))
@@ -116,6 +126,13 @@ def parsear_discord_id(texto: str) -> int | None:
 
 
 def parsear_id_fivem(texto: str) -> str | None:
+    """
+    Lê o identificador FiveM quando o log o informa como um valor utilizável.
+
+    Procura as variações visuais do campo e descarta marcadores como `N/A` ou hífen,
+    que não representam uma identidade. Limita o texto a vinte caracteres para
+    respeitar o tamanho do campo no banco durante a importação.
+    """
     match = re.search(r"ID FiveM:\*\*\s*`([^`]+)`", texto, re.I)
     if not match:
         match = re.search(r"ID FiveM:\s*`([^`]+)`", texto, re.I)
@@ -190,6 +207,13 @@ def parsear_mensagem_plantao(
 
 
 async def mensagem_ja_importada(message_id: int) -> bool:
+    """
+    Confere no banco se uma mensagem de plantão já foi transformada em registro.
+
+    Usa a marca criada a partir do identificador da mensagem, em vez de comparar
+    campos variáveis do card. Essa consulta impede que executar a recuperação duas
+    vezes duplique eventos de plantão na tabela.
+    """
     marca = f"import_log:{message_id}"
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -269,6 +293,9 @@ async def importar_log_plantao_do_canal(
 
 
 def id_canal_log_plantao() -> int | None:
+    """
+    Converte a configuração do canal de plantão em ID para evitar valores de texto.
+    """
     valor = CANAIS.get("LOG_PLANTAO")
     return int(valor) if valor else None
 
@@ -277,7 +304,9 @@ def id_canal_log_plantao() -> int | None:
 
 
 def _ids_no_texto(texto: str) -> list[int]:
-    return [int(x) for x in re.findall(r"<@!?(\d{15,25})>", texto)]
+    return [
+        int(id_encontrado) for id_encontrado in re.findall(r"<@!?(\d{15,25})>", texto)
+    ]
 
 
 def _id_backtick_apos(rotulo: str, texto: str) -> int | None:
@@ -327,7 +356,7 @@ async def _garantir_usuario(
 
 
 def _role_ids_no_texto(texto: str) -> list[int]:
-    return [int(x) for x in re.findall(r"<@&(\d+)>", texto)]
+    return [int(id_de_cargo) for id_de_cargo in re.findall(r"<@&(\d+)>", texto)]
 
 
 def _resolver_cargo_final_por_roles(texto: str) -> str | None:
@@ -530,9 +559,14 @@ async def _buscar_recrutamento_aberto(
         .limit(5)
     )
     candidatos = list(resultado.scalars().all())
-    for reg in candidatos:
-        if reg.status in ("ESTUDANDO", "EM_PROVA", "REPROVADO", "REPROVADO_TEMPO"):
-            return reg
+    for registro_recuperado in candidatos:
+        if registro_recuperado.status in (
+            "ESTUDANDO",
+            "EM_PROVA",
+            "REPROVADO",
+            "REPROVADO_TEMPO",
+        ):
+            return registro_recuperado
     return candidatos[0] if candidatos else None
 
 
@@ -631,6 +665,13 @@ async def importar_canal_recrutamento_generico(
     limite: int | None = None,
     apenas_bot_id: int | None = None,
 ) -> dict:
+    """
+    Percorre um canal e aplica o interpretador fornecido para gravar recrutamentos.
+
+    O `parser` adapta o mesmo laço aos formatos de início, aprovação ou reprovação;
+    `limite` reduz a busca e `apenas_bot_id` filtra a autoria. Insere ou atualiza o
+    banco por mensagem e retorna contagens, mantendo a importação idempotente.
+    """
     lidas = importadas = atualizadas = ignoradas = ja_existiam = erros = 0
 
     async for mensagem in canal.history(limit=limite, oldest_first=True):
@@ -714,6 +755,13 @@ async def importar_log_reprovacoes_do_canal(
 
 
 def parsear_mensagem_punicao(mensagem: discord.Message) -> dict | None:
+    """
+    Converte um card de nova punição em campos seguros para persistência.
+
+    Rejeita mensagens que não anunciam punição e procura alvo, responsável, motivo,
+    cargo e data em formatos alternativos do histórico. Quando faltam identificadores
+    essenciais retorna `None`, evitando criar uma punição atribuída incorretamente.
+    """
     texto = extrair_texto_mensagem(mensagem)
     if not texto.strip():
         return None
@@ -776,6 +824,9 @@ def parsear_mensagem_punicao(mensagem: discord.Message) -> dict | None:
 
 
 async def punicao_ja_importada(message_id: int) -> bool:
+    """
+    Busca a mensagem no banco para impedir que a mesma punição seja inserida duas vezes.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Punicao.id).where(Punicao.message_id == int(message_id)).limit(1)
@@ -789,6 +840,13 @@ async def importar_log_punicoes_do_canal(
     limite: int | None = None,
     apenas_bot_id: int | None = None,
 ) -> dict:
+    """
+    Importa punições interpretáveis do canal sem repetir mensagens já tratadas.
+
+    O limite e o filtro opcional de autoria controlam a varredura. Para cada card
+    válido, grava uma linha ativa no banco e confirma a transação; falhas individuais
+    viram contagem e log, para que uma mensagem ruim não interrompa a recuperação.
+    """
     lidas = importadas = ignoradas = ja_existiam = erros = 0
 
     async for mensagem in canal.history(limit=limite, oldest_first=True):
@@ -839,6 +897,13 @@ async def importar_log_punicoes_do_canal(
 
 
 def parsear_mensagem_chamada(mensagem: discord.Message) -> dict | None:
+    """
+    Extrai os totais de uma chamada somente quando o card identifica seu responsável.
+
+    Aceita os dois títulos usados pelo histórico e localiza o médico por menção ou
+    pelos números do texto. Retorna `None` se não reconhecer um registro completo,
+    protegendo as estatísticas contra mensagens comuns do canal.
+    """
     texto = extrair_texto_mensagem(mensagem)
     if not texto.strip():
         return None
@@ -886,6 +951,13 @@ def parsear_mensagem_chamada(mensagem: discord.Message) -> dict | None:
 
 
 async def chamada_ja_importada(doutor_id: int, criado_em: datetime) -> bool:
+    """
+    Verifica se já existe uma chamada do mesmo médico no mesmo instante.
+
+    A combinação de responsável e data funciona como chave de recuperação, pois a
+    tabela não guarda o identificador da mensagem original. Evita duplicar totais
+    quando o comando percorre novamente o mesmo histórico.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Chamada.id)
@@ -904,6 +976,13 @@ async def importar_log_chamadas_do_canal(
     limite: int | None = None,
     apenas_bot_id: int | None = None,
 ) -> dict:
+    """
+    Recupera chamadas do histórico e grava apenas combinações ainda inexistentes.
+
+    Percorre as mensagens em ordem cronológica, respeita o limite e o filtro de
+    autoria e persiste os totais encontrados. Erros são isolados por mensagem e o
+    dicionário final permite à interface mostrar o balanço da operação.
+    """
     lidas = importadas = ignoradas = ja_existiam = erros = 0
 
     async for mensagem in canal.history(limit=limite, oldest_first=True):
@@ -947,6 +1026,7 @@ async def importar_log_chamadas_do_canal(
 
 
 def id_canal_log(chave: str) -> int | None:
+    """Lê um ID configurado e devolve `None` quando o canal ainda não foi definido."""
     valor = CANAIS.get(chave)
     return int(valor) if valor else None
 
@@ -955,6 +1035,13 @@ def id_canal_log(chave: str) -> int | None:
 
 
 def parsear_mensagem_whitelist(mensagem: discord.Message) -> dict | None:
+    """
+    Interpreta liberações de whitelist em formatos atuais e antigos dos cards.
+
+    Identifica o usuário, seu identificador FiveM e um possível nome composto, além
+    de normalizar a data da mensagem. Retorna `None` ao não encontrar sinais ou ID
+    suficientes, evitando alterar o cadastro de uma pessoa por texto ambíguo.
+    """
     texto = extrair_texto_mensagem(mensagem)
     if not texto.strip():
         return None
@@ -1013,6 +1100,13 @@ async def importar_log_whitelist_do_canal(
     limite: int | None = None,
     apenas_bot_id: int | None = None,
 ) -> dict:
+    """
+    Reconstroi dados de whitelist criando ou complementando usuários no banco.
+
+    Varre o canal conforme o limite e a autoria escolhidos, atualizando campos que
+    ainda não existem sem sobrescrever informação melhor. Devolve contagens de
+    criações, atualizações e falhas para tornar o efeito da escrita auditável.
+    """
     lidas = importadas = atualizadas = ignoradas = ja_existiam = erros = 0
 
     async for mensagem in canal.history(limit=limite, oldest_first=True):
@@ -1113,9 +1207,13 @@ def parsear_mensagem_cargo(mensagem: discord.Message) -> list[dict]:
         # menções de cargo ou texto separado por vírgula
         nomes = re.findall(r"<@&(\d+)>", bruto)
         if nomes:
-            return [f"role:{n}"[:50] for n in nomes]
-        partes = [p.strip() for p in re.split(r"[,|]", bruto) if p.strip()]
-        return [p[:50] for p in partes]
+            return [f"role:{numero}"[:50] for numero in nomes]
+        partes = [
+            parte_do_texto.strip()
+            for parte_do_texto in re.split(r"[,|]", bruto)
+            if parte_do_texto.strip()
+        ]
+        return [parte_do_texto[:50] for parte_do_texto in partes]
 
     for nome in _extrair_lista("Adicionados"):
         registros.append(
@@ -1146,6 +1244,13 @@ async def importar_log_cargos_do_canal(
     limite: int | None = None,
     apenas_bot_id: int | None = None,
 ) -> dict:
+    """
+    Persiste movimentos de cargos preservando cada evento histórico identificável.
+
+    Lê adições e remoções do canal, garante o usuário relacionado e consulta uma
+    combinação de campos antes de inserir no banco. Essa verificação evita duplicar
+    eventos ao reimportar o mesmo período de auditoria.
+    """
     lidas = importadas = ignoradas = ja_existiam = erros = 0
     atualizadas = 0
 
@@ -1160,18 +1265,20 @@ async def importar_log_cargos_do_canal(
                 ignoradas += 1
                 continue
             async with async_session() as sessao:
-                for reg in registros:
+                for registro_recuperado in registros:
                     await _garantir_usuario(
-                        sessao, reg["discord_id"], status="VISITANTE"
+                        sessao, registro_recuperado["discord_id"], status="VISITANTE"
                     )
                     # anti-duplicata grosseira
                     existente = await sessao.execute(
                         select(HistoricoCargo.id)
                         .where(
-                            HistoricoCargo.discord_id == reg["discord_id"],
-                            HistoricoCargo.cargo == reg["cargo"],
-                            HistoricoCargo.acao == reg["acao"],
-                            HistoricoCargo.data_hora == reg["data_hora"],
+                            HistoricoCargo.discord_id
+                            == registro_recuperado["discord_id"],
+                            HistoricoCargo.cargo == registro_recuperado["cargo"],
+                            HistoricoCargo.acao == registro_recuperado["acao"],
+                            HistoricoCargo.data_hora
+                            == registro_recuperado["data_hora"],
                         )
                         .limit(1)
                     )
@@ -1180,11 +1287,11 @@ async def importar_log_cargos_do_canal(
                         continue
                     sessao.add(
                         HistoricoCargo(
-                            discord_id=reg["discord_id"],
-                            cargo=reg["cargo"],
-                            acao=reg["acao"],
-                            executor_id=reg["executor_id"],
-                            data_hora=reg["data_hora"],
+                            discord_id=registro_recuperado["discord_id"],
+                            cargo=registro_recuperado["cargo"],
+                            acao=registro_recuperado["acao"],
+                            executor_id=registro_recuperado["executor_id"],
+                            data_hora=registro_recuperado["data_hora"],
                         )
                     )
                     importadas += 1
@@ -1208,6 +1315,13 @@ async def importar_log_cargos_do_canal(
 
 
 def parsear_mensagem_laudo(mensagem: discord.Message) -> dict | None:
+    """
+    Traduz um card de laudo em dados de consulta e parecer psicológico.
+
+    Busca paciente, psicólogo, passaportes, parecer e CRP com alternativas para
+    templates antigos. Não devolve dados sem os dois membros, pois um laudo parcial
+    não pode criar relações consistentes entre consulta e resultado no banco.
+    """
     texto = extrair_texto_mensagem(mensagem)
     if not texto.strip():
         return None
@@ -1254,10 +1368,10 @@ def parsear_mensagem_laudo(mensagem: discord.Message) -> dict | None:
     if not match:
         match = re.search(r"Parecer:\s*`([^`]+)`", texto, re.I)
     if match:
-        p = match.group(1).strip().upper()
-        if "APROV" in p:
+        texto_do_paciente = match.group(1).strip().upper()
+        if "APROV" in texto_do_paciente:
             parecer = "APROVADO"
-        elif "REPROV" in p:
+        elif "REPROV" in texto_do_paciente:
             parecer = "REPROVADO"
 
     crp = _campo_backtick("CRP", texto) or "IMPORTADO"
@@ -1286,6 +1400,13 @@ async def importar_log_laudos_do_canal(
     limite: int | None = None,
     apenas_bot_id: int | None = None,
 ) -> dict:
+    """
+    Cria consulta concluída e laudo para cada mensagem inédita do histórico.
+
+    A marca baseada na mensagem impede importar o mesmo parecer duas vezes. Cada
+    registro válido grava duas entidades relacionadas na mesma sessão do banco,
+    enquanto mensagens problemáticas são contabilizadas sem cancelar toda a tarefa.
+    """
     lidas = importadas = ignoradas = ja_existiam = erros = 0
     atualizadas = 0
 
@@ -1355,6 +1476,13 @@ async def importar_log_laudos_do_canal(
 
 
 def parsear_mensagem_promocao(mensagem: discord.Message) -> dict | None:
+    """
+    Classifica promoções, reprovações ou rebaixamentos e extrai seus envolvidos.
+
+    Reconhece o tipo pelo texto do card, identifica membro e responsável e tenta
+    recuperar os cargos de origem e destino. Se não houver um alvo, retorna `None`
+    para não criar um evento de hierarquia sem vínculo com alguém.
+    """
     texto = extrair_texto_mensagem(mensagem)
     if not texto.strip():
         return None
@@ -1411,6 +1539,13 @@ async def importar_log_promocoes_do_canal(
     limite: int | None = None,
     apenas_bot_id: int | None = None,
 ) -> dict:
+    """
+    Acrescenta ao histórico somente eventos de promoção ainda não recuperados.
+
+    Usa a marca formada pelo identificador da mensagem para detectar duplicatas antes
+    de gravar no banco. Percorre o canal cronologicamente, isola erros por card e
+    retorna contagens úteis para confirmar o resultado no Discord.
+    """
     lidas = importadas = ignoradas = ja_existiam = erros = 0
     atualizadas = 0
 

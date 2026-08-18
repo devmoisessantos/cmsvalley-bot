@@ -29,10 +29,18 @@ class BauTasks(commands.Cog):
         logger.info("BauTasks iniciado — varredura de prazos a cada 1 min")
 
     def cog_unload(self):
+        """Cancela a varredura para impedir tarefa órfã ao descarregar o cog."""
         self.varrer_prazos.cancel()
 
     @tasks.loop(minutes=1)
     async def varrer_prazos(self):
+        """Aplica medidas aos casos cujo prazo de devolução se esgotou.
+
+        Busca somente o servidor configurado e os casos vencidos, registra a
+        verbal automática no banco e publica ou atualiza o alerta no Discord.
+        Trata falhas por caso para que uma ocorrência com problema não impeça a
+        análise dos demais na próxima execução.
+        """
         guilda = self.bot.get_guild(int(GUILD_ID))
         if guilda is None:
             return
@@ -48,7 +56,7 @@ class BauTasks(commands.Cog):
                 await log_verbal_aplicada(guilda, caso=caso, tipo=tipo)
 
                 # Releitura: status no banco já é PRAZO_ESTOURADO — Valley liberado
-                from src.database.connection import async_session
+                from src.database.conexao import async_session
                 from src.database.models import CasoBau
 
                 async with async_session() as sessao:
@@ -69,8 +77,10 @@ class BauTasks(commands.Cog):
 
     @varrer_prazos.before_loop
     async def antes_varrer(self):
+        """Espera o bot conectar antes de iniciar a varredura periódica."""
         await self.bot.wait_until_ready()
 
 
 async def setup(bot: commands.Bot):
+    """Registra as tarefas de prazo do baú no bot."""
     await bot.add_cog(BauTasks(bot))

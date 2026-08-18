@@ -1,36 +1,143 @@
+"""
+Configuracao central do CMS Valley Bot.
+
+Regra do projeto: nenhum ID, token ou numero magico pode aparecer solto na
+logica dos dominios. Tudo mora aqui, e o que muda entre ambientes vem do .env.
+
+Os nomes em maiusculas que estao em ingles (DISCORD_TOKEN, BACKUP_DIR, ...)
+sao mantidos porque correspondem as chaves do arquivo .env e a imports que
+já existem em dezenas de arquivos. Para cada um deles existe um apelido em
+portugues no fim desta secao, que deve ser preferido em codigo novo.
+"""
+
 import os
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID"))
-# Discord da cidade (Valley) — tickets de ocorrência grave de baú
-GUILD_ID_VALLEY = int(os.getenv("GUILD_ID_VALLEY", "1035704096608493608"))
-DATABASE_URL = os.getenv("DATABASE_URL")
-# preencha com o ID do canal onde o painel vai ficar
-CANAL_PAINEL_RECRUTAMENTO_ID = 1486369071590281326
-# Legado — painéis usam guild.icon; não exigir arquivo local
-# LOGO_PATH = "assets/logo.png"
 
-BACKUP_DIR = os.getenv("BACKUP_DIR", "data/backups")
-MAX_BACKUPS_PER_GUILD = int(os.getenv("MAX_BACKUPS_PER_GUILD", 10))
-# Backup estrutural do Discord (cargos/canais) — intervalo em horas
-AUTO_BACKUP_INTERVAL_HOURS = int(os.getenv("AUTO_BACKUP_INTERVAL_HOURS", 24))
-# Backup do banco (JSON no LOG_BACKUP) — verificação silenciosa em minutos
-AUTO_BACKUP_DB_INTERVAL_MINUTES = int(os.getenv("AUTO_BACKUP_DB_INTERVAL_MINUTES", 1))
-ADMIN_ROLE_NAMES = [
-    r.strip()
-    for r in os.getenv("ADMIN_ROLE_NAMES", "Admin,Fundador").split(",")
-    if r.strip()
-]
-CONFIRMATION_TIMEOUT = int(os.getenv("CONFIRMATION_TIMEOUT", 30))
+def _ler_texto_do_ambiente(nome_da_variavel: str, valor_padrao: str = "") -> str:
+    """Le uma variavel de ambiente como texto, sem espacos nas pontas."""
+    texto_lido = os.getenv(nome_da_variavel, valor_padrao)
+    if texto_lido is None:
+        return valor_padrao
+    return texto_lido.strip()
+
+
+def _ler_numero_do_ambiente(nome_da_variavel: str, valor_padrao: int) -> int:
+    """
+    Le uma variavel de ambiente como numero inteiro.
+
+    Se a variavel nao existir ou estiver vazia, devolve o valor padrao.
+    Se estiver preenchida com algo que nao e numero, avisa de forma clara
+    em vez de estourar um ValueError sem contexto.
+    """
+    texto_lido = _ler_texto_do_ambiente(nome_da_variavel)
+
+    if not texto_lido:
+        return valor_padrao
+
+    if not texto_lido.lstrip("-").isdigit():
+        raise RuntimeError(
+            f"A variavel {nome_da_variavel} do .env precisa ser um numero "
+            f"inteiro, mas veio '{texto_lido}'."
+        )
+
+    return int(texto_lido)
+
+
+def _ler_lista_de_textos_do_ambiente(
+    nome_da_variavel: str,
+    valor_padrao: str = "",
+) -> list[str]:
+    """
+    Le uma variavel de ambiente separada por virgulas e devolve uma lista limpa.
+
+    Exemplo: "Admin, Fundador" vira ["Admin", "Fundador"].
+    """
+    texto_lido = _ler_texto_do_ambiente(nome_da_variavel, valor_padrao)
+
+    lista_de_textos_limpos = []
+    for pedaco_bruto in texto_lido.split(","):
+        pedaco_limpo = pedaco_bruto.strip()
+        if pedaco_limpo:
+            lista_de_textos_limpos.append(pedaco_limpo)
+
+    return lista_de_textos_limpos
+
+
+def _ler_lista_de_numeros_do_ambiente(nome_da_variavel: str) -> list[int]:
+    """Le uma variavel de ambiente separada por virgulas e devolve so os numeros."""
+    lista_de_numeros = []
+    for pedaco_limpo in _ler_lista_de_textos_do_ambiente(nome_da_variavel):
+        if pedaco_limpo.isdigit():
+            lista_de_numeros.append(int(pedaco_limpo))
+
+    return lista_de_numeros
+
+
+# ---------------------------------------------------------------------------
+# Segredos e identificadores que vem do .env
+# ---------------------------------------------------------------------------
+
+DISCORD_TOKEN = _ler_texto_do_ambiente("DISCORD_TOKEN")
 
 if not DISCORD_TOKEN:
     raise RuntimeError(
-        "DISCORD_TOKEN não definido. Crie um arquivo .env baseado em .env.example."
+        "DISCORD_TOKEN nao definido. Crie um arquivo .env baseado em .env.example."
     )
+
+GUILD_ID = _ler_numero_do_ambiente("GUILD_ID", 0)
+
+if not GUILD_ID:
+    raise RuntimeError(
+        "GUILD_ID nao definido. Crie um arquivo .env baseado em .env.example."
+    )
+
+# Discord da cidade (Valley) — tickets de ocorrência grave de baú.
+# Se nao vier no .env, cai no servidor principal em vez de num ID fixo
+# de producao escrito no codigo.
+GUILD_ID_VALLEY = _ler_numero_do_ambiente("GUILD_ID_VALLEY", GUILD_ID)
+
+DATABASE_URL = _ler_texto_do_ambiente("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL nao definida. Crie um arquivo .env baseado em .env.example."
+    )
+
+# Canal onde o painel de recrutamento fica fixado.
+# Continua com um padrao para nao quebrar o deploy atual, mas agora pode ser
+# trocado pelo .env sem mexer no codigo.
+CANAL_PAINEL_RECRUTAMENTO_ID = _ler_numero_do_ambiente(
+    "CANAL_PAINEL_RECRUTAMENTO_ID",
+    1486369071590281326,
+)
+
+# ---------------------------------------------------------------------------
+# Backups
+# ---------------------------------------------------------------------------
+
+BACKUP_DIR = _ler_texto_do_ambiente("BACKUP_DIR", "src/data/backups")
+MAX_BACKUPS_PER_GUILD = _ler_numero_do_ambiente("MAX_BACKUPS_PER_GUILD", 10)
+# Backup estrutural do Discord (cargos/canais) — intervalo em horas
+AUTO_BACKUP_INTERVAL_HOURS = _ler_numero_do_ambiente("AUTO_BACKUP_INTERVAL_HOURS", 24)
+# Backup do banco (JSON no LOG_BACKUP) — verificação silenciosa em minutos
+AUTO_BACKUP_DB_INTERVAL_MINUTES = _ler_numero_do_ambiente(
+    "AUTO_BACKUP_DB_INTERVAL_MINUTES",
+    1,
+)
+
+# ---------------------------------------------------------------------------
+# Permissoes e tempos
+# ---------------------------------------------------------------------------
+
+ADMIN_ROLE_NAMES = _ler_lista_de_textos_do_ambiente(
+    "ADMIN_ROLE_NAMES",
+    "Admin,Fundador",
+)
+CONFIRMATION_TIMEOUT = _ler_numero_do_ambiente("CONFIRMATION_TIMEOUT", 30)
 
 MESES_ABREV = {
     1: "Jan",
@@ -257,11 +364,9 @@ RANKING_HORAS_CARGOS_EXCLUIDOS: list[str] = [
 ]
 
 # DMs de controle financeiro (IDs Discord, separados por vírgula no .env)
-DIRETOR_CONTROLE_FINANCEIRO_IDS = [
-    int(parte.strip())
-    for parte in os.getenv("DIRETOR_CONTROLE_FINANCEIRO_IDS", "").split(",")
-    if parte.strip().isdigit()
-]
+DIRETOR_CONTROLE_FINANCEIRO_IDS = _ler_lista_de_numeros_do_ambiente(
+    "DIRETOR_CONTROLE_FINANCEIRO_IDS"
+)
 
 # Metadados por área para solicitação no canal de finanças
 # responsavel_discord_id / responsavel_fid podem ficar None/"—" até cadastrar
@@ -302,10 +407,10 @@ AREAS_FINANCEIRAS = {
 
 CANAIS = {
     "CANAL_MARCAR_PRESENCA_GATE": 1533997231475261571,
-    "CANAL_PAINEL_PLANTAO_ID": 1531543798293856376,
     "CANAL_PAINEL_PLANTAO_ID": 1531543798293856376,  # #iniciar-plantao
     "CANAL_FAZER_CHAMADA": 1486369151952879848,  # #fazer-chamada
-    "CANAL_CHAMADAS_HP_SUL": 1486369153349582990,  # registro público das chamadas realizadas
+    # registro público das chamadas realizadas
+    "CANAL_CHAMADAS_HP_SUL": 1486369153349582990,
     "CANAL_GERENCIAR_MEMBROS": 1534803293396795522,  # #gerenciar-membros
     "CANAL_ADVERTENCIAS": 1486369099062837341,
     "CANAL_EXONERACOES": 1486369085829808211,
@@ -313,7 +418,8 @@ CANAIS = {
     "CANAL_LAUDOS": 1486369162455683185,  # laudos publicados
     "CANAL_RANKING_LAUDOS": 1486369179044155685,
     "CANAL_ALERTA_BAU": 1486369103777366106,  # ← alertas de excesso / casos
-    "CANAL_PAINEL_BAU": 1536397321074511872,  # ← painel fixo (admin também usa /bau painel)
+    # ← painel fixo (admin também usa /bau painel)
+    "CANAL_PAINEL_BAU": 1536397321074511872,
     "CANAL_TICKETS_BAU": 1486369093769760843,  # ← canal/categoria de tickets (link DM)
     "CANAL_TICKET_VALLEY": 1077995758785138758,
     "CANAL_FINANCAS": 1486369137021161472,
@@ -326,7 +432,6 @@ CANAIS = {
     "CANAL_PAINEL_SOLICITAR_PROMOCAO": 1486369195028517026,
     "CANAL_PAINEL_SOLICITAR_CURSOS": 1486369193787134064,
     "CANAL_AGENDAMENTOS_DE_CURSO": 1533098161827217609,
-    "CANAL_AVALIAR_ATENDIMENTO": 1486369031614365856,
     "CANAL_APROVAR_REPROVAR_CURSO": 1533112969846722560,
     "CANAL_PAINEL_DEMISSAO": 1486369080465293362,  # painel fixo Solicitar Demissão
     "CANAL_APROVAR_DEMISSAO": 1533884920475160777,  # diretoria aprova / recusa
@@ -337,12 +442,14 @@ CANAIS = {
     "CANAL_APROVADOS_CURSOS": 1486369199503708271,
     "CANAL_REPROVADOS_CURSOS": 1486369201521295370,
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
-    "RANKING_RECRUTADORES": 1486369056574406736,  # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
+    # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
+    "RANKING_RECRUTADORES": 1486369056574406736,
     "RANKING_CHAMADAS": 1486369149792948356,
     # Finanças — solicitações de pagamento de área / troca de moedas plantão
     "RANKING_HORAS_PLANTAO": 1534862719457427466,
     # Ranking de moedas (tempo real, mesma ideia do ranking de horas)
-    # Configure o ID do canal no .env se for outro: sobrescreva via código ou ajuste aqui
+    # Configure o ID do canal no .env se for outro: sobrescreva via código ou ajuste
+    # aqui
     "RANKING_MOEDAS": 1537382621338800168,
     # Pedidos de depósito $ → moedas (padrão: canal de finanças)
     "CANAL_DEPOSITO_MOEDAS": 1537382938176655410,
@@ -738,7 +845,10 @@ def obter_ids_canais_plantao_em_ordem() -> list[int]:
 
 
 def _gerar_nomes_amigaveis() -> dict[int, str]:
-    """Monta um mapa {channel_id: 'Nome bonito'} — inclusive numerando categorias com lista."""
+    """
+    Monta um mapa {channel_id: 'Nome bonito'} — inclusive numerando categorias com
+    lista.
+    """
     nomes: dict[int, str] = {}
 
     rotulos_unicos = {
@@ -759,8 +869,8 @@ def _gerar_nomes_amigaveis() -> dict[int, str]:
     for chave, valor in CANAIS_PLANTAO.items():
         if isinstance(valor, list):
             base = rotulos_lista.get(chave, chave.title())
-            for i, canal_id in enumerate(valor, start=1):
-                nomes[canal_id] = f"{base} {i}"
+            for indice, canal_id in enumerate(valor, start=1):
+                nomes[canal_id] = f"{base} {indice}"
         else:
             nomes[valor] = rotulos_unicos.get(chave, chave.title())
 
@@ -1062,3 +1172,26 @@ TRILHAS_PROMOCAO = [
         "observacao": "Libera área de Instrutores. Práticos 1.0/2.0 + metas de plantão .",
     },
 ]
+
+
+# ---------------------------------------------------------------------------
+# Apelidos em portugues (preferir estes em codigo novo)
+#
+# Os nomes originais em ingles continuam existindo logo acima porque batem com
+# as chaves do arquivo .env e com imports que ja existem em dezenas de
+# arquivos. Trocar aqueles nomes quebraria o deploy, e a regra 10 do projeto
+# manda nunca quebrar o que funciona. Estes apelidos apontam para os mesmos
+# valores e deixam o codigo novo 100% em portugues.
+# ---------------------------------------------------------------------------
+
+TOKEN_DO_BOT = DISCORD_TOKEN
+ID_DO_SERVIDOR_PRINCIPAL = GUILD_ID
+ID_DO_SERVIDOR_VALLEY = GUILD_ID_VALLEY
+ENDERECO_DO_BANCO_DE_DADOS = DATABASE_URL
+PASTA_DOS_BACKUPS = BACKUP_DIR
+MAXIMO_DE_BACKUPS_POR_SERVIDOR = MAX_BACKUPS_PER_GUILD
+HORAS_ENTRE_BACKUPS_AUTOMATICOS = AUTO_BACKUP_INTERVAL_HOURS
+MINUTOS_ENTRE_BACKUPS_DO_BANCO = AUTO_BACKUP_DB_INTERVAL_MINUTES
+NOMES_DOS_CARGOS_DE_ADMINISTRADOR = ADMIN_ROLE_NAMES
+SEGUNDOS_PARA_EXPIRAR_CONFIRMACAO = CONFIRMATION_TIMEOUT
+FUSO_HORARIO_LOCAL = TIMEZONE_LOCAL

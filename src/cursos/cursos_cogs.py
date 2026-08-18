@@ -9,7 +9,7 @@ from sqlalchemy import delete
 
 from src.cursos.cursos_setup import garantir_painel_cursos
 from src.cursos.cursos_views import view_persistente_cursos
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.utils.mensagens import responder_sucesso
 from src.utils.permissions import apenas_administrador
@@ -25,6 +25,12 @@ class CursosCog(commands.Cog):
     )
     @apenas_administrador()
     async def painel_cursos(self, interacao: discord.Interaction):
+        """Força a recriação do painel de cursos no canal configurado.
+
+        Remove a referência persistida antes de chamar a garantia do painel,
+        evitando que uma mensagem antiga seja tratada como válida. A operação
+        grava no banco e informa privadamente ao administrador quando termina.
+        """
         await interacao.response.defer(ephemeral=True)
         async with async_session() as sessao:
             await sessao.execute(
@@ -41,5 +47,6 @@ class CursosCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra a visualização persistente e os comandos de cursos."""
     bot.add_view(view_persistente_cursos())
     await bot.add_cog(CursosCog(bot))

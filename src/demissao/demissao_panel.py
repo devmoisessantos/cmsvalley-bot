@@ -22,6 +22,7 @@ from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
     enviar_erro_para_log_erros,
+    ignorar_falha_cosmetica,
 )
 from src.utils.formatacao import (
     agora_brasilia,
@@ -31,6 +32,7 @@ from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
     responder_sucesso,
+    responder_view,
 )
 from src.utils.notificacao import (
     COR_AVISO,
@@ -96,8 +98,10 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(
             discord.ui.TextDisplay(
                 "## Sistema de Demissão\n\n"
-                "Utilize o botão abaixo para solicitar o seu desligamento do CMS Valley.\n"
-                "**Lembre-se:** ao confirmar, seu pedido será enviado para análise da diretoria."
+                "Utilize o botão abaixo para solicitar o seu desligamento do CMS "
+                "Valley.\n"
+                "**Lembre-se:** ao confirmar, seu pedido será enviado para análise da "
+                "diretoria."
             )
         )
 
@@ -114,7 +118,8 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         componentes.append(
             discord.ui.TextDisplay(
-                "-# 📤 **Solicitar Demissão:** clique no botão, informe o motivo e confirme."
+                "-# 📤 **Solicitar Demissão:** clique no botão, informe o motivo e "
+                "confirme."
             )
         )
 
@@ -174,6 +179,12 @@ class ModalMotivoDemissao(
     )
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Monta uma prévia confirmável do motivo de desligamento informado.
+
+        Valida o contexto e o tamanho mínimo do motivo antes de mostrar os
+        dados do cargo atual. Ainda não grava o pedido: a confirmação posterior
+        existe para evitar que um envio acidental vire solicitação oficial.
+        """
         membro = interacao.user
         if not isinstance(membro, discord.Member):
             await responder_erro(
@@ -210,7 +221,11 @@ class ModalMotivoDemissao(
             corpo=corpo,
             url_thumb=membro.display_avatar.url,
         )
-        await interacao.response.send_message(view=view, ephemeral=True)
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
 
 
 class ViewConfirmarEnvioDemissao(LoggingViewMixin, discord.ui.LayoutView):
@@ -314,7 +329,8 @@ class ViewConfirmarEnvioDemissao(LoggingViewMixin, discord.ui.LayoutView):
                 (
                     "Card postado no canal de aprovação."
                     if postou
-                    else "Aviso: canal de aprovação não configurado (CANAL_APROVAR_DEMISSAO)."
+                    else "Aviso: canal de aprovação não configurado "
+                    "(CANAL_APROVAR_DEMISSAO)."
                 ),
             ],
             delay=20,
@@ -327,6 +343,12 @@ async def publicar_pedido_diretoria(
     membro: discord.Member,
     registro,
 ) -> bool:
+    """Publica o pedido pendente para decisão da diretoria e guarda sua mensagem.
+
+    Retorna falso quando o canal não está configurado ou o Discord recusa o
+    envio. No sucesso, grava no banco o canal e a mensagem do card para manter
+    a ligação entre a solicitação persistida e a decisão visual.
+    """
     canal_id = CANAIS.get("CANAL_APROVAR_DEMISSAO") or 0
     canal = guilda.get_channel(int(canal_id)) if canal_id else None
     if canal is None:
@@ -407,6 +429,13 @@ async def processar_decisao_demissao(
     *,
     aprovada: bool,
 ) -> None:
+    """Aplica a decisão da diretoria e executa os efeitos do desligamento.
+
+    Protege a ação contra interações duplicadas e verifica o cargo decisor. Ao
+    aprovar, atualiza o banco, remove cargos do membro e envia uma DM; ao
+    recusar, mantém os cargos. Em ambos os casos, publica o log e remove o
+    card de decisão do Discord quando possível.
+    """
     if interacao.response.is_done():
         return
 
@@ -449,8 +478,13 @@ async def processar_decisao_demissao(
         try:
             if interacao.message is not None:
                 await interacao.message.delete()
-        except discord.HTTPException:
-            pass
+        except discord.HTTPException as erro_em_processar_decisao_demissao:
+            # Enfeite que falhou: atualizar o card do pedido de demissao.
+            # A acao principal ja tinha dado certo, entao so registro.
+            ignorar_falha_cosmetica(
+                erro_em_processar_decisao_demissao,
+                o_que_falhou="atualizar o card do pedido de demissao",
+            )
         return
 
     membro = interacao.guild.get_member(registro.discord_id)
@@ -531,8 +565,13 @@ async def processar_decisao_demissao(
     try:
         if interacao.message is not None:
             await interacao.message.delete()
-    except discord.HTTPException:
-        pass
+    except discord.HTTPException as erro_em_processar_decisao_demissao:
+        # Enfeite que falhou: atualizar o card do pedido de demissao.
+        # A acao principal ja tinha dado certo, entao so registro.
+        ignorar_falha_cosmetica(
+            erro_em_processar_decisao_demissao,
+            o_que_falhou="atualizar o card do pedido de demissao",
+        )
 
 
 async def publicar_log_demissao(
@@ -543,6 +582,12 @@ async def publicar_log_demissao(
     aprovada: bool,
     membro: discord.Member | None,
 ) -> None:
+    """Registra no canal de log o resultado administrativo da demissão.
+
+    Inclui dados congelados do pedido e identifica diretoria e membro, mesmo
+    quando o membro já saiu da guilda. Falhas ao publicar são tratadas como
+    cosméticas para não desfazer uma decisão que já foi gravada no banco.
+    """
     canal_id = CANAIS.get("LOG_DEMISSAO") or 0
     canal = guilda.get_channel(int(canal_id)) if canal_id else None
     if canal is None:
@@ -565,7 +610,8 @@ async def publicar_log_demissao(
         f"- **Advertências (na época):** `{registro.advertencias}`\n"
         f"- **Motivo:** {registro.motivo[:400]}\n"
         f"- **Diretoria:** {diretor.mention}\n"
-        f"- **Solicitado em:** `{_formatar_momento_brasilia(registro.data_solicitacao)}`\n"
+        f"- **Solicitado em:** "
+        f"`{_formatar_momento_brasilia(registro.data_solicitacao)}`\n"
         f"- **Efetiva em:** `{efetiva}`"
     )
     url = membro.display_avatar.url if membro else None
@@ -591,9 +637,15 @@ async def publicar_log_demissao(
     )
     try:
         await canal.send(view=view)
-    except discord.HTTPException:
-        pass
+    except discord.HTTPException as erro_em_publicar_log_demissao:
+        # Enfeite que falhou: publicar o log da demissao.
+        # A acao principal ja tinha dado certo, entao so registro.
+        ignorar_falha_cosmetica(
+            erro_em_publicar_log_demissao,
+            o_que_falhou="publicar o log da demissao",
+        )
 
 
 def view_painel_demissao(guilda: discord.Guild | None = None) -> PainelDemissaoLayout:
+    """Cria o painel persistente usando ícone da guilda quando ele está disponível."""
     return PainelDemissaoLayout(guilda=guilda)

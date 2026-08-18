@@ -14,12 +14,13 @@ from src.config import (
     GUILD_ID_VALLEY,
     PRAZO_DEVOLUCAO_BAU_MINUTOS,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import CasoBau
-from src.plantao.permissoes import e_diretoria
+from src.plantao.plantao_permissoes import e_diretoria
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
+    ignorar_falha_cosmetica,
 )
 from src.utils.mensagens import (
     responder_aviso,
@@ -50,8 +51,13 @@ async def atualizar_mensagem_alerta_caso(
         return
     try:
         await mensagem.edit(view=ViewCasoBau.montar_layout_alerta(caso, guild=guild))
-    except discord.HTTPException:
-        pass
+    except discord.HTTPException as erro_em_atualizar_mensagem_alerta_caso:
+        # Enfeite que falhou: atualizar a mensagem de alerta do caso.
+        # A acao principal ja tinha dado certo, entao so registro.
+        ignorar_falha_cosmetica(
+            erro_em_atualizar_mensagem_alerta_caso,
+            o_que_falhou="atualizar a mensagem de alerta do caso",
+        )
 
 
 class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
@@ -69,7 +75,14 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
         limite_1: int = 0,
         limite_2: int | None = None,
     ) -> discord.ui.LayoutView:
-        # limite_1/limite_2 mantidos na assinatura por compatibilidade com logger/listener
+        """Monta o card persistente com ações compatíveis com o estado do caso.
+
+        Exibe a dívida agregada e escolhe cor, textos e botões conforme a
+        gravidade e o prazo. Os parâmetros de limite são preservados para
+        chamadas antigas, embora a apresentação atual derive seus dados do caso.
+        """
+        # limite_1/limite_2 mantidos na assinatura por compatibilidade com
+        # logger/listener
         mapa_itens = ler_itens_do_caso(caso)
         bloco_itens = formatar_bloco_itens_yaml(mapa_itens)
 
@@ -98,7 +111,8 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
             f"## 🍱 ITENS (dívida do ciclo / pendência)\n"
             f"{bloco_itens}\n"
             f"Total de unidades: **{caso.quantidade_atual}**\n"
-            f"Prazo: **{PRAZO_DEVOLUCAO_BAU_MINUTOS} min** · Caso `#{caso.id}` · `{caso.status}`"
+            f"Prazo: **{PRAZO_DEVOLUCAO_BAU_MINUTOS} min** · Caso `#{caso.id}` · "
+            f"`{caso.status}`"
         )
         if caso.dm_falhou:
             texto += "\n\n⚠️ **DM falhou** — avisar o membro no servidor."
@@ -171,7 +185,8 @@ class ViewCasoBau(LoggingViewMixin, discord.ui.LayoutView):
         else:
             texto += (
                 "\n\n-# Dentro do prazo: membro deve devolver. "
-                "Após **30 min** sem devolução, o botão de ocorrência Valley é liberado."
+                "Após **30 min** sem devolução, o botão de ocorrência Valley é "
+                "liberado."
             )
 
         view.add_item(
@@ -290,6 +305,12 @@ class ModalJustificarCaso(
         self.caso_id = caso_id
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Valida a diretoria e encerra o caso como ignorado com justificativa.
+
+        Reconsulta o caso para não sobrescrever uma decisão recente, salva o
+        motivo no banco e responde ao solicitante. Depois tenta obter o card
+        original para desativar suas ações e refletir a decisão no Discord.
+        """
         membro = interacao.user
         if not isinstance(membro, discord.Member) or not e_diretoria(membro):
             await responder_erro(

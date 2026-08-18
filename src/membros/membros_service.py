@@ -20,7 +20,7 @@ from sqlalchemy import (
 )
 
 from src.bau.bau_service import STATUS_ABERTOS_BAU
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     AdvertenciaVerbalBau,
     CasoBau,
@@ -107,6 +107,7 @@ async def resolver_discord_id_por_fivem(id_fivem: str) -> int | None:
 
 
 async def buscar_estado_plantao(discord_id: int) -> EstadoPlantao | None:
+    """Obtém o estado de plantão sem criar um registro inexistente."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
@@ -115,6 +116,7 @@ async def buscar_estado_plantao(discord_id: int) -> EstadoPlantao | None:
 
 
 async def buscar_usuario(discord_id: int) -> Usuario | None:
+    """Obtém o cadastro persistido sem supor que todo membro já foi sincronizado."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Usuario).where(Usuario.discord_id == discord_id)
@@ -123,6 +125,7 @@ async def buscar_usuario(discord_id: int) -> Usuario | None:
 
 
 async def buscar_recrutamento_como_candidato(discord_id: int) -> Recrutamento | None:
+    """Recupera o processo mais recente para exibir o contexto atual do candidato."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Recrutamento)
@@ -196,6 +199,7 @@ async def estatisticas_chamadas(discord_id: int) -> tuple[int, int]:
 
 
 async def tempo_total_segundos_plantao(discord_id: int) -> int:
+    """Soma apenas durações concluídas para não contar plantões ainda abertos."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
@@ -207,6 +211,7 @@ async def tempo_total_segundos_plantao(discord_id: int) -> int:
 
 
 async def ultimos_logs_plantao(discord_id: int, limite: int = 8) -> list[LogPlantao]:
+    """Traz os eventos mais recentes com limite para manter a ficha legível."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(LogPlantao)
@@ -223,6 +228,11 @@ async def listar_punicoes(
     so_ativas: bool | None = None,
     limite: int = 10,
 ) -> list[Punicao]:
+    """Consulta punições com filtro de atividade que distingue histórico e pendências.
+
+    ``so_ativas`` aceita verdadeiro, falso ou nulo; o último caso não filtra o
+    status. O limite evita carregar todo o histórico disciplinar em uma ficha.
+    """
     async with async_session() as sessao:
         consulta = select(Punicao).where(Punicao.discord_id == discord_id)
         if so_ativas is True:
@@ -235,6 +245,7 @@ async def listar_punicoes(
 
 
 async def contar_punicoes_ativas(discord_id: int) -> int:
+    """Produz o total para indicadores sem transferir registros completos."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(func.count())
@@ -248,6 +259,7 @@ async def listar_historico_cargos(
     discord_id: int,
     limite: int = 12,
 ) -> list[HistoricoCargo]:
+    """Retorna mudanças recentes de cargo na ordem adequada para auditoria."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(HistoricoCargo)
@@ -265,6 +277,11 @@ async def listar_casos_bau_membro(
     so_abertos: bool = True,
     limite: int = 8,
 ) -> list[CasoBau]:
+    """Localiza casos pelo Discord ou FiveM para cobrir vínculos incompletos.
+
+    Não consulta nada sem ao menos um identificador, prevenindo a exposição de
+    casos de outros membros. Por padrão traz apenas casos ainda abertos.
+    """
     async with async_session() as sessao:
         filtros = []
         if discord_id:
@@ -287,6 +304,11 @@ async def listar_verbais_bau(
     id_fivem: str | None,
     limite: int = 8,
 ) -> list[AdvertenciaVerbalBau]:
+    """Busca advertências por qualquer identificador disponível do membro.
+
+    Retorna uma lista vazia sem identificadores para impedir uma consulta ampla
+    indevida. A ordenação prioriza as advertências registradas mais recentemente.
+    """
     async with async_session() as sessao:
         filtros = []
         if discord_id:
@@ -308,6 +330,7 @@ async def listar_laudos_como_paciente(
     discord_id: int,
     limite: int = 8,
 ) -> list[Laudo]:
+    """Lista atendimentos recebidos, limitando o histórico exibido na ficha."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Laudo)
@@ -322,6 +345,7 @@ async def listar_laudos_como_psicologo(
     discord_id: int,
     limite: int = 8,
 ) -> list[Laudo]:
+    """Lista atendimentos realizados pelo psicólogo, dos mais recentes aos antigos."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Laudo)
@@ -363,31 +387,43 @@ async def contagens_resumo_ficha(
 
 
 def formatar_cargos_do_membro(membro: discord.Member) -> str:
+    """Organiza menções em grupos para caberem com clareza na ficha do membro.
+
+    Mantém a ordem de hierarquia e exclui ``@everyone``, que todos possuem e
+    não acrescenta informação administrativa. Cada linha recebe até três cargos
+    para evitar um bloco visual excessivamente largo no Discord.
+    """
     cargos = [
         cargo
-        for cargo in sorted(membro.roles, key=lambda x: x.position, reverse=True)
+        for cargo in sorted(
+            membro.roles,
+            key=lambda cargo_para_ordenar: cargo_para_ordenar.position,
+            reverse=True,
+        )
         if cargo.name != "@everyone"
     ]
     if not cargos:
         return "_Nenhum cargo._"
     mencoes = [cargo.mention for cargo in cargos]
     linhas = []
-    for i in range(0, len(mencoes), 3):
-        linhas.append(" · ".join(mencoes[i : i + 3]))
+    for indice in range(0, len(mencoes), 3):
+        linhas.append(" · ".join(mencoes[indice : indice + 3]))
     return "\n".join(linhas)
 
 
-def formatar_timestamp(dt: datetime | None) -> str:
-    if dt is None:
+def formatar_timestamp(data_e_hora: datetime | None) -> str:
+    """Converte datas para o formato do Discord, assumindo UTC quando necessário."""
+    if data_e_hora is None:
         return "—"
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return f"<t:{int(dt.timestamp())}:d>"
+    if data_e_hora.tzinfo is None:
+        data_e_hora = data_e_hora.replace(tzinfo=timezone.utc)
+    return f"<t:{int(data_e_hora.timestamp())}:d>"
 
 
-def formatar_timestamp_relativo(dt: datetime | None) -> str:
-    if dt is None:
+def formatar_timestamp_relativo(data_e_hora: datetime | None) -> str:
+    """Converte datas em prazo relativo do Discord, assumindo UTC quando necessário."""
+    if data_e_hora is None:
         return "—"
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return f"<t:{int(dt.timestamp())}:R>"
+    if data_e_hora.tzinfo is None:
+        data_e_hora = data_e_hora.replace(tzinfo=timezone.utc)
+    return f"<t:{int(data_e_hora.timestamp())}:R>"

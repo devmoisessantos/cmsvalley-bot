@@ -5,6 +5,7 @@ Views do ticket: cards de abertura + botões de staff no canal.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import discord
 
@@ -33,10 +34,12 @@ from src.tickets.tickets_service import (
     trocar_nome_do_canal,
 )
 from src.tickets.tickets_transcript_api import enviar_transcript_para_api
+from src.utils.error_handling import ignorar_falha_cosmetica
 from src.utils.formatacao import para_horario_brasilia
 from src.utils.mensagens import (
     COR_INFO,
     COR_SUCESSO,
+    responder_aviso,
     responder_card,
     responder_erro,
     responder_view,
@@ -46,6 +49,8 @@ from src.utils.notificacao import (
     enviar_dm_card,
     enviar_dm_view,
 )
+
+registrador = logging.getLogger(__name__)
 
 
 class CardAberturaTicketView(discord.ui.LayoutView):
@@ -306,8 +311,13 @@ async def atualizar_card_botoes_staff(
     )
     try:
         await mensagem.edit(view=view)
-    except discord.HTTPException:
-        pass
+    except discord.HTTPException as erro_em_atualizar_card_botoes_staff:
+        # Enfeite que falhou: atualizar card botoes staff.
+        # A acao principal ja tinha dado certo, entao so registro.
+        ignorar_falha_cosmetica(
+            erro_em_atualizar_card_botoes_staff,
+            o_que_falhou="atualizar card botoes staff",
+        )
 
 
 class ViewSelecionarMembro(discord.ui.LayoutView):
@@ -450,6 +460,7 @@ class ModalBuscarDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
         self.autor_discord_id = autor_discord_id
 
     async def on_submit(self, interacao: discord.Interaction) -> None:
+        """Valida o ID e encaminha a ação ao membro corretamente identificado."""
         texto = str(self.discord_id.value).strip()
         if not texto.isdigit():
             await responder_erro(
@@ -479,7 +490,7 @@ async def _executar_acao_membro(
     if guilda is None:
         await responder_erro(
             interacao,
-            titulo="Erro",
+            titulo="Servidor não encontrado",
             linhas=["Guilda não encontrada."],
         )
         return
@@ -694,7 +705,7 @@ class ViewMoverCanal(discord.ui.LayoutView):
         if guilda is None:
             await responder_erro(
                 interacao,
-                titulo="Erro",
+                titulo="Servidor não encontrado",
                 linhas=["Guilda não encontrada."],
             )
             return
@@ -721,7 +732,7 @@ class ViewMoverCanal(discord.ui.LayoutView):
         if not isinstance(staff, discord.Member):
             await responder_erro(
                 interacao,
-                titulo="Erro",
+                titulo="Comando indisponível aqui",
                 linhas=["Ação disponível apenas no servidor."],
             )
             return
@@ -754,6 +765,12 @@ class ModalTrocarNome(discord.ui.Modal, title="Trocar nome do canal"):
         self.canal_id = canal_id
 
     async def on_submit(self, interacao: discord.Interaction) -> None:
+        """Renomeia o canal somente após validar equipe, guilda e canal do ticket.
+
+        A alteração é aplicada pelo serviço que normaliza o nome e, depois, o
+        bot publica a autoria no próprio canal. Isso evita registros de ações
+        feitas fora do contexto de um ticket válido.
+        """
         staff = interacao.user
         if not isinstance(staff, discord.Member) or not membro_eh_staff_ticket(staff):
             await responder_erro(
@@ -767,7 +784,7 @@ class ModalTrocarNome(discord.ui.Modal, title="Trocar nome do canal"):
         if guilda is None:
             await responder_erro(
                 interacao,
-                titulo="Erro",
+                titulo="Servidor não encontrado",
                 linhas=["Guilda não encontrada."],
             )
             return
@@ -813,6 +830,12 @@ class ModalObservacaoInterna(discord.ui.Modal, title="Observação interna"):
         self.canal_id = canal_id
 
     async def on_submit(self, interacao: discord.Interaction) -> None:
+        """Publica uma nota interna no ticket para manter o contexto da equipe.
+
+        Confere a permissão da equipe e a existência do canal antes de enviar a
+        mensagem. A resposta é registrada no próprio canal, deixando a
+        observação disponível no transcript do atendimento.
+        """
         staff = interacao.user
         if not isinstance(staff, discord.Member) or not membro_eh_staff_ticket(staff):
             await responder_erro(
@@ -826,7 +849,7 @@ class ModalObservacaoInterna(discord.ui.Modal, title="Observação interna"):
         if guilda is None:
             await responder_erro(
                 interacao,
-                titulo="Erro",
+                titulo="Servidor não encontrado",
                 linhas=["Guilda não encontrada."],
             )
             return
@@ -880,7 +903,7 @@ async def processar_clique_botao_ticket(
     if not isinstance(membro, discord.Member):
         await responder_erro(
             interacao,
-            titulo="Erro",
+            titulo="Comando indisponível aqui",
             linhas=["Esta ação só funciona dentro do servidor."],
         )
         return
@@ -897,7 +920,7 @@ async def processar_clique_botao_ticket(
     if not isinstance(canal, discord.TextChannel):
         await responder_erro(
             interacao,
-            titulo="Erro",
+            titulo="Canal inválido",
             linhas=["Canal inválido."],
         )
         return
@@ -940,11 +963,11 @@ async def processar_clique_botao_ticket(
         membros_extra = listar_membros_com_acesso_extra(canal, ticket.autor_discord_id)
         opcoes = [
             discord.SelectOption(
-                label=nome_usuario_discord(m)[:100],
-                value=str(m.id),
-                description=f"ID {m.id}"[:100],
+                label=nome_usuario_discord(membro_extra)[:100],
+                value=str(membro_extra.id),
+                description=f"ID {membro_extra.id}"[:100],
             )
-            for m in membros_extra[:25]
+            for membro_extra in membros_extra[:25]
         ]
         await responder_view(
             interacao,
@@ -1014,7 +1037,7 @@ async def _tratar_mover_canal(
     if guilda is None:
         await responder_erro(
             interacao,
-            titulo="Erro",
+            titulo="Servidor não encontrado",
             linhas=["Guilda não encontrada."],
         )
         return
@@ -1055,7 +1078,7 @@ async def _tratar_criar_call(
     if guilda is None:
         await responder_erro(
             interacao,
-            titulo="Erro",
+            titulo="Servidor não encontrado",
             linhas=["Guilda não encontrada."],
         )
         return
@@ -1105,7 +1128,7 @@ async def _tratar_encerrar_call(
     if guilda is None:
         await responder_erro(
             interacao,
-            titulo="Erro",
+            titulo="Servidor não encontrado",
             linhas=["Guilda não encontrada."],
         )
         return
@@ -1338,11 +1361,18 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
         self.ticket_id = ticket_id
 
     async def on_submit(self, interacao: discord.Interaction) -> None:
+        """Finaliza o atendimento, arquiva o transcript e remove o canal.
+
+        Valida o ticket e a permissão, grava a conclusão, gera e publica o
+        transcript, limpa a chamada associada e envia logs e mensagem direta.
+        Só então agenda a exclusão do canal, evitando apagar evidências antes
+        de concluir o arquivamento.
+        """
         membro = interacao.user
         if not isinstance(membro, discord.Member):
             await responder_erro(
                 interacao,
-                titulo="Erro",
+                titulo="Comando indisponível aqui",
                 linhas=["Ação disponível apenas no servidor."],
             )
             return
@@ -1359,7 +1389,7 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
         if not isinstance(canal, discord.TextChannel):
             await responder_erro(
                 interacao,
-                titulo="Erro",
+                titulo="Canal inválido",
                 linhas=["Canal inválido."],
             )
             return
@@ -1394,7 +1424,8 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             canal,
             titulo="🎫 Ticket Finalizado com Sucesso",
             linhas=[
-                f"**Responsável pela finalização:** {membro.mention} (`{username_staff}`)\n",
+                f"**Responsável pela finalização:** {membro.mention} "
+                f"(`{username_staff}`)\n",
                 "## 📝 Considerações Finais",
                 f"- {texto_consideracoes}",
                 "\n*O ticket foi encerrado e será processado para arquivamento.*",
@@ -1414,7 +1445,8 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
                 "- Verificando integridade dos arquivos anexados\n",
                 "- Removendo metadados sensíveis\n",
                 "## 📄 Geração do Transcript",
-                "*Após a conclusão das etapas acima, o transcript será gerado com segurança e o canal será deletado automaticamente.*\n",
+                "*Após a conclusão das etapas acima, o transcript será gerado com "
+                "segurança e o canal será deletado automaticamente.*\n",
                 "⏳ Aguarde enquanto processamos as últimas etapas...",
             ],
             cor=COR_INFO,
@@ -1431,7 +1463,7 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
         )
 
         # Obrigatório: publicar na API antes do log/DM (habilita botão Acessar)
-        print(
+        registrador.info(
             f"📤 [transcript] iniciando upload ticket=#{ticket_final.id} "
             f"html_chars={len(html_transcript or '')}"
         )
@@ -1441,23 +1473,29 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
         )
         if url_publica:
             ticket_final.url_transcript = url_publica
-            print(f"✅ [transcript] url gravada: {url_publica}")
+            registrador.info(f"✅ [transcript] url gravada: {url_publica}")
         else:
-            print(
+            registrador.warning(
                 f"⚠️ [transcript] upload falhou no ticket #{ticket_final.id} "
                 "— botão Acessar permanecerá desativado"
             )
             try:
-                await interacao.followup.send(
-                    content=(
-                        "⚠️ Transcript **não** foi publicado na API. "
+                await responder_aviso(
+                    interacao,
+                    titulo="Transcript não publicado",
+                    linhas=[
+                        "Transcript **não** foi publicado na API. "
                         "Confira `BACKUP_API_TOKEN` e "
-                        "`CMSVALLEY_API_URL` no ambiente do bot."
-                    ),
-                    ephemeral=True,
+                        "`CMSVALLEY_API_URL` no ambiente do bot.",
+                    ],
                 )
-            except Exception:
-                pass
+            except discord.HTTPException as erro_ao_avisar_da_api:
+                # O ticket JA foi finalizado. Aqui so o card de aviso sobre a
+                # API nao apareceu para quem clicou.
+                ignorar_falha_cosmetica(
+                    erro_ao_avisar_da_api,
+                    o_que_falhou="avisar que o transcript nao foi publicado",
+                )
 
         if interacao.guild is not None:
             await apagar_call_do_ticket(interacao.guild, ticket_final)
@@ -1494,7 +1532,9 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
                 registrar_log=True,
             )
         except Exception as erro_dm:
-            print(f"⚠️ [transcript] falha ao enviar DM do autor: {erro_dm}")
+            registrador.warning(
+                f"⚠️ [transcript] falha ao enviar DM do autor: {erro_dm}"
+            )
 
         await responder_card(
             interacao,
@@ -1512,5 +1552,10 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             await canal.delete(
                 reason=f"Ticket #{ticket_final.id} finalizado por {membro}"
             )
-        except discord.HTTPException:
-            pass
+        except discord.HTTPException as erro_em_on_submit:
+            # Enfeite que falhou: atualizar a mensagem depois do formulario.
+            # A acao principal ja tinha dado certo, entao so registro.
+            ignorar_falha_cosmetica(
+                erro_em_on_submit,
+                o_que_falhou="atualizar a mensagem depois do formulario",
+            )

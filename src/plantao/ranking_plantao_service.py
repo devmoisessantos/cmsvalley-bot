@@ -22,13 +22,12 @@ from sqlalchemy import (
 
 from src.config import (
     CARGOS,
-    MESES_ABREV,
     PREMIOS_RANKING_HORAS,
     RANKING_HORAS_CARGOS_EXCLUIDOS,
     RANKING_HORAS_IDS_EXCLUIDOS,
     TIMEZONE_LOCAL,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     Chamada,
     LogPlantao,
@@ -42,7 +41,9 @@ from src.recrutamento.ranking_service import (
     obter_periodo_postagem_semanal,
 )
 from src.utils.formatacao import (
+    formatar_data_curta,
     formatar_hms,
+    formatar_mes_e_ano,
     formatar_reais,
 )
 
@@ -51,14 +52,14 @@ def _tz() -> ZoneInfo:
     return ZoneInfo(TIMEZONE_LOCAL)
 
 
-def _formatar_data_curta(dt: datetime) -> str:
-    local = dt.astimezone(_tz())
-    return f"{local.day:02d}/{local.month:02d}"
+def _formatar_data_curta(data_e_hora: datetime) -> str:
+    """Data curta DD/MM. Delega para o formatador comum do projeto."""
+    return formatar_data_curta(data_e_hora)
 
 
-def _formatar_mes_ano(dt: datetime) -> str:
-    local = dt.astimezone(_tz())
-    return f"{MESES_ABREV[local.month]}/{local.year}"
+def _formatar_mes_ano(data_e_hora: datetime) -> str:
+    """Mes abreviado com ano. Delega para o formatador comum do projeto."""
+    return formatar_mes_e_ano(data_e_hora)
 
 
 def _medalha(posicao: int) -> str:
@@ -94,7 +95,7 @@ async def buscar_chamadas_por_doutor(
             )
             .group_by(Chamada.doutor_id)
         )
-        return {int(did): int(qtd) for did, qtd in resultado.all()}
+        return {int(did): int(quantidade) for did, quantidade in resultado.all()}
 
 
 async def buscar_horas_por_membro(
@@ -136,7 +137,9 @@ def filtrar_participantes_ranking_horas(
     guild: discord.Guild | None = None,
 ) -> dict[int, int]:
     """Aplica exclusões de ID, cargo e saída do servidor."""
-    ids_bloqueados = {int(x) for x in (RANKING_HORAS_IDS_EXCLUIDOS or [])}
+    ids_bloqueados = {
+        int(id_bloqueado) for id_bloqueado in (RANKING_HORAS_IDS_EXCLUIDOS or [])
+    }
     cargos_bloqueados: set[int] = set()
     for nome in RANKING_HORAS_CARGOS_EXCLUIDOS or []:
         cargo_id = CARGOS.get(nome)
@@ -193,21 +196,21 @@ def _montar_corpo_por_valor(
         )
 
     por_valor: dict[int, list[int]] = defaultdict(list)
-    for uid, val in contagem.items():
-        por_valor[val].append(uid)
+    for uid, valor in contagem.items():
+        por_valor[valor].append(uid)
 
     blocos: list[str] = []
     posicao = 1
     total = 0
 
-    for val in sorted(por_valor.keys(), reverse=True):
-        ids = sorted(por_valor[val])
+    for valor in sorted(por_valor.keys(), reverse=True):
+        ids = sorted(por_valor[valor])
         medalha = _medalha(posicao)
         mencoes = _formatar_mencoes(ids)
-        label = label_singular if val == 1 else label_plural
+        label = label_singular if valor == 1 else label_plural
         # horas: val é segundos; chamadas: val é quantidade
-        blocos.append(f"{medalha} {mencoes}\n↳ **{formatar_valor(val)}** {label}")
-        total += val * len(ids)
+        blocos.append(f"{medalha} {mencoes}\n↳ **{formatar_valor(valor)}** {label}")
+        total += valor * len(ids)
         posicao += len(ids)
 
     corpo = (
@@ -228,6 +231,12 @@ def montar_view_ranking_chamadas(
     guild: discord.Guild | None = None,
     titulo_override: str | None = None,
 ) -> tuple[discord.ui.LayoutView, int]:
+    """Monta o ranking visual de chamadas e calcula o total representado.
+
+    Adapta título, período e cor ao modo semanal, mensal ou em tempo real. Devolve a
+    view pronta para o Discord junto do total agregado, para que a publicação e o
+    histórico usem exatamente a mesma contagem exibida ao servidor.
+    """
     if periodo == "mensal":
         titulo = titulo_override or "🩺 **RANKING MENSAL DE CHAMADAS**"
         sub = (
@@ -244,7 +253,10 @@ def montar_view_ranking_chamadas(
         cor = discord.Color.blurple()
     else:
         titulo = titulo_override or "🩺 **RANKING SEMANAL DE CHAMADAS**"
-        sub = f"**Início:** **{_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)}**"
+        sub = (
+            f"**Início:** **{_formatar_data_curta(inicio_utc)} até "
+            f"{_formatar_data_curta(fim_utc)}**"
+        )
         cor = discord.Color.dark_blue()
 
     cabecalho = (
@@ -255,7 +267,7 @@ def montar_view_ranking_chamadas(
     )
     corpo, total = _montar_corpo_por_valor(
         contagem,
-        formatar_valor=lambda n: str(n),
+        formatar_valor=lambda numero: str(numero),
         label_singular="chamada",
         label_plural="chamadas",
         vazio_msg="_Nenhuma chamada neste período._",
@@ -290,7 +302,7 @@ def montar_view_ranking_chamadas(
 def ordenar_ranking_individual(contagem: dict[int, int]) -> list[tuple[int, int]]:
     """Lista (discord_id, valor) ordenada do maior para o menor (desempate por id)."""
     return sorted(
-        ((int(uid), int(val)) for uid, val in contagem.items() if int(val) > 0),
+        ((int(uid), int(valor)) for uid, valor in contagem.items() if int(valor) > 0),
         key=lambda par: (-par[1], par[0]),
     )
 
@@ -303,7 +315,8 @@ def premio_por_posicao(posicao: int) -> int:
 
 
 def total_premios_configurados() -> int:
-    return sum(int(v) for v in PREMIOS_RANKING_HORAS)
+    """Soma os prêmios configurados para exibir o compromisso financeiro do ranking."""
+    return sum(int(valor_do_premio) for valor_do_premio in PREMIOS_RANKING_HORAS)
 
 
 def montar_lista_premiados(
@@ -368,10 +381,17 @@ def montar_view_ranking_horas(
     guild: discord.Guild | None = None,
     titulo_override: str | None = None,
 ) -> tuple[discord.ui.LayoutView, int]:
+    """Monta o relatório visual de horas, destacando prêmios quando cabíveis.
+
+    Recebe segundos já filtrados e devolve a view mais o total acumulado do período.
+    Separar essa montagem da consulta preserva o mesmo critério de premiação nos cards
+    em tempo real, semanais e mensais, sem misturar dados de membros excluídos.
+    """
     total_premios = total_premios_configurados()
     linha_premio = (
         f"🏆 **Premiação configurada** · "
-        f"**{formatar_reais(total_premios)}** em prêmios (Top 1 ao Top {len(PREMIOS_RANKING_HORAS)})"
+        f"**{formatar_reais(total_premios)}** em prêmios (Top 1 ao Top "
+        f"{len(PREMIOS_RANKING_HORAS)})"
     )
 
     if periodo == "mensal":
@@ -473,6 +493,12 @@ async def gerar_view_ranking_chamadas(
     referencia: datetime | None = None,
     modo_postagem: bool = False,
 ) -> tuple[discord.ui.LayoutView, dict[int, int], datetime, datetime, int]:
+    """Reúne período, consulta e card de chamadas em uma saída pronta para publicar.
+
+    ``modo_postagem`` seleciona um ciclo já encerrado, enquanto o padrão usa o período
+    atual parcial. A tupla retorna também contagem e datas para salvar um histórico que
+    corresponda fielmente ao card mostrado no Discord.
+    """
     inicio, fim, periodo_view = _periodos("chamada", periodo, referencia, modo_postagem)
     contagem = await buscar_chamadas_por_doutor(inicio, fim)
     view, total = montar_view_ranking_chamadas(
@@ -488,6 +514,12 @@ async def gerar_view_ranking_horas(
     referencia: datetime | None = None,
     modo_postagem: bool = False,
 ) -> tuple[discord.ui.LayoutView, dict[int, int], datetime, datetime, int]:
+    """Reúne período, filtro de participantes e card de horas para publicação.
+
+    Usa a guilda, quando disponível, para remover ex-membros e cargos excluídos antes
+    de montar o ranking. A tupla inclui os dados usados e o intervalo, impedindo que
+    um histórico seja salvo com números diferentes dos que foram divulgados.
+    """
     inicio, fim, periodo_view = _periodos("horas", periodo, referencia, modo_postagem)
     contagem = await buscar_horas_por_membro(inicio, fim, guild=guild)
     view, total = montar_view_ranking_horas(
@@ -506,13 +538,24 @@ async def salvar_historico_plantao(
     channel_id: int | None = None,
     message_id: int | None = None,
 ) -> RankingHistorico:
+    """Grava o resultado do ranking no banco, preservando a contagem em JSON.
+
+    O tipo, intervalo e total descrevem o ciclo publicado; os identificadores de canal
+    e mensagem mantêm um vínculo opcional com o Discord. Essa fotografia evita que
+    rankings futuros alterem a referência histórica de horas ou chamadas passadas.
+    """
     registro = RankingHistorico(
         tipo=tipo,
         periodo_inicio=inicio,
         periodo_fim=fim,
         total_recrutamentos=total,  # reutilizado: total chamadas ou total segundos
         total_pago=0,  # horas não têm pagamento; chamadas também 0 aqui
-        payload_json=json.dumps({str(k): v for k, v in contagem.items()}),
+        payload_json=json.dumps(
+            {
+                str(id_do_membro): quantidade_contada
+                for id_do_membro, quantidade_contada in contagem.items()
+            }
+        ),
         channel_id=channel_id,
         message_id=message_id,
         criado_em=agora(),

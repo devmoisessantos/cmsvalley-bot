@@ -32,6 +32,11 @@ from src.recrutamento.ranking_service import (
     montar_view_historico_item,
     salvar_historico,
 )
+from src.utils.mensagens import (
+    responder_erro,
+    responder_sucesso,
+    responder_view,
+)
 from src.utils.permissions import is_authorized
 
 logger = logging.getLogger(__name__)
@@ -51,14 +56,22 @@ class RankingRecrutadoresTasks(commands.Cog):
         logger.info("🏆 RankingRecrutadoresTasks inicializado")
 
     def cog_unload(self):
+        """Cancela o agendamento para impedir execuções após descarregar o cog."""
         self.loop_ranking.cancel()
 
     # ── Loop automático ──────────────────────────────────────────────────
 
     @tasks.loop(minutes=1)
     async def loop_ranking(self):
-        tz = ZoneInfo(TIMEZONE_LOCAL)
-        agora = datetime.now(tz)
+        """Dispara os fechamentos semanais e mensais no minuto configurado.
+
+        Mantém uma chave do último período publicado para que o loop, executado
+        a cada minuto, não envie o mesmo ranking duas vezes. Quando chega o
+        horário, a rotina publica no Discord, salva o histórico e aciona o
+        fechamento financeiro correspondente.
+        """
+        fuso_horario = ZoneInfo(TIMEZONE_LOCAL)
+        agora = datetime.now(fuso_horario)
 
         if agora.hour != RANKING_HORA_POST or agora.minute != 0:
             return
@@ -81,6 +94,7 @@ class RankingRecrutadoresTasks(commands.Cog):
 
     @loop_ranking.before_loop
     async def before_loop_ranking(self):
+        """Espera o bot conectar antes de permitir a tarefa automática."""
         await self.bot.wait_until_ready()
         logger.info("✅ Bot pronto — loop de ranking (semanal + mensal) ativo")
 
@@ -114,7 +128,7 @@ class RankingRecrutadoresTasks(commands.Cog):
                 referencia=referencia,
                 modo_postagem=True,
             )
-            msg = await canal.send(view=view)
+            mensagem = await canal.send(view=view)
             await salvar_historico(
                 tipo=tipo,
                 inicio=inicio,
@@ -123,7 +137,7 @@ class RankingRecrutadoresTasks(commands.Cog):
                 total_recrutamentos=total_rec,
                 total_pago=total_pago,
                 channel_id=canal.id,
-                message_id=msg.id,
+                message_id=mensagem.id,
             )
             # Fechamento financeiro (finanças + DM controle)
             try:
@@ -146,8 +160,8 @@ class RankingRecrutadoresTasks(commands.Cog):
                 f"✅ Ranking {tipo} postado em #{canal.name} e salvo no histórico"
             )
             return True
-        except Exception as e:
-            logger.exception(f"❌ Falha ao postar ranking {tipo}: {e}")
+        except Exception as erro:
+            logger.exception(f"❌ Falha ao postar ranking {tipo}: {erro}")
             canal_erros = guild.get_channel(CANAIS.get("LOG_ERROS", 0) or 0)
             if canal_erros:
                 # log de erro também em Components V2
@@ -155,7 +169,7 @@ class RankingRecrutadoresTasks(commands.Cog):
                 erro_view.add_item(
                     discord.ui.Container(
                         discord.ui.TextDisplay(
-                            f"# ⚠️ Erro no ranking {tipo}\n```py\n{e}\n```"
+                            f"# ⚠️ Erro no ranking {tipo}\n```py\n{erro}\n```"
                         ),
                         accent_color=discord.Color.red(),
                     )
@@ -183,6 +197,12 @@ class RankingRecrutadoresTasks(commands.Cog):
         interaction: discord.Interaction,
         escopo: app_commands.Choice[str] = None,
     ):
+        """Exibe ao solicitante a parcial semanal ou mensal ainda em andamento.
+
+        O resultado é enviado apenas de forma efêmera para não publicar dados
+        parciais no canal. A opção de escopo define se a contagem considera o
+        ciclo semanal atual ou o mês atual.
+        """
         await interaction.response.defer(ephemeral=True)
         tipo_consulta = (
             "tempo_real" if (escopo is None or escopo.value == "semanal") else "mensal"
@@ -201,10 +221,18 @@ class RankingRecrutadoresTasks(commands.Cog):
                     guild=interaction.guild,
                     modo_postagem=False,
                 )
-            await interaction.followup.send(view=view, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Erro ao gerar ranking: `{e}`", ephemeral=True
+            await responder_view(
+                interaction,
+                view,
+                ephemeral=True,
+            )
+        except Exception as erro:
+            await responder_erro(
+                interaction,
+                titulo="Erro inesperado",
+                linhas=[
+                    f"Erro ao gerar ranking: `{erro}`",
+                ],
             )
 
     # ── /ranking postar ──────────────────────────────────────────────────
@@ -230,6 +258,12 @@ class RankingRecrutadoresTasks(commands.Cog):
         tipo: app_commands.Choice[str],
         no_canal: bool = False,
     ):
+        """Gera o fechamento oficial e, se solicitado, publica-o no canal.
+
+        Quando ``no_canal`` é falso, mostra apenas uma prévia efêmera. Quando é
+        verdadeiro, envia a mensagem no Discord e grava no banco o período, os
+        totais e o endereço da publicação para preservar o histórico oficial.
+        """
         await interaction.response.defer(ephemeral=True)
         tipo_val = tipo.value
 
@@ -246,30 +280,47 @@ class RankingRecrutadoresTasks(commands.Cog):
                 guild=interaction.guild,
                 modo_postagem=True,
             )
-        except Exception as e:
-            await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
+        except Exception as erro:
+            await responder_erro(
+                interaction,
+                titulo="Falha inesperada",
+                linhas=[
+                    f"Erro: `{erro}`",
+                ],
+            )
             return
 
         if not no_canal:
-            await interaction.followup.send(view=view, ephemeral=True)
+            await responder_view(
+                interaction,
+                view,
+                ephemeral=True,
+            )
             return
 
         canal_id = CANAIS.get("RANKING_RECRUTADORES") or 0
         if not canal_id:
-            await interaction.followup.send(
-                "❌ `CANAIS['RANKING_RECRUTADORES']` não configurado no config.",
-                ephemeral=True,
+            await responder_erro(
+                interaction,
+                titulo="Canal não configurado",
+                linhas=[
+                    "`CANAIS['RANKING_RECRUTADORES']` não configurado no config.",
+                ],
             )
             return
 
         canal = interaction.guild.get_channel(canal_id) if interaction.guild else None
         if canal is None:
-            await interaction.followup.send(
-                f"❌ Canal `{canal_id}` não encontrado.", ephemeral=True
+            await responder_erro(
+                interaction,
+                titulo="Não encontrado",
+                linhas=[
+                    f"Canal `{canal_id}` não encontrado.",
+                ],
             )
             return
 
-        msg = await canal.send(view=view)
+        mensagem = await canal.send(view=view)
         await salvar_historico(
             tipo=tipo_val,
             inicio=inicio,
@@ -278,11 +329,15 @@ class RankingRecrutadoresTasks(commands.Cog):
             total_recrutamentos=total_rec,
             total_pago=total_pago,
             channel_id=canal.id,
-            message_id=msg.id,
+            message_id=mensagem.id,
         )
-        await interaction.followup.send(
-            f"✅ Ranking **{tipo_val}** postado em {canal.mention} e salvo no histórico.",
-            ephemeral=True,
+        await responder_sucesso(
+            interaction,
+            titulo="Ranking postado",
+            linhas=[
+                f"Ranking **{tipo_val}** postado em {canal.mention} e salvo no "
+                f"histórico.",
+            ],
         )
 
     # ── /ranking historico ───────────────────────────────────────────────
@@ -310,27 +365,51 @@ class RankingRecrutadoresTasks(commands.Cog):
         limite: app_commands.Range[int, 1, 25] = 10,
         id: int | None = None,
     ):
+        """Consulta fechamentos anteriores por lista filtrada ou identificador.
+
+        Um ``id`` reabre o cartão completo de um fechamento específico; sem
+        ele, a rotina envia uma lista limitada e opcionalmente filtrada. Isso
+        permite consultar dados consolidados sem recalcular períodos passados.
+        """
         await interaction.response.defer(ephemeral=True)
 
         try:
             if id is not None:
                 registro = await buscar_historico_por_id(id)
                 if registro is None:
-                    await interaction.followup.send(
-                        f"❌ Histórico `#{id}` não encontrado.", ephemeral=True
+                    await responder_erro(
+                        interaction,
+                        titulo="Não encontrado",
+                        linhas=[
+                            f"Histórico `#{id}` não encontrado.",
+                        ],
                     )
                     return
                 view = montar_view_historico_item(registro, guild=interaction.guild)
-                await interaction.followup.send(view=view, ephemeral=True)
+                await responder_view(
+                    interaction,
+                    view,
+                    ephemeral=True,
+                )
                 return
 
             filtro = None if (tipo is None or tipo.value == "todos") else tipo.value
             registros = await listar_historico(tipo=filtro, limite=limite)
 
             view = montar_view_lista_historico_com_ids(registros, interaction.guild)
-            await interaction.followup.send(view=view, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Erro: `{e}`", ephemeral=True)
+            await responder_view(
+                interaction,
+                view,
+                ephemeral=True,
+            )
+        except Exception as erro:
+            await responder_erro(
+                interaction,
+                titulo="Falha inesperada",
+                linhas=[
+                    f"Erro: `{erro}`",
+                ],
+            )
 
 
 def montar_view_lista_historico_com_ids(
@@ -348,15 +427,23 @@ def montar_view_lista_historico_com_ids(
         linhas = "_Nenhum ranking histórico encontrado._"
     else:
         blocos = []
-        for r in registros:
-            periodo = f"{_formatar_data_curta(r.periodo_inicio)} → {_formatar_data_curta(r.periodo_fim)}"
-            tipo_emoji = "📅" if r.tipo == "semanal" else "🗓️"
+        for registro in registros:
+            periodo = (
+                f"{_formatar_data_curta(registro.periodo_inicio)} → "
+                f"{_formatar_data_curta(registro.periodo_fim)}"
+            )
+            tipo_emoji = "📅" if registro.tipo == "semanal" else "🗓️"
             link = ""
-            if r.channel_id and r.message_id and guild:
-                link = f" • [abrir](https://discord.com/channels/{guild.id}/{r.channel_id}/{r.message_id})"
+            if registro.channel_id and registro.message_id and guild:
+                link = (
+                    f" • "
+                    f"[abrir](https://discord.com/channels/{guild.id}/{registro.channel_id}/{registro.message_id})"
+                )
             blocos.append(
-                f"`#{r.id}` {tipo_emoji} **{r.tipo.upper()}** `{periodo}`\n"
-                f"↳ 👥 **{r.total_recrutamentos}** • 💰 **{formatar_reais(r.total_pago)}**{link}"
+                f"`#{registro.id}` {tipo_emoji} **{registro.tipo.upper()}** "
+                f"`{periodo}`\n"
+                f"↳ 👥 **{registro.total_recrutamentos}** • 💰 "
+                f"**{formatar_reais(registro.total_pago)}**{link}"
             )
         linhas = "\n\n".join(blocos)
 
@@ -382,4 +469,5 @@ def montar_view_lista_historico_com_ids(
 
 
 async def setup(bot: commands.Bot):
+    """Adiciona ao bot o cog que agenda e expõe os rankings de recrutamento."""
     await bot.add_cog(RankingRecrutadoresTasks(bot))

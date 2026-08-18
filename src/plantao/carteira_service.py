@@ -21,7 +21,7 @@ from src.config import (
     CARGOS_HIERARQUIA,
     VALOR_MOEDA_INGAME,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     EstadoPlantao,
     MovimentacaoMoeda,
@@ -46,10 +46,12 @@ def cargo_principal_hierarquia(membro: discord.Member) -> str:
 
 
 def equivalente_em_reais(moedas: int) -> str:
+    """Converte moedas em dinheiro in-game usando a cotação centralizada."""
     return formatar_dinheiro(int(moedas) * int(VALOR_MOEDA_INGAME))
 
 
 async def obter_saldo(discord_id: int) -> int:
+    """Obtém o saldo armazenado, tratando membros sem estado de plantão como zero."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(EstadoPlantao.saldo_moedas).where(
@@ -69,6 +71,12 @@ async def registrar_movimentacao(
     outro_discord_id: int | None = None,
     referencia: str | None = None,
 ) -> None:
+    """Registra no banco uma alteração já calculada no saldo de moedas.
+
+    Guarda o saldo resultante, a contraparte e uma referência curta quando existirem,
+    formando o extrato auditável. Não altera o saldo: quem chama deve fazê-lo na mesma
+    regra de negócio para que o histórico não substitua a operação financeira real.
+    """
     async with async_session() as sessao:
         sessao.add(
             MovimentacaoMoeda(
@@ -84,6 +92,9 @@ async def registrar_movimentacao(
 
 
 async def listar_extrato(discord_id: int, limite: int = 15) -> list[MovimentacaoMoeda]:
+    """
+    Devolve as movimentações mais recentes na ordem adequada para exibir o extrato.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(MovimentacaoMoeda)
@@ -190,6 +201,12 @@ async def criar_pedido_deposito(
     observacao: str | None,
     id_fivem: str | None,
 ) -> tuple[bool, str, PedidoDepositoMoeda | None]:
+    """Cria no banco um pedido pendente, sem creditar moedas antecipadamente.
+
+    Calcula o valor in-game pela cotação configurada e preserva uma observação limitada
+    antes de gravar o pedido. A tupla informa se a solicitação foi aceita, explica a
+    decisão e traz o pedido criado, permitindo que a interface aguarde a staff.
+    """
     if quantidade <= 0:
         return False, "Informe uma quantidade maior que zero.", None
     if not membro_na_hierarquia(membro):
@@ -216,6 +233,12 @@ async def aprovar_deposito(
     pedido_id: int,
     staff: discord.Member,
 ) -> tuple[bool, str, PedidoDepositoMoeda | None]:
+    """Credita um pedido pendente uma única vez e registra sua origem no extrato.
+
+    Atualiza no banco o saldo, o status e o responsável pela análise dentro da mesma
+    transação. Assim, um botão repetido ou uma análise posterior não concede moedas
+    duas vezes; a tupla devolvida informa o resultado e o pedido atualizado.
+    """
     async with async_session() as sessao:
         pedido = await sessao.get(PedidoDepositoMoeda, pedido_id)
         if pedido is None:
@@ -260,6 +283,12 @@ async def recusar_deposito(
     staff: discord.Member,
     motivo: str | None = None,
 ) -> tuple[bool, str, PedidoDepositoMoeda | None]:
+    """Fecha um pedido pendente como recusado, sem alterar o saldo do membro.
+
+    Persiste no banco a pessoa que analisou, o motivo limitado e o horário da decisão.
+    O estado pendente é exigido para impedir que uma ação duplicada sobrescreva uma
+    aprovação ou uma recusa anterior.
+    """
     async with async_session() as sessao:
         pedido = await sessao.get(PedidoDepositoMoeda, pedido_id)
         if pedido is None:
@@ -346,6 +375,9 @@ def membro_elegivel_ranking_moedas(membro: discord.Member | None) -> bool:
 
 
 def rotulo_tipo_movimentacao(tipo: str) -> str:
+    """
+    Traduz códigos conhecidos do extrato sem esconder novos tipos ainda não mapeados.
+    """
     mapa = {
         "GANHO_PLANTAO": "Plantão (30 min)",
         "TRANSFERENCIA_ENVIADA": "Transferência enviada",

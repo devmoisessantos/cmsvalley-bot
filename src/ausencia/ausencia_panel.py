@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import (
     datetime,
     timezone,
@@ -38,12 +39,15 @@ from src.utils.error_handling import (
 )
 from src.utils.formatacao import (
     agora_brasilia,
+    formatar_data_completa,
     para_horario_brasilia,
 )
 from src.utils.mensagens import (
+    editar_mensagem_original,
     responder_aviso,
     responder_erro,
     responder_sucesso,
+    responder_view,
 )
 from src.utils.notificacao import (
     COR_AVISO,
@@ -82,8 +86,8 @@ def _formatar_momento_brasilia(data: datetime | None = None) -> str:
 
 
 def _formatar_data_curta(data: datetime) -> str:
-    local = para_horario_brasilia(data) or data
-    return local.strftime("%d/%m/%Y")
+    """Data completa DD/MM/AAAA. Delega para o formatador comum do projeto."""
+    return formatar_data_completa(data)
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +110,8 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
         titulo = (
             "# :beach: CMS Valley — Painel de Ausência\n"
             "> Use a opção abaixo para solicitar seu afastamento do servidor.\n"
-            "Cada solicitação é registrada em nosso sistema para aprovação da Diretoria.\n"
+            "Cada solicitação é registrada em nosso sistema para aprovação da "
+            "Diretoria.\n"
             "Caso tenha dúvidas, entre em contato com os Gerais!"
         )
         if url_icone:
@@ -123,13 +128,18 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(
             discord.ui.TextDisplay(
                 "## :gear: Regras Gerais:\n"
-                ":white_check_mark: Solicitações devem ser feitas com antecedência mínima de 12h.\n"
-                ":white_check_mark: Ausências superiores a **30 dias** exigem aprovação da Diretoria.\n"
-                ":white_check_mark: Para emergências, contate um Superior no privado.\n\n"
+                ":white_check_mark: Solicitações devem ser feitas com antecedência "
+                "mínima de 12h.\n"
+                ":white_check_mark: Ausências superiores a **30 dias** exigem "
+                "aprovação da Diretoria.\n"
+                ":white_check_mark: Para emergências, contate um Superior no "
+                "privado.\n\n"
                 "### **:pushpin: Como Funciona:**\n"
-                "→ Após escolher o tipo e o período, o pedido será enviado para o canal da Diretoria.\n"
+                "→ Após escolher o tipo e o período, o pedido será enviado para o "
+                "canal da Diretoria.\n"
                 "→ Você receberá uma notificação quando for aprovado ou negado.\n"
-                "→ Ao voltar, use **Solicitar Retorno** — a Diretoria aprova e restaura seus cargos."
+                "→ Ao voltar, use **Solicitar Retorno** — a Diretoria aprova e "
+                "restaura seus cargos."
             )
         )
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
@@ -174,7 +184,8 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Sem permissão",
                 linhas=[
-                    "Só membros da **hierarquia** / HP S・Valley podem solicitar ausência.",
+                    "Só membros da **hierarquia** / HP S・Valley podem solicitar "
+                    "ausência.",
                 ],
             )
             return
@@ -218,7 +229,11 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         view = ViewSelecaoAusencia(membro_id=membro.id)
-        await interacao.response.send_message(view=view, ephemeral=True)
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
 
     async def _ao_retornar(self, interacao: discord.Interaction):
         membro = interacao.user
@@ -266,7 +281,11 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
             data_fim=ativa.data_fim,
             url_thumb=membro.display_avatar.url,
         )
-        await interacao.response.send_message(view=view, ephemeral=True)
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -318,15 +337,15 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 if self.tipo_selecionado == chave
                 else discord.ButtonStyle.secondary
             )
-            btn = discord.ui.Button(
+            botao_da_opcao = discord.ui.Button(
                 label=rotulo,
                 style=estilo,
                 disabled=self.tipo_selecionado is not None
                 and self.tipo_selecionado != chave,
                 custom_id=f"ausencia:tipo:{chave}",
             )
-            btn.callback = self._fazer_callback_tipo(chave)
-            linha_tipos.add_item(btn)
+            botao_da_opcao.callback = self._fabricar_resposta_de_tipo(chave)
+            linha_tipos.add_item(botao_da_opcao)
         componentes.append(linha_tipos)
 
         # Botão alterar tipo (reabilita)
@@ -350,15 +369,15 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 if self.periodo_selecionado == chave
                 else discord.ButtonStyle.secondary
             )
-            btn = discord.ui.Button(
+            botao_da_opcao = discord.ui.Button(
                 label=rotulo,
                 style=estilo,
                 disabled=self.periodo_selecionado is not None
                 and self.periodo_selecionado != chave,
                 custom_id=f"ausencia:periodo:{chave}",
             )
-            btn.callback = self._fazer_callback_periodo(chave)
-            linha_periodos.add_item(btn)
+            botao_da_opcao.callback = self._fabricar_resposta_de_periodo(chave)
+            linha_periodos.add_item(botao_da_opcao)
         componentes.append(linha_periodos)
 
         if self.periodo_selecionado:
@@ -396,7 +415,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
-    def _fazer_callback_tipo(self, chave: str):
+    def _fabricar_resposta_de_tipo(self, chave: str):
         async def _cb(interacao: discord.Interaction):
             if interacao.user.id != self.membro_id:
                 await responder_erro(
@@ -407,11 +426,14 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 return
             self.tipo_selecionado = chave
             self._reconstruir()
-            await interacao.response.edit_message(view=self)
+            await editar_mensagem_original(
+                interacao,
+                view=self,
+            )
 
         return _cb
 
-    def _fazer_callback_periodo(self, chave: str):
+    def _fabricar_resposta_de_periodo(self, chave: str):
         async def _cb(interacao: discord.Interaction):
             if interacao.user.id != self.membro_id:
                 await responder_erro(
@@ -422,7 +444,10 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 return
             self.periodo_selecionado = chave
             self._reconstruir()
-            await interacao.response.edit_message(view=self)
+            await editar_mensagem_original(
+                interacao,
+                view=self,
+            )
 
         return _cb
 
@@ -436,7 +461,10 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
             return
         self.tipo_selecionado = None
         self._reconstruir()
-        await interacao.response.edit_message(view=self)
+        await editar_mensagem_original(
+            interacao,
+            view=self,
+        )
 
     async def _ao_alterar_periodo(self, interacao: discord.Interaction):
         if interacao.user.id != self.membro_id:
@@ -448,7 +476,10 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
             return
         self.periodo_selecionado = None
         self._reconstruir()
-        await interacao.response.edit_message(view=self)
+        await editar_mensagem_original(
+            interacao,
+            view=self,
+        )
 
     async def _ao_cancelar(self, interacao: discord.Interaction):
         if interacao.user.id != self.membro_id:
@@ -458,7 +489,8 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Só quem abriu o pedido pode cancelar."],
             )
             return
-        await interacao.response.edit_message(
+        await editar_mensagem_original(
+            interacao,
             view=discord.ui.LayoutView().add_item(
                 discord.ui.Container(
                     discord.ui.TextDisplay(
@@ -466,7 +498,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                     ),
                     accent_color=discord.Color.red(),
                 )
-            )
+            ),
         )
 
     async def _ao_enviar(self, interacao: discord.Interaction):
@@ -545,13 +577,19 @@ class ModalMotivoAusencia(
             return None
         for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"):
             try:
-                dt = datetime.strptime(texto, fmt)
-                return dt.replace(tzinfo=timezone.utc)
+                data_e_hora = datetime.strptime(texto, fmt)
+                return data_e_hora.replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
         return None
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Valida o período e apresenta uma confirmação antes de registrar o pedido.
+
+        Exige um motivo útil e datas coerentes, especialmente para ausências de
+        30 dias ou mais. A prévia evita gravar ou enviar à Diretoria dados que o
+        próprio membro ainda não conferiu.
+        """
         membro = interacao.user
         if not isinstance(membro, discord.Member):
             await responder_erro(
@@ -634,7 +672,11 @@ class ModalMotivoAusencia(
             corpo=corpo,
             url_thumb=membro.display_avatar.url,
         )
-        await interacao.response.send_message(view=view, ephemeral=True)
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
 
 
 class ViewConfirmarEnvioAusencia(LoggingViewMixin, discord.ui.LayoutView):
@@ -843,7 +885,8 @@ class ViewConfirmarRetorno(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Retorno solicitado",
                 linhas=[
-                    f"Pedido de retorno da ausência `#{registro.id}` enviado à Diretoria.",
+                    f"Pedido de retorno da ausência `#{registro.id}` enviado à "
+                    f"Diretoria.",
                     "Você será notificado quando houver decisão.",
                 ],
                 delay=20,
@@ -869,6 +912,12 @@ async def publicar_pedido_diretoria(
     registro,
     membro: discord.Member,
 ) -> None:
+    """Envia a solicitação pendente à Diretoria e guarda o endereço da mensagem.
+
+    A persistência do canal e da mensagem permite atualizar o mesmo cartão
+    quando houver uma decisão, em vez de deixar informações contraditórias no
+    canal administrativo.
+    """
     canal_id = CANAIS.get("CANAL_PEDIDOS_AUSENCIA") or 0
     canal = guilda.get_channel(int(canal_id)) if canal_id else None
     if canal is None:
@@ -884,7 +933,8 @@ async def publicar_pedido_diretoria(
         f"- **Início:** `{_formatar_data_curta(registro.data_inicio)}`\n"
         f"- **Fim:** `{_formatar_data_curta(registro.data_fim)}`\n"
         f"- **Motivo:** {registro.motivo or '—'}\n"
-        f"`🕐` **Solicitado em:** `{_formatar_momento_brasilia(registro.data_solicitacao)}`\n"
+        f"`🕐` **Solicitado em:** "
+        f"`{_formatar_momento_brasilia(registro.data_solicitacao)}`\n"
         f"`📌` **Status:** 🟡 **Pendente**"
     )
 
@@ -903,6 +953,12 @@ async def publicar_pedido_retorno(
     registro,
     membro: discord.Member,
 ) -> None:
+    """Envia o pedido de retorno à Diretoria e vincula a mensagem ao registro.
+
+    Publica o estado de retorno pendente com os cargos anteriores e salva os
+    identificadores da mensagem. Isso permite substituir a prévia pela decisão
+    final sem criar uma segunda fonte de verdade no canal.
+    """
     canal_id = CANAIS.get("CANAL_PEDIDOS_AUSENCIA") or 0
     canal = guilda.get_channel(int(canal_id)) if canal_id else None
     if canal is None:
@@ -1009,6 +1065,12 @@ async def processar_decisao_ausencia(
     *,
     aprovada: bool,
 ) -> None:
+    """Aplica a decisão da Diretoria e efetiva os efeitos de uma ausência aprovada.
+
+    Garante que somente a primeira decisão persista, salva quem decidiu e, na
+    aprovação, registra os cargos atuais antes de aplicar os de ausência. Por
+    fim atualiza o cartão no Discord e tenta avisar o membro por mensagem direta.
+    """
     if interacao.guild is None or not isinstance(interacao.user, discord.Member):
         await responder_erro(
             interacao,
@@ -1054,7 +1116,7 @@ async def processar_decisao_ausencia(
         await atualizar_cargos_anteriores(pedido_id, membro)
         registro = await obter_solicitacao(pedido_id) or registro
 
-        ok, msg = await aplicar_cargos_ausencia(
+        ok, mensagem = await aplicar_cargos_ausencia(
             membro,
             executor=interacao.user,
             motivo=registro.motivo or tipo_rotulo,
@@ -1063,7 +1125,7 @@ async def processar_decisao_ausencia(
             await enviar_erro_para_log_erros(
                 interacao.guild,
                 "Falha ao aplicar cargos de ausência",
-                Exception(msg),
+                Exception(mensagem),
                 contexto=f"processar_decisao_ausencia#{pedido_id}",
                 usuario=membro,
             )
@@ -1077,7 +1139,8 @@ async def processar_decisao_ausencia(
         f"- **Início:** `{_formatar_data_curta(registro.data_inicio)}`\n"
         f"- **Fim:** `{_formatar_data_curta(registro.data_fim)}`\n"
         f"- **Motivo:** {registro.motivo or '—'}\n"
-        f"`🕐` **Solicitado em:** `{_formatar_momento_brasilia(registro.data_solicitacao)}`\n"
+        f"`🕐` **Solicitado em:** "
+        f"`{_formatar_momento_brasilia(registro.data_solicitacao)}`\n"
         f"`📌` **Status:** {status_emoji}\n"
         f"`🛡️` **Decidido por:** {interacao.user.mention}\n"
         f"`🕐` **Decisão em:** `{_formatar_momento_brasilia()}`"
@@ -1093,7 +1156,10 @@ async def processar_decisao_ausencia(
         )
     )
     try:
-        await interacao.response.edit_message(view=view_final)
+        await editar_mensagem_original(
+            interacao,
+            view=view_final,
+        )
     except discord.HTTPException:
         if not interacao.response.is_done():
             await interacao.response.defer()
@@ -1115,8 +1181,25 @@ async def processar_decisao_ausencia(
             ],
             cor=discord.Color.green() if aprovada else COR_AVISO,
         )
-    except Exception:
-        pass
+    except discord.Forbidden as erro_de_dm_fechada:
+        # O membro fechou a DM. A decisao ja esta salva no banco e ja aparece
+        # no canal, entao o pedido nao se perde: ele so nao recebe o aviso.
+        logging.warning(
+            "Nao consegui avisar o membro %s sobre a decisao do pedido de "
+            "ausencia #%s porque a DM esta fechada: %s",
+            registro.discord_id,
+            pedido_id,
+            erro_de_dm_fechada,
+        )
+    except discord.HTTPException as erro_ao_avisar:
+        # Falha de rede ou do Discord ao mandar a DM. Mesmo caso acima: a
+        # decisao esta salva, so o aviso nao chegou.
+        logging.warning(
+            "Falha ao avisar o membro %s sobre a decisao do pedido de ausencia #%s: %s",
+            registro.discord_id,
+            pedido_id,
+            erro_ao_avisar,
+        )
 
 
 async def processar_decisao_retorno(
@@ -1125,6 +1208,12 @@ async def processar_decisao_retorno(
     *,
     aprovada: bool,
 ) -> None:
+    """Aplica a decisão de retorno sem restaurar cargos antes da autorização.
+
+    A operação é idempotente para impedir decisões duplicadas. Ao aprovar, usa
+    o retrato de cargos guardado na ausência, atualiza o cartão administrativo e
+    tenta avisar o membro, preservando o registro mesmo se a DM estiver fechada.
+    """
     if interacao.guild is None or not isinstance(interacao.user, discord.Member):
         await responder_erro(
             interacao,
@@ -1166,17 +1255,17 @@ async def processar_decisao_retorno(
     detalhe_cargos = ""
 
     if aprovada and membro is not None:
-        ok, msg = await restaurar_cargos_ausencia(
+        ok, mensagem = await restaurar_cargos_ausencia(
             membro,
             solicitacao=registro,
             executor=interacao.user,
         )
-        detalhe_cargos = msg
+        detalhe_cargos = mensagem
         if not ok:
             await enviar_erro_para_log_erros(
                 interacao.guild,
                 "Falha ao restaurar cargos no retorno",
-                Exception(msg),
+                Exception(mensagem),
                 contexto=f"processar_decisao_retorno#{pedido_id}",
                 usuario=membro,
             )
@@ -1209,7 +1298,10 @@ async def processar_decisao_retorno(
         )
     )
     try:
-        await interacao.response.edit_message(view=view_final)
+        await editar_mensagem_original(
+            interacao,
+            view=view_final,
+        )
     except discord.HTTPException:
         if not interacao.response.is_done():
             await interacao.response.defer()
@@ -1224,14 +1316,31 @@ async def processar_decisao_retorno(
                 (
                     "Seus cargos foram restaurados. Bem-vindo de volta!"
                     if aprovada
-                    else "Você continua com o cargo de ausente. Fale com a Diretoria se precisar."
+                    else "Você continua com o cargo de ausente. Fale com a Diretoria "
+                    "se precisar."
                 ),
             ],
             cor=discord.Color.green() if aprovada else COR_AVISO,
         )
-    except Exception:
-        pass
+    except discord.Forbidden as erro_de_dm_fechada:
+        # O membro fechou a DM. A decisao do retorno ja esta salva no banco.
+        logging.warning(
+            "Nao consegui avisar o membro %s sobre a decisao do pedido de "
+            "retorno #%s porque a DM esta fechada: %s",
+            registro.discord_id,
+            pedido_id,
+            erro_de_dm_fechada,
+        )
+    except discord.HTTPException as erro_ao_avisar:
+        # Falha de rede ou do Discord ao mandar a DM.
+        logging.warning(
+            "Falha ao avisar o membro %s sobre a decisao do pedido de retorno #%s: %s",
+            registro.discord_id,
+            pedido_id,
+            erro_ao_avisar,
+        )
 
 
 def view_painel_ausencia(guilda: discord.Guild | None = None) -> PainelAusenciaLayout:
+    """Cria o painel persistente de ausência com o ícone da guilda quando disponível."""
     return PainelAusenciaLayout(guilda=guilda)

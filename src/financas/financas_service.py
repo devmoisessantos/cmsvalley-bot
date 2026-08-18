@@ -23,7 +23,10 @@ from src.financas.financas_views import (
 )
 from src.membros.membros_service import resolver_id_fivem_do_membro
 from src.utils.error_handling import enviar_erro_para_log_erros
-from src.utils.formatacao import formatar_reais
+from src.utils.formatacao import (
+    formatar_data_curta,
+    formatar_reais,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +35,9 @@ def _medalha(posicao: int) -> str:
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(posicao, "🏅")
 
 
-def _formatar_data_curta(dt: datetime) -> str:
-    from src.utils.formatacao import formatar_data_curta
-
-    return formatar_data_curta(dt)
+def _formatar_data_curta(data_e_hora: datetime) -> str:
+    """Data curta DD/MM. Delega para o formatador comum do projeto."""
+    return formatar_data_curta(data_e_hora)
 
 
 def _formatar_ids_fivem(ids: list[str]) -> str:
@@ -109,6 +111,12 @@ def montar_texto_solicitacao_area(
     total_unidades: int,
     observacao_extra: str | None = None,
 ) -> str:
+    """Monta a solicitação que resume o pagamento de uma área para finanças.
+
+    Busca os dados da área configurada e preserva valores de referência quando
+    ela for desconhecida, para que o texto continue auditável. A observação
+    opcional permite anexar contexto sem alterar o cálculo do fechamento.
+    """
     area = AREAS_FINANCEIRAS.get(chave_area, {})
     titulo_area = area.get("titulo", chave_area.upper())
     unidade_plural = area.get("unidade_plural", "itens")
@@ -145,6 +153,11 @@ def montar_texto_controle_dm(
     total_pago: int,
     canal_financas_id: int | None,
 ) -> str:
+    """Monta o controle detalhado enviado por DM à diretoria financeira.
+
+    Inclui as linhas de pagamento, totais e um atalho ao canal público para
+    que a conferência não dependa de procurar mensagens no servidor.
+    """
     area = AREAS_FINANCEIRAS.get(chave_area, {})
     titulo_area = area.get("titulo", chave_area.upper())
     unidade_plural = area.get("unidade_plural", "itens")
@@ -170,6 +183,11 @@ def montar_texto_lista_pagamento_publica(
     linhas_pagamento: list[str],
     total_pago: int,
 ) -> str:
+    """Monta a lista pública de pagamentos com período e total consolidado.
+
+    Usa as linhas já agrupadas pelo ranking para manter os valores conferíveis e
+    inclui o horário da geração, distinguindo esta lista de outras publicações.
+    """
     area = AREAS_FINANCEIRAS.get(chave_area, {})
     titulo_area = area.get("titulo", chave_area.upper())
     corpo = "\n\n".join(linhas_pagamento) if linhas_pagamento else "_Nenhum._"

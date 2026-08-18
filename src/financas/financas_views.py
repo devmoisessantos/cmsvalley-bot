@@ -13,12 +13,13 @@ from datetime import (
 
 import discord
 
-from src.plantao.permissoes import e_diretoria
+from src.plantao.plantao_permissoes import e_diretoria
 from src.utils.error_handling import (
     LoggingViewMixin,
     enviar_erro_para_log_erros,
 )
 from src.utils.mensagens import (
+    editar_mensagem_original,
     responder_aviso,
     responder_erro,
     responder_sucesso,
@@ -149,7 +150,10 @@ class ViewSolicitacaoFinancasCard(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         try:
-            await interacao.response.edit_message(view=view_paga)
+            await editar_mensagem_original(
+                interacao,
+                view=view_paga,
+            )
         except discord.HTTPException as erro_edit:
             await enviar_erro_para_log_erros(
                 interacao.guild,
@@ -234,9 +238,10 @@ class ViewBotaoPagamentoFinancas(LoggingViewMixin, discord.ui.View):
             )
             view_paga = ViewBotaoPagamentoFinancas(ja_pago=True)
             try:
-                await interacao.response.edit_message(
-                    content=texto_novo,
+                await editar_mensagem_original(
+                    interacao,
                     view=view_paga,
+                    texto=texto_novo,
                 )
             except discord.HTTPException as erro:
                 await enviar_erro_para_log_erros(
@@ -269,7 +274,12 @@ class ViewBotaoPagamentoFinancas(LoggingViewMixin, discord.ui.View):
             pago_por_mencao=membro.mention,
         )
         try:
-            await interacao.response.edit_message(content=None, view=view_paga)
+            # texto=None apaga o texto antigo: o card V2 agora traz tudo.
+            await editar_mensagem_original(
+                interacao,
+                view=view_paga,
+                texto=None,
+            )
         except discord.HTTPException:
             if not interacao.response.is_done():
                 await interacao.response.defer(ephemeral=True)

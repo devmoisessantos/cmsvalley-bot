@@ -591,7 +591,9 @@ class AdvertenciaVerbalBau(Base):
 
 
 class ConfigBau(Base):
-    """Overrides de configuração do baú (limites, tolerância) editáveis pelo painel admin."""
+    """
+    Overrides de configuração do baú (limites, tolerância) editáveis pelo painel admin.
+    """
 
     __tablename__ = "config_bau"
 
@@ -815,7 +817,8 @@ class Ticket(Base):
 
     canal_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     mensagem_painel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # mensagem do card 3 (botões de staff) — usada para atualizar Assumir / Call / Saudar
+    # mensagem do card 3 (botões de staff) — usada para atualizar Assumir / Call /
+    # Saudar
     mensagem_botoes_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # canal de voz criado pelo botão Criar Call
     call_canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

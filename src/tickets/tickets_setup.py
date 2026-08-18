@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from sqlalchemy import select
 
@@ -9,12 +11,14 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.tickets.tickets_panel import (
     PainelTicketDenunciasLayout,
     PainelTicketSuporteLayout,
 )
+
+registrador = logging.getLogger(__name__)
 
 
 async def _resolver_guilda(
@@ -43,12 +47,16 @@ async def garantir_painel_ticket_suporte(
         canal_id = CANAIS.get("CANAL_ABRIR_SUPORTE_DUVIDAS") or 0
         canal = bot.get_channel(int(canal_id)) if canal_id else None
         if canal is None:
-            print("⚠️ Canal CANAL_ABRIR_SUPORTE_DUVIDAS não configurado/encontrado.")
+            registrador.warning(
+                "⚠️ Canal CANAL_ABRIR_SUPORTE_DUVIDAS não configurado/encontrado."
+            )
             return
 
         guilda = await _resolver_guilda(bot, interacao)
         if guilda is None:
-            print("❌ Guild não encontrada ao postar painel de ticket suporte.")
+            registrador.error(
+                "❌ Guild não encontrada ao postar painel de ticket suporte."
+            )
             return
 
         mensagem = await canal.send(view=PainelTicketSuporteLayout(guilda=guilda))
@@ -60,7 +68,7 @@ async def garantir_painel_ticket_suporte(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel de Ticket (Suporte) postado em #{canal.name}.")
+        registrador.info(f"✅ Painel de Ticket (Suporte) postado em #{canal.name}.")
 
 
 async def garantir_painel_ticket_denuncias(
@@ -80,12 +88,16 @@ async def garantir_painel_ticket_denuncias(
         canal_id = CANAIS.get("CANAL_ABRIR_TICKET_DENUNCIAS") or 0
         canal = bot.get_channel(int(canal_id)) if canal_id else None
         if canal is None:
-            print("⚠️ Canal CANAL_ABRIR_TICKET_DENUNCIAS não configurado/encontrado.")
+            registrador.warning(
+                "⚠️ Canal CANAL_ABRIR_TICKET_DENUNCIAS não configurado/encontrado."
+            )
             return
 
         guilda = await _resolver_guilda(bot, interacao)
         if guilda is None:
-            print("❌ Guild não encontrada ao postar painel de ticket denúncias.")
+            registrador.error(
+                "❌ Guild não encontrada ao postar painel de ticket denúncias."
+            )
             return
 
         mensagem = await canal.send(view=PainelTicketDenunciasLayout(guilda=guilda))
@@ -97,4 +109,4 @@ async def garantir_painel_ticket_denuncias(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel de Ticket (Denúncias) postado em #{canal.name}.")
+        registrador.info(f"✅ Painel de Ticket (Denúncias) postado em #{canal.name}.")

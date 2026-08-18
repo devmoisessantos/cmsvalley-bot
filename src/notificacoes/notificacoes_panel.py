@@ -22,7 +22,7 @@ from src.notificacoes.notificacoes_service import (
     rascunho_tem_conteudo,
     resumo_destino,
 )
-from src.plantao.permissoes import (
+from src.plantao.plantao_permissoes import (
     e_diretoria,
     mensagem_sem_permissao,
 )
@@ -46,11 +46,14 @@ from src.templates.templates_modelo import (
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
+    ignorar_falha_cosmetica,
 )
 from src.utils.mensagens import (
     COR_ERRO,
     COR_INFO,
     COR_SUCESSO,
+    editar_mensagem_original,
+    responder_aviso,
     responder_erro,
     responder_view,
 )
@@ -130,19 +133,25 @@ class PainelNotificacaoLayout(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_clicar_iniciar(self, interacao: discord.Interaction):
         membro = interacao.user
         if not isinstance(membro, discord.Member) or not e_diretoria(membro):
-            await interacao.response.send_message(
-                mensagem_sem_permissao("usar o painel de notificação"),
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    mensagem_sem_permissao("usar o painel de notificação"),
+                ],
             )
             return
 
         if not ainda_pode_enviar(membro.id):
             usados = quantidade_envios_na_hora(membro.id)
-            await interacao.response.send_message(
-                f"❌ Limite de **{LIMITE_NOTIFICACOES_POR_HORA}** notificações "
-                f"por hora atingido (`{usados}` neste período).\n"
-                "Aguarde um pouco antes de enviar outra.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Limite por hora atingido",
+                linhas=[
+                    f"Limite de **{LIMITE_NOTIFICACOES_POR_HORA}** notificações "
+                    f"por hora atingido (`{usados}` neste período).\n"
+                    "Aguarde um pouco antes de enviar outra.",
+                ],
             )
             return
 
@@ -297,16 +306,22 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _garantir_dono(self, interacao: discord.Interaction) -> bool:
         if interacao.user.id != self.id_do_executor:
-            await interacao.response.send_message(
-                "❌ Este painel não é seu.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Painel de outra pessoa",
+                linhas=[
+                    "Este painel não é seu.",
+                ],
             )
             return False
         return True
 
     async def _atualizar(self, interacao: discord.Interaction) -> None:
         self._reconstruir()
-        await interacao.response.edit_message(view=self)
+        await editar_mensagem_original(
+            interacao,
+            view=self,
+        )
 
     async def _ao_escolher_tipo(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
@@ -326,9 +341,12 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
         id_membro = int(interacao.data["values"][0])
         membro = interacao.guild.get_member(id_membro) if interacao.guild else None
         if membro is None:
-            await interacao.response.send_message(
-                "❌ Membro não encontrado no servidor.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Não encontrado",
+                linhas=[
+                    "Membro não encontrado no servidor.",
+                ],
             )
             return
         sessao = obter_sessao(self.id_do_executor)
@@ -347,9 +365,12 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
         id_cargo = int(interacao.data["values"][0])
         cargo = interacao.guild.get_role(id_cargo) if interacao.guild else None
         if cargo is None:
-            await interacao.response.send_message(
-                "❌ Cargo não encontrado.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Não encontrado",
+                linhas=[
+                    "Cargo não encontrado.",
+                ],
             )
             return
         sessao = obter_sessao(self.id_do_executor)
@@ -362,9 +383,12 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
             return
         sessao = obter_sessao(self.id_do_executor)
         if not destino_esta_pronto(sessao):
-            await interacao.response.send_message(
-                "❌ Selecione o destino antes de continuar.",
-                ephemeral=True,
+            await responder_aviso(
+                interacao,
+                titulo="Falta escolher",
+                linhas=[
+                    "Selecione o destino antes de continuar.",
+                ],
             )
             return
 
@@ -375,17 +399,20 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
             id_do_usuario=self.id_do_executor,
             guilda=interacao.guild,
         )
-        await interacao.response.edit_message(view=painel)
+        await editar_mensagem_original(
+            interacao,
+            view=painel,
+        )
         painel.mensagem_editor = await interacao.original_response()
 
         view_preview = montar_preview(
             obter_rascunho(self.id_do_executor),
             interacao.guild,
         )
-        mensagem_preview = await interacao.followup.send(
-            view=view_preview,
+        mensagem_preview = await responder_view(
+            interacao,
+            view_preview,
             ephemeral=True,
-            wait=True,
         )
         painel.mensagem_preview = mensagem_preview
 
@@ -393,12 +420,13 @@ class FluxoEscolherDestinoView(LoggingViewMixin, discord.ui.LayoutView):
         if not await self._garantir_dono(interacao):
             return
         limpar_sessao(self.id_do_executor)
-        await interacao.response.edit_message(
+        await editar_mensagem_original(
+            interacao,
             view=_view_mensagem_simples(
                 titulo="❌ Notificação cancelada",
                 linhas=["Nada foi enviado."],
                 cor=COR_ERRO,
-            )
+            ),
         )
 
 
@@ -418,11 +446,20 @@ class ModalDiscordIdNotificacao(
         self.painel = painel
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Resolve o membro digitado e atualiza o destino da sessão privada.
+
+        Valida o formato e confirma que o ID pertence à guilda, inclusive fora
+        do cache. Só então substitui o destino por membro e redesenha o painel,
+        evitando o envio acidental para uma referência inválida.
+        """
         texto = self.campo_id.value.strip()
         if not texto.isdigit():
-            await interacao.response.send_message(
-                "❌ ID inválido. Use apenas números.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "ID inválido. Use apenas números.",
+                ],
             )
             return
 
@@ -435,9 +472,12 @@ class ModalDiscordIdNotificacao(
                 membro = None
 
         if membro is None:
-            await interacao.response.send_message(
-                "❌ Membro não está no servidor (ou ID incorreto).",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Membro fora do servidor",
+                linhas=[
+                    "Membro não está no servidor (ou ID incorreto).",
+                ],
             )
             return
 
@@ -448,7 +488,10 @@ class ModalDiscordIdNotificacao(
         sessao.id_do_cargo = None
         sessao.nome_do_cargo = None
         self.painel._reconstruir()
-        await interacao.response.edit_message(view=self.painel)
+        await editar_mensagem_original(
+            interacao,
+            view=self.painel,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -482,7 +525,7 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
         sessao = obter_sessao(self.id_do_usuario)
 
         linha_1 = discord.ui.ActionRow()
-        for rotulo, emoji, callback in (
+        for rotulo, emoji, funcao_ao_clicar in (
             ("Seção", "🗂️", self._ao_clicar_secao),
             ("Texto", "📝", self._ao_clicar_texto),
             ("Título", "✏️", self._ao_clicar_titulo),
@@ -493,11 +536,11 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
                 style=discord.ButtonStyle.primary,
                 emoji=emoji,
             )
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_1.add_item(botao)
 
         linha_2 = discord.ui.ActionRow()
-        for rotulo, emoji, callback in (
+        for rotulo, emoji, funcao_ao_clicar in (
             ("Botão", "🔘", self._ao_clicar_botao),
             ("Rodapé", "📌", self._ao_clicar_rodape),
         ):
@@ -506,11 +549,11 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
                 style=discord.ButtonStyle.secondary,
                 emoji=emoji,
             )
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_2.add_item(botao)
 
         linha_3 = discord.ui.ActionRow()
-        for rotulo, emoji, estilo, callback in (
+        for rotulo, emoji, estilo, funcao_ao_clicar in (
             (
                 "Editar bloco",
                 "📝",
@@ -537,7 +580,7 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
             ),
         ):
             botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_3.add_item(botao)
 
         linha_cor = discord.ui.ActionRow()
@@ -552,13 +595,13 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
         linha_cor.add_item(seletor_cor)
 
         linha_acoes = discord.ui.ActionRow()
-        for rotulo, emoji, estilo, callback in (
+        for rotulo, emoji, estilo, funcao_ao_clicar in (
             ("Enviar", "📨", discord.ButtonStyle.success, self._ao_clicar_enviar),
             ("Resetar", "♻️", discord.ButtonStyle.secondary, self._ao_clicar_resetar),
             ("Cancelar", "✖️", discord.ButtonStyle.danger, self._ao_clicar_cancelar),
         ):
             botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_acoes.add_item(botao)
 
         status_rodape = "ligado" if rascunho.rodape_ativo else "desligado"
@@ -600,9 +643,12 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _garantir_dono(self, interacao: discord.Interaction) -> bool:
         if interacao.user.id != self.id_do_usuario:
-            await interacao.response.send_message(
-                "❌ Este painel não é seu.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Painel de outra pessoa",
+                linhas=[
+                    "Este painel não é seu.",
+                ],
             )
             return False
         return True
@@ -622,11 +668,21 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
             return
         try:
             await self.mensagem_preview.delete()
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
+        except (
+            discord.NotFound,
+            discord.Forbidden,
+            discord.HTTPException,
+        ) as erro_em_destruir_mensagem_preview:
+            # Enfeite que falhou: apagar a mensagem de preview.
+            # A acao principal ja tinha dado certo, entao so registro.
+            ignorar_falha_cosmetica(
+                erro_em_destruir_mensagem_preview,
+                o_que_falhou="apagar a mensagem de preview",
+            )
         self.mensagem_preview = None
 
     async def on_timeout(self) -> None:
+        """Apaga o preview temporário quando a edição da notificação expira."""
         await self._destruir_mensagem_preview()
 
     async def _atualizar_painel(
@@ -640,8 +696,13 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
         if interacao is not None and not interacao.response.is_done():
             try:
                 await interacao.response.defer(ephemeral=True)
-            except discord.HTTPException:
-                pass
+            except discord.HTTPException as erro_em_atualizar_painel:
+                # Enfeite que falhou: atualizar o painel na tela.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_atualizar_painel,
+                    o_que_falhou="atualizar o painel na tela",
+                )
 
         self._reconstruir()
 
@@ -652,9 +713,20 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
                 self.mensagem_editor = None
         elif interacao is not None:
             try:
-                await interacao.edit_original_response(view=self)
-            except (discord.HTTPException, discord.NotFound):
-                pass
+                await editar_mensagem_original(
+                    interacao,
+                    view=self,
+                )
+            except (
+                discord.HTTPException,
+                discord.NotFound,
+            ) as erro_em_atualizar_painel:
+                # Enfeite que falhou: atualizar o painel na tela.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_atualizar_painel,
+                    o_que_falhou="atualizar o painel na tela",
+                )
 
         await self._atualizar_mensagem_preview()
 
@@ -701,9 +773,12 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
             return
         rascunho = obter_rascunho(self.id_do_usuario)
         if not rascunho.blocos:
-            await interacao.response.send_message(
-                "❌ Não há bloco para editar.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Nada para editar",
+                linhas=[
+                    "Não há bloco para editar.",
+                ],
             )
             return
 
@@ -712,9 +787,12 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
         modal = _modal_para_bloco(self, ultimo)
         if modal is None:
             self.indice_em_edicao = None
-            await interacao.response.send_message(
-                f"❌ Tipo `{ultimo.tipo}` sem editor.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Bloco sem editor",
+                linhas=[
+                    f"Tipo `{ultimo.tipo}` sem editor.",
+                ],
             )
             return
         await interacao.response.send_modal(modal)
@@ -764,12 +842,13 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
             return
         await self._destruir_mensagem_preview()
         limpar_sessao(self.id_do_usuario)
-        await interacao.response.edit_message(
+        await editar_mensagem_original(
+            interacao,
             view=_view_mensagem_simples(
                 titulo="❌ Notificação cancelada",
                 linhas=["Rascunho e destino foram descartados."],
                 cor=COR_ERRO,
-            )
+            ),
         )
 
     async def _ao_clicar_enviar(self, interacao: discord.Interaction):
@@ -778,9 +857,12 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
 
         sessao = obter_sessao(self.id_do_usuario)
         if not destino_esta_pronto(sessao):
-            await interacao.response.send_message(
-                "❌ Destino inválido. Cancele e comece de novo.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Dado inválido",
+                linhas=[
+                    "Destino inválido. Cancele e comece de novo.",
+                ],
             )
             return
 
@@ -793,16 +875,22 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         if not ainda_pode_enviar(self.id_do_usuario):
-            await interacao.response.send_message(
-                f"❌ Limite de **{LIMITE_NOTIFICACOES_POR_HORA}** por hora atingido.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Limite por hora atingido",
+                linhas=[
+                    f"Limite de **{LIMITE_NOTIFICACOES_POR_HORA}** por hora atingido.",
+                ],
             )
             return
 
         if interacao.guild is None:
-            await interacao.response.send_message(
-                "❌ Este fluxo só funciona dentro do servidor.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Comando indisponível aqui",
+                linhas=[
+                    "Este fluxo só funciona dentro do servidor.",
+                ],
             )
             return
 
@@ -841,8 +929,9 @@ class FluxoComporNotificacaoView(LoggingViewMixin, discord.ui.LayoutView):
             cor = COR_INFO
 
         limpar_sessao(self.id_do_usuario)
-        await interacao.edit_original_response(
-            view=_view_mensagem_simples(titulo=titulo, linhas=linhas, cor=cor)
+        await editar_mensagem_original(
+            interacao,
+            view=_view_mensagem_simples(titulo=titulo, linhas=linhas, cor=cor),
         )
 
 

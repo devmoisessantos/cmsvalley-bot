@@ -1,8 +1,20 @@
+"""
+Registro visual dos eventos de plantao no canal de logs.
+
+O dicionario EVENTOS_PLANTAO no topo diz, para cada tipo de evento, como ele
+deve aparecer: titulo, emoji e cor. Concentrar isso num lugar so evita que cada
+arquivo invente seu proprio jeito de escrever "entrou em servico".
+
+`resolver_id_fivem_e_validar` existe porque o log precisa mostrar o ID FiveM da
+pessoa, e esse ID vem da ficha de recrutamento. Quando nao ha ficha, o log sai
+sem o ID em vez de falhar.
+"""
+
 import discord
 from sqlalchemy import select
 
 from src.config import CANAIS
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     LogPlantao,
     Recrutamento,
@@ -66,6 +78,12 @@ async def registrar_evento_plantao(
     detalhes: str | None = None,
     campos_extra: dict[str, str] | None = None,
 ):
+    """Persiste um evento de plantão e tenta publicá-lo no canal de auditoria.
+
+    O registro no banco acontece antes do envio ao Discord para não perder a evidência
+    quando o canal está ausente ou indisponível. Campos extras permitem acrescentar
+    contexto sem forçar cada evento a ter um formato novo no modelo de dados.
+    """
 
     async with async_session() as session:
         session.add(
@@ -82,7 +100,8 @@ async def registrar_evento_plantao(
 
     canal = guild.get_channel(CANAIS["LOG_PLANTAO"])
     if canal is None:
-        return  # canal ainda não configurado — o registro no banco já aconteceu, só não posta
+        # canal ainda não configurado — o registro no banco já aconteceu, só não posta
+        return
 
     titulo, cor = EVENTOS_PLANTAO.get(evento, (evento, discord.Color.blurple()))
     membro = guild.get_member(discord_id)

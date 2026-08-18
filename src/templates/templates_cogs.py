@@ -29,14 +29,19 @@ from src.templates.templates_modelo import (
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
+    ignorar_falha_cosmetica,
 )
 from src.utils.mensagens import (
     COR_ERRO,
     COR_INFO,
     COR_SUCESSO,
+    editar_mensagem_original,
     enviar_card,
+    responder_aviso,
     responder_erro,
+    responder_info,
     responder_sucesso,
+    responder_view,
 )
 from src.utils.permissions import apenas_administrador
 
@@ -104,7 +109,7 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
 
         # 1) secao | texto | titulo | separador
         linha_1 = discord.ui.ActionRow()
-        for rotulo, emoji, callback in (
+        for rotulo, emoji, funcao_ao_clicar in (
             ("Seção", "🗂️", self._ao_clicar_secao),
             ("Texto", "📝", self._ao_clicar_texto),
             ("Título", "✏️", self._ao_clicar_titulo),
@@ -113,12 +118,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             botao = discord.ui.Button(
                 label=rotulo, style=discord.ButtonStyle.primary, emoji=emoji
             )
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_1.add_item(botao)
 
         # 2) arquivo | galeria | botao | select
         linha_2 = discord.ui.ActionRow()
-        for rotulo, emoji, callback in (
+        for rotulo, emoji, funcao_ao_clicar in (
             ("Arquivo", "📎", self._ao_clicar_arquivo),
             ("Galeria", "🖼️", self._ao_clicar_galeria),
             ("Botão", "🔘", self._ao_clicar_botao),
@@ -127,12 +132,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             botao = discord.ui.Button(
                 label=rotulo, style=discord.ButtonStyle.secondary, emoji=emoji
             )
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_2.add_item(botao)
 
         # 3) sel. usuarios | sel. cargo | sel. canais | rodapé
         linha_3 = discord.ui.ActionRow()
-        for rotulo, emoji, callback in (
+        for rotulo, emoji, funcao_ao_clicar in (
             ("Sel. usuários", "👤", self._ao_clicar_select_user),
             ("Sel. cargo", "🎭", self._ao_clicar_select_role),
             ("Sel. canais", "#️⃣", self._ao_clicar_select_channel),
@@ -141,12 +146,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             botao = discord.ui.Button(
                 label=rotulo, style=discord.ButtonStyle.secondary, emoji=emoji
             )
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_3.add_item(botao)
 
         # 4) Editar bloco | Editar último | Mover bloco | Remover último
         linha_4 = discord.ui.ActionRow()
-        for rotulo, emoji, estilo, callback in (
+        for rotulo, emoji, estilo, funcao_ao_clicar in (
             (
                 "Editar bloco",
                 "📝",
@@ -173,12 +178,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             ),
         ):
             botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_4.add_item(botao)
 
         # 5) Código Painel | Código Modal
         linha_5 = discord.ui.ActionRow()
-        for rotulo, emoji, estilo, callback in (
+        for rotulo, emoji, estilo, funcao_ao_clicar in (
             ("Código Painel", "📄", discord.ButtonStyle.danger, self._ao_clicar_codigo),
             (
                 "Código Modal",
@@ -188,7 +193,7 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             ),
         ):
             botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_5.add_item(botao)
 
         # Cor (Select sozinho na linha)
@@ -205,14 +210,14 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
 
         # Preview | Postar | Resetar | Ajuda
         linha_acoes = discord.ui.ActionRow()
-        for rotulo, emoji, estilo, callback in (
+        for rotulo, emoji, estilo, funcao_ao_clicar in (
             ("Preview", "👁️", discord.ButtonStyle.success, self._ao_clicar_preview),
             ("Postar", "📢", discord.ButtonStyle.success, self._ao_clicar_postar),
             ("Resetar", "♻️", discord.ButtonStyle.secondary, self._ao_clicar_resetar),
             ("Ajuda", "❓", discord.ButtonStyle.primary, self._ao_clicar_ajuda_api),
         ):
             botao = discord.ui.Button(label=rotulo, style=estilo, emoji=emoji)
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha_acoes.add_item(botao)
 
         status_rodape = "ligado" if rascunho.rodape_ativo else "desligado"
@@ -231,7 +236,8 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# 🧩 Construtor Bot UI Kit (V2)\n"
-                    "-# O **preview** fica em outra mensagem e é atualizado a cada mudança."
+                    "-# O **preview** fica em outra mensagem e é atualizado a cada "
+                    "mudança."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(
@@ -255,8 +261,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _garantir_dono(self, interacao: discord.Interaction) -> bool:
         if interacao.user.id != self.id_do_usuario:
-            await interacao.response.send_message(
-                "❌ Este painel não é seu.", ephemeral=True
+            await responder_erro(
+                interacao,
+                titulo="Painel de outra pessoa",
+                linhas=[
+                    "Este painel não é seu.",
+                ],
             )
             return False
         return True
@@ -278,11 +288,23 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             return
         try:
             await self.mensagem_preview.delete()
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
+        except (
+            discord.NotFound,
+            discord.Forbidden,
+            discord.HTTPException,
+        ) as erro_em_destruir_mensagem_preview:
+            # Enfeite que falhou: apagar a mensagem de preview.
+            # A acao principal ja tinha dado certo, entao so registro.
+            ignorar_falha_cosmetica(
+                erro_em_destruir_mensagem_preview,
+                o_que_falhou="apagar a mensagem de preview",
+            )
         self.mensagem_preview = None
 
     async def on_timeout(self) -> None:
+        """
+        Remove o preview temporário para não deixar uma cópia esquecida após expirar.
+        """
         await self._destruir_mensagem_preview()
 
     async def _atualizar_painel(
@@ -303,8 +325,13 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         if interacao is not None and not interacao.response.is_done():
             try:
                 await interacao.response.defer(ephemeral=True)
-            except discord.HTTPException:
-                pass
+            except discord.HTTPException as erro_em_atualizar_painel:
+                # Enfeite que falhou: atualizar o painel na tela.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_atualizar_painel,
+                    o_que_falhou="atualizar o painel na tela",
+                )
 
         self._reconstruir()
 
@@ -316,9 +343,20 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         elif interacao is not None:
             # Sem mensagem_editor guardada: tenta editar a mensagem da interação
             try:
-                await interacao.edit_original_response(view=self)
-            except (discord.HTTPException, discord.NotFound):
-                pass
+                await editar_mensagem_original(
+                    interacao,
+                    view=self,
+                )
+            except (
+                discord.HTTPException,
+                discord.NotFound,
+            ) as erro_em_atualizar_painel:
+                # Enfeite que falhou: atualizar o painel na tela.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_atualizar_painel,
+                    o_que_falhou="atualizar o painel na tela",
+                )
 
         await self._atualizar_mensagem_preview()
 
@@ -366,8 +404,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         if not await self._garantir_dono(interacao):
             return
         if not TEM_USER_SELECT:
-            await interacao.response.send_message(
-                "❌ UserSelect indisponível nesta versão.", ephemeral=True
+            await responder_erro(
+                interacao,
+                titulo="Componente indisponível",
+                linhas=[
+                    "UserSelect indisponível nesta versão.",
+                ],
             )
             return
         obter_rascunho(self.id_do_usuario).blocos.append(
@@ -382,8 +424,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         if not await self._garantir_dono(interacao):
             return
         if not TEM_ROLE_SELECT:
-            await interacao.response.send_message(
-                "❌ RoleSelect indisponível nesta versão.", ephemeral=True
+            await responder_erro(
+                interacao,
+                titulo="Componente indisponível",
+                linhas=[
+                    "RoleSelect indisponível nesta versão.",
+                ],
             )
             return
         obter_rascunho(self.id_do_usuario).blocos.append(
@@ -398,8 +444,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         if not await self._garantir_dono(interacao):
             return
         if not TEM_CHANNEL_SELECT:
-            await interacao.response.send_message(
-                "❌ ChannelSelect indisponível nesta versão.", ephemeral=True
+            await responder_erro(
+                interacao,
+                titulo="Componente indisponível",
+                linhas=[
+                    "ChannelSelect indisponível nesta versão.",
+                ],
             )
             return
         obter_rascunho(self.id_do_usuario).blocos.append(
@@ -424,9 +474,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             return
         rascunho = obter_rascunho(self.id_do_usuario)
         if not rascunho.blocos:
-            await interacao.response.send_message(
-                "❌ Não há bloco para editar.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Nada para editar",
+                linhas=[
+                    "Não há bloco para editar.",
+                ],
             )
             return
 
@@ -435,9 +488,12 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
         modal = _modal_para_bloco(self, ultimo)
         if modal is None:
             self.indice_em_edicao = None
-            await interacao.response.send_message(
-                f"❌ Tipo `{ultimo.tipo}` sem editor.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Bloco sem editor",
+                linhas=[
+                    f"Tipo `{ultimo.tipo}` sem editor.",
+                ],
             )
             return
         await interacao.response.send_modal(modal)
@@ -488,7 +544,11 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
             return
         guilda = interacao.guild or self.guilda
         preview = montar_preview(obter_rascunho(self.id_do_usuario), guilda)
-        await interacao.response.send_message(view=preview, ephemeral=True)
+        await responder_view(
+            interacao,
+            preview,
+            ephemeral=True,
+        )
 
     async def _ao_clicar_postar(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
@@ -501,8 +561,9 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Adicione pelo menos um bloco antes de postar."],
             )
             return
-        await interacao.response.send_message(
-            view=SeletorCanalPostarView(self.id_do_usuario),
+        await responder_view(
+            interacao,
+            SeletorCanalPostarView(self.id_do_usuario),
             ephemeral=True,
         )
 
@@ -528,8 +589,10 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_clicar_ajuda_api(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
-        await interacao.response.send_message(
-            content=(
+        await responder_info(
+            interacao,
+            titulo="Hierarquia do Components V2",
+            linhas=[
                 "**Hierarquia Components V2**\n"
                 "```\n"
                 "LayoutView (raiz da mensagem)\n"
@@ -547,9 +610,9 @@ class PainelTemplatesView(LoggingViewMixin, discord.ui.LayoutView):
                 "```\n"
                 "Limites: ≤40 componentes/msg · TextDisplay total ≤4000 chars · "
                 "ActionRow ≤5 botões **ou** 1 select · MediaGallery 1–10.\n"
-                "Docs: <https://discordpy.readthedocs.io/en/stable/interactions/api.html#bot-ui-kit>"
-            ),
-            ephemeral=True,
+                "Docs: "
+                "<https://discordpy.readthedocs.io/en/stable/interactions/api.html#bot-ui-kit>",
+            ],
         )
 
 
@@ -563,9 +626,21 @@ async def _enviar_codigo_em_partes(
     while restante:
         partes.append(f"```python\n{restante[:1800]}\n```")
         restante = restante[1800:]
-    await interacao.response.send_message(content=partes[0], ephemeral=True)
+    await responder_info(
+        interacao,
+        titulo="Código de exemplo",
+        linhas=[
+            partes[0],
+        ],
+    )
     for pedaco in partes[1:]:
-        await interacao.followup.send(content=pedaco, ephemeral=True)
+        await responder_info(
+            interacao,
+            titulo="Código de exemplo",
+            linhas=[
+                pedaco,
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +836,8 @@ async def _enviar_card_acao_bloco(
             titulo="↕️ Mover bloco",
             linhas=[
                 f"Bloco selecionado: {resumo}",
-                "No menu: **Pra cima**, **Pra baixo** ou **troque** com outro bloco da lista.",
+                "No menu: **Pra cima**, **Pra baixo** ou **troque** com outro bloco "
+                "da lista.",
             ],
             cor=COR_INFO,
             extra_row=linha,
@@ -830,7 +906,7 @@ async def responder_aviso_local(
 
     await responder_aviso(
         interacao,
-        titulo="Aviso",
+        titulo="Aviso do painel",
         linhas=[texto],
         delay=10,
     )
@@ -853,6 +929,13 @@ class ModalEscolherBloco(LoggingModalMixin, discord.ui.Modal):
         self.modo = modo
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Valida o número escolhido antes de abrir a ação de edição ou movimentação.
+
+        Converte a numeração humana para índice, recusa valores fora do rascunho e
+        envia o card de ação apenas quando o bloco existe. Isso evita editar por
+        engano outro item ou produzir um erro silencioso no modal.
+        """
         rascunho = obter_rascunho(self.painel.id_do_usuario)
         try:
             indice = int(self.numero.value.strip()) - 1
@@ -905,6 +988,13 @@ class ModalTextoBloco(LoggingModalMixin, discord.ui.Modal):
                 self.campo_texto.default = bloco.texto
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Inclui ou substitui um bloco textual e renova o preview no Discord.
+
+        A flag de edição decide se o conteúdo ocupa a última posição ou é anexado
+        ao rascunho. Atualizar o painel após salvar mantém o editor e a prévia
+        sincronizados, evitando que o usuário ache que sua alteração foi perdida.
+        """
         novo = BlocoTemplate(tipo=self.tipo, texto=self.campo_texto.value.strip())
         rascunho = obter_rascunho(self.painel.id_do_usuario)
         if self.editar_ultimo and rascunho.blocos:
@@ -959,6 +1049,13 @@ class ModalSecaoCompleta(LoggingModalMixin, discord.ui.Modal):
                 self.botao_url.default = bloco.accessory_botao_url or ""
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Transforma os campos da seção em um bloco com accessory compatível.
+
+        Normaliza a escolha de ícone e os valores opcionais de miniatura ou botão,
+        depois adiciona ou substitui o bloco em edição. A atualização do painel
+        reflete a escolha imediatamente sem publicar uma mensagem persistente.
+        """
         usar = self.usar_icone.value.strip().lower() in ("sim", "s", "yes", "y", "1")
         novo = BlocoTemplate(
             tipo="secao",
@@ -993,6 +1090,13 @@ class ModalSeparador(LoggingModalMixin, discord.ui.Modal):
                 self.espacamento.default = bloco.espacamento
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Salva um separador com espaçamento seguro e atualiza a prévia.
+
+        Aceita somente os dois tamanhos suportados pelo Discord e usa `large` como
+        alternativa para entrada inválida. Isso impede que texto livre gere um
+        componente incompatível na montagem do Container.
+        """
         valor = self.espacamento.value.strip().lower()
         if valor not in ("small", "large"):
             valor = "large"
@@ -1022,14 +1126,25 @@ class ModalGaleria(LoggingModalMixin, discord.ui.Modal):
                 self.urls.default = "\n".join(bloco.urls_midia)
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Filtra URLs de imagens antes de salvar uma galeria de até dez itens.
+
+        Descarta linhas que não começam com HTTP e avisa quando não sobra nenhuma
+        imagem utilizável. Essa validação antecipa um card vazio ou inválido e só
+        então atualiza o rascunho e seu preview.
+        """
         lista = [
             linha.strip()
             for linha in self.urls.value.splitlines()
             if linha.strip().startswith("http")
         ][:10]
         if not lista:
-            await interacao.response.send_message(
-                "❌ Nenhuma URL http válida.", ephemeral=True
+            await responder_aviso(
+                interacao,
+                titulo="Nada para mostrar",
+                linhas=[
+                    "Nenhuma URL http válida.",
+                ],
             )
             return
         novo = BlocoTemplate(tipo="galeria", urls_midia=lista)
@@ -1060,6 +1175,13 @@ class ModalArquivo(LoggingModalMixin, discord.ui.Modal):
                 self.nome.default = bloco.nome_arquivo
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Guarda a referência visual de um anexo e atualiza o rascunho.
+
+        O construtor registra apenas o nome, pois o arquivo real precisa ser enviado
+        na publicação pelo código do usuário. Isso torna o preview didático sem
+        fingir que um modal consegue receber um anexo.
+        """
         novo = BlocoTemplate(tipo="arquivo", nome_arquivo=self.nome.value.strip())
         if self.editar_ultimo:
             _aplicar_bloco_editado(self.painel, novo)
@@ -1095,6 +1217,13 @@ class ModalBotao(LoggingModalMixin, discord.ui.Modal):
                 self.url_ou_id.default = valor
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Normaliza o estilo do botão para preservar as regras de links do Discord.
+
+        URLs HTTP sempre se tornam botões de link e estilos inválidos caem no padrão
+        secundário. Depois salva o bloco e renova o preview, evitando um componente
+        que aparenta ser clicável, mas seria recusado pela API.
+        """
         estilo = self.estilo.value.strip().lower()
         if estilo not in ("primary", "secondary", "success", "danger", "link"):
             estilo = "secondary"
@@ -1105,8 +1234,12 @@ class ModalBotao(LoggingModalMixin, discord.ui.Modal):
         if estilo == "link" and not (
             valor.startswith("http://") or valor.startswith("https://")
         ):
-            await interacao.response.send_message(
-                "❌ Botão link precisa de URL http(s).", ephemeral=True
+            await responder_erro(
+                interacao,
+                titulo="URL do botão inválida",
+                linhas=[
+                    "Botão link precisa de URL http(s).",
+                ],
             )
             return
         item = (self.rotulo.value.strip(), estilo, valor)
@@ -1128,8 +1261,12 @@ class ModalBotao(LoggingModalMixin, discord.ui.Modal):
             and not self.editar_ultimo
         ):
             if len(rascunho.blocos[-1].botoes) >= 5:
-                await interacao.response.send_message(
-                    "❌ Máximo de 5 botões por ActionRow.", ephemeral=True
+                await responder_erro(
+                    interacao,
+                    titulo="Limite de botões atingido",
+                    linhas=[
+                        "Máximo de 5 botões por ActionRow.",
+                    ],
                 )
                 return
             rascunho.blocos[-1].botoes.append(item)
@@ -1162,12 +1299,19 @@ class ModalSelectString(LoggingModalMixin, discord.ui.Modal):
             if bloco is not None:
                 self.placeholder.default = bloco.placeholder_select
                 if bloco.opcoes_select:
-                    lab, val, desc = bloco.opcoes_select[0]
+                    lab, valor, desc = bloco.opcoes_select[0]
                     self.label.default = lab
-                    self.value.default = val
+                    self.value.default = valor
                     self.descricao.default = desc
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Cria, completa ou edita opções de um select textual respeitando seu limite.
+
+        Atualiza a primeira opção ao editar ou acrescenta ao último select em uso,
+        até vinte e cinco alternativas. Ao barrar o excesso antes da montagem,
+        impede que o Discord recuse o card por ultrapassar sua capacidade.
+        """
         rascunho = obter_rascunho(self.painel.id_do_usuario)
         label = self.label.value.strip()
         value = self.value.value.strip()
@@ -1188,8 +1332,12 @@ class ModalSelectString(LoggingModalMixin, discord.ui.Modal):
             self.painel.indice_em_edicao = None
         elif rascunho.blocos and rascunho.blocos[-1].tipo == "select_string":
             if len(rascunho.blocos[-1].opcoes_select) >= 25:
-                await interacao.response.send_message(
-                    "❌ Máximo de 25 opções.", ephemeral=True
+                await responder_erro(
+                    interacao,
+                    titulo="Limite de opções atingido",
+                    linhas=[
+                        "Máximo de 25 opções.",
+                    ],
                 )
                 return
             rascunho.blocos[-1].opcoes_select.append((label, value, desc))
@@ -1228,6 +1376,13 @@ class ModalSelectEspecial(LoggingModalMixin, discord.ui.Modal, title="Select esp
                 self.placeholder.default = bloco.placeholder_select_especial
 
     async def on_submit(self, interacao: discord.Interaction):
+        """
+        Salva a configuração de um select preenchido automaticamente pelo Discord.
+
+        O tipo foi escolhido antes de abrir o modal e o campo atual define apenas o
+        texto de orientação. Aplicar ou anexar o bloco e renovar a prévia separa
+        essas opções dos selects cujas alternativas são digitadas manualmente.
+        """
         novo = BlocoTemplate(
             tipo=self.tipo,
             placeholder_select_especial=self.placeholder.value.strip(),
@@ -1267,8 +1422,16 @@ class ModalRodape(LoggingModalMixin, discord.ui.Modal, title="Rodapé"):
         self.data_hora.default = "sim" if rascunho.rodape_data_hora else "não"
 
     async def on_submit(self, interacao: discord.Interaction):
-        def _sim(v: str) -> bool:
-            return v.strip().lower() in ("sim", "s", "yes", "y", "1")
+        """
+        Atualiza as preferências do rodapé a partir de respostas simples do modal.
+
+        Converte as opções de sim ou não em booleanos e salva texto, nome da guilda
+        e horário no rascunho. A prévia é refeita para que ativar ou desativar o
+        rodapé não deixe separadores antigos no editor.
+        """
+
+        def _sim(valor_do_campo: str) -> bool:
+            return valor_do_campo.strip().lower() in ("sim", "s", "yes", "y", "1")
 
         rascunho = obter_rascunho(self.painel.id_do_usuario)
         rascunho.rodape_ativo = _sim(self.ativo.value)
@@ -1425,22 +1588,33 @@ class TemplatesCog(commands.Cog):
     @grupo.command(name="abrir", description="Abre o painel interativo de templates")
     @apenas_administrador()
     async def abrir(self, interacao: discord.Interaction):
+        """
+        Cria um editor privado e uma prévia separada para o rascunho do administrador.
+
+        As duas mensagens são efêmeras, mas a prévia é armazenada no painel para ser
+        substituída a cada ajuste. Essa separação permite experimentar Components V2
+        sem publicar testes no canal do servidor.
+        """
         obter_rascunho(interacao.user.id)
         painel = PainelTemplatesView(
             interacao.user.id,
             guilda=interacao.guild,
         )
         # 1) Editor (efêmero)
-        await interacao.response.send_message(view=painel, ephemeral=True)
+        await responder_view(
+            interacao,
+            painel,
+            ephemeral=True,
+        )
         painel.mensagem_editor = await interacao.original_response()
 
         # 2) Preview V2 em mensagem separada (editada a cada change)
         rascunho = obter_rascunho(interacao.user.id)
         view_preview = montar_preview(rascunho, interacao.guild)
-        mensagem_preview = await interacao.followup.send(
-            view=view_preview,
+        mensagem_preview = await responder_view(
+            interacao,
+            view_preview,
             ephemeral=True,
-            wait=True,
         )
         painel.mensagem_preview = mensagem_preview
 
@@ -1455,6 +1629,13 @@ class TemplatesCog(commands.Cog):
         interacao: discord.Interaction,
         canal: discord.TextChannel,
     ):
+        """
+        Publica o rascunho atual como uma mensagem persistente no canal escolhido.
+
+        O canal recebido é o destino público, diferente do painel efêmero, e a
+        função confirma sucesso ou explica a falha ao administrador. Assim, o ato
+        de testar o layout permanece separado do ato irreversível de divulgá-lo.
+        """
         await interacao.response.defer(ephemeral=True)
         ok, detalhe = await postar_rascunho_no_canal(
             canal=canal,
@@ -1482,6 +1663,13 @@ class TemplatesCog(commands.Cog):
     @grupo.command(name="preview-dm", description="Envia o preview na sua DM")
     @apenas_administrador()
     async def preview_dm(self, interacao: discord.Interaction):
+        """
+        Envia uma cópia privada do layout para testar como ele aparece fora do painel.
+
+        Monta o mesmo rascunho da guilda, tenta mandar uma mensagem direta e retorna
+        um card temporário com o resultado. Capturar erros de DM evita que a
+        configuração de privacidade do membro pare o comando sem explicação.
+        """
         rascunho = obter_rascunho(interacao.user.id)
         await interacao.response.defer(ephemeral=True)
         preview = montar_preview(rascunho, interacao.guild)
@@ -1501,16 +1689,26 @@ class TemplatesCog(commands.Cog):
     @grupo.command(name="ajuda", description="Mapa do Bot UI Kit no construtor")
     @apenas_administrador()
     async def ajuda(self, interacao: discord.Interaction):
+        """
+        Exibe um guia temporário dos componentes e fluxos suportados pelo construtor.
+
+        A mensagem descreve comandos, tipos de componentes e limites relevantes para
+        que o administrador escolha a ferramenta correta antes de montar ou publicar
+        um card. Ela não altera o rascunho nem envia conteúdo ao canal público.
+        """
         await enviar_card(
             interacao,
             titulo="🧩 Ajuda · Templates / Bot UI Kit",
             linhas=[
                 "`/templates abrir` — painel completo (editor + preview efêmeros).",
-                "`/templates postar #canal` — publica o rascunho **persistente** no canal.",
+                "`/templates postar #canal` — publica o rascunho **persistente** no "
+                "canal.",
                 "No painel: botão **Postar** → escolhe o canal e envia.",
                 "**Mensagem:** TextDisplay, Separator, Section+Thumbnail/Button,",
-                "MediaGallery, File, ActionRow (Button / Select string|user|role|channel).",
-                "**Modal (código):** Label, TextInput, FileUpload, RadioGroup, CheckboxGroup.",
+                "MediaGallery, File, ActionRow (Button / Select "
+                "string|user|role|channel).",
+                "**Modal (código):** Label, TextInput, FileUpload, RadioGroup, "
+                "CheckboxGroup.",
                 "**Rodapé:** texto + servidor + data/hora.",
                 "Botão **Ajuda API** no painel mostra hierarquia e limites.",
             ],
@@ -1520,4 +1718,5 @@ class TemplatesCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra o construtor visual para disponibilizar seus comandos no Discord."""
     await bot.add_cog(TemplatesCog(bot))

@@ -14,7 +14,7 @@ from discord.ext import commands
 from sqlalchemy import select
 
 from src.config import CANAIS
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.utils.mensagens import (
     responder_erro,
@@ -127,6 +127,11 @@ class Guia(commands.Cog):
     )
     @apenas_administrador()
     async def painel_boas_vindas(self, interacao: discord.Interaction):
+        """Republica as boas-vindas usando a interface persistente já carregada.
+
+        Delega à rotina comum para atualizar a referência no banco junto com a
+        nova mensagem, evitando que um painel republicado fique sem manutenção.
+        """
         await self._publicar_painel(
             interacao,
             nome_do_painel="boas_vindas",
@@ -141,6 +146,11 @@ class Guia(commands.Cog):
     )
     @apenas_administrador()
     async def painel_tutoriais(self, interacao: discord.Interaction):
+        """Republica os tutoriais usando a interface persistente já carregada.
+
+        Delega à rotina comum para atualizar a referência no banco junto com a
+        nova mensagem, evitando que um painel republicado fique sem manutenção.
+        """
         await self._publicar_painel(
             interacao,
             nome_do_painel="tutoriais",
@@ -151,4 +161,5 @@ class Guia(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Adiciona ao bot os comandos administrativos do Guia do Estagiário."""
     await bot.add_cog(Guia(bot))

@@ -19,9 +19,12 @@ from src.ausencia.ausencia_panel import (
 )
 from src.ausencia.ausencia_setup import garantir_painel_ausencia
 from src.config import CANAIS
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
-from src.utils.mensagens import responder_sucesso
+from src.utils.mensagens import (
+    responder_erro,
+    responder_sucesso,
+)
 from src.utils.permissions import is_authorized
 
 
@@ -37,8 +40,20 @@ class AusenciaCogs(commands.Cog):
     )
     @app_commands.default_permissions(administrator=True)
     async def painel_ausencia(self, interacao: discord.Interaction):
+        """Força uma nova publicação do painel sem duplicar seu registro de controle.
+
+        Remove a referência persistida anterior antes de chamar a garantia de
+        publicação. Isso é útil para recuperar um painel apagado ou atualizado,
+        mantendo a mensagem de confirmação visível apenas ao administrador.
+        """
         if not is_authorized(interacao.user):
-            await interacao.response.send_message("Sem permissão.", ephemeral=True)
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "Sem permissão.",
+                ],
+            )
             return
         await interacao.response.defer(ephemeral=True)
 
@@ -108,4 +123,5 @@ class AusenciaCogs(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Adiciona ao bot os comandos e listeners persistentes de ausência."""
     await bot.add_cog(AusenciaCogs(bot))

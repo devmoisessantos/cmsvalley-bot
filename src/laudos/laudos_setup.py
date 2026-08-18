@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from sqlalchemy import select
 
@@ -9,9 +11,11 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.laudos.laudos_panel import PainelLaudosLayout
+
+registrador = logging.getLogger(__name__)
 
 
 async def garantir_painel_laudos(
@@ -29,7 +33,7 @@ async def garantir_painel_laudos(
 
         canal = bot.get_channel(CANAIS.get("CANAL_PAINEL_LAUDOS", 0))
         if canal is None:
-            print("❌ Canal CANAL_PAINEL_LAUDOS não encontrado.")
+            registrador.error("❌ Canal CANAL_PAINEL_LAUDOS não encontrado.")
             return
 
         if interacao and interacao.guild:
@@ -37,7 +41,7 @@ async def garantir_painel_laudos(
         else:
             guilda = bot.get_guild(int(GUILD_ID))
         if guilda is None:
-            print("❌ Guild não encontrada ao publicar painel de laudos.")
+            registrador.error("❌ Guild não encontrada ao publicar painel de laudos.")
             return
 
         view = PainelLaudosLayout(guild=guilda)
@@ -50,4 +54,4 @@ async def garantir_painel_laudos(
             )
         )
         await sessao.commit()
-        print(f"✅ Painel de Laudos postado no canal #{canal.name}.")
+        registrador.info(f"✅ Painel de Laudos postado no canal #{canal.name}.")

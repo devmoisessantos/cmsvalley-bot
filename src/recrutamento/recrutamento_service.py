@@ -1,4 +1,22 @@
 # src/services/recrutamento_service.py
+"""
+As regras do recrutamento: abrir, cancelar e encontrar candidaturas.
+
+As duas listas do topo
+----------------------
+- STATUS_RECRUTAMENTO_ATIVOS diz quais situacoes contam como "ainda em
+  andamento". E o que impede a mesma pessoa de abrir duas candidaturas.
+- NOMES_CARGOS_RECRUTAMENTO_SENSIVEIS lista os cargos que exigem conferencia
+  extra antes de serem entregues.
+
+`candidato_tem_fluxo_incompleto` existe porque uma candidatura pode parar no
+meio do caminho. Sem essa conferencia, a pessoa ficaria travada para sempre, sem
+poder recomecar.
+
+`cancelar_por_saida_do_servidor` fecha a candidatura de quem saiu do Discord, em
+vez de deixar ficha aberta de gente que nao esta mais la.
+"""
+
 from datetime import (
     datetime,
     timezone,
@@ -14,17 +32,24 @@ from src.config import (
     CANAIS,
     CARGOS,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     EstadoPlantao,
     Recrutamento,
     RespostaProva,
     Usuario,
 )
-from src.recrutamento.recrutamento_logs import NovoRecrutamentoLog
+from src.recrutamento.recrutamento_logger import NovoRecrutamentoLog
+from src.utils.error_handling import capturar_erro_e_logar, ignorar_falha_cosmetica
 from src.utils.logger import log_mudanca_cargo
+from src.utils.mensagens import (
+    responder_aviso,
+    responder_erro,
+    responder_sucesso,
+)
 
-# Status que ainda contam como processo em andamento (travam novo início se não cancelar)
+# Status que ainda contam como processo em andamento (travam novo início se não
+# cancelar)
 STATUS_RECRUTAMENTO_ATIVOS = (
     "ESTUDANDO",
     "PROVA_LIBERADA",
@@ -128,9 +153,9 @@ async def cancelar_recrutamento_ativo(
             )
 
         await session.commit()
-        # Detach values we need after session closes
+        # Guardamos o id em uma variavel porque, depois que a sessao fecha,
+        # ler atributos do objeto recrutamento lancaria erro de objeto expirado.
         recrutamento_id = recrutamento.id
-        status_final = recrutamento.status
 
     # Ajuste de cargos no Discord (fora da sessão)
     if guild is not None:
@@ -153,12 +178,33 @@ async def cancelar_recrutamento_ativo(
                                 guild,
                                 candidato=membro,
                                 executor=executor,
-                                cargos_removidos=[c.mention for c in cargos_remover],
+                                cargos_removidos=[
+                                    cargo.mention for cargo in cargos_remover
+                                ],
                             )
-                        except Exception:
-                            pass
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+                        except Exception as erro_ao_logar_cargos:
+                            # Os cargos JA foram removidos do membro. O que
+                            # falhou foi escrever o registro no canal de log.
+                            # Isso importa para auditoria, entao vai como erro.
+                            await capturar_erro_e_logar(
+                                erro_ao_logar_cargos,
+                                contexto=(
+                                    "registrar no log a remocao de cargos do "
+                                    f"membro {membro.id} no cancelamento do "
+                                    "recrutamento"
+                                ),
+                                guilda=guild,
+                            )
+                except (
+                    discord.Forbidden,
+                    discord.HTTPException,
+                ) as erro_em_cancelar_recrutamento_ativo:
+                    # Enfeite que falhou: avisar o candidato por mensagem direta.
+                    # A acao principal ja tinha dado certo, entao so registro.
+                    ignorar_falha_cosmetica(
+                        erro_em_cancelar_recrutamento_ativo,
+                        o_que_falhou="avisar o candidato por mensagem direta",
+                    )
 
             # Garante Visitantes se ainda for fluxo de entrada
             cargo_visitante = guild.get_role(CARGOS.get("Visitantes", 0))
@@ -168,8 +214,16 @@ async def cancelar_recrutamento_ativo(
                         cargo_visitante,
                         reason="Recrutamento cancelado — mantém Visitantes",
                     )
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+                except (
+                    discord.Forbidden,
+                    discord.HTTPException,
+                ) as erro_em_cancelar_recrutamento_ativo:
+                    # Enfeite que falhou: avisar o candidato por mensagem direta.
+                    # A acao principal ja tinha dado certo, entao so registro.
+                    ignorar_falha_cosmetica(
+                        erro_em_cancelar_recrutamento_ativo,
+                        o_que_falhou="avisar o candidato por mensagem direta",
+                    )
 
     # Re-fetch for return
     async with async_session() as session:
@@ -200,6 +254,13 @@ async def validar_e_iniciar_recrutamento(
     recrutador: discord.Member,
     id_fivem: str,
 ):
+    """Inicia um fluxo válido, recuperando com segurança tentativas interrompidas.
+
+    Confere WhiteList, aprovação anterior, espera após reprovação e conflito do
+    ID FiveM. Processos ativos anteriores são cancelados para não prender o
+    candidato após uma falha, enquanto os novos dados são gravados no banco e
+    os cargos e logs correspondentes são atualizados no Discord.
+    """
     await interaction.response.defer(ephemeral=True)
 
     guild = interaction.guild
@@ -210,15 +271,22 @@ async def validar_e_iniciar_recrutamento(
 
     # Validações do fluxo
     if cargo_visitante not in candidato.roles:
-        await interaction.followup.send(
-            "❌ Este membro não possui o cargo Visitantes (não concluiu a WhiteList).",
-            ephemeral=True,
+        await responder_erro(
+            interaction,
+            titulo="Cargo ausente no membro",
+            linhas=[
+                "Este membro não possui o cargo Visitantes (não concluiu a WhiteList).",
+            ],
         )
         return
 
     if cargo_hp in candidato.roles or cargo_aprovado in candidato.roles:
-        await interaction.followup.send(
-            "❌ Este membro já foi aprovado anteriormente.", ephemeral=True
+        await responder_erro(
+            interaction,
+            titulo="Candidato já aprovado",
+            linhas=[
+                "Este membro já foi aprovado anteriormente.",
+            ],
         )
         return
 
@@ -240,9 +308,13 @@ async def validar_e_iniciar_recrutamento(
             tempo_passado = datetime.now(timezone.utc) - usuario.data_ultima_reprovacao
             if tempo_passado.total_seconds() < 24 * 3600:
                 horas_restantes = 24 - (tempo_passado.total_seconds() / 3600)
-                await interaction.followup.send(
-                    f"❌ Este candidato precisa aguardar mais {horas_restantes:.1f}h para tentar novamente.",
-                    ephemeral=True,
+                await responder_erro(
+                    interaction,
+                    titulo="Ainda em período de espera",
+                    linhas=[
+                        f"Este candidato precisa aguardar mais {horas_restantes:.1f}h "
+                        f"para tentar novamente.",
+                    ],
                 )
                 return
 
@@ -279,10 +351,14 @@ async def validar_e_iniciar_recrutamento(
         conflito = resultado_duplicidade.scalar_one_or_none()
 
         if conflito is not None:
-            await interaction.followup.send(
-                f"⚠️ O ID FiveM `{id_fivem}` já está associado a <@{conflito.discord_id_candidato}>. "
-                f"Confira se digitou o ID correto antes de continuar.",
-                ephemeral=True,
+            await responder_aviso(
+                interaction,
+                titulo="Já em andamento",
+                linhas=[
+                    f"O ID FiveM `{id_fivem}` já está associado a "
+                    f"<@{conflito.discord_id_candidato}>. "
+                    f"Confira se digitou o ID correto antes de continuar.",
+                ],
             )
             return
 
@@ -308,21 +384,35 @@ async def validar_e_iniciar_recrutamento(
                 *cargos_limpar,
                 reason="Limpeza de cargo de prova de recrutamento anterior",
             )
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+        except (
+            discord.Forbidden,
+            discord.HTTPException,
+        ) as erro_em_validar_e_iniciar_recrutamento:
+            # Enfeite que falhou: avisar o candidato por mensagem direta.
+            # A acao principal ja tinha dado certo, entao so registro.
+            ignorar_falha_cosmetica(
+                erro_em_validar_e_iniciar_recrutamento,
+                o_que_falhou="avisar o candidato por mensagem direta",
+            )
 
     await candidato.add_roles(
         cargo_estudante,
         reason=f"Recrutamento iniciado por {recrutador}",
     )
 
-    # 👇 Responde AO USUÁRIO primeiro — isso garante que ele vê o sucesso mesmo se o log falhar depois
-    await interaction.followup.send(
-        f"✅ Recrutamento iniciado para {candidato.mention}. Cargo Estudante aplicado.",
-        ephemeral=True,
+    # 👇 Responde AO USUÁRIO primeiro — isso garante que ele vê o sucesso mesmo se o log
+    # falhar depois
+    await responder_sucesso(
+        interaction,
+        titulo="Recrutamento iniciado",
+        linhas=[
+            f"Recrutamento iniciado para {candidato.mention}. Cargo Estudante "
+            f"aplicado.",
+        ],
     )
 
-    # 👇 Logs vêm DEPOIS, protegidos por try/except — falha aqui não derruba a experiência do recrutador
+    # 👇 Logs vêm DEPOIS, protegidos por try/except — falha aqui não derruba a
+    # experiência do recrutador
     try:
         await log_mudanca_cargo(
             guild,

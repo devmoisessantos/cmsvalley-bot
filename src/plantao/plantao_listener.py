@@ -1,3 +1,16 @@
+"""
+Ouvinte que cronometra o plantao pela entrada e saida na call de voz.
+
+O Discord avisa este arquivo toda vez que alguem entra, sai ou muda de canal de
+voz. Ele confere duas coisas antes de contar tempo: se o canal e um canal de
+plantao (`_canal_e_valido`) e se a pessoa esta em estado que conta tempo
+(`_voice_conta_tempo`) — quem esta com o microfone desligado pelo servidor, por
+exemplo, nao esta trabalhando.
+
+Sem essas duas conferencias, entrar em qualquer call do servidor viraria hora
+paga.
+"""
+
 from datetime import (
     datetime,
     timezone,
@@ -8,7 +21,7 @@ from discord.ext import commands
 from sqlalchemy import select
 
 from src.config import obter_todos_ids_canais_plantao
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_logger import registrar_evento_plantao
 from src.plantao.plantao_service import (
@@ -46,6 +59,12 @@ class PlantaoListener(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ):
+        """Sincroniza o plantão com entradas, saídas e pausas nas calls válidas.
+
+        Grava no banco apenas mudanças que afetam a elegibilidade de tempo e moedas,
+        além de registrar eventos de auditoria. Distinguir troca de canal de ficar
+        surdo impede conceder moedas enquanto o membro não participa da chamada.
+        """
         estava_em_call_valida = _canal_e_valido(before.channel)
         esta_em_call_valida = _canal_e_valido(after.channel)
 
@@ -204,4 +223,5 @@ class PlantaoListener(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra o observador de voz que mantém o estado de plantão atualizado."""
     await bot.add_cog(PlantaoListener(bot))

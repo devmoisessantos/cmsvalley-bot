@@ -11,12 +11,14 @@ from src.config import CANAIS
 from src.demissao.demissao_panel import (
     CUSTOM_ID_APROVAR,
     CUSTOM_ID_REPROVAR,
-    CUSTOM_ID_SOLICITAR,
     PainelDemissaoLayout,
     processar_decisao_demissao,
 )
 from src.demissao.demissao_setup import garantir_painel_demissao
-from src.utils.mensagens import responder_sucesso
+from src.utils.mensagens import (
+    responder_erro,
+    responder_sucesso,
+)
 from src.utils.permissions import is_authorized
 
 
@@ -32,9 +34,19 @@ class DemissaoCogs(commands.Cog):
     )
     @app_commands.default_permissions(administrator=True)
     async def painel_demissao(self, interacao: discord.Interaction):
+        """Força a publicação de uma nova referência para o painel de desligamento.
+
+        Confere a autorização e remove do banco a referência anterior antes de
+        chamar o publicador idempotente. Isso evita que uma mensagem antiga seja
+        mantida como painel ativo depois de uma republicação administrativa.
+        """
         if not is_authorized(interacao.user):
-            await interacao.response.send_message(
-                "Sem permissão.", ephemeral=True
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "Sem permissão.",
+                ],
             )
             return
         await interacao.response.defer(ephemeral=True)
@@ -42,7 +54,7 @@ class DemissaoCogs(commands.Cog):
         # se já existe, só informa.
         from sqlalchemy import select
 
-        from src.database.connection import async_session
+        from src.database.conexao import async_session
         from src.database.models import PainelPostado
 
         async with async_session() as sessao:
@@ -93,4 +105,5 @@ class DemissaoCogs(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra os comandos e a visualização persistente de desligamento."""
     await bot.add_cog(DemissaoCogs(bot))

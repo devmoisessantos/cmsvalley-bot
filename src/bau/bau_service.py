@@ -16,7 +16,7 @@ from sqlalchemy import (
     select,
 )
 
-from src.bau.bau_parse import (
+from src.bau.bau_leitura_service import (
     LogBauParseado,
     parsear_mensagem_log_bau,
 )
@@ -30,13 +30,14 @@ from src.config import (
     TOLERANCIA_EXTRA_BAU,
     VERBAIS_PARA_ADV1_BAU,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     AdvertenciaVerbalBau,
     CasoBau,
     ConfigBau,
     ContadorItemBau,
 )
+from src.utils.error_handling import ignorar_falha_cosmetica
 
 # Status em que o caso ainda está aberto (botões ativos conforme regras)
 STATUS_ABERTOS_BAU = ("AGUARDANDO", "GRAVE", "PRAZO_ESTOURADO")
@@ -58,12 +59,23 @@ async def obter_tolerancia_extra() -> int:
         if registro is not None:
             try:
                 return max(0, int(registro.valor))
-            except ValueError:
-                pass
+            except ValueError as erro_em_obter_tolerancia_extra:
+                # Enfeite que falhou: ler a tolerancia extra salva.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_obter_tolerancia_extra,
+                    o_que_falhou="ler a tolerancia extra salva",
+                )
     return int(TOLERANCIA_EXTRA_BAU)
 
 
 async def obter_limites_camada_1() -> dict[str, int]:
+    """Combina os limites diários padrão com substituições salvas no banco.
+
+    Parte da configuração estática para que o monitor continue tendo valores
+    válidos sem registros administrativos. Valores persistidos com a chave da
+    primeira camada substituem apenas seus itens correspondentes.
+    """
     limites = dict(LIMITES_BAU_CAMADA_1)
     async with async_session() as sessao:
         resultado = await sessao.execute(select(ConfigBau))
@@ -78,6 +90,11 @@ async def obter_limites_camada_1() -> dict[str, int]:
 
 
 async def obter_limites_camada_2() -> dict[str, int]:
+    """Combina os limites graves padrão com substituições salvas no banco.
+
+    Mantém a base configurada no projeto e aplica somente as chaves de segunda
+    camada válidas, ignorando valores persistidos que não possam virar número.
+    """
     limites = dict(LIMITES_BAU_CAMADA_2)
     async with async_session() as sessao:
         resultado = await sessao.execute(select(ConfigBau))
@@ -97,6 +114,12 @@ async def salvar_config_bau(
     *,
     atualizado_por: int | None = None,
 ) -> None:
+    """Cria ou atualiza uma opção administrativa do baú no banco.
+
+    Além do valor textual, guarda quem realizou a mudança e o instante da
+    atualização. Isso permite que os painéis sobrescrevam a configuração sem
+    perder a rastreabilidade da decisão.
+    """
     async with async_session() as sessao:
         registro = await sessao.get(ConfigBau, chave)
         if registro is None:
@@ -112,7 +135,9 @@ async def salvar_config_bau(
 def quantidade_dispara_alerta(
     quantidade: int, limite_diario: int, tolerancia: int
 ) -> bool:
-    """True só se passou de limite + tolerância (ex.: limite 1, tol 1 → alerta em 3+)."""
+    """
+    True só se passou de limite + tolerância (ex.: limite 1, tol 1 → alerta em 3+).
+    """
     return quantidade > (limite_diario + tolerancia)
 
 
@@ -129,7 +154,9 @@ def chave_ciclo_atual(referencia: datetime | None = None) -> str:
 
 
 async def resolver_discord_id(id_fivem: str) -> int | None:
-    """Resolve Discord ID a partir do passaporte FiveM (Usuario → Plantão → Recrutamento)."""
+    """
+    Resolve Discord ID a partir do passaporte FiveM (Usuario → Plantão → Recrutamento).
+    """
     from src.database.models import (
         EstadoPlantao,
         Recrutamento,
@@ -177,7 +204,9 @@ async def aplicar_movimento_item(
     delta: int,
     ciclo: str,
 ) -> int:
-    """Soma (ou subtrai) no contador do ciclo. Retorna quantidade líquida após update."""
+    """
+    Soma (ou subtrai) no contador do ciclo. Retorna quantidade líquida após update.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(ContadorItemBau).where(
@@ -227,6 +256,7 @@ def ler_itens_do_caso(caso: CasoBau | None) -> dict[str, int]:
 
 
 def serializar_itens(mapa_itens: dict[str, int]) -> str:
+    """Converte apenas dívidas positivas em JSON estável para persistência."""
     limpo = {chave: int(valor) for chave, valor in mapa_itens.items() if int(valor) > 0}
     return json.dumps(limpo, ensure_ascii=False, sort_keys=True)
 
@@ -243,6 +273,11 @@ def formatar_bloco_itens_yaml(mapa_itens: dict[str, int]) -> str:
 
 
 def caso_tem_item_grave(mapa_itens: dict[str, int], limites_2: dict[str, int]) -> bool:
+    """Indica se alguma dívida já atingiu o limite que exige tratamento grave.
+
+    Itens sem limite de segunda camada não são considerados, evitando elevar a
+    gravidade de uma ocorrência só porque ela possui muitos tipos de item.
+    """
     for item, quantidade in mapa_itens.items():
         limite_2 = limites_2.get(item)
         if limite_2 is not None and quantidade >= limite_2:
@@ -269,6 +304,11 @@ async def buscar_caso_aberto_por_passaporte(id_fivem: str) -> CasoBau | None:
 async def buscar_caso_aberto(
     id_fivem: str, item_canonico: str | None = None
 ) -> CasoBau | None:
+    """Mantém compatibilidade e busca o caso aberto pelo passaporte.
+
+    O parâmetro de item permanece aceito para não quebrar chamadas antigas,
+    embora os casos atuais agreguem todas as dívidas de uma mesma pessoa.
+    """
     return await buscar_caso_aberto_por_passaporte(id_fivem)
 
 
@@ -347,6 +387,11 @@ async def abrir_ou_atualizar_caso(
 
 
 async def marcar_dm_resultado(caso_id: int, *, falhou: bool) -> None:
+    """Registra no banco se o aviso direto do caso alcançou o membro.
+
+    Não falha quando o caso já não existe, pois o envio da mensagem pode correr
+    em paralelo com sua resolução. A data também permite auditar a tentativa.
+    """
     async with async_session() as sessao:
         caso = await sessao.get(CasoBau, caso_id)
         if caso is None:
@@ -358,6 +403,11 @@ async def marcar_dm_resultado(caso_id: int, *, falhou: bool) -> None:
 
 
 async def salvar_message_alerta(caso_id: int, message_id: int) -> None:
+    """Guarda o identificador do alerta para que atualizações editem o mesmo card.
+
+    Ignora casos removidos entre a publicação e a gravação, evitando que uma
+    condição de corrida interrompa o processamento dos demais logs.
+    """
     async with async_session() as sessao:
         caso = await sessao.get(CasoBau, caso_id)
         if caso is None:
@@ -373,6 +423,12 @@ async def resolver_caso(
     status: str = "RESOLVIDO",
     motivo_ignore: str | None = None,
 ) -> CasoBau | None:
+    """Fecha ou ignora um caso e registra a pessoa responsável no banco.
+
+    Permite informar um estado diferente de resolvido e um motivo de ignorar,
+    truncado para caber no campo persistido. Retorna o caso atualizado ou
+    `None` se ele já não existir.
+    """
     async with async_session() as sessao:
         caso = await sessao.get(CasoBau, caso_id)
         if caso is None:
@@ -389,6 +445,11 @@ async def resolver_caso(
 
 
 async def contar_verbais(id_fivem: str) -> int:
+    """Conta as verbais anteriores do passaporte para decidir uma escalada.
+
+    Consulta somente registros do tipo verbal, para que advertências escaladas
+    não sejam contadas novamente e alterem a regra de reincidência.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(func.count())
@@ -410,7 +471,9 @@ async def aplicar_verbal_automatica(caso: CasoBau) -> tuple[str, AdvertenciaVerb
     qtd_verbais = await contar_verbais(caso.id_fivem)
     mapa_itens = ler_itens_do_caso(caso)
     resumo_itens = (
-        ", ".join(f"{item} x{qtd}" for item, qtd in sorted(mapa_itens.items()))
+        ", ".join(
+            f"{item} x{quantidade}" for item, quantidade in sorted(mapa_itens.items())
+        )
         or caso.item_canonico
     )
 
@@ -625,4 +688,5 @@ async def processar_log_parseado(
 
 
 def parsear_conteudo(conteudo: str) -> LogBauParseado | None:
+    """Interpreta o texto do log usando os aliases configurados para o baú."""
     return parsear_mensagem_log_bau(conteudo, ALIASES_ITENS_BAU)

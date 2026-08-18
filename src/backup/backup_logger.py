@@ -8,11 +8,15 @@ Se o canal não existir ou o bot não puder escrever, registra no console.
 
 from __future__ import annotations
 
+import logging
+
 import discord
 
 from src.config import CANAIS
 from src.utils.log_container import LogContainerView
 from src.utils.mensagens import COR_INFO
+
+registrador = logging.getLogger(__name__)
 
 
 class BackupLogger:
@@ -62,15 +66,15 @@ class BackupLogger:
             try:
                 await canal.send(view=view_do_log)
             except discord.Forbidden:
-                print(
+                registrador.error(
                     f"[AVISO] Sem permissão para enviar no canal "
                     f"{self.mencao_do_canal()}"
                 )
         else:
-            print(
+            registrador.error(
                 f"[AVISO] Canal de log {self.mencao_do_canal()} "
                 f"não encontrado em {guild.name}"
             )
 
         trecho_no_console = (descricao or "")[:200]
-        print(f"[LOG] {titulo}: {trecho_no_console}")
+        registrador.info(f"[LOG] {titulo}: {trecho_no_console}")

@@ -18,10 +18,9 @@ from sqlalchemy import (
 )
 
 from src.config import (
-    MESES_ABREV,
     TIMEZONE_LOCAL,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     Laudo,
     RankingHistorico,
@@ -33,6 +32,10 @@ from src.recrutamento.ranking_service import (
     obter_periodo_postagem_mensal,
     obter_periodo_postagem_semanal,
 )
+from src.utils.formatacao import (
+    formatar_data_curta,
+    formatar_mes_e_ano,
+)
 
 
 def _fuso() -> ZoneInfo:
@@ -40,13 +43,13 @@ def _fuso() -> ZoneInfo:
 
 
 def _formatar_data_curta(momento: datetime) -> str:
-    local = momento.astimezone(_fuso())
-    return f"{local.day:02d}/{local.month:02d}"
+    """Data curta DD/MM. Delega para o formatador comum do projeto."""
+    return formatar_data_curta(momento)
 
 
 def _formatar_mes_ano(momento: datetime) -> str:
-    local = momento.astimezone(_fuso())
-    return f"{MESES_ABREV[local.month]}/{local.year}"
+    """Mes abreviado com ano. Delega para o formatador comum do projeto."""
+    return formatar_mes_e_ano(momento)
 
 
 def _medalha(posicao: int) -> str:
@@ -113,6 +116,12 @@ def montar_view_ranking_laudos(
     periodo: str,
     guild: discord.Guild | None = None,
 ) -> tuple[discord.ui.LayoutView, int]:
+    """Constrói o card de ranking e calcula seu total de laudos.
+
+    Agrupa empates na mesma posição para que pessoas com a mesma produção
+    recebam a mesma medalha. O período muda título, cor e subtítulo, enquanto a
+    guilda é opcional para permitir gerar a visualização fora do Discord.
+    """
     if periodo == "mensal":
         titulo = "🧠 **RANKING MENSAL DE LAUDOS**"
         subtitulo = (
@@ -204,6 +213,12 @@ async def gerar_view_ranking_laudos(
     referencia: datetime | None = None,
     modo_postagem: bool = False,
 ) -> tuple[discord.ui.LayoutView, dict[int, int], datetime, datetime, int]:
+    """Obtém a contagem do período e devolve todos os dados para publicação.
+
+    O modo de postagem escolhe um intervalo fechado para registrar o ranking,
+    enquanto o padrão mostra o ciclo em andamento. Retorna a view, contagem,
+    início, fim e total para evitar recalcular dados em quem chama.
+    """
     inicio, fim, periodo_view = _periodos(periodo, referencia, modo_postagem)
     contagem = await contar_laudos_por_psicologo(inicio, fim)
     view, total = montar_view_ranking_laudos(
@@ -248,6 +263,11 @@ async def salvar_historico_laudos(
 
 
 async def listar_historico_laudos(limite: int = 10) -> list[RankingHistorico]:
+    """Lista os rankings de laudos mais recentes sem misturar outros domínios.
+
+    O limite evita carregar todo o histórico administrativo e a ordenação
+    descendente faz o primeiro resultado corresponder à publicação mais nova.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(RankingHistorico)

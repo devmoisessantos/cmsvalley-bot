@@ -18,7 +18,7 @@ from src.config import (
     CARGOS_DIRETORIA,
     CARGOS_HIERARQUIA,
 )
-from src.database.connection import async_session
+from src.database.conexao import async_session
 from src.database.models import (
     SolicitacaoAusencia,
     Usuario,
@@ -46,6 +46,7 @@ CARGOS_MANTER_AUSENCIA = (
 
 
 def cargo_atual_hierarquia(membro: discord.Member) -> str:
+    """Identifica o primeiro cargo hierárquico configurado para registrar o contexto."""
     nomes = {cargo.name for cargo in membro.roles}
     for nome in CARGOS_HIERARQUIA:
         if nome in nomes:
@@ -54,6 +55,7 @@ def cargo_atual_hierarquia(membro: discord.Member) -> str:
 
 
 def membro_e_diretoria(membro: discord.Member) -> bool:
+    """Confere a Diretoria por nomes configurados, não pela posição do cargo."""
     nomes = {cargo.name for cargo in membro.roles}
     return bool(nomes.intersection(set(CARGOS_DIRETORIA)))
 
@@ -80,6 +82,7 @@ def calcular_datas_periodo(
 
 
 async def obter_id_fivem(discord_id: int) -> str | None:
+    """Lê o FiveM salvo no cadastro sem obrigar a existência prévia do usuário."""
     async with async_session() as sessao:
         usuario = await sessao.get(Usuario, discord_id)
         if usuario is None:
@@ -88,6 +91,7 @@ async def obter_id_fivem(discord_id: int) -> str | None:
 
 
 async def obter_pedido_pendente(discord_id: int) -> SolicitacaoAusencia | None:
+    """Localiza pendência recente para impedir pedidos simultâneos do mesmo membro."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoAusencia)
@@ -117,6 +121,7 @@ async def obter_ausencia_ativa(discord_id: int) -> SolicitacaoAusencia | None:
 
 
 async def obter_retorno_pendente(discord_id: int) -> SolicitacaoAusencia | None:
+    """Localiza retorno em análise para evitar restaurar cargos mais de uma vez."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoAusencia)
@@ -131,17 +136,19 @@ async def obter_retorno_pendente(discord_id: int) -> SolicitacaoAusencia | None:
 
 
 def serializar_cargos(membro: discord.Member) -> tuple[str, str]:
-    ids = [r.id for r in membro.roles if r != membro.guild.default_role]
-    nomes = [r.name for r in membro.roles if r != membro.guild.default_role]
+    """Guarda IDs e nomes dos cargos para permitir recuperação após a ausência."""
+    ids = [cargo.id for cargo in membro.roles if cargo != membro.guild.default_role]
+    nomes = [cargo.name for cargo in membro.roles if cargo != membro.guild.default_role]
     return json.dumps(ids), json.dumps(nomes, ensure_ascii=False)
 
 
 def deserializar_cargos_ids(texto: str | None) -> list[int]:
+    """Recupera IDs válidos sem propagar JSON corrompido na restauração de cargos."""
     if not texto:
         return []
     try:
         dados = json.loads(texto)
-        return [int(x) for x in dados if x is not None]
+        return [int(id_de_cargo) for id_de_cargo in dados if id_de_cargo is not None]
     except (json.JSONDecodeError, TypeError, ValueError):
         return []
 
@@ -172,6 +179,12 @@ async def criar_solicitacao(
     data_fim: datetime,
     motivo: str,
 ) -> SolicitacaoAusencia:
+    """Cria uma solicitação pendente com o retrato de cargos do membro.
+
+    Salva o FiveM, o cargo hierárquico e os cargos completos antes de qualquer
+    remoção no Discord. Esse retrato é indispensável para restaurar corretamente
+    a posição do membro caso o retorno seja aprovado.
+    """
     ids_json, nomes_json = serializar_cargos(membro)
     id_fivem = await obter_id_fivem(membro.id)
     cargo = cargo_atual_hierarquia(membro)
@@ -205,6 +218,7 @@ async def marcar_mensagem_pedido(
     canal_id: int,
     mensagem_id: int,
 ) -> None:
+    """Vincula ao pedido a mensagem administrativa que deverá ser atualizada depois."""
     async with async_session() as sessao:
         registro = await sessao.get(SolicitacaoAusencia, solicitacao_id)
         if registro is None:
@@ -216,6 +230,7 @@ async def marcar_mensagem_pedido(
 
 
 async def obter_solicitacao(solicitacao_id: int) -> SolicitacaoAusencia | None:
+    """Obtém o pedido pela chave sem falhar quando ele foi removido."""
     async with async_session() as sessao:
         return await sessao.get(SolicitacaoAusencia, solicitacao_id)
 
@@ -305,14 +320,16 @@ async def aplicar_cargos_ausencia(
 
     roles_manter: list[discord.Role] = []
     for nome in CARGOS_MANTER_AUSENCIA:
-        rid = CARGOS.get(nome)
-        if rid:
-            role = guilda.get_role(rid)
+        id_do_cargo = CARGOS.get(nome)
+        if id_do_cargo:
+            role = guilda.get_role(id_do_cargo)
             if role is not None:
                 roles_manter.append(role)
 
     if not any(
-        r.name == "🚫 Ausente" or r.id == CARGOS.get("🚫 Ausente") for r in roles_manter
+        cargo_a_manter.name == "🚫 Ausente"
+        or cargo_a_manter.id == CARGOS.get("🚫 Ausente")
+        for cargo_a_manter in roles_manter
     ):
         rid_ausente = CARGOS.get("🚫 Ausente")
         if rid_ausente:
@@ -320,7 +337,9 @@ async def aplicar_cargos_ausencia(
             if role_a:
                 roles_manter.append(role_a)
 
-    ids_manter = {guilda.default_role.id} | {r.id for r in roles_manter}
+    ids_manter = {guilda.default_role.id} | {
+        cargo_a_manter.id for cargo_a_manter in roles_manter
+    }
     cargos_para_remover: list[discord.Role] = []
     for cargo in list(membro.roles):
         if cargo.id in ids_manter:
@@ -365,10 +384,10 @@ async def restaurar_cargos_ausencia(
     id_ausente = CARGOS.get("🚫 Ausente")
 
     roles_para_adicionar: list[discord.Role] = []
-    for rid in ids_salvos:
-        if id_ausente and rid == id_ausente:
+    for id_do_cargo in ids_salvos:
+        if id_ausente and id_do_cargo == id_ausente:
             continue
-        role = guilda.get_role(rid)
+        role = guilda.get_role(id_do_cargo)
         if role is None:
             continue
         if role.managed:

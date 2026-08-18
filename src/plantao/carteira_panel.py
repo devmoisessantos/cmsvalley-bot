@@ -25,6 +25,8 @@ from src.recrutamento.recrutamento_service import resolver_id_fivem
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
+    capturar_erro_e_logar,
+    ignorar_falha_cosmetica,
 )
 from src.utils.formatacao import (
     formatar_dinheiro,
@@ -34,9 +36,11 @@ from src.utils.mensagens import (
     COR_AVISO,
     COR_ERRO,
     COR_SUCESSO,
+    editar_mensagem_original,
     responder_aviso,
     responder_erro,
     responder_sucesso,
+    responder_view,
 )
 from src.utils.notificacao import enviar_dm_card
 
@@ -95,7 +99,7 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
             "Use os botões abaixo para movimentar suas moedas."
         )
         linha = discord.ui.ActionRow()
-        for label, emoji, style, callback, cid in (
+        for label, emoji, style, funcao_ao_clicar, cid in (
             (
                 "Transferir",
                 "💸",
@@ -131,7 +135,7 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
                 style=style,
                 custom_id=cid,
             )
-            botao.callback = callback
+            botao.callback = funcao_ao_clicar
             linha.add_item(botao)
 
         self.add_item(
@@ -169,8 +173,9 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Você não tem saldo para transferir."],
             )
             return
-        await interacao.response.send_message(
-            view=ViewSelecionarDestinoTransferencia(
+        await responder_view(
+            interacao,
+            ViewSelecionarDestinoTransferencia(
                 remetente_id=self.membro_id,
                 saldo=self.saldo,
             ),
@@ -185,8 +190,9 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Só quem abriu o painel pode usar os botões."],
             )
             return
-        await interacao.response.send_message(
-            view=ViewIntroDeposito(
+        await responder_view(
+            interacao,
+            ViewIntroDeposito(
                 membro_id=self.membro_id,
                 saldo=self.saldo,
             ),
@@ -236,7 +242,11 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
                 accent_color=discord.Color.blurple(),
             )
         )
-        await interacao.followup.send(view=view, ephemeral=True)
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
 
     async def _ao_trocar(self, interacao: discord.Interaction):
         if not self._autor_ok(interacao):
@@ -283,9 +293,17 @@ async def abrir_carteira(interacao: discord.Interaction) -> None:
     id_fivem = await _fid(membro)
     view = CarteiraHubView(membro, saldo=saldo, id_fivem=id_fivem)
     if interacao.response.is_done():
-        await interacao.followup.send(view=view, ephemeral=True)
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
     else:
-        await interacao.response.send_message(view=view, ephemeral=True)
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +421,10 @@ class ViewSelecionarDestinoTransferencia(LoggingViewMixin, discord.ui.LayoutView
             fid_destino=fid,
             cargo_destino=cargo,
         )
-        await interacao.response.edit_message(view=view)
+        await editar_mensagem_original(
+            interacao,
+            view=view,
+        )
 
 
 class ViewConfirmarDestinoTransferencia(LoggingViewMixin, discord.ui.LayoutView):
@@ -515,6 +536,12 @@ class ModalQuantidadeTransferencia(
         self.quantidade_input.placeholder = f"Saldo disponível: {saldo}"
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Valida a quantidade e prepara a confirmação da transferência.
+
+        A mensagem original é atualizada quando possível para manter o fluxo no mesmo
+        card; se essa atualização visual falhar após o modal, envia uma resposta
+        efêmera para não perder a confirmação nem concluir a transferência cedo demais.
+        """
         bruto = self.quantidade_input.value.strip()
         if not bruto.isdigit():
             await responder_erro(
@@ -578,9 +605,18 @@ class ModalQuantidadeTransferencia(
                 await self.mensagem_a_editar.edit(view=view)
                 await interacao.response.defer()
                 return
-            except discord.HTTPException:
-                pass
-        await interacao.response.send_message(view=view, ephemeral=True)
+            except discord.HTTPException as erro_em_on_submit:
+                # Enfeite que falhou: atualizar a mensagem depois do formulario.
+                # A acao principal ja tinha dado certo, entao so registro.
+                ignorar_falha_cosmetica(
+                    erro_em_on_submit,
+                    o_que_falhou="atualizar a mensagem depois do formulario",
+                )
+        await responder_view(
+            interacao,
+            view,
+            ephemeral=True,
+        )
 
 
 class ViewConfirmarEnvioTransferencia(LoggingViewMixin, discord.ui.LayoutView):
@@ -721,11 +757,18 @@ class ViewConfirmarEnvioTransferencia(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         try:
-            from src.plantao.carteira_ranking import atualizar_ranking_moedas
+            from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
 
             await atualizar_ranking_moedas(interacao.client)
-        except Exception:
-            pass
+        except Exception as erro_ao_atualizar_ranking:
+            # A transferencia JA foi concluida e ja apareceu no log. O que
+            # falhou foi so repintar o ranking de moedas, que se atualiza
+            # sozinho na proxima vez. Registro para nao ficar invisivel.
+            await capturar_erro_e_logar(
+                erro_ao_atualizar_ranking,
+                contexto="atualizar o ranking de moedas depois da transferencia",
+                guilda=interacao.guild,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -805,6 +848,12 @@ class ModalPedidoDeposito(
         self.membro_id = membro_id
 
     async def on_submit(self, interacao: discord.Interaction):
+        """Cria um pedido de crédito sujeito à confirmação financeira.
+
+        Além de gravar o pedido pendente no banco, publica um card para a equipe
+        financeira analisar o valor in-game. A separação evita que moedas sejam
+        creditadas automaticamente antes de a transferência ser confirmada.
+        """
         if interacao.user.id != self.membro_id:
             await responder_erro(
                 interacao,
@@ -875,6 +924,13 @@ async def publicar_pedido_deposito_staff(
     membro: discord.Member,
     pedido,
 ) -> bool:
+    """Publica o pedido pendente para análise e guarda o vínculo com a mensagem.
+
+    Envia no canal financeiro um card persistente de aprovação ou recusa e grava no
+    banco os identificadores do canal e da mensagem. Retorna ``False`` quando o
+    canal não está configurado ou o Discord não aceita o envio, preservando o pedido
+    pendente para que a equipe possa tratá-lo sem conceder moedas por engano.
+    """
     canal_id = CANAIS.get("CANAL_DEPOSITO_MOEDAS") or CANAIS.get("CANAL_FINANCAS") or 0
     canal = guilda.get_channel(int(canal_id)) if canal_id else None
     if canal is None:
@@ -896,14 +952,14 @@ async def publicar_pedido_deposito_staff(
     )
     try:
         mensagem = await canal.send(view=view)
-        from src.database.connection import async_session
+        from src.database.conexao import async_session
         from src.database.models import PedidoDepositoMoeda
 
         async with async_session() as sessao:
-            reg = await sessao.get(PedidoDepositoMoeda, pedido.id)
-            if reg is not None:
-                reg.mensagem_canal_id = canal.id
-                reg.mensagem_id = mensagem.id
+            pedido_no_banco = await sessao.get(PedidoDepositoMoeda, pedido.id)
+            if pedido_no_banco is not None:
+                pedido_no_banco.mensagem_canal_id = canal.id
+                pedido_no_banco.mensagem_id = mensagem.id
                 await sessao.commit()
         return True
     except discord.HTTPException:
@@ -1016,11 +1072,16 @@ async def _processar_decisao_deposito(
                 guilda=interacao.guild,
             )
         try:
-            from src.plantao.carteira_ranking import atualizar_ranking_moedas
+            from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
 
             await atualizar_ranking_moedas(interacao.client)
-        except Exception:
-            pass
+        except Exception as erro_ao_atualizar_ranking:
+            # O deposito JA foi creditado. Aqui so o ranking nao repintou.
+            await capturar_erro_e_logar(
+                erro_ao_atualizar_ranking,
+                contexto="atualizar o ranking de moedas depois do deposito",
+                guilda=interacao.guild,
+            )
     else:
         await responder_aviso(
             interacao,
@@ -1053,8 +1114,13 @@ async def _processar_decisao_deposito(
                     staff=interacao.user,
                 )
             )
-    except discord.HTTPException:
-        pass
+    except discord.HTTPException as erro_em_processar_decisao_deposito:
+        # Enfeite que falhou: atualizar o card do deposito.
+        # A acao principal ja tinha dado certo, entao so registro.
+        ignorar_falha_cosmetica(
+            erro_em_processar_decisao_deposito,
+            o_que_falhou="atualizar o card do deposito",
+        )
 
 
 class ViewDecisaoDepositoFinal(LoggingViewMixin, discord.ui.LayoutView):

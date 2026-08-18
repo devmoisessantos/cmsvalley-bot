@@ -24,6 +24,8 @@ from typing import Any
 
 import discord
 
+from src.utils.error_handling import ignorar_falha_cosmetica
+
 # ---------------------------------------------------------------------------
 # Detecção da API (versões antigas não quebram o bot)
 # ---------------------------------------------------------------------------
@@ -62,6 +64,13 @@ def formatar_data_hora_rodape(momento: datetime | None = None) -> str:
 
 
 def mapa_de_cores() -> dict[str, discord.Color]:
+    """
+    Centraliza as cores permitidas pelo construtor em objetos do Discord.
+
+    Retorna um novo mapa para que os componentes visualizem nomes simples sem
+    espalhar códigos de cor pela interface. O conjunto também mantém preview e
+    código gerado coerentes quando uma opção do painel é escolhida.
+    """
     return {
         "info": discord.Color.blurple(),
         "sucesso": discord.Color.green(),
@@ -75,6 +84,13 @@ def mapa_de_cores() -> dict[str, discord.Color]:
 
 
 def expressao_cor_python(nome: str) -> str:
+    """
+    Traduz a cor escolhida na interface para código Python exibível ao usuário.
+
+    O retorno é uma expressão textual, não um objeto de cor, porque será inserido
+    no snippet didático gerado pelo construtor. Quando o nome não é reconhecido,
+    usa azul padrão para que o exemplo continue válido.
+    """
     mapa = {
         "info": "discord.Color.blurple()",
         "sucesso": "discord.Color.green()",
@@ -130,6 +146,7 @@ class RascunhoTemplate:
 
     @property
     def cor(self) -> discord.Color:
+        """Converte o nome salvo em uma cor segura para montar o card atual."""
         return mapa_de_cores().get(self.cor_nome, discord.Color.blurple())
 
 
@@ -137,6 +154,13 @@ _rascunhos_por_usuario: dict[int, RascunhoTemplate] = {}
 
 
 def obter_rascunho(id_do_usuario: int) -> RascunhoTemplate:
+    """
+    Entrega o rascunho isolado de quem está editando um template.
+
+    Cria um estado vazio na primeira consulta e reutiliza o mesmo objeto depois,
+    preservando os blocos entre cliques. A separação pelo identificador impede que
+    uma pessoa altere acidentalmente o preview que outra pessoa está montando.
+    """
     if id_do_usuario not in _rascunhos_por_usuario:
         _rascunhos_por_usuario[id_do_usuario] = RascunhoTemplate()
     return _rascunhos_por_usuario[id_do_usuario]
@@ -157,6 +181,13 @@ def montar_texto_do_rodape(
     rascunho: RascunhoTemplate,
     guilda: discord.Guild | None,
 ) -> str:
+    """
+    Combina as opções de rodapé em uma linha discreta para Components V2.
+
+    Considera o texto livre, o nome da guilda e a data conforme as preferências do
+    rascunho. Retorna texto vazio quando nenhuma parte foi habilitada, para impedir
+    que a montagem adicione um separador e um rodapé visualmente inúteis.
+    """
     partes: list[str] = []
     if rascunho.rodape_texto.strip():
         partes.append(rascunho.rodape_texto.strip())
@@ -169,12 +200,17 @@ def montar_texto_do_rodape(
     return "-# " + " • ".join(partes)
 
 
-async def callback_noop(interacao: discord.Interaction) -> None:
+async def ao_clicar_sem_fazer_nada(interacao: discord.Interaction) -> None:
     """Callback vazio para preview (não executa regra de negócio)."""
     try:
         await interacao.response.defer()
-    except discord.InteractionResponded:
-        pass
+    except discord.InteractionResponded as erro_no_botao_sem_acao:
+        # Enfeite que falhou: responder a um botao de exemplo.
+        # A acao principal ja tinha dado certo, entao so registro.
+        ignorar_falha_cosmetica(
+            erro_no_botao_sem_acao,
+            o_que_falhou="responder a um botao de exemplo",
+        )
 
 
 def _estilo_botao(nome: str) -> discord.ButtonStyle:
@@ -229,7 +265,7 @@ def _montar_linha_de_botoes(botoes: list[tuple[str, str, str]]) -> discord.ui.Ac
                 style=_estilo_botao(estilo),
                 custom_id=f"tpl:{url_ou_id}"[:100],
             )
-            botao.callback = callback_noop
+            botao.callback = ao_clicar_sem_fazer_nada
             linha.add_item(botao)
     return linha
 
@@ -249,7 +285,7 @@ def _montar_select_string(bloco: BlocoTemplate) -> discord.ui.ActionRow:
         min_values=1,
         max_values=1,
     )
-    select.callback = callback_noop
+    select.callback = ao_clicar_sem_fazer_nada
     linha = discord.ui.ActionRow()
     linha.add_item(select)
     return linha
@@ -266,7 +302,7 @@ def _montar_select_especial(
         min_values=max(0, min_valores),
         max_values=max(1, min(max_valores, 25)),
     )
-    select.callback = callback_noop
+    select.callback = ao_clicar_sem_fazer_nada
     linha = discord.ui.ActionRow()
     linha.add_item(select)
     return linha
@@ -295,7 +331,11 @@ def montar_componentes_do_container(
         elif bloco.tipo == "secao":
             componentes.append(_montar_secao(bloco, url_icone))
         elif bloco.tipo == "galeria":
-            urls = [u.strip() for u in bloco.urls_midia if u.strip().startswith("http")]
+            urls = [
+                url_da_midia.strip()
+                for url_da_midia in bloco.urls_midia
+                if url_da_midia.strip().startswith("http")
+            ]
             if urls:
                 itens = [discord.MediaGalleryItem(url) for url in urls[:10]]
                 componentes.append(discord.ui.MediaGallery(*itens))
@@ -388,50 +428,53 @@ def resumo_dos_blocos(rascunho: RascunhoTemplate) -> str:
     if not rascunho.blocos:
         return "_Nenhum bloco. Use os botões para montar o card._"
     linhas: list[str] = []
-    for i, bloco in enumerate(rascunho.blocos, 1):
+    for indice, bloco in enumerate(rascunho.blocos, 1):
         if bloco.tipo in ("titulo", "texto", "secao") and bloco.texto:
             # Texto integral; quebra visual em linhas curtas se for muito longo
             corpo = bloco.texto.strip()
-            linhas.append(f"`{i}.` **{bloco.tipo}**\n{corpo}")
+            linhas.append(f"`{indice}.` **{bloco.tipo}**\n{corpo}")
         elif bloco.tipo == "separador":
-            linhas.append(f"`{i}.` **separador** ({bloco.espacamento})")
+            linhas.append(f"`{indice}.` **separador** ({bloco.espacamento})")
         elif bloco.tipo == "galeria":
             urls = ", ".join(bloco.urls_midia[:3])
             mais = f" +{len(bloco.urls_midia) - 3}" if len(bloco.urls_midia) > 3 else ""
             linhas.append(
-                f"`{i}.` **galeria** ({len(bloco.urls_midia)} img) {urls}{mais}"
+                f"`{indice}.` **galeria** ({len(bloco.urls_midia)} img) {urls}{mais}"
             )
         elif bloco.tipo == "botoes":
-            rotulos = ", ".join(r for r, _, _ in bloco.botoes)
-            linhas.append(f"`{i}.` **botoes** ({len(bloco.botoes)}): {rotulos}")
+            rotulos = ", ".join(
+                rotulo_do_botao for rotulo_do_botao, _, _ in bloco.botoes
+            )
+            linhas.append(f"`{indice}.` **botoes** ({len(bloco.botoes)}): {rotulos}")
         elif bloco.tipo == "select_string":
             opcoes = ", ".join(lab for lab, _, _ in bloco.opcoes_select)
             linhas.append(
-                f"`{i}.` **select_string** ({len(bloco.opcoes_select)} opc): {opcoes}"
+                f"`{indice}.` **select_string** ({len(bloco.opcoes_select)} opc): "
+                f"{opcoes}"
             )
         elif bloco.tipo.startswith("select_"):
             linhas.append(
-                f"`{i}.` **{bloco.tipo}** — {bloco.placeholder_select_especial}"
+                f"`{indice}.` **{bloco.tipo}** — {bloco.placeholder_select_especial}"
             )
         elif bloco.tipo == "arquivo":
-            linhas.append(f"`{i}.` **arquivo** `{bloco.nome_arquivo or '?'}`")
+            linhas.append(f"`{indice}.` **arquivo** `{bloco.nome_arquivo or '?'}`")
         else:
-            linhas.append(f"`{i}.` **{bloco.tipo}**")
+            linhas.append(f"`{indice}.` **{bloco.tipo}**")
     return "\n\n".join(linhas)
 
 
 def _codigo_do_bloco(bloco: BlocoTemplate, indent: str = "    ") -> list[str]:
-    i = indent
+    indice = indent
     if bloco.tipo == "titulo":
-        t = f"# {bloco.texto}"
+        linha_de_codigo = f"# {bloco.texto}"
         return [
-            f"{i}# TextDisplay com markdown de título",
-            f"{i}componentes.append(discord.ui.TextDisplay({t!r}))",
+            f"{indice}# TextDisplay com markdown de título",
+            f"{indice}componentes.append(discord.ui.TextDisplay({linha_de_codigo!r}))",
         ]
     if bloco.tipo == "texto":
         return [
-            f"{i}# TextDisplay = texto livre (markdown ok)",
-            f"{i}componentes.append(discord.ui.TextDisplay({bloco.texto!r}))",
+            f"{indice}# TextDisplay = texto livre (markdown ok)",
+            f"{indice}componentes.append(discord.ui.TextDisplay({bloco.texto!r}))",
         ]
     if bloco.tipo == "separador":
         esp = (
@@ -440,100 +483,117 @@ def _codigo_do_bloco(bloco: BlocoTemplate, indent: str = "    ") -> list[str]:
             else "discord.SeparatorSpacing.large"
         )
         return [
-            f"{i}# Separator divide blocos visualmente",
-            f"{i}componentes.append(discord.ui.Separator(spacing={esp}))",
+            f"{indice}# Separator divide blocos visualmente",
+            f"{indice}componentes.append(discord.ui.Separator(spacing={esp}))",
         ]
     if bloco.tipo == "secao":
-        out = [f"{i}# Section + accessory (Thumbnail ou Button link)"]
+        out = [f"{indice}# Section + accessory (Thumbnail ou Button link)"]
         if bloco.accessory_botao_rotulo and bloco.accessory_botao_url.startswith(
             "http"
         ):
             out.extend(
                 [
-                    f"{i}botao_accessory = discord.ui.Button(",
-                    f"{i}    label={bloco.accessory_botao_rotulo!r},",
-                    f"{i}    style=discord.ButtonStyle.link,",
-                    f"{i}    url={bloco.accessory_botao_url!r},",
-                    f"{i})",
-                    f"{i}componentes.append(discord.ui.Section({bloco.texto!r}, accessory=botao_accessory))",
+                    f"{indice}botao_accessory = discord.ui.Button(",
+                    f"{indice}    label={bloco.accessory_botao_rotulo!r},",
+                    f"{indice}    style=discord.ButtonStyle.link,",
+                    f"{indice}    url={bloco.accessory_botao_url!r},",
+                    f"{indice})",
+                    f"{indice}componentes.append(discord.ui.Section({bloco.texto!r}, "
+                    f"accessory=botao_accessory))",
                 ]
             )
         elif bloco.usar_thumbnail_servidor:
             out.extend(
                 [
-                    f"{i}url_icone = guilda.icon.url if guilda and guilda.icon else None",
-                    f"{i}if url_icone:",
-                    f"{i}    componentes.append(discord.ui.Section(",
-                    f"{i}        {bloco.texto!r},",
-                    f"{i}        accessory=discord.ui.Thumbnail(url_icone),",
-                    f"{i}    ))",
-                    f"{i}else:",
-                    f"{i}    componentes.append(discord.ui.TextDisplay({bloco.texto!r}))",
+                    f"{indice}url_icone = guilda.icon.url if guilda and guilda.icon "
+                    f"else None",
+                    f"{indice}if url_icone:",
+                    f"{indice}    componentes.append(discord.ui.Section(",
+                    f"{indice}        {bloco.texto!r},",
+                    f"{indice}        accessory=discord.ui.Thumbnail(url_icone),",
+                    f"{indice}    ))",
+                    f"{indice}else:",
+                    f"{indice}    "
+                    f"componentes.append(discord.ui.TextDisplay({bloco.texto!r}"
+                    f"))",
                 ]
             )
         elif bloco.url_thumbnail.strip().startswith("http"):
             out.append(
-                f"{i}componentes.append(discord.ui.Section("
-                f"{bloco.texto!r}, accessory=discord.ui.Thumbnail({bloco.url_thumbnail.strip()!r})))"
+                f"{indice}componentes.append(discord.ui.Section("
+                f"{bloco.texto!r}, "
+                f"accessory=discord.ui.Thumbnail({bloco.url_thumbnail.strip()!r})))"
             )
         else:
             out.append(
-                f"{i}componentes.append(discord.ui.TextDisplay({bloco.texto!r}))"
+                f"{indice}componentes.append(discord.ui.TextDisplay({bloco.texto!r}))"
             )
         return out
     if bloco.tipo == "galeria":
-        urls = [u for u in bloco.urls_midia if u.startswith("http")]
+        urls = [
+            url_da_midia
+            for url_da_midia in bloco.urls_midia
+            if url_da_midia.startswith("http")
+        ]
         return [
-            f"{i}# MediaGallery: 1–10 MediaGalleryItem",
-            f"{i}urls = {urls!r}",
-            f"{i}itens = [discord.MediaGalleryItem(u) for u in urls]",
-            f"{i}componentes.append(discord.ui.MediaGallery(*itens))",
+            f"{indice}# MediaGallery: 1–10 MediaGalleryItem",
+            f"{indice}urls = {urls!r}",
+            f"{indice}itens = [discord.MediaGalleryItem(u) for u in urls]",
+            f"{indice}componentes.append(discord.ui.MediaGallery(*itens))",
         ]
     if bloco.tipo == "arquivo":
         nome = bloco.nome_arquivo or "arquivo.bin"
         return [
-            f"{i}# ui.File exige enviar o attachment no send",
-            f"{i}# arquivo = discord.File('caminho/{nome}', filename={nome!r})",
-            f"{i}# componentes.append(discord.ui.File(media=arquivo))",
-            f"{i}# await canal.send(view=view, files=[arquivo])",
-            f"{i}componentes.append(discord.ui.TextDisplay('📎 `{nome}` — troque por ui.File'))",
+            f"{indice}# ui.File exige enviar o attachment no send",
+            f"{indice}# arquivo = discord.File('caminho/{nome}', filename={nome!r})",
+            f"{indice}# componentes.append(discord.ui.File(media=arquivo))",
+            f"{indice}# await canal.send(view=view, files=[arquivo])",
+            f"{indice}componentes.append(discord.ui.TextDisplay('📎 `{nome}` — troque "
+            f"por ui.File'))",
         ]
     if bloco.tipo == "botoes":
         out = [
-            f"{i}# ActionRow: ≤5 Buttons OU 1 Select sozinho",
-            f"{i}linha = discord.ui.ActionRow()",
+            f"{indice}# ActionRow: ≤5 Buttons OU 1 Select sozinho",
+            f"{indice}linha = discord.ui.ActionRow()",
         ]
         for rotulo, estilo, valor in bloco.botoes:
             if estilo == "link":
                 out.append(
-                    f"{i}linha.add_item(discord.ui.Button(label={rotulo!r}, "
+                    f"{indice}linha.add_item(discord.ui.Button(label={rotulo!r}, "
                     f"style=discord.ButtonStyle.link, url={valor!r}))"
                 )
             else:
                 out.extend(
                     [
-                        f"{i}btn = discord.ui.Button(label={rotulo!r}, "
-                        f"style=discord.ButtonStyle.{estilo}, custom_id={('tpl:' + valor)!r})",
-                        f"{i}# btn.callback = seu_callback",
-                        f"{i}linha.add_item(btn)",
+                        f"{indice}btn = discord.ui.Button(label={rotulo!r}, "
+                        f"style=discord.ButtonStyle.{estilo}, "
+                        f"custom_id={('tpl:' + valor)!r})",
+                        f"{indice}# btn.callback = seu_callback",
+                        f"{indice}linha.add_item(btn)",
                     ]
                 )
-        out.append(f"{i}componentes.append(linha)")
+        out.append(f"{indice}componentes.append(linha)")
         return out
     if bloco.tipo == "select_string":
-        out = [f"{i}# Select string com SelectOption manuais", f"{i}opcoes = ["]
+        out = [
+            f"{indice}# Select string com SelectOption manuais",
+            f"{indice}opcoes = [",
+        ]
         for label, value, desc in bloco.opcoes_select:
             out.append(
-                f"{i}    discord.SelectOption(label={label!r}, value={value!r}, description={desc!r}),"
+                f"{indice}    discord.SelectOption(label={label!r}, value={value!r}, "
+                f"description={desc!r}),"
             )
         out.extend(
             [
-                f"{i}]",
-                f"{i}select = discord.ui.Select(placeholder={bloco.placeholder_select!r}, options=opcoes)",
-                f"{i}# select.callback = seu_callback",
-                f"{i}linha = discord.ui.ActionRow()",
-                f"{i}linha.add_item(select)",
-                f"{i}componentes.append(linha)",
+                f"{indice}]",
+                f"{indice}select = "
+                f"discord.ui.Select(placeholder={bloco.placeholder_select!r}"
+                f", options=opcoes)",
+                f"{indice}# select.callback = seu_callback",
+                f"{indice}linha = discord.ui.ActionRow()",
+                f"{indice}linha.add_item(select)",
+                f"{indice}componentes.append(linha)",
             ]
         )
         return out
@@ -545,18 +605,18 @@ def _codigo_do_bloco(bloco: BlocoTemplate, indent: str = "    ") -> list[str]:
     }
     if bloco.tipo in mapa:
         return [
-            f"{i}# Select preenchido pelo Discord automaticamente",
-            f"{i}select = {mapa[bloco.tipo]}(",
-            f"{i}    placeholder={bloco.placeholder_select_especial!r},",
-            f"{i}    min_values={bloco.min_valores},",
-            f"{i}    max_values={bloco.max_valores},",
-            f"{i})",
-            f"{i}# select.callback = seu_callback",
-            f"{i}linha = discord.ui.ActionRow()",
-            f"{i}linha.add_item(select)",
-            f"{i}componentes.append(linha)",
+            f"{indice}# Select preenchido pelo Discord automaticamente",
+            f"{indice}select = {mapa[bloco.tipo]}(",
+            f"{indice}    placeholder={bloco.placeholder_select_especial!r},",
+            f"{indice}    min_values={bloco.min_valores},",
+            f"{indice}    max_values={bloco.max_valores},",
+            f"{indice})",
+            f"{indice}# select.callback = seu_callback",
+            f"{indice}linha = discord.ui.ActionRow()",
+            f"{indice}linha.add_item(select)",
+            f"{indice}componentes.append(linha)",
         ]
-    return [f"{i}# tipo desconhecido: {bloco.tipo}"]
+    return [f"{indice}# tipo desconhecido: {bloco.tipo}"]
 
 
 def gerar_codigo_mensagem(
@@ -578,8 +638,8 @@ def gerar_codigo_mensagem(
         "    componentes: list = []",
         "",
     ]
-    for n, bloco in enumerate(rascunho.blocos, 1):
-        linhas.append(f"    # --- bloco {n}: {bloco.tipo} ---")
+    for numero, bloco in enumerate(rascunho.blocos, 1):
+        linhas.append(f"    # --- bloco {numero}: {bloco.tipo} ---")
         linhas.extend(_codigo_do_bloco(bloco))
         linhas.append("")
     if rascunho.rodape_ativo:
@@ -603,14 +663,18 @@ def gerar_codigo_mensagem(
                 [
                     "    from zoneinfo import ZoneInfo",
                     "    agora = datetime.now(ZoneInfo('America/Sao_Paulo'))",
-                    "    meses = ('jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez')",
-                    "    partes.append(f\"{agora.day} {meses[agora.month-1]} de {agora.year} • {agora.strftime('%H:%M')}\")",
+                    "    meses = "
+                    "('jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez')",
+                    '    partes.append(f"{agora.day} {meses[agora.month-1]} de '
+                    "{agora.year} • {agora.strftime('%H:%M')}\")",
                 ]
             )
         linhas.extend(
             [
-                "    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))",
-                '    componentes.append(discord.ui.TextDisplay("-# " + " • ".join(partes)))',
+                "    "
+                "componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))",
+                '    componentes.append(discord.ui.TextDisplay("-# " + " • '
+                '".join(partes)))',
                 "",
             ]
         )
@@ -619,7 +683,8 @@ def gerar_codigo_mensagem(
         [
             "    # LayoutView = raiz V2; Container = grupo visual com accent_color",
             "    view = discord.ui.LayoutView(timeout=None)",
-            f"    view.add_item(discord.ui.Container(*componentes, accent_color={cor}))",
+            f"    view.add_item(discord.ui.Container(*componentes, accent_color={cor}"
+            f"))",
             "    return await canal.send(view=view)",
             "",
         ]
@@ -633,6 +698,8 @@ def gerar_codigo_modal(rascunho: RascunhoTemplate) -> str:
         '"""Template gerado por /templates — Modal (Label + inputs)."""',
         "from __future__ import annotations",
         "import discord",
+        "",
+        "from src.utils.mensagens import responder_sucesso",
         "",
         f"class ModalExemplo(discord.ui.Modal, title={rascunho.modal_titulo!r}):",
         '    """Modal V2: inputs preferencialmente dentro de Label."""',
@@ -665,8 +732,10 @@ def gerar_codigo_modal(rascunho: RascunhoTemplate) -> str:
         if TEM_FILE_UPLOAD and TEM_LABEL:
             linhas.extend(
                 [
-                    "        # FileUpload só em Modal, dentro de Label (discord.py 2.6+)",
-                    "        self.envio = discord.ui.FileUpload(min_values=1, max_values=1, required=False)",
+                    "        # FileUpload só em Modal, dentro de Label (discord.py "
+                    "2.6+)",
+                    "        self.envio = discord.ui.FileUpload(min_values=1, "
+                    "max_values=1, required=False)",
                     "        self.add_item(discord.ui.Label(",
                     "            text='Anexo',",
                     "            description='Até 1 arquivo',",
@@ -687,7 +756,8 @@ def gerar_codigo_modal(rascunho: RascunhoTemplate) -> str:
                 "            discord.RadioGroupOption(label='Sim', value='sim'),",
                 "            discord.RadioGroupOption(label='Não', value='nao'),",
                 "        )",
-                "        self.add_item(discord.ui.Label(text='Confirma?', component=self.radio))",
+                "        self.add_item(discord.ui.Label(text='Confirma?', "
+                "component=self.radio))",
                 "",
             ]
         )
@@ -700,14 +770,20 @@ def gerar_codigo_modal(rascunho: RascunhoTemplate) -> str:
                 "            discord.CheckboxGroupOption(label='Opção B', value='b'),",
                 "            min_values=0, max_values=2,",
                 "        )",
-                "        self.add_item(discord.ui.Label(text='Marque o que se aplica', component=self.checks))",
+                "        self.add_item(discord.ui.Label(text='Marque o que se "
+                "aplica', component=self.checks))",
                 "",
             ]
         )
     linhas.extend(
         [
             "    async def on_submit(self, interacao: discord.Interaction) -> None:",
-            "        await interacao.response.send_message('Formulário recebido.', ephemeral=True)",
+            "        # Toda resposta ao membro passa por src/utils/mensagens.py.",
+            "        await responder_sucesso(",
+            "            interacao,",
+            "            titulo='Formulário recebido',",
+            "            linhas=['Seus dados foram registrados.'],",
+            "        )",
             "",
             "# Uso: await interacao.response.send_modal(ModalExemplo())",
             "",

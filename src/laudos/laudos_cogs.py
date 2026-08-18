@@ -37,6 +37,12 @@ class LaudosCog(commands.Cog):
         description="Mostra sua consulta aberta (se houver)",
     )
     async def laudos_consulta(self, interacao: discord.Interaction):
+        """Mostra ao psicólogo os dados da consulta que ele ainda está conduzindo.
+
+        Confere o cargo antes de consultar o banco para não expor informações
+        de pacientes. A resposta identifica paciente, passaportes e início,
+        orientando a pessoa quando não existe atendimento em aberto.
+        """
         if not isinstance(interacao.user, discord.Member) or not membro_e_psicologo(
             interacao.user
         ):
@@ -73,6 +79,12 @@ class LaudosCog(commands.Cog):
         description="Cancela sua consulta aberta",
     )
     async def laudos_cancelar(self, interacao: discord.Interaction):
+        """Cancela apenas a consulta aberta pelo psicólogo que solicitou.
+
+        A verificação de cargo evita que membros comuns alterem atendimentos.
+        Delega ao serviço a mudança no banco e transforma seu resultado em uma
+        resposta clara de sucesso ou do motivo para não cancelar.
+        """
         if not isinstance(interacao.user, discord.Member) or not membro_e_psicologo(
             interacao.user
         ):
@@ -95,6 +107,11 @@ class LaudosCog(commands.Cog):
         description="Quantidade de laudos que você já emitiu",
     )
     async def laudos_meus(self, interacao: discord.Interaction):
+        """Exibe ao psicólogo a quantidade de laudos que ele já emitiu.
+
+        Restringe a contagem a quem tem permissão clínica, evitando que o
+        comando seja usado como uma consulta pública de atividade da equipe.
+        """
         if not isinstance(interacao.user, discord.Member) or not membro_e_psicologo(
             interacao.user
         ):
@@ -120,6 +137,12 @@ class LaudosCog(commands.Cog):
     async def laudos_total(
         self, interacao: discord.Interaction, membro: discord.Member
     ):
+        """Permite à administração conferir a produção de um psicólogo.
+
+        Usa o membro recebido pelo comando em vez do autor da interação, pois o
+        objetivo é acompanhar outro integrante. A resposta apresenta a
+        quantidade obtida do banco junto à menção da pessoa consultada.
+        """
         total = await contar_laudos_psicologo(membro.id)
         await responder_info(
             interacao,
@@ -129,4 +152,5 @@ class LaudosCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    """Registra os comandos de consultas e laudos no bot."""
     await bot.add_cog(LaudosCog(bot))
