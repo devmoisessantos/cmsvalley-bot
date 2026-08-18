@@ -45,6 +45,52 @@ def _membro_mutado_e_surdo(membro: discord.Member) -> bool:
     return mudo and surdo
 
 
+def _membro_surdo(membro: discord.Member) -> bool:
+    """True se estiver surdo (self ou server) — sozinho ou com mudo."""
+    voice = membro.voice
+    if voice is None:
+        return False
+    return bool(voice.self_deaf or voice.deaf)
+
+
+def _membro_conta_tempo_moeda(membro: discord.Member) -> bool:
+    """
+    Tempo de plantão que gera moeda:
+    - precisa estar em call válida (checado pelo chamador)
+    - mutado sozinho → CONTA
+    - surdo (com ou sem mudo) → NÃO CONTA
+    - ocioso / fora de call → NÃO CONTA (checado pelo chamador)
+    """
+    return not _membro_surdo(membro)
+
+
+def _acumular_segmento_atual(estado: EstadoPlantao) -> int:
+    """
+    Soma ao saldo de segundos o trecho aberto (segmento_iniciado_em → agora)
+    e zera o ponteiro do segmento. Retorna segundos adicionados.
+    """
+    if estado.segmento_iniciado_em is None:
+        return 0
+    inicio = garantir_aware(estado.segmento_iniciado_em)
+    decorrido = int((datetime.now(timezone.utc) - inicio).total_seconds())
+    if decorrido > 0:
+        estado.segundos_acumulados = int(estado.segundos_acumulados or 0) + decorrido
+    estado.segmento_iniciado_em = None
+    return max(0, decorrido)
+
+
+def _creditar_moedas_de_acumulado(
+    estado: EstadoPlantao,
+) -> int:
+    """Converte segundos_acumulados em moedas (1 / SEGUNDOS_PARA_MOEDA). Retorna moedas ganhas."""
+    moedas_ganhas = 0
+    while int(estado.segundos_acumulados or 0) >= SEGUNDOS_PARA_MOEDA:
+        estado.segundos_acumulados -= SEGUNDOS_PARA_MOEDA
+        estado.saldo_moedas = int(estado.saldo_moedas or 0) + 1
+        moedas_ganhas += 1
+    return moedas_ganhas
+
+
 def membro_pode_informar_id_manualmente(membro: discord.Member) -> bool:
     """True se o membro tiver algum cargo da hierarquia (Visitante já está fora dessa lista)."""
     if membro.guild_permissions.administrator:
@@ -99,9 +145,15 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
             agora = datetime.now(timezone.utc)
             estado.em_call_valida = True
             estado.call_entrada_em = agora
-            estado.segmento_iniciado_em = agora
             estado.canal_atual_id = canal_atual.id
-            estado.ocioso_desde = None  # já entrou contando, não está ocioso
+            estado.ocioso_desde = None
+            # Surdo (ou mudo+surdo) não inicia cronômetro de moeda
+            if _membro_conta_tempo_moeda(membro):
+                estado.segmento_iniciado_em = agora
+            else:
+                estado.segmento_iniciado_em = None
+                estado.afk_mudo_surdo_desde = agora
+                estado.afk_canal_referencia_id = canal_atual.id
         else:
             estado.ocioso_desde = datetime.now(
                 timezone.utc
@@ -194,33 +246,27 @@ async def _finalizar_periodo_em_call(
     evento: str = "SAIU_CALL",
     motivo: str = "Saiu da call de voz",
 ):
-    """Fecha o segmento de call atual: loga a duração, credita moedas se aplicável, e reinicia o estado ocioso."""
-    if estado.call_entrada_em is None:
+    """
+    Fecha o período em call: soma só o segmento ativo (não conta ocioso/surdo),
+    credita moedas e marca ocioso (toggle ainda ligado).
+    """
+    if estado.call_entrada_em is None and estado.segmento_iniciado_em is None:
+        # Já estava pausado / sem sessão aberta
+        estado.em_call_valida = False
+        estado.call_entrada_em = None
+        estado.segmento_iniciado_em = None
+        estado.canal_atual_id = None
+        if estado.toggle_ligado and estado.ocioso_desde is None:
+            estado.ocioso_desde = datetime.now(timezone.utc)
         return
-
-    entrada_total = garantir_aware(estado.call_entrada_em)
-    decorrido_total = (datetime.now(timezone.utc) - entrada_total).total_seconds()
-
-    inicio_segmento = (
-        garantir_aware(estado.segmento_iniciado_em)
-        if estado.segmento_iniciado_em
-        else entrada_total
-    )
-    decorrido_segmento = int(
-        (datetime.now(timezone.utc) - inicio_segmento).total_seconds()
-    )
 
     canal_anterior_id = estado.canal_atual_id
     discord_id = estado.discord_id
     id_fivem_atual = estado.id_fivem
 
-    estado.segundos_acumulados += int(decorrido_total)
-
-    moedas_ganhas = 0
-    while estado.segundos_acumulados >= SEGUNDOS_PARA_MOEDA:
-        estado.segundos_acumulados -= SEGUNDOS_PARA_MOEDA
-        estado.saldo_moedas += 1
-        moedas_ganhas += 1
+    # Só o trecho em que o cronômetro estava rodando (não surdo / não pausado)
+    decorrido_segmento = _acumular_segmento_atual(estado)
+    moedas_ganhas = _creditar_moedas_de_acumulado(estado)
 
     estado.em_call_valida = False
     estado.call_entrada_em = None
@@ -229,8 +275,11 @@ async def _finalizar_periodo_em_call(
     estado.ocioso_desde = datetime.now(timezone.utc)
     estado.lembrete_1_enviado = False
     estado.lembrete_2_enviado = False
+    estado.lembrete_3_enviado = False
+    estado.afk_mudo_surdo_desde = None
+    estado.afk_canal_referencia_id = None
+    estado.afk_aviso_enviado = False
 
-    # _finalizar_periodo_em_call
     await registrar_evento_plantao(
         guild,
         discord_id,
@@ -249,7 +298,10 @@ async def _finalizar_periodo_em_call(
             estado.id_fivem,
             campos_extra={
                 "Moedas Ganhas": str(moedas_ganhas),
-                "Saldo Total": f"{estado.saldo_moedas} moedas ({formatar_dinheiro(estado.saldo_moedas * VALOR_MOEDA_INGAME)})",
+                "Saldo Total": (
+                    f"{estado.saldo_moedas} moedas "
+                    f"({formatar_dinheiro(estado.saldo_moedas * VALOR_MOEDA_INGAME)})"
+                ),
             },
         )
         try:
@@ -264,6 +316,25 @@ async def _finalizar_periodo_em_call(
             )
         except Exception:
             pass
+
+
+async def pausar_cronometro_moeda(
+    estado: EstadoPlantao,
+    *,
+    motivo: str = "Pausa (surdo / AFK)",
+) -> int:
+    """
+    Para de contar tempo para moeda sem sair da call.
+    Acumula o segmento aberto e limpa segmento_iniciado_em.
+    Retorna segundos fechados neste pause.
+    """
+    return _acumular_segmento_atual(estado)
+
+
+def retomar_cronometro_moeda(estado: EstadoPlantao) -> None:
+    """Reinicia segmento se está em call válida e ainda não há segmento aberto."""
+    if estado.em_call_valida and estado.segmento_iniciado_em is None:
+        estado.segmento_iniciado_em = datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------

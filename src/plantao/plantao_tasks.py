@@ -35,8 +35,11 @@ from src.database.models import EstadoPlantao
 from src.plantao.plantao_logger import registrar_evento_plantao
 from src.plantao.plantao_service import (
     _finalizar_periodo_em_call,
-    _membro_mutado_e_surdo,
+    _membro_conta_tempo_moeda,
+    _membro_surdo,
     garantir_aware,
+    pausar_cronometro_moeda,
+    retomar_cronometro_moeda,
 )
 from src.utils.notificacao import (
     notificar_dm_plantao_afk_aviso,
@@ -207,15 +210,26 @@ class PlantaoTasks(commands.Cog):
                     if membro is None:
                         continue
 
-                    condicao_afk = _membro_mutado_e_surdo(membro)
+                    # Surdo (com ou sem mudo) → não gera moeda + rastreio AFK
+                    # Mutado sozinho → continua gerando moeda
+                    esta_surdo = _membro_surdo(membro)
                     canal_atual = estado.canal_atual_id
 
-                    if not condicao_afk:
+                    if not esta_surdo:
+                        # Voltou a ouvir → retoma cronômetro se ainda em call
                         if estado.afk_mudo_surdo_desde is not None:
                             estado.afk_mudo_surdo_desde = None
                             estado.afk_canal_referencia_id = None
                             estado.afk_aviso_enviado = False
+                        if _membro_conta_tempo_moeda(membro):
+                            retomar_cronometro_moeda(estado)
                         continue
+
+                    # Está surdo: garante que o cronômetro de moeda está pausado
+                    if estado.segmento_iniciado_em is not None:
+                        pausar_cronometro_moeda(
+                            estado, motivo="Surdo detectado no loop AFK"
+                        )
 
                     if (
                         estado.afk_mudo_surdo_desde is None
@@ -258,7 +272,8 @@ class PlantaoTasks(commands.Cog):
             guild,
             evento="CALL_ENCERRADA_POR_AFK",
             motivo=(
-                f"Mudo+surdo por {AFK_LIMITE_MINUTOS} min no mesmo canal, sem atividade"
+                f"Surdo por {AFK_LIMITE_MINUTOS} min no mesmo canal "
+                "(tempo surdo não contou para moeda)"
             ),
         )
 
