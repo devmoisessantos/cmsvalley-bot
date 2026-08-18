@@ -1,8 +1,8 @@
-import discord
 from dataclasses import (
-    dataclass, 
-    field
+    dataclass,
+    field,
 )
+
 
 @dataclass
 class MedicoNaChamada:
@@ -21,9 +21,13 @@ class SessaoChamada:
     chamada_id: int
     canal_id: int
     mensagem_id: int | None = None
-    print_ems_url: str | None = None    # URL do print do EMS enviado pelo doutor, guardado pra referência
-    print_ems_mensagem: object | None = None  # discord.Message — guardado pra apagar só no final
-    
+    print_ems_url: str | None = (
+        None  # URL do print do EMS enviado pelo doutor, guardado pra referência
+    )
+    print_ems_mensagem: object | None = (
+        None  # discord.Message — guardado pra apagar só no final
+    )
+
     # NOVO: TODOS os identificados como Hospital Sul (banco OU apelido),
     # independente de estar com toggle ligado — é o "identificados no EMS" real.
     reconhecidos: list[MedicoNaChamada] = field(default_factory=list)
@@ -31,17 +35,24 @@ class SessaoChamada:
     presentes_no_ems_toggle_ligado: list[MedicoNaChamada] = field(default_factory=list)
     toggle_ligado_mas_nao_no_ems: list[MedicoNaChamada] = field(default_factory=list)
     nao_reconhecidos: list[dict] = field(default_factory=list)
-    medicos_norte: list[dict] = field(default_factory=list)  # confirmados como Hospital Norte
+    medicos_norte: list[dict] = field(
+        default_factory=list
+    )  # confirmados como Hospital Norte
     bypass_presenca: list[MedicoNaChamada] = field(default_factory=list)
-
 
     total_medicos_ems: int = 0
     total_toggle_ligado: int = 0
 
-    membros_conhecidos: list = field(default_factory=list)  # cache de MembroConhecido pra busca manual
+    membros_conhecidos: list = field(
+        default_factory=list
+    )  # cache de MembroConhecido pra busca manual
 
-    faltantes_ids: set[int] = field(default_factory=set)  # marcados na Etapa 3, ajustável até finalizar
+    faltantes_ids: set[int] = field(
+        default_factory=set
+    )  # marcados na Etapa 3, ajustável até finalizar
     etapa_atual: int = 1
+    # Trava o botão "Finalizar" pra não enviar a chamada duas vezes
+    finalizando: bool = False
 
 
 # Só pode existir 1 sessão ativa por vez (já garantido pelo lock do ControleChamada,

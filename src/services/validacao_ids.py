@@ -22,12 +22,17 @@ existe no banco (String(20)) — nada de cast pra int.
 
 from dataclasses import dataclass
 from difflib import get_close_matches
-from typing import Dict, List, Optional
+from typing import (
+    Dict,
+    List,
+    Optional,
+)
 
 
 @dataclass
 class MembroConhecido:
     """Um Recrutamento aprovado, montado a partir do banco (join com Usuario pro nome)."""
+
     id_fivem: str
     nome: str  # Usuario.nickname_atual do candidato (pode vir vazio se nunca setou apelido)
     discord_id: int
@@ -62,7 +67,7 @@ def _candidatos_por_digito(id_str: str) -> List[str]:
     candidatos = []
     for i, digito in enumerate(id_str):
         for alternativa in _DIGITOS_CONFUNDIVEIS.get(digito, []):
-            candidatos.append(id_str[:i] + alternativa + id_str[i + 1:])
+            candidatos.append(id_str[:i] + alternativa + id_str[i + 1 :])
     return candidatos
 
 
@@ -73,28 +78,115 @@ def _candidatos_por_corte(id_str: str) -> List[str]:
     return [id_str[1:], id_str[:-1]]
 
 
-def _buscar_por_nome(nome_lido: str, membros: List[MembroConhecido]) -> Optional[MembroConhecido]:
-    candidatos = [m for m in membros if m.nome]  # ignora quem não tem apelido cadastrado
+def normalizar_nome(texto: str) -> str:
+    """Minúsculas, só letras/números/espaços — facilita comparar nomes do EMS com o Discord."""
+    texto = (texto or "").lower().strip()
+    limpo = []
+    for caractere in texto:
+        if caractere.isalnum() or caractere.isspace():
+            limpo.append(caractere)
+        else:
+            limpo.append(" ")
+    return " ".join("".join(limpo).split())
+
+
+# Alias interno pra não quebrar chamadas locais antigas no mesmo arquivo
+_normalizar_nome = normalizar_nome
+
+
+def nomes_parecidos(nome_a: str, nome_b: str) -> bool:
+    """
+    True se os nomes batem de forma útil pra chamada:
+    - iguais após normalizar
+    - um contém o outro (ex: 'asty' em 'asty detroit')
+    - fuzzy próximo (cutoff 0.6)
+    - pelo menos um token significativo (>=3 letras) em comum
+    """
+    a = normalizar_nome(nome_a)
+    b = normalizar_nome(nome_b)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if a in b or b in a:
+        return True
+    proximos = get_close_matches(a, [b], n=1, cutoff=0.6)
+    if proximos:
+        return True
+    tokens_a = {t for t in a.split() if len(t) >= 3}
+    tokens_b = {t for t in b.split() if len(t) >= 3}
+    if tokens_a and tokens_b and tokens_a.intersection(tokens_b):
+        return True
+    return False
+
+
+# Alias usado pelo restante do módulo
+_nomes_parecidos = nomes_parecidos
+
+
+def _buscar_por_nome(
+    nome_lido: str, membros: List[MembroConhecido]
+) -> Optional[MembroConhecido]:
+    """Procura membro pelo nome (nickname / apelido)."""
+    candidatos = [m for m in membros if m.nome]
+    if not candidatos:
+        return None
+
+    # 1) Match direto / parcial / tokens
+    for membro in candidatos:
+        if nomes_parecidos(nome_lido, membro.nome):
+            return membro
+
+    # 2) Fuzzy clássico no conjunto de nomes
     nomes = [m.nome for m in candidatos]
-    proximos = get_close_matches(nome_lido, nomes, n=1, cutoff=0.75)
+    proximos = get_close_matches(nome_lido, nomes, n=1, cutoff=0.6)
     if not proximos:
         return None
     nome_encontrado = proximos[0]
-    return next((m for m in candidatos if m.nome == nome_encontrado), None)
+    for membro in candidatos:
+        if membro.nome == nome_encontrado:
+            return membro
+    return None
 
 
-def validar_medico(id_lido: str, nome_lido: str, membros: List[MembroConhecido]) -> MedicoValidado:
+def nomes_ou_ids_batem_com_reconhecido(
+    id_fivem: str,
+    nome_ems: str,
+    reconhecidos_ids: set[str],
+    reconhecidos_nomes: list[str],
+) -> bool:
+    """
+    True se a entrada 'desconhecida' na verdade já está entre os presentes
+    (mesmo FID ou nome parecido). Usado pra tirar falso positivo do Norte.
+    """
+    id_limpo = str(id_fivem or "").strip()
+    if id_limpo and id_limpo in reconhecidos_ids:
+        return True
+    for nome_conhecido in reconhecidos_nomes:
+        if nomes_parecidos(nome_ems, nome_conhecido):
+            return True
+    return False
+
+
+def validar_medico(
+    id_lido: str, nome_lido: str, membros: List[MembroConhecido]
+) -> MedicoValidado:
     por_id = {m.id_fivem: m for m in membros}
 
     # 1. bate direto
     if id_lido in por_id:
-        return MedicoValidado(id_lido, nome_lido, status="confirmado", membro=por_id[id_lido])
+        return MedicoValidado(
+            id_lido, nome_lido, status="confirmado", membro=por_id[id_lido]
+        )
 
     # 2. tenta corrigir por confusão de dígito (ex: 710515 -> 110515)
-    for candidato_str in _candidatos_por_digito(id_lido) + _candidatos_por_corte(id_lido):
+    for candidato_str in _candidatos_por_digito(id_lido) + _candidatos_por_corte(
+        id_lido
+    ):
         if candidato_str in por_id:
             return MedicoValidado(
-                id_lido, nome_lido,
+                id_lido,
+                nome_lido,
                 status="corrigido",
                 id_corrigido=candidato_str,
                 membro=por_id[candidato_str],
@@ -105,7 +197,8 @@ def validar_medico(id_lido: str, nome_lido: str, membros: List[MembroConhecido])
     membro_por_nome = _buscar_por_nome(nome_lido, membros)
     if membro_por_nome:
         return MedicoValidado(
-            id_lido, nome_lido,
+            id_lido,
+            nome_lido,
             status="corrigido",
             id_corrigido=membro_por_nome.id_fivem,
             membro=membro_por_nome,
@@ -114,13 +207,16 @@ def validar_medico(id_lido: str, nome_lido: str, membros: List[MembroConhecido])
 
     # 4. não encontrado de nenhuma forma
     return MedicoValidado(
-        id_lido, nome_lido,
+        id_lido,
+        nome_lido,
         status="nao_encontrado",
         motivo="Não encontrado entre os Recrutamentos aprovados — pode ser médico de outro hospital (ex: Norte).",
     )
 
 
-def validar_medicos(medicos_api: List[dict], membros: List[MembroConhecido]) -> List[MedicoValidado]:
+def validar_medicos(
+    medicos_api: List[dict], membros: List[MembroConhecido]
+) -> List[MedicoValidado]:
     """Valida a lista inteira devolvida pela API (`resultado["medicos"]`).
 
     `medicos_api` vem com `id` como int (formato da API) — convertido pra

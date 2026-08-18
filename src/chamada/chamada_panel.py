@@ -35,6 +35,7 @@ from src.chamada.ocr.ocr_ems_service import (
 from src.chamada.ocr.scraping_membros import (
     combinar_membros,
     construir_membros_via_apelido,
+    extrair_id_do_apelido,
 )
 from src.config import (
     CANAIS,
@@ -55,12 +56,17 @@ from src.plantao.plantao_service import (
 )
 from src.services.validacao_ids import (
     MembroConhecido,
+    nomes_ou_ids_batem_com_reconhecido,
+    nomes_parecidos,
+    normalizar_nome,
     validar_medicos,
 )
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.mensagens import (
     destruir_print_com_aviso,
     excluir_mensagem,
+    responder_aviso,
+    responder_info,
 )
 
 logger = logging.getLogger(__name__)
@@ -466,15 +472,23 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
     sessao.nao_reconhecidos = nao_reconhecidos
     sessao.total_toggle_ligado = len(estados_ligados)
 
+    # Segunda passagem: tenta resgatar "não identificados" pelo servidor
+    # (nome parcial / FID no nick) e tira duplicatas que já estão nos presentes
+    _resgatar_nao_reconhecidos_pelo_servidor(sessao, guild)
+    _limpar_nao_reconhecidos_ja_presentes(sessao)
+
     ids_fivem_com_toggle = {
         e.id_fivem: e.discord_id for e in estados_ligados if e.id_fivem
     }
     ids_com_toggle_fora_do_ems = set(ids_fivem_com_toggle.keys()) - ids_no_ems
+    # Quem realiza a chamada não conta como ausente do EMS
+    doutor_id = sessao.doutor_id
     sessao.toggle_ligado_mas_nao_no_ems = [
         MedicoNaChamada(
             id_fivem=id_fivem, discord_id=ids_fivem_com_toggle[id_fivem], nome_ems="—"
         )
         for id_fivem in ids_com_toggle_fora_do_ems
+        if ids_fivem_com_toggle[id_fivem] != doutor_id
     ]
 
     await _processar_ausentes_do_ems(interaction, sessao)
@@ -492,6 +506,9 @@ async def _processar_ausentes_do_ems(
     for medico in sessao.toggle_ligado_mas_nao_no_ems:
         membro = guild.get_member(medico.discord_id)
         if membro is None:
+            continue
+        # Quem está fazendo a chamada nunca leva falta por esta regra
+        if membro.id == sessao.doutor_id:
             continue
         # Diretoria / bypass: sem falta e sem desligar plantão por chamada
         if _tem_cargo_bypass(membro.id, guild):
@@ -522,6 +539,111 @@ def _deduplicar_reconhecidos(sessao: SessaoChamada):
         vistos.add(chave)
         unicos.append(m)
     sessao.reconhecidos = unicos
+
+
+def _coletar_ids_e_nomes_reconhecidos(
+    sessao: SessaoChamada,
+) -> tuple[set[str], list[str]]:
+    ids: set[str] = set()
+    nomes: list[str] = []
+    for medico in sessao.reconhecidos:
+        if medico.id_fivem:
+            ids.add(str(medico.id_fivem).strip())
+        if medico.nome_ems:
+            nomes.append(medico.nome_ems)
+        if medico.nome_discord:
+            nomes.append(medico.nome_discord)
+    return ids, nomes
+
+
+def _limpar_nao_reconhecidos_ja_presentes(sessao: SessaoChamada) -> None:
+    """
+    Se alguém já está em `reconhecidos` (presente identificado),
+    não pode ficar em `nao_reconhecidos` / Norte com o mesmo FID ou nome.
+    """
+    ids_presentes, nomes_presentes = _coletar_ids_e_nomes_reconhecidos(sessao)
+    filtrados = []
+    for entrada in sessao.nao_reconhecidos:
+        id_entrada = str(entrada.get("id_fivem") or "").strip()
+        nome_entrada = entrada.get("nome_ems") or ""
+        if nomes_ou_ids_batem_com_reconhecido(
+            id_entrada, nome_entrada, ids_presentes, nomes_presentes
+        ):
+            continue
+        filtrados.append(entrada)
+    sessao.nao_reconhecidos = filtrados
+
+
+def _resgatar_nao_reconhecidos_pelo_servidor(
+    sessao: SessaoChamada, guild: discord.Guild
+) -> None:
+    """
+    Para cada linha ainda 'não identificada', tenta achar no servidor:
+    - FID no apelido (Nome | 1234)
+    - nome parecido com display_name / nick
+    Se achar, move para reconhecidos.
+    """
+    if guild is None or not sessao.nao_reconhecidos:
+        return
+
+    ainda_desconhecidos = []
+    discord_ids_ja = {
+        m.discord_id for m in sessao.reconhecidos if m.discord_id is not None
+    }
+
+    for entrada in sessao.nao_reconhecidos:
+        id_lido = str(entrada.get("id_fivem") or "").strip()
+        nome_lido = entrada.get("nome_ems") or ""
+        membro_achado = _buscar_membro_no_servidor(guild, id_lido, nome_lido)
+
+        if membro_achado is None:
+            ainda_desconhecidos.append(entrada)
+            continue
+        if membro_achado.id in discord_ids_ja:
+            # Já está nos presentes — não duplica nem manda pro Norte
+            continue
+
+        id_fivem_final = id_lido or _resolver_id_fivem_do_membro(membro_achado) or "—"
+        sessao.reconhecidos.append(
+            MedicoNaChamada(
+                id_fivem=str(id_fivem_final),
+                discord_id=membro_achado.id,
+                nome_ems=nome_lido or membro_achado.display_name,
+                nome_discord=membro_achado.display_name,
+                confianca=0.65,
+                origem="corrigido",
+                motivo="Resgatado pelo nome/FID no servidor",
+            )
+        )
+        discord_ids_ja.add(membro_achado.id)
+
+    sessao.nao_reconhecidos = ainda_desconhecidos
+    _deduplicar_reconhecidos(sessao)
+
+
+def _buscar_membro_no_servidor(
+    guild: discord.Guild,
+    id_fivem: str,
+    nome_ems: str,
+) -> discord.Member | None:
+    """Procura membro na guild pelo FID do nick ou pelo nome do EMS."""
+    id_limpo = str(id_fivem or "").strip()
+    nome_norm = normalizar_nome(nome_ems)
+
+    for membro in guild.members:
+        if membro.bot:
+            continue
+        nome_exibido = membro.nick or membro.display_name or membro.name
+        fid_no_nick = extrair_id_do_apelido(nome_exibido)
+        if id_limpo and fid_no_nick and fid_no_nick == id_limpo:
+            return membro
+        if nome_norm and nomes_parecidos(nome_ems, nome_exibido):
+            return membro
+        # Também compara só a parte do nome (sem tag / sem FID)
+        nome_sem_fid = nome_exibido.split("|")[0].strip()
+        if nome_norm and nomes_parecidos(nome_ems, nome_sem_fid):
+            return membro
+    return None
 
 
 # ─────────────────────────────────────────────
@@ -900,6 +1022,12 @@ def _construir_etapa_2(
 
 async def _callback_marcar_como_norte(interaction: discord.Interaction):
     sessao = obter_sessao()
+    # Última limpeza: quem já está presente não vai pro Norte
+    _limpar_nao_reconhecidos_ja_presentes(sessao)
+    if interaction.guild is not None:
+        _resgatar_nao_reconhecidos_pelo_servidor(sessao, interaction.guild)
+        _limpar_nao_reconhecidos_ja_presentes(sessao)
+
     sessao.medicos_norte.extend(sessao.nao_reconhecidos)
     sessao.nao_reconhecidos = []
     await interaction.response.defer(ephemeral=True)
@@ -938,13 +1066,22 @@ def _construir_etapa_3(
     sessao.bypass_presenca = [
         m for m in sessao.reconhecidos if _tem_cargo_bypass(m.discord_id, guild)
     ]
-    # 👇 MUDANÇA: usa TODOS os identificados na Etapa 1 (já excluindo quem foi
-    # movido pra Hospital Norte, já que esses nunca entraram em `reconhecidos`)
+    # Quem faz a chamada entra no bypass: sempre presente, nunca falta
+    ids_bypass = {b.discord_id for b in sessao.bypass_presenca}
+    for medico in sessao.reconhecidos:
+        if (
+            medico.discord_id == sessao.doutor_id
+            and medico.discord_id not in ids_bypass
+        ):
+            sessao.bypass_presenca.append(medico)
+            ids_bypass.add(medico.discord_id)
+
+    # Usa TODOS os identificados na Etapa 1 (já excluindo Norte / bypass)
     sessao.presentes_no_ems_toggle_ligado = [
-        m
-        for m in sessao.reconhecidos
-        if m.discord_id not in {b.discord_id for b in sessao.bypass_presenca}
+        m for m in sessao.reconhecidos if m.discord_id not in ids_bypass
     ]
+    # Garante que o doutor nunca fique marcado como faltante no select
+    sessao.faltantes_ids.discard(sessao.doutor_id)
 
     linha_bypass = (
         f"`🛡️` **{len(sessao.bypass_presenca)}** já contam como presentes automaticamente (cargo com dispensa).\n"
@@ -1119,9 +1256,55 @@ def _construir_etapa_4(
 
 
 async def _callback_finalizar_chamada(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
     sessao = obter_sessao()
+    if sessao is None:
+        await responder_aviso(
+            interaction,
+            titulo="Chamada já encerrada",
+            linhas=["Esta sessão de chamada não está mais ativa."],
+        )
+        return
+
+    # Trava reenvio: marca etapa e desativa o botão na hora
+    if sessao.finalizando:
+        await responder_aviso(
+            interaction,
+            titulo="Já está enviando",
+            linhas=["A chamada já está sendo processada. Aguarde…"],
+        )
+        return
+    sessao.finalizando = True
+
     guild = interaction.guild
+    await interaction.response.defer(ephemeral=True)
+
+    # Aviso ephemeral de processando (followup após defer)
+    try:
+        await responder_info(
+            interaction,
+            titulo="Processando envio",
+            linhas=[
+                "Enviando o registro da chamada para o canal.",
+                "Não clique de novo — o botão foi desativado.",
+            ],
+            delay=20,
+        )
+    except Exception:
+        pass
+
+    try:
+        await interaction.edit_original_response(
+            view=_construir_view_simples(
+                "⏳ Enviando chamada…",
+                "Aguarde o registro no canal. O botão foi desativado.",
+                discord.Color.orange(),
+            )
+        )
+    except discord.HTTPException:
+        pass
+
+    # Nunca falta pro responsável pela chamada
+    sessao.faltantes_ids.discard(sessao.doutor_id)
 
     presentes = sessao.bypass_presenca + [
         m
@@ -1131,12 +1314,14 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
     faltantes = [
         m
         for m in sessao.presentes_no_ems_toggle_ligado
-        if m.discord_id in sessao.faltantes_ids
+        if m.discord_id in sessao.faltantes_ids and m.discord_id != sessao.doutor_id
     ]
 
     for medico in faltantes:
-        membro = guild.get_member(medico.discord_id)
+        membro = guild.get_member(medico.discord_id) if guild else None
         if membro is None:
+            continue
+        if membro.id == sessao.doutor_id:
             continue
         # Diretoria / bypass: nunca falta, nunca punição, nunca perde plantão por chamada
         if _tem_cargo_bypass(membro.id, guild):
@@ -1156,6 +1341,9 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
         # Diretoria / bypass: presença automática, sem +1 moeda de chamada
         if _tem_cargo_bypass(medico.discord_id, guild):
             continue
+        if medico.discord_id == sessao.doutor_id:
+            # Moeda do doutor é creditada abaixo (só uma vez)
+            continue
         async with async_session() as session:
             resultado = await session.execute(
                 select(EstadoPlantao).where(
@@ -1173,7 +1361,7 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
         )
         estado_doutor = resultado.scalar_one_or_none()
         if estado_doutor:
-            estado_doutor.saldo_moedas += 1
+            estado_doutor.saldo_moedas = int(estado_doutor.saldo_moedas or 0) + 1
             await session.commit()
 
         resultado_chamada = await session.execute(
@@ -1188,6 +1376,26 @@ async def _callback_finalizar_chamada(interaction: discord.Interaction):
                 sessao.toggle_ligado_mas_nao_no_ems
             )
             await session.commit()
+
+    # Limpa Norte de quem já está em presentes (FID / nome)
+    ids_presentes, nomes_presentes = _coletar_ids_e_nomes_reconhecidos(sessao)
+    for medico in presentes:
+        if medico.id_fivem:
+            ids_presentes.add(str(medico.id_fivem).strip())
+        if medico.nome_ems:
+            nomes_presentes.append(medico.nome_ems)
+        if medico.nome_discord:
+            nomes_presentes.append(medico.nome_discord)
+    sessao.medicos_norte = [
+        entrada
+        for entrada in sessao.medicos_norte
+        if not nomes_ou_ids_batem_com_reconhecido(
+            str(entrada.get("id_fivem") or "").strip(),
+            entrada.get("nome_ems") or "",
+            ids_presentes,
+            nomes_presentes,
+        )
+    ]
 
     await _enviar_log_chamada_canal(guild, sessao, presentes, faltantes)
 
