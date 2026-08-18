@@ -507,6 +507,9 @@ CANAIS = {
     "CATEG_REVOGAR_EXO": 1486368967193788580,
     "CATEG_DENUNCIAS_JOGADOR": 1486368965084315679,
     "CATEG_DENUNCIAS_DIRETORIA": 1537884732358922280,
+    # Entrada e saída de membros no servidor (cards automáticos)
+    "CANAL_BOAS_VINDAS": 1539222373717381150,
+    "CANAL_ADEUS_SERVIDOR": 1539222407947100200,
 }
 
 # ---------------------------------------------------------------------------

@@ -183,6 +183,7 @@ CAMINHOS_DOS_COGS = [
     "src.demissao.demissao_cogs",
     "src.ausencia.ausencia_cogs",
     "src.tickets.tickets_cogs",
+    "src.entrada.entrada_listener",
 ]
 
 
