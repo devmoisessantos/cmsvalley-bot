@@ -10,9 +10,12 @@ from sqlalchemy import select
 
 from src.ausencia.ausencia_panel import (
     CUSTOM_ID_APROVAR,
+    CUSTOM_ID_APROVAR_RETORNO,
     CUSTOM_ID_REPROVAR,
+    CUSTOM_ID_REPROVAR_RETORNO,
     PainelAusenciaLayout,
     processar_decisao_ausencia,
+    processar_decisao_retorno,
 )
 from src.ausencia.ausencia_setup import garantir_painel_ausencia
 from src.config import CANAIS
@@ -63,12 +66,30 @@ class AusenciaCogs(commands.Cog):
 
     @commands.Cog.listener()
     async def on_interaction(self, interacao: discord.Interaction):
-        """Botões de aprovar/recusar após restart (custom_id dinâmico)."""
+        """Botões de aprovar/recusar (ausência e retorno) após restart."""
         if interacao.type is not discord.InteractionType.component:
             return
         data = interacao.data or {}
         custom_id = str(data.get("custom_id") or "")
-        if custom_id.startswith(CUSTOM_ID_APROVAR):
+
+        # Retorno precisa vir antes de "ausencia:aprovar:" (prefixo comum)
+        if custom_id.startswith(CUSTOM_ID_APROVAR_RETORNO):
+            try:
+                pedido_id = int(custom_id[len(CUSTOM_ID_APROVAR_RETORNO) :])
+            except ValueError:
+                return
+            if pedido_id <= 0 or interacao.response.is_done():
+                return
+            await processar_decisao_retorno(interacao, pedido_id, aprovada=True)
+        elif custom_id.startswith(CUSTOM_ID_REPROVAR_RETORNO):
+            try:
+                pedido_id = int(custom_id[len(CUSTOM_ID_REPROVAR_RETORNO) :])
+            except ValueError:
+                return
+            if pedido_id <= 0 or interacao.response.is_done():
+                return
+            await processar_decisao_retorno(interacao, pedido_id, aprovada=False)
+        elif custom_id.startswith(CUSTOM_ID_APROVAR):
             try:
                 pedido_id = int(custom_id[len(CUSTOM_ID_APROVAR) :])
             except ValueError:

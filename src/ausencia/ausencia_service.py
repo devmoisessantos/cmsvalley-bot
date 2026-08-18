@@ -102,6 +102,7 @@ async def obter_pedido_pendente(discord_id: int) -> SolicitacaoAusencia | None:
 
 
 async def obter_ausencia_ativa(discord_id: int) -> SolicitacaoAusencia | None:
+    """Ausência em vigor (aprovada) — ainda não finalizada."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoAusencia)
@@ -115,10 +116,51 @@ async def obter_ausencia_ativa(discord_id: int) -> SolicitacaoAusencia | None:
         return resultado.scalar_one_or_none()
 
 
+async def obter_retorno_pendente(discord_id: int) -> SolicitacaoAusencia | None:
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoAusencia)
+            .where(
+                SolicitacaoAusencia.discord_id == discord_id,
+                SolicitacaoAusencia.status == "retorno_pendente",
+            )
+            .order_by(SolicitacaoAusencia.id.desc())
+            .limit(1)
+        )
+        return resultado.scalar_one_or_none()
+
+
 def serializar_cargos(membro: discord.Member) -> tuple[str, str]:
     ids = [r.id for r in membro.roles if r != membro.guild.default_role]
     nomes = [r.name for r in membro.roles if r != membro.guild.default_role]
     return json.dumps(ids), json.dumps(nomes, ensure_ascii=False)
+
+
+def deserializar_cargos_ids(texto: str | None) -> list[int]:
+    if not texto:
+        return []
+    try:
+        dados = json.loads(texto)
+        return [int(x) for x in dados if x is not None]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return []
+
+
+async def atualizar_cargos_anteriores(
+    solicitacao_id: int,
+    membro: discord.Member,
+) -> None:
+    """Regrava snapshot de cargos no momento da aprovação da ausência."""
+    ids_json, nomes_json = serializar_cargos(membro)
+    async with async_session() as sessao:
+        registro = await sessao.get(SolicitacaoAusencia, solicitacao_id)
+        if registro is None:
+            return
+        registro.cargos_anteriores_ids = ids_json
+        registro.cargos_anteriores_nomes = nomes_json
+        registro.cargo_principal = cargo_atual_hierarquia(membro)
+        registro.atualizado_em = datetime.now(timezone.utc)
+        await sessao.commit()
 
 
 async def criar_solicitacao(
@@ -184,7 +226,7 @@ async def decidir_ausencia(
     aprovada: bool,
     diretor: discord.Member,
 ) -> tuple[SolicitacaoAusencia | None, bool]:
-    """Atualiza status. Retorna (registro, foi_decidido_agora)."""
+    """Atualiza status de pedido de ausência. Retorna (registro, foi_decidido_agora)."""
     async with async_session() as sessao:
         registro = await sessao.get(SolicitacaoAusencia, solicitacao_id)
         if registro is None:
@@ -193,6 +235,50 @@ async def decidir_ausencia(
             return registro, False
 
         registro.status = "aprovada" if aprovada else "negada"
+        registro.aprovado_por_id = diretor.id
+        registro.aprovado_por_nome = str(diretor)[:120]
+        registro.data_decisao = datetime.now(timezone.utc)
+        registro.atualizado_em = datetime.now(timezone.utc)
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro, True
+
+
+async def solicitar_retorno(solicitacao_id: int) -> SolicitacaoAusencia | None:
+    """Marca ausência ativa como retorno_pendente (aguarda Diretoria)."""
+    async with async_session() as sessao:
+        registro = await sessao.get(SolicitacaoAusencia, solicitacao_id)
+        if registro is None or registro.status != "aprovada":
+            return None
+        registro.status = "retorno_pendente"
+        registro.atualizado_em = datetime.now(timezone.utc)
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
+async def decidir_retorno(
+    *,
+    solicitacao_id: int,
+    aprovada: bool,
+    diretor: discord.Member,
+) -> tuple[SolicitacaoAusencia | None, bool]:
+    """
+    Aprova/nega pedido de retorno.
+    - aprovada → finalizada (cargos serão restaurados pelo painel)
+    - negada → volta para aprovada (continua ausente)
+    """
+    async with async_session() as sessao:
+        registro = await sessao.get(SolicitacaoAusencia, solicitacao_id)
+        if registro is None:
+            return None, False
+        if registro.status != "retorno_pendente":
+            return registro, False
+
+        if aprovada:
+            registro.status = "finalizada"
+        else:
+            registro.status = "aprovada"
         registro.aprovado_por_id = diretor.id
         registro.aprovado_por_nome = str(diretor)[:120]
         registro.data_decisao = datetime.now(timezone.utc)
@@ -258,3 +344,62 @@ async def aplicar_cargos_ausencia(
         return False, f"Falha ao ajustar cargos: {erro}"
 
     return True, "Cargos ajustados (Ausente + HP S・Valley + Aprovado)."
+
+
+async def restaurar_cargos_ausencia(
+    membro: discord.Member,
+    *,
+    solicitacao: SolicitacaoAusencia,
+    executor: discord.Member,
+) -> tuple[bool, str]:
+    """
+    Restaura cargos salvos no pedido e remove 🚫 Ausente.
+    Mantém cargos que o bot não consegue gerenciar.
+    """
+    guilda = membro.guild
+    bot_membro = guilda.me
+    if bot_membro is None:
+        return False, "Bot sem contexto de membro na guilda."
+
+    ids_salvos = deserializar_cargos_ids(solicitacao.cargos_anteriores_ids)
+    id_ausente = CARGOS.get("🚫 Ausente")
+
+    roles_para_adicionar: list[discord.Role] = []
+    for rid in ids_salvos:
+        if id_ausente and rid == id_ausente:
+            continue
+        role = guilda.get_role(rid)
+        if role is None:
+            continue
+        if role.managed:
+            continue
+        if role >= bot_membro.top_role:
+            continue
+        if role not in membro.roles:
+            roles_para_adicionar.append(role)
+
+    roles_para_remover: list[discord.Role] = []
+    if id_ausente:
+        role_ausente = guilda.get_role(id_ausente)
+        if role_ausente is not None and role_ausente in membro.roles:
+            if role_ausente < bot_membro.top_role and not role_ausente.managed:
+                roles_para_remover.append(role_ausente)
+
+    motivo_discord = (
+        f"Retorno de ausência #{solicitacao.id} — {executor} — cargos restaurados"
+    )
+    try:
+        if roles_para_remover:
+            await membro.remove_roles(*roles_para_remover, reason=motivo_discord)
+        if roles_para_adicionar:
+            await membro.add_roles(*roles_para_adicionar, reason=motivo_discord)
+    except discord.Forbidden:
+        return False, "Sem permissão para restaurar os cargos do membro."
+    except discord.HTTPException as erro:
+        return False, f"Falha ao restaurar cargos: {erro}"
+
+    return (
+        True,
+        f"Cargos restaurados ({len(roles_para_adicionar)} adicionados, "
+        f"{len(roles_para_remover)} removidos).",
+    )

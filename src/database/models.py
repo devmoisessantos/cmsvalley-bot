@@ -757,7 +757,7 @@ class SolicitacaoAusencia(Base):
     cargos_anteriores_ids: Mapped[str] = mapped_column(Text, default="[]")
     cargos_anteriores_nomes: Mapped[str] = mapped_column(Text, default="[]")
     cargo_principal: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    # pendente | aprovada | negada | finalizada
+    # pendente | aprovada | negada | retorno_pendente | finalizada
     status: Mapped[str] = mapped_column(String(20), default="pendente", index=True)
     aprovado_por_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     aprovado_por_nome: Mapped[str | None] = mapped_column(String(120), nullable=True)

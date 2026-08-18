@@ -23,7 +23,9 @@ from src.database.models import (
 )
 from src.plantao.carteira_service import (
     equivalente_em_reais,
+    membro_elegivel_ranking_moedas,
     ranking_top_moedas,
+    zerar_saldo_moedas,
 )
 from src.recrutamento.recrutamento_service import resolver_id_fivem
 
@@ -101,9 +103,34 @@ def _rotulo_membro(
 
 
 async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.LayoutView:
-    top = await ranking_top_moedas(15)
+    candidatos = await ranking_top_moedas(15)
     medalhas = {1: "🥇", 2: "🥈", 3: "🥉"}
     linhas_rank: list[str] = []
+
+    # Filtra só quem ainda faz parte da organização; zera saldo de quem saiu/exonerado
+    top: list[tuple[int, int]] = []
+    for discord_id, saldo in candidatos:
+        membro = guilda.get_member(discord_id)
+        if membro_elegivel_ranking_moedas(membro):
+            top.append((discord_id, saldo))
+            if len(top) >= 15:
+                break
+        else:
+            # Saiu do servidor / sem hierarquia / exonerado → limpa moedas
+            try:
+                await zerar_saldo_moedas(
+                    discord_id,
+                    motivo=(
+                        "Removido do ranking: saiu do servidor ou não faz "
+                        "mais parte da organização"
+                    ),
+                )
+            except Exception as erro:
+                logger.warning(
+                    "Ranking moedas: falha ao zerar saldo de %s (%s)",
+                    discord_id,
+                    erro,
+                )
 
     ids_fora_cache = [
         discord_id for discord_id, _ in top if guilda.get_member(discord_id) is None

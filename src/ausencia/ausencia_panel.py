@@ -14,14 +14,21 @@ from src.ausencia.ausencia_service import (
     PERIODOS_AUSENCIA,
     TIPOS_AUSENCIA,
     aplicar_cargos_ausencia,
+    atualizar_cargos_anteriores,
     calcular_datas_periodo,
     cargo_atual_hierarquia,
     criar_solicitacao,
     decidir_ausencia,
+    decidir_retorno,
     marcar_mensagem_pedido,
     membro_e_diretoria,
     membro_pode_solicitar_ausencia,
+    obter_ausencia_ativa,
     obter_pedido_pendente,
+    obter_retorno_pendente,
+    obter_solicitacao,
+    restaurar_cargos_ausencia,
+    solicitar_retorno,
 )
 from src.config import CANAIS
 from src.utils.error_handling import (
@@ -44,8 +51,11 @@ from src.utils.notificacao import (
 )
 
 CUSTOM_ID_SOLICITAR = "ausencia:solicitar"
+CUSTOM_ID_RETORNAR = "ausencia:retornar"
 CUSTOM_ID_APROVAR = "ausencia:aprovar:"
 CUSTOM_ID_REPROVAR = "ausencia:reprovar:"
+CUSTOM_ID_APROVAR_RETORNO = "ausencia:aprovar_retorno:"
+CUSTOM_ID_REPROVAR_RETORNO = "ausencia:reprovar_retorno:"
 
 
 def _formatar_momento_brasilia(data: datetime | None = None) -> str:
@@ -94,7 +104,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         componentes: list = []
         titulo = (
-            "# :beach: CMS Valley — Registro de Ausências\n"
+            "# :beach: CMS Valley — Painel de Ausência\n"
             "> Use a opção abaixo para solicitar seu afastamento do servidor.\n"
             "Cada solicitação é registrada em nosso sistema para aprovação da Diretoria.\n"
             "Caso tenha dúvidas, entre em contato com os Gerais!"
@@ -118,19 +128,28 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 ":white_check_mark: Para emergências, contate um Superior no privado.\n\n"
                 "### **:pushpin: Como Funciona:**\n"
                 "→ Após escolher o tipo e o período, o pedido será enviado para o canal da Diretoria.\n"
-                "→ Você receberá uma notificação quando for aprovado ou negado."
+                "→ Você receberá uma notificação quando for aprovado ou negado.\n"
+                "→ Ao voltar, use **Solicitar Retorno** — a Diretoria aprova e restaura seus cargos."
             )
         )
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
         linha = discord.ui.ActionRow()
         botao = discord.ui.Button(
-            label="📩 Iniciar Registro",
+            label="📩 Solicitar Ausência",
             style=discord.ButtonStyle.success,
             custom_id=CUSTOM_ID_SOLICITAR,
         )
         botao.callback = self._ao_solicitar
         linha.add_item(botao)
+
+        botao_retorno = discord.ui.Button(
+            label="🔄 Solicitar Retorno",
+            style=discord.ButtonStyle.primary,
+            custom_id=CUSTOM_ID_RETORNAR,
+        )
+        botao_retorno.callback = self._ao_retornar
+        linha.add_item(botao_retorno)
         componentes.append(linha)
 
         self.add_item(
@@ -160,6 +179,31 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
+        ativa = await obter_ausencia_ativa(membro.id)
+        if ativa is not None:
+            await responder_aviso(
+                interacao,
+                titulo="Você já está ausente",
+                linhas=[
+                    f"Ausência `#{ativa.id}` está **ativa**.",
+                    "Use **🔄 Solicitar Retorno** quando estiver pronto para voltar.",
+                ],
+                delay=15,
+            )
+            return
+
+        retorno = await obter_retorno_pendente(membro.id)
+        if retorno is not None:
+            await responder_aviso(
+                interacao,
+                titulo="Retorno em análise",
+                linhas=[
+                    f"Seu pedido de retorno `#{retorno.id}` já está com a Diretoria.",
+                ],
+                delay=15,
+            )
+            return
+
         pendente = await obter_pedido_pendente(membro.id)
         if pendente is not None:
             await responder_aviso(
@@ -174,6 +218,54 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         view = ViewSelecaoAusencia(membro_id=membro.id)
+        await interacao.response.send_message(view=view, ephemeral=True)
+
+    async def _ao_retornar(self, interacao: discord.Interaction):
+        membro = interacao.user
+        if not isinstance(membro, discord.Member) or interacao.guild is None:
+            await responder_erro(
+                interacao,
+                titulo="Contexto inválido",
+                linhas=["Use este painel dentro do servidor."],
+            )
+            return
+
+        retorno = await obter_retorno_pendente(membro.id)
+        if retorno is not None:
+            await responder_aviso(
+                interacao,
+                titulo="Retorno já solicitado",
+                linhas=[
+                    f"Pedido de retorno `#{retorno.id}` já está **em análise**.",
+                    "Aguarde a decisão da Diretoria.",
+                ],
+                delay=15,
+            )
+            return
+
+        ativa = await obter_ausencia_ativa(membro.id)
+        if ativa is None:
+            await responder_aviso(
+                interacao,
+                titulo="Sem ausência ativa",
+                linhas=[
+                    "Você não possui ausência **aprovada** em andamento.",
+                    "Só quem está ausente pode solicitar o retorno.",
+                ],
+                delay=15,
+            )
+            return
+
+        tipo_rotulo = TIPOS_AUSENCIA.get(ativa.tipo, ativa.tipo)
+        view = ViewConfirmarRetorno(
+            membro_id=membro.id,
+            solicitacao_id=ativa.id,
+            tipo_rotulo=tipo_rotulo,
+            periodo_rotulo=ativa.periodo_rotulo,
+            data_inicio=ativa.data_inicio,
+            data_fim=ativa.data_fim,
+            url_thumb=membro.display_avatar.url,
+        )
         await interacao.response.send_message(view=view, ephemeral=True)
 
 
@@ -661,6 +753,116 @@ class ViewConfirmarEnvioAusencia(LoggingViewMixin, discord.ui.LayoutView):
 # ---------------------------------------------------------------------------
 
 
+class ViewConfirmarRetorno(LoggingViewMixin, discord.ui.LayoutView):
+    """Confirmação ephemeral antes de enviar pedido de retorno à Diretoria."""
+
+    def __init__(
+        self,
+        *,
+        membro_id: int,
+        solicitacao_id: int,
+        tipo_rotulo: str,
+        periodo_rotulo: str,
+        data_inicio: datetime,
+        data_fim: datetime,
+        url_thumb: str,
+    ):
+        super().__init__(timeout=300)
+        self.membro_id = membro_id
+        self.solicitacao_id = solicitacao_id
+
+        corpo = (
+            f"**Ausência** `#{solicitacao_id}`\n"
+            f"- **Tipo:** {tipo_rotulo}\n"
+            f"- **Período:** `{periodo_rotulo}`\n"
+            f"- **Início:** `{_formatar_data_curta(data_inicio)}`\n"
+            f"- **Fim previsto:** `{_formatar_data_curta(data_fim)}`\n\n"
+            "Ao confirmar, a **Diretoria** analisa o retorno e, se aprovado, "
+            "**restaura seus cargos** anteriores."
+        )
+
+        linha = discord.ui.ActionRow()
+        botao = discord.ui.Button(
+            label="Confirmar retorno",
+            style=discord.ButtonStyle.success,
+            emoji="✅",
+        )
+        botao.callback = self._ao_confirmar
+        linha.add_item(botao)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    "# 🔄 Solicitar retorno à atividade",
+                    corpo,
+                    accessory=discord.ui.Thumbnail(url_thumb),
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                linha,
+                discord.ui.TextDisplay(
+                    "-# Seus cargos só voltam depois da **aprovação** da Diretoria."
+                ),
+                accent_color=discord.Color.blurple(),
+            )
+        )
+
+    async def _ao_confirmar(self, interacao: discord.Interaction):
+        if interacao.user.id != self.membro_id:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Só quem solicitou pode confirmar."],
+            )
+            return
+        if not isinstance(interacao.user, discord.Member) or interacao.guild is None:
+            await responder_erro(
+                interacao,
+                titulo="Contexto inválido",
+                linhas=["Use dentro do servidor."],
+            )
+            return
+
+        registro = await solicitar_retorno(self.solicitacao_id)
+        if registro is None:
+            await responder_aviso(
+                interacao,
+                titulo="Não foi possível solicitar",
+                linhas=[
+                    "A ausência não está mais ativa ou já há retorno pendente.",
+                ],
+            )
+            return
+
+        try:
+            await publicar_pedido_retorno(
+                interacao.guild,
+                registro=registro,
+                membro=interacao.user,
+            )
+            await responder_sucesso(
+                interacao,
+                titulo="Retorno solicitado",
+                linhas=[
+                    f"Pedido de retorno da ausência `#{registro.id}` enviado à Diretoria.",
+                    "Você será notificado quando houver decisão.",
+                ],
+                delay=20,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Falha ao publicar pedido de retorno",
+                erro,
+                contexto="ViewConfirmarRetorno._ao_confirmar",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro ao enviar",
+                linhas=["Não foi possível enviar o pedido. Tente novamente."],
+            )
+
+
 async def publicar_pedido_diretoria(
     guilda: discord.Guild,
     *,
@@ -687,6 +889,39 @@ async def publicar_pedido_diretoria(
     )
 
     view = ViewDecisaoAusencia(
+        solicitacao_id=registro.id,
+        corpo=corpo,
+        url_thumb=membro.display_avatar.url,
+    )
+    mensagem = await canal.send(view=view)
+    await marcar_mensagem_pedido(registro.id, canal.id, mensagem.id)
+
+
+async def publicar_pedido_retorno(
+    guilda: discord.Guild,
+    *,
+    registro,
+    membro: discord.Member,
+) -> None:
+    canal_id = CANAIS.get("CANAL_PEDIDOS_AUSENCIA") or 0
+    canal = guilda.get_channel(int(canal_id)) if canal_id else None
+    if canal is None:
+        return
+
+    tipo_rotulo = TIPOS_AUSENCIA.get(registro.tipo, registro.tipo)
+    corpo = (
+        f"`👤` **Membro:** {membro.mention} (`{membro.id}`)\n"
+        f"- **FID:** `{registro.id_fivem or '—'}`\n"
+        f"- **Cargo anterior:** `{registro.cargo_principal or '—'}`\n"
+        f"- **Tipo da ausência:** {tipo_rotulo}\n"
+        f"- **Período:** `{registro.periodo_rotulo}`\n"
+        f"- **Início:** `{_formatar_data_curta(registro.data_inicio)}`\n"
+        f"- **Fim previsto:** `{_formatar_data_curta(registro.data_fim)}`\n"
+        f"`🕐` **Retorno solicitado em:** `{_formatar_momento_brasilia()}`\n"
+        f"`📌` **Status:** 🟡 **Retorno pendente** — restaurar cargos?"
+    )
+
+    view = ViewDecisaoRetorno(
         solicitacao_id=registro.id,
         corpo=corpo,
         url_thumb=membro.display_avatar.url,
@@ -726,6 +961,44 @@ class ViewDecisaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 linha,
                 accent_color=discord.Color.blurple(),
+            )
+        )
+
+
+class ViewDecisaoRetorno(LoggingViewMixin, discord.ui.LayoutView):
+    def __init__(self, *, solicitacao_id: int, corpo: str, url_thumb: str):
+        super().__init__(timeout=None)
+        self.solicitacao_id = solicitacao_id
+
+        linha = discord.ui.ActionRow()
+        botao_ok = discord.ui.Button(
+            label="Aprovar retorno",
+            style=discord.ButtonStyle.success,
+            emoji="✅",
+            custom_id=f"{CUSTOM_ID_APROVAR_RETORNO}{solicitacao_id}",
+        )
+        botao_no = discord.ui.Button(
+            label="Negar retorno",
+            style=discord.ButtonStyle.danger,
+            emoji="❌",
+            custom_id=f"{CUSTOM_ID_REPROVAR_RETORNO}{solicitacao_id}",
+        )
+        linha.add_item(botao_ok)
+        linha.add_item(botao_no)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    f"# 🔄 Pedido de Retorno `#{solicitacao_id}`",
+                    corpo,
+                    accessory=discord.ui.Thumbnail(url_thumb),
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                linha,
+                discord.ui.TextDisplay(
+                    "-# **Aprovar** restaura os cargos salvos e remove 🚫 Ausente."
+                ),
+                accent_color=discord.Color.gold(),
             )
         )
 
@@ -777,6 +1050,10 @@ async def processar_decisao_ausencia(
     status_emoji = "✅ Aprovada" if aprovada else "❌ Negada"
 
     if aprovada and membro is not None:
+        # Snapshot atualizado no momento da aprovação (antes de remover cargos)
+        await atualizar_cargos_anteriores(pedido_id, membro)
+        registro = await obter_solicitacao(pedido_id) or registro
+
         ok, msg = await aplicar_cargos_ausencia(
             membro,
             executor=interacao.user,
@@ -791,7 +1068,6 @@ async def processar_decisao_ausencia(
                 usuario=membro,
             )
 
-    # Atualiza a mensagem do pedido
     corpo_atualizado = (
         f"`👤` **Membro:** <@{registro.discord_id}> (`{registro.discord_id}`)\n"
         f"- **FID:** `{registro.id_fivem or '—'}`\n"
@@ -819,9 +1095,9 @@ async def processar_decisao_ausencia(
     try:
         await interacao.response.edit_message(view=view_final)
     except discord.HTTPException:
-        await interacao.response.defer()
+        if not interacao.response.is_done():
+            await interacao.response.defer()
 
-    # DM ao membro
     try:
         await enviar_dm_card(
             interacao.client.get_user(registro.discord_id) or membro,
@@ -829,7 +1105,127 @@ async def processar_decisao_ausencia(
             linhas=[
                 f"Seu pedido `#{pedido_id}` foi **{registro.status}**.",
                 f"Tipo: {tipo_rotulo} · Período: {registro.periodo_rotulo}",
-                f"Início: {_formatar_data_curta(registro.data_inicio)} · Fim: {_formatar_data_curta(registro.data_fim)}",
+                f"Início: {_formatar_data_curta(registro.data_inicio)} · "
+                f"Fim: {_formatar_data_curta(registro.data_fim)}",
+                (
+                    "Quando voltar, use **🔄 Solicitar Retorno** no painel."
+                    if aprovada
+                    else ""
+                ),
+            ],
+            cor=discord.Color.green() if aprovada else COR_AVISO,
+        )
+    except Exception:
+        pass
+
+
+async def processar_decisao_retorno(
+    interacao: discord.Interaction,
+    pedido_id: int,
+    *,
+    aprovada: bool,
+) -> None:
+    if interacao.guild is None or not isinstance(interacao.user, discord.Member):
+        await responder_erro(
+            interacao,
+            titulo="Contexto inválido",
+            linhas=["Use dentro do servidor."],
+        )
+        return
+
+    if not membro_e_diretoria(interacao.user):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Apenas a **Diretoria** pode decidir pedidos de retorno."],
+        )
+        return
+
+    registro, decidido_agora = await decidir_retorno(
+        solicitacao_id=pedido_id,
+        aprovada=aprovada,
+        diretor=interacao.user,
+    )
+    if registro is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=[f"Solicitação `#{pedido_id}` não existe."],
+        )
+        return
+    if not decidido_agora:
+        await responder_aviso(
+            interacao,
+            titulo="Já decidido",
+            linhas=[f"Este pedido já está **{registro.status}**."],
+        )
+        return
+
+    membro = interacao.guild.get_member(registro.discord_id)
+    tipo_rotulo = TIPOS_AUSENCIA.get(registro.tipo, registro.tipo)
+    detalhe_cargos = ""
+
+    if aprovada and membro is not None:
+        ok, msg = await restaurar_cargos_ausencia(
+            membro,
+            solicitacao=registro,
+            executor=interacao.user,
+        )
+        detalhe_cargos = msg
+        if not ok:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Falha ao restaurar cargos no retorno",
+                Exception(msg),
+                contexto=f"processar_decisao_retorno#{pedido_id}",
+                usuario=membro,
+            )
+
+    status_emoji = (
+        "✅ Retorno aprovado — cargos restaurados"
+        if aprovada
+        else "❌ Retorno negado — continua ausente"
+    )
+    corpo_atualizado = (
+        f"`👤` **Membro:** <@{registro.discord_id}> (`{registro.discord_id}`)\n"
+        f"- **FID:** `{registro.id_fivem or '—'}`\n"
+        f"- **Cargo anterior:** `{registro.cargo_principal or '—'}`\n"
+        f"- **Tipo:** {tipo_rotulo}\n"
+        f"- **Período:** `{registro.periodo_rotulo}`\n"
+        f"`📌` **Status:** {status_emoji}\n"
+        f"`🛡️` **Decidido por:** {interacao.user.mention}\n"
+        f"`🕐` **Decisão em:** `{_formatar_momento_brasilia()}`"
+    )
+    if detalhe_cargos:
+        corpo_atualizado += f"\n`📋` **Cargos:** {detalhe_cargos}"
+
+    view_final = discord.ui.LayoutView(timeout=None)
+    view_final.add_item(
+        discord.ui.Container(
+            discord.ui.TextDisplay(
+                f"# 🔄 Pedido de Retorno `#{pedido_id}`\n{corpo_atualizado}"
+            ),
+            accent_color=discord.Color.green() if aprovada else discord.Color.red(),
+        )
+    )
+    try:
+        await interacao.response.edit_message(view=view_final)
+    except discord.HTTPException:
+        if not interacao.response.is_done():
+            await interacao.response.defer()
+
+    try:
+        await enviar_dm_card(
+            interacao.client.get_user(registro.discord_id) or membro,
+            titulo="Retorno " + ("aprovado ✅" if aprovada else "negado ❌"),
+            linhas=[
+                f"Pedido de retorno da ausência `#{pedido_id}`: "
+                f"**{'aprovado' if aprovada else 'negado'}**.",
+                (
+                    "Seus cargos foram restaurados. Bem-vindo de volta!"
+                    if aprovada
+                    else "Você continua com o cargo de ausente. Fale com a Diretoria se precisar."
+                ),
             ],
             cor=discord.Color.green() if aprovada else COR_AVISO,
         )

@@ -276,15 +276,73 @@ async def recusar_deposito(
 
 
 async def ranking_top_moedas(limite: int = 15) -> list[tuple[int, int]]:
-    """Lista (discord_id, saldo) ordenada por saldo desc."""
+    """
+    Lista (discord_id, saldo) ordenada por saldo desc.
+
+    Busca mais linhas do que o limite para o ranking filtrar quem
+    ainda faz parte da organização (guild + hierarquia).
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(EstadoPlantao.discord_id, EstadoPlantao.saldo_moedas)
             .where(EstadoPlantao.saldo_moedas > 0)
             .order_by(EstadoPlantao.saldo_moedas.desc())
-            .limit(limite)
+            .limit(max(limite * 5, 50))
         )
         return [(int(row[0]), int(row[1] or 0)) for row in resultado.all()]
+
+
+async def zerar_saldo_moedas(
+    discord_id: int,
+    *,
+    motivo: str = "Saída da organização",
+) -> int:
+    """
+    Zera saldo de moedas e registra AJUSTE_STAFF no extrato.
+    Retorna o saldo que foi removido (0 se já estava zerado).
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado.scalar_one_or_none()
+        if estado is None:
+            return 0
+        saldo = int(estado.saldo_moedas or 0)
+        if saldo <= 0:
+            return 0
+        estado.saldo_moedas = 0
+        estado.ultima_atualizacao = datetime.now(timezone.utc)
+        sessao.add(
+            MovimentacaoMoeda(
+                discord_id=discord_id,
+                tipo="AJUSTE_STAFF",
+                valor=-saldo,
+                saldo_apos=0,
+                referencia=(motivo or "Saldo zerado")[:200],
+            )
+        )
+        await sessao.commit()
+        return saldo
+
+
+def membro_elegivel_ranking_moedas(membro: discord.Member | None) -> bool:
+    """
+    Só entra no ranking quem ainda faz parte da organização:
+    - está na guild
+    - tem cargo da hierarquia hospitalar, HP S・Valley ou Aprovado
+    - não é só Visitante / Exonerado
+    """
+    if membro is None:
+        return False
+    nomes = {cargo.name for cargo in membro.roles}
+    if "🚫┇Exonerado" in nomes:
+        return False
+    if nomes.intersection(set(CARGOS_HIERARQUIA)):
+        return True
+    if "HP S・Valley" in nomes or "Aprovado" in nomes:
+        return True
+    return False
 
 
 def rotulo_tipo_movimentacao(tipo: str) -> str:
