@@ -1,11 +1,16 @@
-# src/cogs/moderacao.py
+# src/punicoes/moderacao_cogs.py
 """
-Grupo /moderacao — ferramentas rápidas de moderação.
+Grupo /moderacao — ferramentas rápidas de moderação e wipe de temporada.
 
   /moderacao limpar
   /moderacao apelido
+  /moderacao wipe
+  /moderacao wipe-status
+  /moderacao wipe-diretoria
 
 Não substitui o sistema de punições do domínio punicoes/.
+O wipe de temporada vive em src/wipe/; este cog só registra os comandos
+no grupo moderacao para o Discord listar tudo junto.
 """
 
 from __future__ import annotations
@@ -21,6 +26,11 @@ from src.utils.mensagens import (
     enviar_card,
 )
 from src.utils.permissions import apenas_administrador
+from src.wipe.wipe_cogs import (
+    executar_comando_wipe,
+    executar_comando_wipe_diretoria,
+    executar_comando_wipe_status,
+)
 
 
 class ModeracaoCog(commands.Cog):
@@ -166,6 +176,33 @@ class ModeracaoCog(commands.Cog):
             cor=COR_SUCESSO,
             delay=12,
         )
+
+    @grupo_moderacao.command(
+        name="wipe",
+        description="Assistente de wipe: expulsar membros e limpar canais escolhidos",
+    )
+    @apenas_administrador()
+    async def wipe(self, interacao: discord.Interaction):
+        """Abre o assistente de wipe (não destrói nada até confirmar com WIPE)."""
+        await executar_comando_wipe(interacao)
+
+    @grupo_moderacao.command(
+        name="wipe-status",
+        description="Mostra se há wipe em andamento e o resumo do último",
+    )
+    @apenas_administrador()
+    async def wipe_status(self, interacao: discord.Interaction):
+        """Consulta o estado do wipe neste processo do bot."""
+        await executar_comando_wipe_status(interacao)
+
+    @grupo_moderacao.command(
+        name="wipe-diretoria",
+        description="Lista quem seria preservado se o wipe rodasse agora",
+    )
+    @apenas_administrador()
+    async def wipe_diretoria(self, interacao: discord.Interaction):
+        """Lista preservados e quantidade de expulsáveis no momento."""
+        await executar_comando_wipe_diretoria(interacao)
 
 
 async def setup(bot: commands.Bot):
