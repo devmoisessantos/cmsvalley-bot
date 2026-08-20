@@ -888,10 +888,14 @@ RR_HORARIOS = ["11:00", "17:00"]  # horários diários de RR (restart) da cidade
 INTERVALO_CHAMADA_MINUTOS = 120
 # Cooldown de 2h só após chamada CONCLUÍDA com sucesso.
 # Timeouts de cancelamento (não aplicam cooldown):
-TIMEOUT_PRINT_EMS_SEGUNDOS = 300  # 5 min sem enviar print do /ems
-TIMEOUT_INTERACAO_POS_OCR_SEGUNDOS = 300  # 5 min sem interação após processar
-# Tempo máximo absoluto da sessão com lock (qualquer etapa)
-TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS = 15
+TIMEOUT_PRINT_EMS_SEGUNDOS = 600  # 10 min sem enviar print do /ems
+# Tempo sem clicar em nenhum botão da sessão (após o OCR).
+# Cada interação reinicia este contador. Valor alto para o doutor conferir
+# nome a nome, editar, remover e adicionar sem perder a sessão.
+TIMEOUT_INTERACAO_POS_OCR_SEGUNDOS = 3600  # 60 min sem interação
+# Tempo máximo absoluto da sessão com lock (qualquer etapa).
+# Protege contra chamada abandonada: outro doutor só consegue entrar depois.
+TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS = 90
 LIMITE_FALTAS_PARA_ADVERTENCIA = 3
 PENALIDADE_FALTA_MOEDAS = 1
 BONUS_PRESENCA_CHAMADA = 1

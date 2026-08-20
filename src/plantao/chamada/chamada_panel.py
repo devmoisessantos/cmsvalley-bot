@@ -30,6 +30,9 @@ from src.config import (
     CANAIS,
     CARGOS,
     CARGOS_BYPASS_PRESENCA_CHAMADA,
+    TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS,
+    TIMEOUT_INTERACAO_POS_OCR_SEGUNDOS,
+    TIMEOUT_PRINT_EMS_SEGUNDOS,
 )
 from src.database.conexao import async_session
 from src.database.models import (
@@ -76,7 +79,10 @@ from src.plantao.plantao_service import (
     desligar_servico,
     membro_e_doutor_ou_acima,
 )
-from src.utils.error_handling import LoggingViewMixin, ignorar_falha_cosmetica
+from src.utils.error_handling import (
+    LoggingViewMixin,
+    ignorar_falha_cosmetica,
+)
 from src.utils.mensagens import (
     destruir_print_com_aviso,
     editar_mensagem_original,
@@ -92,17 +98,20 @@ logger = logging.getLogger(__name__)
 
 
 class _ViewSessaoChamada(discord.ui.LayoutView):
-    """LayoutView da sessão: ao expirar (5 min sem interação), cancela sem cooldown."""
+    """LayoutView da sessão: ao expirar sem interação, cancela sem cooldown."""
 
-    def __init__(self, *, timeout: float | None = 300):
+    def __init__(self, *, timeout: float | None = None):
+        if timeout is None:
+            timeout = float(TIMEOUT_INTERACAO_POS_OCR_SEGUNDOS)
         super().__init__(timeout=timeout)
 
     async def on_timeout(self):
         """Cancela uma sessão abandonada para não manter a trava ocupada.
 
-        Limpa tanto o controle persistido quanto a sessão em memória, sem registrar
-        cooldown. Isso permite que outro doutor recomece após cinco minutos sem
-        interação, em vez de o sistema parecer ocupado por uma chamada esquecida.
+        Limpa tanto o controle persistido quanto a sessão em memória, sem
+        registrar cooldown. Assim outro doutor consegue recomeçar depois do
+        tempo configurado em TIMEOUT_INTERACAO_POS_OCR_SEGUNDOS, em vez de o
+        sistema parecer ocupado por uma chamada esquecida.
         """
         try:
             sessao = obter_sessao()
@@ -167,7 +176,7 @@ def _construir_view_aguardando_print() -> discord.ui.LayoutView:
         "`•` Envie **neste canal** um print do comando `/ems`, o mais legível "
         "possível.\n"
         "`•` O sistema vai identificar os IDs FiveM automaticamente.\n"
-        "`•` Você tem 5 minutos.",
+        f"`•` Você tem **{TIMEOUT_PRINT_EMS_SEGUNDOS // 60} minutos**.",
         discord.Color.gold(),
     )
 
@@ -310,7 +319,8 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=[
                     f"{mencao_outro} já está realizando uma chamada agora.\n"
                     "Se a chamada não for concluída, o sistema **cancela sozinho** "
-                    "em até 15 minutos e libera para outro doutor.",
+                    f"em até **{TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS} minutos** e "
+                    "libera para outro doutor.",
                 ],
             )
             return
@@ -349,8 +359,6 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
             )
 
         try:
-            from src.config import TIMEOUT_PRINT_EMS_SEGUNDOS
-
             mensagem_print = await bot.wait_for(
                 "message",
                 timeout=TIMEOUT_PRINT_EMS_SEGUNDOS,
@@ -359,11 +367,13 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
         except TimeoutError:
             await cancelar_chamada(motivo=MOTIVO_CANCEL_TIMEOUT_PRINT)
             definir_sessao(None)
+            minutos_print = TIMEOUT_PRINT_EMS_SEGUNDOS // 60
             await editar_mensagem_original(
                 interaction,
                 view=_construir_view_simples(
                     "⏱️ Chamada cancelada",
-                    "O doutor não enviou o print do `/ems` em **5 minutos**.\n"
+                    f"O doutor não enviou o print do `/ems` em **{minutos_print} "
+                    "minutos**.\n"
                     "A chamada permanece **em aberto** para outro doutor (ou o mesmo) "
                     "iniciar.",
                     discord.Color.red(),
@@ -836,7 +846,7 @@ def _construir_etapa_1(
     row_continuar.add_item(botao_continuar)
     componentes.append(row_continuar)
 
-    layout = _ViewSessaoChamada(timeout=300)
+    layout = _ViewSessaoChamada()
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -1174,7 +1184,7 @@ def _construir_etapa_2(
     row.add_item(botao_continuar)
     componentes.append(row)
 
-    layout = _ViewSessaoChamada(timeout=300)
+    layout = _ViewSessaoChamada()
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -1292,7 +1302,7 @@ def _construir_etapa_3(
         row_botoes.add_item(botao_continuar)
         componentes.append(row_botoes)
 
-        layout = _ViewSessaoChamada(timeout=300)
+        layout = _ViewSessaoChamada()
         layout.add_item(
             discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
         )
@@ -1338,7 +1348,7 @@ def _construir_etapa_3(
     row_botoes.add_item(botao_continuar)
     componentes.append(row_botoes)
 
-    layout = _ViewSessaoChamada(timeout=300)
+    layout = _ViewSessaoChamada()
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -1432,7 +1442,7 @@ def _construir_etapa_4(
     row.add_item(botao_finalizar)
     componentes.append(row)
 
-    layout = _ViewSessaoChamada(timeout=300)
+    layout = _ViewSessaoChamada()
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
