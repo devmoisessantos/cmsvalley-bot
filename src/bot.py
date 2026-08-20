@@ -184,6 +184,7 @@ CAMINHOS_DOS_COGS = [
     "src.ausencia.ausencia_cogs",
     "src.tickets.tickets_cogs",
     "src.entrada.entrada_listener",
+    "src.wipe.wipe_cogs",
     "src.wipe.wipe_listener",
 ]
 
@@ -266,14 +267,40 @@ class CmsValleyBot(commands.Bot):
         separador()
 
     async def _sincronizar_comandos_de_barra(self):
-        """Copia os comandos globais para o servidor principal e sincroniza."""
+        """
+        Copia os comandos globais para o servidor principal e sincroniza.
+
+        Se o Discord recusar o payload (nome inválido, limite, etc.), o erro
+        é logado com a lista de comandos da árvore para facilitar o diagnóstico.
+        """
         registrador.info("Sincronizando comandos de barra...")
 
         servidor_principal = discord.Object(id=GUILD_ID)
         self.tree.copy_global_to(guild=servidor_principal)
-        await self.tree.sync(guild=servidor_principal)
 
-        sucesso(f"Comandos sincronizados (ID: {GUILD_ID})")
+        try:
+            comandos_sincronizados = await self.tree.sync(guild=servidor_principal)
+        except Exception as falha_na_sincronizacao:
+            nomes_na_arvore = sorted(
+                comando.name for comando in self.tree.get_commands()
+            )
+            erro(
+                f"Falha ao sincronizar comandos na guilda {GUILD_ID}: "
+                f"{falha_na_sincronizacao}"
+            )
+            registrador.exception(
+                "Falha no tree.sync. Comandos na árvore (%s): %s",
+                len(nomes_na_arvore),
+                ", ".join(nomes_na_arvore),
+            )
+            raise
+
+        nomes = sorted(comando.name for comando in comandos_sincronizados)
+        sucesso(
+            f"Comandos sincronizados (ID: {GUILD_ID}) — "
+            f"{len(comandos_sincronizados)} comando(s)"
+        )
+        registrador.info("Comandos na guilda: %s", ", ".join(nomes))
 
     async def _preparar_banco_de_dados(self):
         """Cria as tabelas que faltam e semeia as perguntas da prova."""
