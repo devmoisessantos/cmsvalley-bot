@@ -800,6 +800,45 @@ class PedidoDepositoMoeda(Base):
     )
 
 
+class RegistroWipe(Base):
+    """Últimos wipes de temporada executados (auditoria leve)."""
+
+    __tablename__ = "registros_wipe"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    temporada: Mapped[str] = mapped_column(String(40), index=True)
+    iniciador_id: Mapped[int] = mapped_column(BigInteger)
+    iniciador_nome: Mapped[str] = mapped_column(String(120))
+    caminho_backup: Mapped[str] = mapped_column(String(500))
+    fase_final: Mapped[str] = mapped_column(String(60), default="concluido")
+    membros_expulsos: Mapped[int] = mapped_column(Integer, default=0)
+    membros_falha: Mapped[int] = mapped_column(Integer, default=0)
+    iniciado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+    finalizado_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    relatorio: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DiretoriaPendenteWipe(Base):
+    """Diretoria ausente no wipe: cargos a repor quando entrar de novo."""
+
+    __tablename__ = "diretoria_pendente_wipe"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    nome_referencia: Mapped[str] = mapped_column(String(120))
+    # Nomes dos cargos de gestão a repor, separados por ||
+    nomes_cargos: Mapped[str] = mapped_column(Text)
+    temporada: Mapped[str] = mapped_column(String(40))
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    restaurado_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class Ticket(Base):
     """Ticket de suporte / denúncia (canal privado + transcript)."""
 

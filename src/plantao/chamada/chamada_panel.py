@@ -1134,7 +1134,7 @@ class ModalBuscarPorDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
 
 class ModalBuscarPorIdFivem(discord.ui.Modal, title="Buscar por ID FiveM"):
     id_fivem_input = discord.ui.TextInput(
-        label="ID FiveM", placeholder="Ex: 054623", required=True
+        label="ID FiveM", placeholder="Ex: 54623", required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -1198,7 +1198,7 @@ class ModalBuscarPorIdFivem(discord.ui.Modal, title="Buscar por ID FiveM"):
 class ModalRemoverMedico(discord.ui.Modal, title="Remover da Lista"):
     identificador = discord.ui.TextInput(
         label="ID FiveM, Discord ID ou Menção",
-        placeholder="Ex: 054623 ou @membro ou 859100649366356000",
+        placeholder="Ex: 54623 ou @membro ou 859100649366356000",
         required=True,
     )
 
@@ -1327,7 +1327,7 @@ def _construir_etapa_2(
 
     resumo = (
         f"`❓` Restam **{len(sessao.nao_reconhecidos)}** não identificados "
-        f"(resto do OCR sem dono do hospital).\n"
+        f"(resto do OCR).\n"
         "Se for do nosso hospital, adicione abaixo pelo ID/menção.\n"
         "Se for de outro hospital, marque como Hospital Norte."
     )
