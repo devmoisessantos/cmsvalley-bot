@@ -132,11 +132,69 @@ class _ViewSessaoChamada(discord.ui.LayoutView):
 
 
 def _remover_medico(sessao: SessaoChamada, discord_id: int) -> bool:
-    tamanho_antes = len(sessao.reconhecidos)
+    """Tira o médico dos identificados e devolve a linha do EMS aos não identificados.
+
+    Sem isso, uma correção automática errada que o doutor remove some do fluxo:
+    o ID não volta pra Etapa 2 e some da conferência.
+    """
+    removidos = [
+        medico for medico in sessao.reconhecidos if medico.discord_id == discord_id
+    ]
     sessao.reconhecidos = [
         medico for medico in sessao.reconhecidos if medico.discord_id != discord_id
     ]
-    return len(sessao.reconhecidos) < tamanho_antes
+    if not removidos:
+        return False
+
+    _sincronizar_nao_reconhecidos_com_ems_original(sessao)
+    return True
+
+
+def _sincronizar_nao_reconhecidos_com_ems_original(sessao: SessaoChamada) -> None:
+    """
+    Reconstrói `nao_reconhecidos` a partir das linhas originais do print.
+
+    Uma linha do EMS só sai da lista de não identificados se ainda houver
+    alguém em `reconhecidos` cobrindo aquele ID (lido ou final) ou o nome.
+    Quem foi removido na Etapa 1 volta automaticamente pra Etapa 2.
+    """
+    if not sessao.entradas_ems_originais:
+        return
+
+    ids_cobertos: set[str] = set()
+    nomes_cobertos: list[str] = []
+    for medico in sessao.reconhecidos:
+        if medico.id_fivem:
+            ids_cobertos.add(str(medico.id_fivem).strip())
+        if medico.id_fivem_lido:
+            ids_cobertos.add(str(medico.id_fivem_lido).strip())
+        if medico.nome_ems:
+            nomes_cobertos.append(medico.nome_ems)
+        if medico.nome_discord:
+            nomes_cobertos.append(medico.nome_discord)
+
+    # Quem o doutor já marcou como Norte também não volta pra lista
+    for entrada_norte in sessao.medicos_norte:
+        id_norte = str(entrada_norte.get("id_fivem") or "").strip()
+        if id_norte:
+            ids_cobertos.add(id_norte)
+
+    reconstruidos: list[dict] = []
+    ids_ja_listados: set[str] = set()
+    for entrada in sessao.entradas_ems_originais:
+        id_lido = str(entrada.get("id_fivem") or "").strip()
+        nome_lido = entrada.get("nome_ems") or ""
+        if id_lido and id_lido in ids_ja_listados:
+            continue
+        if nomes_ou_ids_batem_com_reconhecido(
+            id_lido, nome_lido, ids_cobertos, nomes_cobertos
+        ):
+            continue
+        reconstruidos.append({"id_fivem": id_lido, "nome_ems": nome_lido})
+        if id_lido:
+            ids_ja_listados.add(id_lido)
+
+    sessao.nao_reconhecidos = reconstruidos
 
 
 def _construir_view_simples(
@@ -479,6 +537,15 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
     medicos_ems = resultado["medicos"]
     sessao.total_medicos_ems = len(medicos_ems)
 
+    # Guarda cada linha do print como veio do OCR — base da Etapa 2.
+    sessao.entradas_ems_originais = [
+        {
+            "id_fivem": str(medico_da_api.get("id") or "").strip(),
+            "nome_ems": medico_da_api.get("nome") or "",
+        }
+        for medico_da_api in medicos_ems
+    ]
+
     ids_no_ems, reconhecidos, nao_reconhecidos = set(), [], []
 
     async with async_session() as session:
@@ -534,6 +601,7 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
                     if medico_validado.status == "confirmado"
                     else "corrigido",
                     motivo=medico_validado.motivo,
+                    id_fivem_lido=medico_validado.id_lido,
                 )
             )
         else:
@@ -691,7 +759,10 @@ def _resgatar_nao_reconhecidos_pelo_servidor(
             # Já está nos presentes — não duplica nem manda pro Norte
             continue
 
-        id_fivem_final = id_lido or _resolver_id_fivem_do_membro(membro_achado) or "—"
+        id_pelo_membro = _resolver_id_fivem_do_membro(
+            sessao, membro_achado.id, membro_achado
+        )
+        id_fivem_final = id_lido or id_pelo_membro or "—"
         sessao.reconhecidos.append(
             MedicoNaChamada(
                 id_fivem=str(id_fivem_final),
@@ -701,6 +772,7 @@ def _resgatar_nao_reconhecidos_pelo_servidor(
                 confianca=0.65,
                 origem="corrigido",
                 motivo="Resgatado pelo nome/FID no servidor",
+                id_fivem_lido=id_lido or None,
             )
         )
         discord_ids_ja.add(membro_achado.id)
@@ -744,6 +816,8 @@ def _construir_etapa_1(
 ) -> discord.ui.LayoutView:
     sessao.etapa_atual = 1
     _deduplicar_reconhecidos(sessao)
+    # Mantém o contador de "ainda não identificados" alinhado com o print
+    _sincronizar_nao_reconhecidos_com_ems_original(sessao)
 
     corrigidos = [
         medico for medico in sessao.reconhecidos if medico.origem == "corrigido"
@@ -888,14 +962,11 @@ def _adicionar_medico_manual(
         nome_ems="(adicionado manualmente)",
         nome_discord=membro.display_name if membro else None,
         origem="manual",
+        id_fivem_lido=id_fivem,
     )
     sessao.reconhecidos.append(novo)
-
-    if id_fivem:
-        sessao.nao_reconhecidos = [
-            erro for erro in sessao.nao_reconhecidos if erro["id_fivem"] != id_fivem
-        ]
-
+    # Atualiza a lista de não identificados com base no print original
+    _sincronizar_nao_reconhecidos_com_ems_original(sessao)
     return True
 
 
@@ -1111,6 +1182,9 @@ async def _ao_abrir_modal_id_fivem(interaction: discord.Interaction):
 
 async def _ao_ir_etapa_2(interaction: discord.Interaction):
     sessao = obter_sessao()
+    # Garante que todo ID do print ainda sem dono aparece na Etapa 2,
+    # inclusive os que o doutor tirou de uma correção automática errada.
+    _sincronizar_nao_reconhecidos_com_ems_original(sessao)
     await interaction.response.defer(ephemeral=True)
     await editar_mensagem_original(
         interaction,
@@ -1143,6 +1217,7 @@ def _construir_etapa_2(
     sessao: SessaoChamada, guild: discord.Guild
 ) -> discord.ui.LayoutView:
     sessao.etapa_atual = 2
+    _sincronizar_nao_reconhecidos_com_ems_original(sessao)
     linhas = [_linha_desconhecido(erro) for erro in sessao.nao_reconhecidos]
     blocos = _construir_blocos_texto(linhas)
 

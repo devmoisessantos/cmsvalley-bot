@@ -24,6 +24,10 @@ class MedicoNaChamada:
     confianca: float = 1.0
     origem: str = "ocr"  # "ocr" | "manual" | "corrigido"
     motivo: str | None = None
+    # ID exatamente como o OCR leu no print (pode diferir do id_fivem
+    # depois de uma correção automática). Usado pra devolver a linha
+    # original à lista de não identificados quando o doutor remove um falso.
+    id_fivem_lido: str | None = None
 
 
 @dataclass
@@ -46,6 +50,10 @@ class SessaoChamada:
     presentes_no_ems_toggle_ligado: list[MedicoNaChamada] = field(default_factory=list)
     toggle_ligado_mas_nao_no_ems: list[MedicoNaChamada] = field(default_factory=list)
     nao_reconhecidos: list[dict] = field(default_factory=list)
+    # Cópia fiel de cada linha lida no print do /ems (id + nome do OCR).
+    # Serve pra reconstruir a lista da Etapa 2 quando o doutor remove uma
+    # correção automática errada na Etapa 1 — senão o ID some do fluxo.
+    entradas_ems_originais: list[dict] = field(default_factory=list)
     medicos_norte: list[dict] = field(
         default_factory=list
     )  # confirmados como Hospital Norte
