@@ -184,6 +184,7 @@ CAMINHOS_DOS_COGS = [
     "src.ausencia.ausencia_cogs",
     "src.tickets.tickets_cogs",
     "src.entrada.entrada_listener",
+    "src.wipe.wipe_listener",
 ]
 
 

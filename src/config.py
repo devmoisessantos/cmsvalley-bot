@@ -250,6 +250,33 @@ CARGOS_DIRETORIA = [
     "👑・VICE DIRETOR",
 ]
 
+# ---------------------------------------------------------------------------
+# Wipe de temporada (/moderacao wipe)
+# ---------------------------------------------------------------------------
+# Cargos de gestão que NÃO são kickados e têm restauração automática.
+# Responsáveis de área ficam de fora de propósito (recomeçam a temporada).
+CARGOS_PRESERVADOS_NO_WIPE = [
+    "Responsavel HP",
+    "👑 | RESPONSÁVEL GERAL",
+    "👑 |  DIRETOR GERAL",
+    "👑 |  VICE DIRETOR GERAL",
+    "🔍・COORDENADOR",
+    "👑・DIRETOR",
+    "👑・VICE DIRETOR",
+    "👑・SUPERVISOR",
+]
+
+# Discord IDs extras sempre preservados (além dos cargos acima).
+# Separados por vírgula no .env, opcional.
+IDS_PRESERVADOS_NO_WIPE = [
+    int(valor)
+    for valor in _ler_lista_de_textos_do_ambiente("IDS_PRESERVADOS_NO_WIPE", "")
+    if valor.isdigit()
+]
+
+# Segundos de espera entre kicks / create_role / create_channel (rate limit).
+ATRASO_WIPE_SEGUNDOS = 1.2
+
 # Staff que pode assumir e finalizar tickets
 CARGOS_TICKET_STAFF = [
     "⚠️ EQUIPE • TICKET",
