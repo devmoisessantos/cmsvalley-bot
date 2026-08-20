@@ -228,3 +228,12 @@ class ModeracaoCog(commands.Cog):
             )
             return
         await executar_comando_wipe_diretoria(interacao)
+
+
+async def setup(bot: commands.Bot):
+    """Registra os comandos rápidos de moderação durante a inicialização do bot."""
+    await bot.add_cog(ModeracaoCog(bot))
+    registrador.info(
+        "ModeracaoCog registrado com subcomandos: %s",
+        [comando.name for comando in ModeracaoCog.grupo_moderacao.commands],
+    )
