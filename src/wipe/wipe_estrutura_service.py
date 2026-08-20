@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 import discord
 
@@ -108,9 +107,7 @@ async def recriar_canais_escolhidos(
             linhas.append(f"Canal {id_canal} não encontrado.")
             continue
         if not isinstance(canal, discord.TextChannel):
-            linhas.append(
-                f"Ignorado {id_canal}: não é texto ({type(canal).__name__})."
-            )
+            linhas.append(f"Ignorado {id_canal}: não é texto ({type(canal).__name__}).")
             continue
 
         id_antigo = canal.id

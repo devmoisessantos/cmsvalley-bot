@@ -143,9 +143,7 @@ async def executar_wipe(
                 1 for linha in linhas_ch if linha.startswith("Canal recriado:")
             )
             if mapa_cfg:
-                caminho_json = salvar_json_de_config(
-                    guilda.id, temporada, mapa_cfg
-                )
+                caminho_json = salvar_json_de_config(guilda.id, temporada, mapa_cfg)
                 _anotar(estado, f"JSON para config.py: {caminho_json}")
                 _anotar(
                     estado,

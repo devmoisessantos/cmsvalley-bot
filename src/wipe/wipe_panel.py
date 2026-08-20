@@ -8,11 +8,15 @@ Fluxo:
 4. Revisão de expulsões (preservados)
 5. Confirmação final (modal WIPE)
 
-Timeout da view: 1 hora. Botões Voltar entre etapas.
+Timeout da view: 1 hora. Botões Voltar e Desfazer entre etapas.
+
+Importante: interações de botão usam edit_message / defer sem ephemeral,
+para redesenhar o MESMO card do assistente (e não criar outra mensagem).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import (
     datetime,
@@ -22,6 +26,11 @@ from math import ceil
 
 import discord
 
+from src.utils.mensagens import (
+    responder_aviso,
+    responder_erro,
+    responder_sucesso,
+)
 from src.wipe.wipe_backup_service import (
     criar_e_salvar_backup_do_wipe,
     montar_nome_da_temporada,
@@ -36,6 +45,8 @@ from src.wipe.wipe_state import (
     ETAPA_REVISAO_CANAIS,
     SessaoDoAssistenteWipe,
     definir_sessao_assistente,
+    desfazer_ultima_marcacao,
+    guardar_marcacao_no_historico,
     limpar_sessao_assistente,
     obter_sessao_assistente,
     wipe_esta_em_andamento,
@@ -43,49 +54,30 @@ from src.wipe.wipe_state import (
 
 registrador = logging.getLogger(__name__)
 
-TIMEOUT_ASSISTENTE_SEGUNDOS = 3600  # 1 hora
+TIMEOUT_ASSISTENTE_SEGUNDOS = 3600
 CANAIS_POR_PAGINA = 25
 
 
 def _montar_catalogo_canais(guilda: discord.Guild) -> list[tuple[int, str]]:
     """Lista canais de texto ordenados por categoria e nome."""
     itens: list[tuple[int, str]] = []
-    for canal in sorted(
+    canais_ordenados = sorted(
         guilda.text_channels,
-        key=lambda item: (
-            item.category.position if item.category else -1,
-            item.position,
-            item.name,
+        key=lambda canal: (
+            canal.category.position if canal.category else -1,
+            canal.position,
+            canal.name,
         ),
-    ):
+    )
+    for canal in canais_ordenados:
         categoria = canal.category.name if canal.category else "sem categoria"
         rotulo = f"#{canal.name} · {categoria}"[:100]
         itens.append((canal.id, rotulo))
     return itens
 
 
-def _obter_ou_criar_sessao(
-    interacao: discord.Interaction,
-) -> SessaoDoAssistenteWipe | None:
-    if interacao.guild is None:
-        return None
-    sessao = obter_sessao_assistente(interacao.user.id)
-    if sessao is not None and sessao.guilda_id == interacao.guild.id:
-        return sessao
-    catalogo = _montar_catalogo_canais(interacao.guild)
-    sessao = SessaoDoAssistenteWipe(
-        usuario_id=interacao.user.id,
-        guilda_id=interacao.guild.id,
-        etapa=ETAPA_INICIO,
-        catalogo_canais=catalogo,
-        criada_em=datetime.now(timezone.utc),
-    )
-    definir_sessao_assistente(sessao)
-    return sessao
-
-
 class ViewAssistenteWipe(discord.ui.LayoutView):
-    """View base do assistente — 1 hora sem interação cancela só a sessão."""
+    """View base do assistente — 1 hora sem interação encerra a sessão."""
 
     def __init__(self, usuario_id: int):
         super().__init__(timeout=float(TIMEOUT_ASSISTENTE_SEGUNDOS))
@@ -93,15 +85,14 @@ class ViewAssistenteWipe(discord.ui.LayoutView):
 
     async def on_timeout(self) -> None:
         limpar_sessao_assistente(self.usuario_id)
-        registrador.info(
-            "[wipe] assistente expirou para usuario %s", self.usuario_id
-        )
+        registrador.info("[wipe] assistente expirou para usuario %s", self.usuario_id)
 
     async def interaction_check(self, interacao: discord.Interaction) -> bool:
         if interacao.user.id != self.usuario_id:
-            await interacao.response.send_message(
-                "Só quem abriu o assistente pode usar estes botões.",
-                ephemeral=True,
+            await responder_aviso(
+                interacao,
+                titulo="Assistente de outro membro",
+                linhas=["Só quem abriu o assistente pode usar estes botões."],
             )
             return False
         return True
@@ -160,7 +151,7 @@ def _view_inicio(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
         "• Não apaga canais que você não marcar\n\n"
         f"Backup: `{backup_txt}`\n"
         f"Canais de texto no catálogo: **{len(sessao.catalogo_canais)}**\n\n"
-        "-# Você tem **1 hora** para configurar. Use Voltar entre as etapas."
+        "-# Você tem **1 hora** para configurar. Use Voltar e Desfazer."
     )
 
     row = discord.ui.ActionRow()
@@ -172,7 +163,7 @@ def _view_inicio(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
     row.add_item(botao_backup)
 
     botao_seguir = discord.ui.Button(
-        label="Escolher canais →",
+        label="Escolher canais",
         style=discord.ButtonStyle.primary,
     )
     botao_seguir.callback = _ao_ir_canais
@@ -194,6 +185,7 @@ def _view_canais(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
     fatia = _fatia_catalogo(sessao)
     total = len(sessao.catalogo_canais)
     paginas = max(1, ceil(total / CANAIS_POR_PAGINA)) if total else 1
+    pode_desfazer = bool(sessao.historico_marcacoes)
 
     texto = (
         "## Canais a recriar (limpar histórico)\n"
@@ -201,7 +193,8 @@ def _view_canais(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
         "(logs, gerais sujos, etc.).\n"
         "Canais de **painel fixo** deixe de fora.\n\n"
         f"{_texto_progresso_canais(sessao)}\n\n"
-        "Ao mudar de página, as marcações **desta página** são salvas."
+        "Ao mudar a seleção desta página, as marcações são **salvas**.\n"
+        "Use **Desfazer** para voltar à marcação anterior."
     )
 
     componentes: list = [
@@ -230,20 +223,26 @@ def _view_canais(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
         row_sel.add_item(seletor)
         componentes.append(row_sel)
     else:
-        componentes.append(
-            discord.ui.TextDisplay("Nenhum canal de texto encontrado.")
-        )
+        componentes.append(discord.ui.TextDisplay("Nenhum canal de texto encontrado."))
 
     row_nav = discord.ui.ActionRow()
     botao_voltar = discord.ui.Button(
-        label="← Voltar",
+        label="Voltar",
         style=discord.ButtonStyle.secondary,
     )
     botao_voltar.callback = _ao_voltar_inicio
     row_nav.add_item(botao_voltar)
 
+    botao_desfazer = discord.ui.Button(
+        label="Desfazer",
+        style=discord.ButtonStyle.secondary,
+        disabled=not pode_desfazer,
+    )
+    botao_desfazer.callback = _ao_desfazer_marcacao
+    row_nav.add_item(botao_desfazer)
+
     botao_ant = discord.ui.Button(
-        label="← Página anterior",
+        label="Página anterior",
         style=discord.ButtonStyle.secondary,
         disabled=(sessao.pagina_canais <= 0),
     )
@@ -251,20 +250,22 @@ def _view_canais(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
     row_nav.add_item(botao_ant)
 
     botao_prox = discord.ui.Button(
-        label="Próxima página →",
+        label="Próxima página",
         style=discord.ButtonStyle.secondary,
         disabled=(sessao.pagina_canais >= paginas - 1),
     )
     botao_prox.callback = _ao_pagina_proxima
     row_nav.add_item(botao_prox)
+    componentes.append(row_nav)
 
+    row_ok = discord.ui.ActionRow()
     botao_ok = discord.ui.Button(
-        label="Revisar canais →",
+        label="Revisar canais",
         style=discord.ButtonStyle.primary,
     )
     botao_ok.callback = _ao_ir_revisao_canais
-    row_nav.add_item(botao_ok)
-    componentes.append(row_nav)
+    row_ok.add_item(botao_ok)
+    componentes.append(row_ok)
 
     layout.add_item(
         discord.ui.Container(
@@ -279,8 +280,7 @@ def _view_revisao_canais(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
     layout = ViewAssistenteWipe(sessao.usuario_id)
     por_id = {item[0]: item[1] for item in sessao.catalogo_canais}
     linhas = [
-        f"• {por_id.get(id_c, id_c)}"
-        for id_c in sorted(sessao.ids_canais_para_recriar)
+        f"• {por_id.get(id_c, id_c)}" for id_c in sorted(sessao.ids_canais_para_recriar)
     ]
     if not linhas:
         corpo = "_Nenhum canal marcado — o wipe só expulsará membros._"
@@ -297,11 +297,19 @@ def _view_revisao_canais(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
 
     row = discord.ui.ActionRow()
     botao_voltar = discord.ui.Button(
-        label="← Voltar aos canais",
+        label="Voltar aos canais",
         style=discord.ButtonStyle.secondary,
     )
     botao_voltar.callback = _ao_ir_canais
     row.add_item(botao_voltar)
+
+    botao_desfazer = discord.ui.Button(
+        label="Desfazer",
+        style=discord.ButtonStyle.secondary,
+        disabled=not bool(sessao.historico_marcacoes),
+    )
+    botao_desfazer.callback = _ao_desfazer_marcacao
+    row.add_item(botao_desfazer)
 
     botao_limpar = discord.ui.Button(
         label="Limpar marcações",
@@ -311,7 +319,7 @@ def _view_revisao_canais(sessao: SessaoDoAssistenteWipe) -> ViewAssistenteWipe:
     row.add_item(botao_limpar)
 
     botao_seguir = discord.ui.Button(
-        label="Ver expulsões →",
+        label="Ver expulsões",
         style=discord.ButtonStyle.primary,
     )
     botao_seguir.callback = _ao_ir_membros
@@ -337,9 +345,7 @@ def _view_membros(
         texto = "Servidor indisponível."
     else:
         preservados, expulsaveis = listar_preservados_e_expulsaveis(guilda)
-        nomes = [
-            f"• {membro}" for membro in preservados if not membro.bot
-        ][:25]
+        nomes = [f"• {membro}" for membro in preservados if not membro.bot][:25]
         lista = "\n".join(nomes) if nomes else "_(só bots/dono)_"
         texto = (
             "## Revisão — expulsões\n"
@@ -352,14 +358,14 @@ def _view_membros(
 
     row = discord.ui.ActionRow()
     botao_voltar = discord.ui.Button(
-        label="← Voltar",
+        label="Voltar",
         style=discord.ButtonStyle.secondary,
     )
     botao_voltar.callback = _ao_ir_revisao_canais
     row.add_item(botao_voltar)
 
     botao_seguir = discord.ui.Button(
-        label="Confirmação final →",
+        label="Confirmação final",
         style=discord.ButtonStyle.primary,
     )
     botao_seguir.callback = _ao_ir_confirmacao
@@ -398,14 +404,14 @@ def _view_confirmacao(
 
     row = discord.ui.ActionRow()
     botao_voltar = discord.ui.Button(
-        label="← Voltar",
+        label="Voltar",
         style=discord.ButtonStyle.secondary,
     )
     botao_voltar.callback = _ao_ir_membros
     row.add_item(botao_voltar)
 
     botao_go = discord.ui.Button(
-        label="Executar wipe…",
+        label="Executar wipe",
         style=discord.ButtonStyle.danger,
     )
     botao_go.callback = _ao_abrir_modal_wipe
@@ -426,6 +432,7 @@ async def _redesenhar(
     interacao: discord.Interaction,
     sessao: SessaoDoAssistenteWipe,
 ) -> None:
+    """Atualiza o card do assistente (a mensagem que tem os botões)."""
     definir_sessao_assistente(sessao)
     view = montar_view_da_etapa(sessao, interacao.guild)
     if interacao.response.is_done():
@@ -434,12 +441,29 @@ async def _redesenhar(
         await interacao.response.edit_message(view=view)
 
 
-async def _ao_exportar_backup(interacao: discord.Interaction) -> None:
+async def _sessao_ou_aviso(
+    interacao: discord.Interaction,
+) -> SessaoDoAssistenteWipe | None:
     sessao = obter_sessao_assistente(interacao.user.id)
+    if sessao is None:
+        await responder_aviso(
+            interacao,
+            titulo="Sessão expirada",
+            linhas=[
+                "O assistente expirou ou foi encerrado.",
+                "Abra de novo com `/moderacao wipe`.",
+            ],
+        )
+        return None
+    return sessao
+
+
+async def _ao_exportar_backup(interacao: discord.Interaction) -> None:
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None or interacao.guild is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
-    await interacao.response.defer(ephemeral=True)
+    # defer SEM ephemeral: atualiza o card do componente, não cria outra msg
+    await interacao.response.defer()
     try:
         _backup, caminho = criar_e_salvar_backup_do_wipe(
             interacao.guild,
@@ -448,67 +472,78 @@ async def _ao_exportar_backup(interacao: discord.Interaction) -> None:
         )
         sessao.caminho_backup = caminho
         definir_sessao_assistente(sessao)
-        await interacao.followup.send(
-            f"Backup salvo em `{caminho}`.",
-            ephemeral=True,
-        )
         await interacao.edit_original_response(
             view=montar_view_da_etapa(sessao, interacao.guild)
         )
+        await responder_sucesso(
+            interacao,
+            titulo="Backup exportado",
+            linhas=[f"Arquivo salvo em `{caminho}`."],
+        )
     except Exception as erro:
         registrador.exception("[wipe] backup: %s", erro)
-        await interacao.followup.send(f"Falha no backup: {erro}", ephemeral=True)
+        await responder_erro(
+            interacao,
+            titulo="Falha no backup",
+            linhas=[str(erro)],
+        )
 
 
 async def _ao_ir_canais(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
     sessao.etapa = ETAPA_CANAIS
     await _redesenhar(interacao, sessao)
 
 
 async def _ao_voltar_inicio(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
     sessao.etapa = ETAPA_INICIO
     await _redesenhar(interacao, sessao)
 
 
 async def _ao_salvar_pagina_canais(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
     fatia = _fatia_catalogo(sessao)
     ids_pagina = {item[0] for item in fatia}
-    # remove marcações antigas só desta página
+    guardar_marcacao_no_historico(sessao)
     sessao.ids_canais_para_recriar -= ids_pagina
-    for valor in interacao.data.get("values", []):
+    valores = interacao.data.get("values", []) if interacao.data else []
+    for valor in valores:
         sessao.ids_canais_para_recriar.add(int(valor))
-    definir_sessao_assistente(sessao)
-    await interacao.response.defer()
-    await interacao.edit_original_response(
-        view=montar_view_da_etapa(sessao, interacao.guild)
-    )
+    await _redesenhar(interacao, sessao)
+
+
+async def _ao_desfazer_marcacao(interacao: discord.Interaction) -> None:
+    sessao = await _sessao_ou_aviso(interacao)
+    if sessao is None:
+        return
+    if not desfazer_ultima_marcacao(sessao):
+        await responder_aviso(
+            interacao,
+            titulo="Nada para desfazer",
+            linhas=["Não há alteração de marcação anterior nesta sessão."],
+        )
+        return
+    await _redesenhar(interacao, sessao)
 
 
 async def _ao_pagina_anterior(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
     sessao.pagina_canais = max(0, sessao.pagina_canais - 1)
     await _redesenhar(interacao, sessao)
 
 
 async def _ao_pagina_proxima(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
     total = len(sessao.catalogo_canais)
     max_pag = max(0, ceil(total / CANAIS_POR_PAGINA) - 1)
@@ -517,42 +552,42 @@ async def _ao_pagina_proxima(interacao: discord.Interaction) -> None:
 
 
 async def _ao_ir_revisao_canais(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
     sessao.etapa = ETAPA_REVISAO_CANAIS
     await _redesenhar(interacao, sessao)
 
 
 async def _ao_limpar_canais(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
+    if sessao.ids_canais_para_recriar:
+        guardar_marcacao_no_historico(sessao)
     sessao.ids_canais_para_recriar.clear()
     await _redesenhar(interacao, sessao)
 
 
 async def _ao_ir_membros(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
     sessao.etapa = ETAPA_MEMBROS
     await _redesenhar(interacao, sessao)
 
 
 async def _ao_ir_confirmacao(interacao: discord.Interaction) -> None:
-    sessao = obter_sessao_assistente(interacao.user.id)
+    sessao = await _sessao_ou_aviso(interacao)
     if sessao is None:
-        await interacao.response.send_message("Sessão expirada.", ephemeral=True)
         return
     sessao.etapa = ETAPA_CONFIRMACAO
     await _redesenhar(interacao, sessao)
 
 
 class ModalConfirmacaoWipe(discord.ui.Modal, title="Confirmar WIPE"):
+    """Exige digitar WIPE para não haver clique acidental."""
+
     texto_confirmacao = discord.ui.TextInput(
         label="Digite WIPE em maiúsculas",
         placeholder="WIPE",
@@ -562,22 +597,25 @@ class ModalConfirmacaoWipe(discord.ui.Modal, title="Confirmar WIPE"):
 
     async def on_submit(self, interacao: discord.Interaction) -> None:
         if self.texto_confirmacao.value.strip() != "WIPE":
-            await interacao.response.send_message(
-                "Digite exatamente WIPE.",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Confirmação inválida",
+                linhas=["Digite exatamente WIPE em maiúsculas."],
             )
             return
         if wipe_esta_em_andamento():
-            await interacao.response.send_message(
-                "Já existe um wipe em andamento.",
-                ephemeral=True,
+            await responder_aviso(
+                interacao,
+                titulo="Wipe em andamento",
+                linhas=["Já existe um wipe rodando. Aguarde terminar."],
             )
             return
         sessao = obter_sessao_assistente(interacao.user.id)
         if sessao is None or interacao.guild is None:
-            await interacao.response.send_message(
-                "Sessão expirada. Abra /moderacao wipe de novo.",
-                ephemeral=True,
+            await responder_aviso(
+                interacao,
+                titulo="Sessão expirada",
+                linhas=["Abra de novo com `/moderacao wipe`."],
             )
             return
 
@@ -593,26 +631,37 @@ class ModalConfirmacaoWipe(discord.ui.Modal, title="Confirmar WIPE"):
                 ids,
                 caminho_backup_ja_feito=caminho_backup,
             )
-            mapa = estado.mapa_config_novos_ids
-            extra = ""
-            if mapa:
-                extra = "\n\n**Novos IDs (config.py):**\n```json\n" + (
-                    __import__("json").dumps(mapa, indent=2, ensure_ascii=False)
-                ) + "\n```"
-            await interacao.followup.send(
-                f"Wipe `{estado.temporada}` finalizado.\n"
+            linhas = [
+                f"Temporada: `{estado.temporada}`",
                 f"Expulsos: **{estado.membros_expulsos}** "
-                f"(falhas: {estado.membros_falha})\n"
-                f"Canais recriados: **{estado.canais_recriados}**\n"
-                f"Backup: `{estado.caminho_backup or '—'}`"
-                f"{extra}",
-                ephemeral=True,
+                f"(falhas: {estado.membros_falha})",
+                f"Canais recriados: **{estado.canais_recriados}**",
+                f"Backup: `{estado.caminho_backup or '—'}`",
+            ]
+            if estado.mapa_config_novos_ids:
+                linhas.append("Novos IDs para o config.py:")
+                linhas.append(
+                    "```json\n"
+                    + json.dumps(
+                        estado.mapa_config_novos_ids,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                    + "\n```"
+                )
+            await responder_sucesso(
+                interacao,
+                titulo="Wipe finalizado",
+                linhas=linhas,
+                delay=None,
             )
         except Exception as erro:
             registrador.exception("[wipe] execução: %s", erro)
-            await interacao.followup.send(
-                f"Wipe falhou: {erro}",
-                ephemeral=True,
+            await responder_erro(
+                interacao,
+                titulo="Wipe falhou",
+                linhas=[str(erro)],
+                delay=None,
             )
 
 
@@ -623,19 +672,23 @@ async def _ao_abrir_modal_wipe(interacao: discord.Interaction) -> None:
 async def abrir_painel_de_confirmacao(interacao: discord.Interaction) -> None:
     """Ponto de entrada do /moderacao wipe — abre o assistente."""
     if interacao.guild is None:
-        await interacao.followup.send(
-            "Use este comando dentro do servidor.",
-            ephemeral=True,
+        await responder_erro(
+            interacao,
+            titulo="Sem servidor",
+            linhas=["Use este comando dentro do servidor."],
         )
         return
     if wipe_esta_em_andamento():
-        await interacao.followup.send(
-            "Já existe um wipe em execução. Use `/moderacao wipe-status`.",
-            ephemeral=True,
+        await responder_aviso(
+            interacao,
+            titulo="Wipe em andamento",
+            linhas=[
+                "Já existe um wipe em execução.",
+                "Use `/moderacao wipe-status`.",
+            ],
         )
         return
 
-    # Nova sessão (ou retoma se ainda existir e for a mesma guilda)
     sessao = obter_sessao_assistente(interacao.user.id)
     if sessao is None or sessao.guilda_id != interacao.guild.id:
         sessao = SessaoDoAssistenteWipe(
@@ -647,6 +700,7 @@ async def abrir_painel_de_confirmacao(interacao: discord.Interaction) -> None:
         )
         definir_sessao_assistente(sessao)
 
+    # interacao já veio com defer do comando — envia o card como followup
     await interacao.followup.send(
         view=montar_view_da_etapa(sessao, interacao.guild),
         ephemeral=True,

@@ -66,9 +66,7 @@ async def executar_comando_wipe_diretoria(interacao: discord.Interaction) -> Non
         return
 
     preservados, expulsaveis = listar_preservados_e_expulsaveis(interacao.guild)
-    nomes = [
-        f"• {membro} (`{membro.id}`)" for membro in preservados if not membro.bot
-    ]
+    nomes = [f"• {membro} (`{membro.id}`)" for membro in preservados if not membro.bot]
     await responder_info(
         interacao,
         titulo="Preservados no wipe",
