@@ -62,6 +62,8 @@ from src.plantao.chamada.ocr.leitura_de_membros_service import (
     combinar_membros,
     construir_membros_via_apelido,
     extrair_id_do_apelido,
+    filtrar_membros_do_hospital,
+    membro_e_do_hospital,
 )
 from src.plantao.chamada.ocr.ocr_ems_service import (
     OcrEmsError,
@@ -154,26 +156,20 @@ def _sincronizar_nao_reconhecidos_com_ems_original(sessao: SessaoChamada) -> Non
     """
     Reconstrói `nao_reconhecidos` a partir das linhas originais do print.
 
-    Uma linha do EMS só sai da lista de não identificados se ainda houver
-    alguém em `reconhecidos` cobrindo aquele ID (lido ou final) ou o nome.
-    Quem foi removido na Etapa 1 volta automaticamente pra Etapa 2.
+    Cobertura só por ID (lido ou final). Nome parecido NÃO cobre: senão um
+    falso positivo removido continuava "coberto" por outro presente e sumia
+    da Etapa 2.
     """
     if not sessao.entradas_ems_originais:
         return
 
     ids_cobertos: set[str] = set()
-    nomes_cobertos: list[str] = []
     for medico in sessao.reconhecidos:
-        if medico.id_fivem:
+        if medico.id_fivem and str(medico.id_fivem).strip() not in ("", "N/A", "—"):
             ids_cobertos.add(str(medico.id_fivem).strip())
         if medico.id_fivem_lido:
             ids_cobertos.add(str(medico.id_fivem_lido).strip())
-        if medico.nome_ems:
-            nomes_cobertos.append(medico.nome_ems)
-        if medico.nome_discord:
-            nomes_cobertos.append(medico.nome_discord)
 
-    # Quem o doutor já marcou como Norte também não volta pra lista
     for entrada_norte in sessao.medicos_norte:
         id_norte = str(entrada_norte.get("id_fivem") or "").strip()
         if id_norte:
@@ -186,9 +182,7 @@ def _sincronizar_nao_reconhecidos_com_ems_original(sessao: SessaoChamada) -> Non
         nome_lido = entrada.get("nome_ems") or ""
         if id_lido and id_lido in ids_ja_listados:
             continue
-        if nomes_ou_ids_batem_com_reconhecido(
-            id_lido, nome_lido, ids_cobertos, nomes_cobertos
-        ):
+        if id_lido and id_lido in ids_cobertos:
             continue
         reconstruidos.append({"id_fivem": id_lido, "nome_ems": nome_lido})
         if id_lido:
@@ -570,12 +564,12 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
             for row in resultado_db.all()
         }
 
-        membros_via_apelido = construir_membros_via_apelido(
-            guild
-        )  # já filtrado por prefixo
+        membros_via_apelido = construir_membros_via_apelido(guild)
         membros_conhecidos = combinar_membros(
             list(aprovados_por_id.values()), membros_via_apelido
         )
+        # Visitante / sem cargo da hierarquia / sem prefixo não entra
+        membros_conhecidos = filtrar_membros_do_hospital(membros_conhecidos, guild)
         sessao.membros_conhecidos = membros_conhecidos
 
         resultado_toggle = await session.execute(
@@ -590,12 +584,21 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
         ids_no_ems.add(id_final)
         if medico_validado.status in ("confirmado", "corrigido"):
             membro_db = guild.get_member(medico_validado.membro.discord_id)
+            # Só aceita se a pessoa ainda for do hospital no Discord
+            if membro_db is None or not membro_e_do_hospital(membro_db):
+                nao_reconhecidos.append(
+                    {
+                        "id_fivem": medico_validado.id_lido,
+                        "nome_ems": medico_validado.nome_lido,
+                    }
+                )
+                continue
             reconhecidos.append(
                 MedicoNaChamada(
                     id_fivem=medico_validado.membro.id_fivem,
                     discord_id=medico_validado.membro.discord_id,
                     nome_ems=medico_validado.nome_lido,
-                    nome_discord=membro_db.display_name if membro_db else None,
+                    nome_discord=membro_db.display_name,
                     confianca=1.0 if medico_validado.status == "confirmado" else 0.7,
                     origem="ocr"
                     if medico_validado.status == "confirmado"
@@ -712,17 +715,17 @@ def _coletar_ids_e_nomes_reconhecidos(
 
 def _limpar_nao_reconhecidos_ja_presentes(sessao: SessaoChamada) -> None:
     """
-    Se alguém já está em `reconhecidos` (presente identificado),
-    não pode ficar em `nao_reconhecidos` / Norte com o mesmo FID ou nome.
+    Se o ID já está coberto por alguém em `reconhecidos`, sai de
+    `nao_reconhecidos`. Só por ID — nome parecido não basta.
     """
-    ids_presentes, nomes_presentes = _coletar_ids_e_nomes_reconhecidos(sessao)
+    ids_presentes, _nomes = _coletar_ids_e_nomes_reconhecidos(sessao)
+    for medico in sessao.reconhecidos:
+        if medico.id_fivem_lido:
+            ids_presentes.add(str(medico.id_fivem_lido).strip())
     filtrados = []
     for entrada in sessao.nao_reconhecidos:
         id_entrada = str(entrada.get("id_fivem") or "").strip()
-        nome_entrada = entrada.get("nome_ems") or ""
-        if nomes_ou_ids_batem_com_reconhecido(
-            id_entrada, nome_entrada, ids_presentes, nomes_presentes
-        ):
+        if id_entrada and id_entrada in ids_presentes:
             continue
         filtrados.append(entrada)
     sessao.nao_reconhecidos = filtrados
@@ -786,12 +789,12 @@ def _buscar_membro_no_servidor(
     id_fivem: str,
     nome_ems: str,
 ) -> discord.Member | None:
-    """Procura membro na guild pelo FID do nick ou pelo nome do EMS."""
+    """Procura membro do hospital pelo FID do nick ou pelo nome do EMS."""
     id_limpo = str(id_fivem or "").strip()
     nome_norm = normalizar_nome(nome_ems)
 
     for membro in guild.members:
-        if membro.bot:
+        if not membro_e_do_hospital(membro):
             continue
         nome_exibido = membro.nick or membro.display_name or membro.name
         fid_no_nick = extrair_id_do_apelido(nome_exibido)
@@ -799,7 +802,6 @@ def _buscar_membro_no_servidor(
             return membro
         if nome_norm and nomes_parecidos(nome_ems, nome_exibido):
             return membro
-        # Também compara só a parte do nome (sem tag / sem FID)
         nome_sem_fid = nome_exibido.split("|")[0].strip()
         if nome_norm and nomes_parecidos(nome_ems, nome_sem_fid):
             return membro
@@ -816,7 +818,6 @@ def _construir_etapa_1(
 ) -> discord.ui.LayoutView:
     sessao.etapa_atual = 1
     _deduplicar_reconhecidos(sessao)
-    # Mantém o contador de "ainda não identificados" alinhado com o print
     _sincronizar_nao_reconhecidos_com_ems_original(sessao)
 
     corrigidos = [
@@ -828,12 +829,19 @@ def _construir_etapa_1(
         [_linha_medico(medico) for medico in demais]
     )
 
+    # Lista completa do OCR (id + nome como lidos no print)
+    linhas_ocr = [
+        f"`{entrada.get('id_fivem') or '—'}`: {entrada.get('nome_ems') or '—'}"
+        for entrada in sessao.entradas_ems_originais
+    ]
+    blocos_ocr = _construir_blocos_texto(linhas_ocr)
+
     resumo = (
         f"`📋` Total no `/ems`: **{sessao.total_medicos_ems}**\n"
         f"`✅` Identificados: **{len(sessao.reconhecidos)}**\n"
         f"`❓` Ainda não identificados: **{len(sessao.nao_reconhecidos)}**\n\n"
-        "Confira a lista. Faltando alguém que está no `/ems`? Adicione manualmente.\n"
-        "Alguém errado na lista? Remova pelo botão ou pelo bloco de correções abaixo."
+        "Só entram membros do hospital (prefixo no nick ou cargo da hierarquia).\n"
+        "Remova correção errada — o ID/nome do OCR volta pra Etapa 2."
     )
 
     componentes = [
@@ -842,18 +850,26 @@ def _construir_etapa_1(
         discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
     ]
 
-    # Bloco de destaque: correções automáticas, maior risco de falso positivo
+    # 1) Tudo que o OCR leu
+    componentes.append(discord.ui.TextDisplay("**📋 IDs e nomes lidos pelo OCR**"))
+    for bloco in blocos_ocr:
+        componentes.append(discord.ui.TextDisplay(bloco))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+    # 2) Correções automáticas (revisar)
     if corrigidos:
         linhas_corrigidos = "\n".join(
-            f"🔧 `{medico.id_fivem}` — <@{medico.discord_id}>\n> "
-            f"_{medico.motivo or 'correção automática'}"
-            f"_"
+            (
+                f"🔧 OCR `{medico.id_fivem_lido or '—'}` → "
+                f"`{medico.id_fivem}` — <@{medico.discord_id}>\n"
+                f"> _{medico.motivo or 'correção automática'}_"
+            )
             for medico in corrigidos
         )
         componentes.append(
             discord.ui.TextDisplay(
-                f"**⚠️ Correções automáticas — confira com "
-                f"atenção**\n{linhas_corrigidos}"
+                f"**⚠️ Correções automáticas — confira com atenção**\n"
+                f"{linhas_corrigidos}"
             )
         )
 
@@ -862,7 +878,10 @@ def _construir_etapa_1(
                 placeholder="Selecione quem está ERRADO aqui pra remover",
                 options=[
                     discord.SelectOption(
-                        label=f"{medico.nome_discord or medico.nome_ems} | {medico.id_fivem}",
+                        label=(
+                            f"OCR {medico.id_fivem_lido or '?'} → "
+                            f"{medico.nome_discord or medico.nome_ems}"
+                        )[:100],
                         value=str(medico.discord_id),
                     )
                     for medico in corrigidos
@@ -877,16 +896,15 @@ def _construir_etapa_1(
 
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
-    # Lista completa dos demais (confirmados direto + manuais)
+    # 3) Confirmados / adicionados
     componentes.append(discord.ui.TextDisplay("**✅ Confirmados / Adicionados**"))
     for bloco in blocos_demais:
         componentes.append(discord.ui.TextDisplay(bloco))
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
-    # Busca pra adicionar
     row_select = discord.ui.ActionRow()
     user_select = discord.ui.UserSelect(
-        placeholder="🔎 Adicionar por menção (selecione o usuário)"
+        placeholder="🔎 Adicionar por menção (somente hospital)"
     )
     user_select.callback = _ao_userselect_adicionar
     row_select.add_item(user_select)
@@ -943,31 +961,50 @@ def _resolver_id_fivem_do_membro(
 
 def _adicionar_medico_manual(
     sessao: SessaoChamada, guild: discord.Guild, discord_id: int, id_fivem: str | None
-) -> bool:
+) -> tuple[bool, str]:
     """
-    Retorna True se adicionou de fato, False se a pessoa já estava na lista (evita
-    duplicata).
+    Tenta incluir um membro do hospital na lista de identificados.
+
+    Retorna (True, "") se adicionou; (False, motivo) se recusou.
     """
     ja_existe = any(medico.discord_id == discord_id for medico in sessao.reconhecidos)
     if ja_existe:
-        return False
+        return False, "Essa pessoa já está na lista."
 
     membro = guild.get_member(discord_id)
-    if id_fivem is None and membro:
+    if membro is None:
+        return False, "Membro não encontrado neste servidor."
+    if not membro_e_do_hospital(membro):
+        return (
+            False,
+            "Só entram pessoas do hospital (prefixo no nick ou cargo da hierarquia). "
+            "Visitante não pode ser adicionado.",
+        )
+
+    if id_fivem is None:
         id_fivem = _resolver_id_fivem_do_membro(sessao, discord_id, membro)
+
+    # Se o ID informado/resolvido bate com uma linha do OCR, usa o nome do print
+    nome_ems = "(adicionado manualmente)"
+    id_lido = id_fivem
+    if id_fivem:
+        for entrada in sessao.entradas_ems_originais:
+            if str(entrada.get("id_fivem") or "").strip() == str(id_fivem).strip():
+                nome_ems = entrada.get("nome_ems") or nome_ems
+                id_lido = str(entrada.get("id_fivem") or "").strip()
+                break
 
     novo = MedicoNaChamada(
         id_fivem=id_fivem or "N/A",
         discord_id=discord_id,
-        nome_ems="(adicionado manualmente)",
-        nome_discord=membro.display_name if membro else None,
+        nome_ems=nome_ems,
+        nome_discord=membro.display_name,
         origem="manual",
-        id_fivem_lido=id_fivem,
+        id_fivem_lido=id_lido,
     )
     sessao.reconhecidos.append(novo)
-    # Atualiza a lista de não identificados com base no print original
     _sincronizar_nao_reconhecidos_com_ems_original(sessao)
-    return True
+    return True, ""
 
 
 async def _ao_userselect_adicionar(interaction: discord.Interaction):
@@ -976,21 +1013,57 @@ async def _ao_userselect_adicionar(interaction: discord.Interaction):
         await responder_aviso(
             interaction,
             titulo="Sessão expirada",
-            linhas=[
-                "Sessão expirada.",
-            ],
+            linhas=["Sessão expirada."],
         )
         return
 
     membro_selecionado = interaction.data["values"][0]
     discord_id = int(membro_selecionado)
-
-    _adicionar_medico_manual(sessao, interaction.guild, discord_id, None)
+    adicionou, motivo = _adicionar_medico_manual(
+        sessao, interaction.guild, discord_id, None
+    )
+    if not adicionou:
+        await responder_aviso(
+            interaction,
+            titulo="Não adicionado",
+            linhas=[motivo],
+        )
+        return
 
     await interaction.response.defer(ephemeral=True)
     await editar_mensagem_original(
         interaction,
         view=_construir_etapa_1(sessao, interaction.guild),
+    )
+
+
+async def _ao_userselect_adicionar_etapa_2(interaction: discord.Interaction):
+    sessao = obter_sessao()
+    if sessao is None:
+        await responder_aviso(
+            interaction,
+            titulo="Sessão expirada",
+            linhas=["Sessão expirada."],
+        )
+        return
+
+    membro_selecionado = interaction.data["values"][0]
+    discord_id = int(membro_selecionado)
+    adicionou, motivo = _adicionar_medico_manual(
+        sessao, interaction.guild, discord_id, None
+    )
+    if not adicionou:
+        await responder_aviso(
+            interaction,
+            titulo="Não adicionado",
+            linhas=[motivo],
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    await editar_mensagem_original(
+        interaction,
+        view=_construir_etapa_2(sessao, interaction.guild),
     )
 
 
@@ -1040,11 +1113,22 @@ class ModalBuscarPorDiscordId(discord.ui.Modal, title="Buscar por Discord ID"):
             )
             return
 
-        _adicionar_medico_manual(sessao, interaction.guild, discord_id, None)
+        adicionou, motivo = _adicionar_medico_manual(
+            sessao, interaction.guild, discord_id, None
+        )
+        if not adicionou:
+            await responder_aviso(
+                interaction,
+                titulo="Não adicionado",
+                linhas=[motivo],
+            )
+            return
         await interaction.response.defer(ephemeral=True)
+        etapa = sessao.etapa_atual if sessao.etapa_atual in (1, 2) else 1
+        construtor = _construir_etapa_1 if etapa == 1 else _construir_etapa_2
         await editar_mensagem_original(
             interaction,
-            view=_construir_etapa_1(sessao, interaction.guild),
+            view=construtor(sessao, interaction.guild),
         )
 
 
@@ -1086,19 +1170,28 @@ class ModalBuscarPorIdFivem(discord.ui.Modal, title="Buscar por ID FiveM"):
                 interaction,
                 titulo="Nada para mostrar",
                 linhas=[
-                    "Nenhum membro no servidor com esse ID FiveM (nem no "
-                    "Recrutamento, nem no apelido).",
+                    "Nenhum membro do hospital com esse ID FiveM "
+                    "(prefixo no nick ou cargo da hierarquia).",
                 ],
             )
             return
 
-        _adicionar_medico_manual(
+        adicionou, motivo = _adicionar_medico_manual(
             sessao, interaction.guild, membro_conhecido.discord_id, id_fivem
         )
+        if not adicionou:
+            await responder_aviso(
+                interaction,
+                titulo="Não adicionado",
+                linhas=[motivo],
+            )
+            return
         await interaction.response.defer(ephemeral=True)
+        etapa = sessao.etapa_atual if sessao.etapa_atual in (1, 2) else 1
+        construtor = _construir_etapa_1 if etapa == 1 else _construir_etapa_2
         await editar_mensagem_original(
             interaction,
-            view=_construir_etapa_1(sessao, interaction.guild),
+            view=construtor(sessao, interaction.guild),
         )
 
 
@@ -1180,6 +1273,14 @@ async def _ao_abrir_modal_id_fivem(interaction: discord.Interaction):
     await interaction.response.send_modal(ModalBuscarPorIdFivem())
 
 
+async def _ao_abrir_modal_discord_id_etapa_2(interaction: discord.Interaction):
+    await interaction.response.send_modal(ModalBuscarPorDiscordId())
+
+
+async def _ao_abrir_modal_id_fivem_etapa_2(interaction: discord.Interaction):
+    await interaction.response.send_modal(ModalBuscarPorIdFivem())
+
+
 async def _ao_ir_etapa_2(interaction: discord.Interaction):
     sessao = obter_sessao()
     # Garante que todo ID do print ainda sem dono aparece na Etapa 2,
@@ -1218,13 +1319,17 @@ def _construir_etapa_2(
 ) -> discord.ui.LayoutView:
     sessao.etapa_atual = 2
     _sincronizar_nao_reconhecidos_com_ems_original(sessao)
-    linhas = [_linha_desconhecido(erro) for erro in sessao.nao_reconhecidos]
+    linhas = [
+        f"`{erro.get('id_fivem') or '—'}`: {erro.get('nome_ems') or '—'}"
+        for erro in sessao.nao_reconhecidos
+    ]
     blocos = _construir_blocos_texto(linhas)
 
     resumo = (
-        f"`❓` Restam **{len(sessao.nao_reconhecidos)}** não identificados.\n"
-        "Se não forem médicos do nosso hospital, marque como Hospital Norte pra "
-        "liberar a próxima etapa."
+        f"`❓` Restam **{len(sessao.nao_reconhecidos)}** não identificados "
+        f"(resto do OCR sem dono do hospital).\n"
+        "Se for do nosso hospital, adicione abaixo pelo ID/menção.\n"
+        "Se for de outro hospital, marque como Hospital Norte."
     )
 
     componentes = [
@@ -1235,6 +1340,29 @@ def _construir_etapa_2(
     for bloco in blocos:
         componentes.append(discord.ui.TextDisplay(bloco))
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+    # Adicionar IDs faltantes que são do hospital
+    row_select = discord.ui.ActionRow()
+    user_select = discord.ui.UserSelect(
+        placeholder="🔎 Adicionar membro do hospital (menção)"
+    )
+    user_select.callback = _ao_userselect_adicionar_etapa_2
+    row_select.add_item(user_select)
+    componentes.append(row_select)
+
+    row_modais = discord.ui.ActionRow()
+    botao_discord_id = discord.ui.Button(
+        label="🆔 Discord ID", style=discord.ButtonStyle.secondary
+    )
+    botao_discord_id.callback = _ao_abrir_modal_discord_id_etapa_2
+    row_modais.add_item(botao_discord_id)
+
+    botao_fivem = discord.ui.Button(
+        label="🎮 ID FiveM", style=discord.ButtonStyle.secondary
+    )
+    botao_fivem.callback = _ao_abrir_modal_id_fivem_etapa_2
+    row_modais.add_item(botao_fivem)
+    componentes.append(row_modais)
 
     row = discord.ui.ActionRow()
     botao_voltar = discord.ui.Button(
@@ -1268,11 +1396,8 @@ def _construir_etapa_2(
 
 async def _ao_marcar_como_norte(interaction: discord.Interaction):
     sessao = obter_sessao()
-    # Última limpeza: quem já está presente não vai pro Norte
-    _limpar_nao_reconhecidos_ja_presentes(sessao)
-    if interaction.guild is not None:
-        _resgatar_nao_reconhecidos_pelo_servidor(sessao, interaction.guild)
-        _limpar_nao_reconhecidos_ja_presentes(sessao)
+    # Só por ID: não reatacha por nome solto na hora de mandar pro Norte
+    _sincronizar_nao_reconhecidos_com_ems_original(sessao)
 
     sessao.medicos_norte.extend(sessao.nao_reconhecidos)
     sessao.nao_reconhecidos = []

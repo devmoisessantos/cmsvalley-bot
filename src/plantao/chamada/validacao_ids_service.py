@@ -105,11 +105,13 @@ _normalizar_nome = normalizar_nome
 
 def nomes_parecidos(nome_a: str, nome_b: str) -> bool:
     """
-    True se os nomes batem de forma útil pra chamada:
+    True se os nomes batem de forma segura pra chamada automática:
     - iguais após normalizar
-    - um contém o outro (ex: 'asty' em 'asty detroit')
-    - fuzzy próximo (cutoff 0.6)
-    - pelo menos um token significativo (>=3 letras) em comum
+    - um contém o outro por inteiro (ex: 'asty' em 'asty detroit')
+    - fuzzy alto (cutoff 0.82) — evita ligar 'Lionela' com qualquer 'Luan'
+
+    Token solto em comum NÃO basta: gerava falso positivo demais
+    (visitante / nome parecido sem ser a mesma pessoa).
     """
     primeiro_nome_limpo = normalizar_nome(nome_a)
     segundo_nome_limpo = normalizar_nome(nome_b)
@@ -123,13 +125,9 @@ def nomes_parecidos(nome_a: str, nome_b: str) -> bool:
     ):
         return True
     proximos = get_close_matches(
-        primeiro_nome_limpo, [segundo_nome_limpo], n=1, cutoff=0.6
+        primeiro_nome_limpo, [segundo_nome_limpo], n=1, cutoff=0.82
     )
     if proximos:
-        return True
-    tokens_a = {palavra for palavra in primeiro_nome_limpo.split() if len(palavra) >= 3}
-    tokens_b = {palavra for palavra in segundo_nome_limpo.split() if len(palavra) >= 3}
-    if tokens_a and tokens_b and tokens_a.intersection(tokens_b):
         return True
     return False
 
@@ -151,9 +149,9 @@ def _buscar_por_nome(
         if nomes_parecidos(nome_lido, membro.nome):
             return membro
 
-    # 2) Fuzzy clássico no conjunto de nomes
+    # 2) Fuzzy clássico no conjunto de nomes (cutoff alto)
     nomes = [medico.nome for medico in candidatos]
-    proximos = get_close_matches(nome_lido, nomes, n=1, cutoff=0.6)
+    proximos = get_close_matches(nome_lido, nomes, n=1, cutoff=0.82)
     if not proximos:
         return None
     nome_encontrado = proximos[0]
@@ -187,35 +185,44 @@ def validar_medico(
 ) -> MedicoValidado:
     """Relaciona uma leitura do OCR a um membro sem aceitar falsos positivos.
 
-    Prioriza a coincidência exata do FiveM e só tenta dígitos parecidos, cortes e nome
-    como alternativas controladas. Devolve o status e a justificativa da correção para
-    que o painel destaque casos incertos em vez de transformar uma leitura falha em
-    presença automática.
+    Prioriza a coincidência exata do FiveM. Correção por dígito só vale se o
+    nome do EMS também parecer com o do membro. Match só por nome exige
+    semelhança alta. Quem não for do hospital nem entra em `membros`.
     """
     por_id = {medico.id_fivem: medico for medico in membros}
 
-    # 1. bate direto
+    # 1. bate direto no ID
     if id_lido in por_id:
         return MedicoValidado(
             id_lido, nome_lido, status="confirmado", membro=por_id[id_lido]
         )
 
-    # 2. tenta corrigir por confusão de dígito (ex: 710515 -> 110515)
+    # 2. confusão de dígito / corte — só se o nome também bater
     for candidato_str in _candidatos_por_digito(id_lido) + _candidatos_por_corte(
         id_lido
     ):
-        if candidato_str in por_id:
-            return MedicoValidado(
-                id_lido,
-                nome_lido,
-                status="corrigido",
-                id_corrigido=candidato_str,
-                membro=por_id[candidato_str],
-                motivo=f"ID lido como {id_lido}, corrigido pra {candidato_str} (confusão de "
-                f"dígito)",
-            )
+        if candidato_str not in por_id:
+            continue
+        candidato = por_id[candidato_str]
+        if (
+            nome_lido
+            and candidato.nome
+            and not nomes_parecidos(nome_lido, candidato.nome)
+        ):
+            continue
+        return MedicoValidado(
+            id_lido,
+            nome_lido,
+            status="corrigido",
+            id_corrigido=candidato_str,
+            membro=candidato,
+            motivo=(
+                f"ID lido como {id_lido}, corrigido pra {candidato_str} "
+                f"(confusão de dígito + nome compatível)"
+            ),
+        )
 
-    # 3. não bateu por número nenhum — tenta pelo nome
+    # 3. só pelo nome (semelhança alta) — ainda vira "corrigido" pra o doutor revisar
     membro_por_nome = _buscar_por_nome(nome_lido, membros)
     if membro_por_nome:
         return MedicoValidado(
@@ -224,16 +231,21 @@ def validar_medico(
             status="corrigido",
             id_corrigido=membro_por_nome.id_fivem,
             membro=membro_por_nome,
-            motivo=f"ID não batia, encontrado pelo nome ('{nome_lido}' ~ '{membro_por_nome.nome}')",
+            motivo=(
+                f"ID não batia, encontrado pelo nome "
+                f"('{nome_lido}' ~ '{membro_por_nome.nome}')"
+            ),
         )
 
-    # 4. não encontrado de nenhuma forma
+    # 4. não encontrado
     return MedicoValidado(
         id_lido,
         nome_lido,
         status="nao_encontrado",
-        motivo="Não encontrado entre os Recrutamentos aprovados — pode ser médico de outro "
-        "hospital (ex: Norte).",
+        motivo=(
+            "Não encontrado entre os membros do cms "
+            "(tag/hierarquia) — pode ser do hospital norte."
+        ),
     )
 
 

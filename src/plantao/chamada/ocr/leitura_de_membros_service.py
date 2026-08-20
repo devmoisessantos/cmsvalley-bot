@@ -1,12 +1,10 @@
 """
 Complemento pro validacao_ids.py: varre guild.members procurando o padrão
-"[TAG] Nome | idFivem" no apelido — cobre quem nunca passou pelo fluxo de
-Recrutamento formal (visitantes, membros antigos, etc.), mas já tem o ID
-FiveM no próprio apelido do servidor.
+"[TAG] Nome | idFivem" no apelido — só entra quem é do hospital de verdade
+(prefixo de cargo no nick ou cargo da hierarquia).
 
-Isso NÃO substitui o Recrutamento — os dois são combinados: o Recrutamento
-aprovado continua tendo prioridade (é o dado mais confiável, veio de um
-processo formal), e a varredura de apelido preenche as lacunas.
+Visitante e quem só tem recrutamento antigo no banco, sem cargo/prefixo
+hoje, NÃO entra na lista de candidatos da chamada.
 """
 
 import re
@@ -18,10 +16,11 @@ from typing import (
 
 import discord
 
-# Os prefixos de cargo que aparecem no início do apelido — usados só pra
-# identificar visualmente, não são obrigatórios pro parsing do ID funcionar
-# (o regex do ID não depende de reconhecer o prefixo certo).
-from src.config import PREFIXOS_NICKNAME
+from src.config import (
+    CARGOS,
+    CARGOS_HIERARQUIA,
+    PREFIXOS_NICKNAME,
+)
 from src.plantao.chamada.validacao_ids_service import MembroConhecido
 
 # Pega o primeiro número depois de um "|" — não ancora no fim da string
@@ -64,15 +63,30 @@ def possui_prefixo_reconhecido(nome_exibido: str) -> bool:
     return any(nome_exibido.startswith(tag) for tag in PREFIXOS_NICKNAME.values())
 
 
+def membro_e_do_hospital(membro: discord.Member) -> bool:
+    """
+    True só se a pessoa for do hospital agora:
+    - apelido com prefixo de cargo (ex: [ ENF ], [ DR ]), ou
+    - algum cargo da hierarquia hospitalar.
+
+    Visitante, sem prefixo e sem cargo da hierarquia, fica de fora.
+    """
+    if membro is None or membro.bot:
+        return False
+    nome_exibido = membro.nick or membro.display_name or membro.name
+    if possui_prefixo_reconhecido(nome_exibido):
+        return True
+    ids_hierarquia = {CARGOS[nome] for nome in CARGOS_HIERARQUIA if nome in CARGOS}
+    return any(cargo.id in ids_hierarquia for cargo in membro.roles)
+
+
 def construir_membros_via_apelido(guild: discord.Guild) -> List[MembroConhecido]:
-    """Varre guild.members procurando '[TAG] Nome | idFivem' no apelido —
-    exige o prefixo de cargo reconhecido, senão qualquer 'Nome | número' no
-    servidor entraria como falso positivo (ex: 'Beka Rico | 251')."""
+    """Varre guild.members com prefixo de hospital e ID FiveM no apelido."""
     membros = []
     for membro in guild.members:
-        nome_exibido = membro.nick or membro.display_name or membro.name
-        if not possui_prefixo_reconhecido(nome_exibido):
+        if not membro_e_do_hospital(membro):
             continue
+        nome_exibido = membro.nick or membro.display_name or membro.name
         id_fivem = extrair_id_do_apelido(nome_exibido)
         if id_fivem is None:
             continue
@@ -84,3 +98,18 @@ def construir_membros_via_apelido(guild: discord.Guild) -> List[MembroConhecido]
             )
         )
     return membros
+
+
+def filtrar_membros_do_hospital(
+    membros: List[MembroConhecido], guild: discord.Guild
+) -> List[MembroConhecido]:
+    """Mantém só quem está no servidor e é do hospital (prefixo ou hierarquia)."""
+    filtrados: List[MembroConhecido] = []
+    for conhecido in membros:
+        membro = guild.get_member(conhecido.discord_id)
+        if membro is None:
+            continue
+        if not membro_e_do_hospital(membro):
+            continue
+        filtrados.append(conhecido)
+    return filtrados
