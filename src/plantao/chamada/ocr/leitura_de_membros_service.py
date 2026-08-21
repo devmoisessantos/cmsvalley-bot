@@ -23,20 +23,26 @@ from src.config import (
 )
 from src.plantao.chamada.validacao_ids_service import MembroConhecido
 
-# Pega o primeiro número depois de um "|" — não ancora no fim da string
-# porque apelidos reais têm lixo depois do ID às vezes (ex: "| 1763 [VL]").
-_PADRAO_ID_APELIDO = re.compile(r"\|\s*(\d{1,7})")
+# Aceita "|" ASCII e "│" (barra vertical fullwidth comum em nicks do servidor).
+# Não ancora no fim: apelidos reais têm lixo depois do ID (ex: "| 1763 [VL]").
+_PADRAO_ID_APELIDO = re.compile(r"[|│]\s*(\d{1,7})")
 
 
 def extrair_id_do_apelido(nome_exibido: str) -> Optional[str]:
-    """Extrai o primeiro FiveM após ``|`` para tolerar texto adicional no apelido."""
+    """
+    Extrai o primeiro ID FiveM após separador de apelido.
+
+    Aceita tanto ``|`` quanto ``│`` (fullwidth), padrão visto em nicks
+    como ``『RES.RE』Nome│83793``.
+    """
     match = _PADRAO_ID_APELIDO.search(nome_exibido or "")
     return match.group(1) if match else None
 
 
 def _extrair_nome(nome_exibido: str) -> str:
-    """Tira o prefixo de cargo (se tiver) e fica só com o nome, antes do '|'."""
-    nome_sem_id = nome_exibido.split("|")[0].strip()
+    """Tira o prefixo de cargo (se tiver) e fica só com o nome, antes do separador."""
+    # Aceita "|" e "│" (fullwidth) como separador do ID
+    nome_sem_id = re.split(r"[|│]", nome_exibido or "", maxsplit=1)[0].strip()
     for tag in PREFIXOS_NICKNAME.values():
         if nome_sem_id.startswith(tag):
             nome_sem_id = nome_sem_id[len(tag) :].strip()

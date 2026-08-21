@@ -48,14 +48,14 @@ class ModeracaoCog(commands.Cog):
 
     @grupo_moderacao.command(
         name="limpar",
-        description="Apaga as últimas mensagens deste canal (até 100)",
+        description="Apaga as últimas mensagens deste canal (até 1000)",
     )
-    @app_commands.describe(quantidade="Quantas mensagens apagar (1 a 100)")
+    @app_commands.describe(quantidade="Quantas mensagens apagar (1 a 1000)")
     @apenas_administrador()
     async def limpar(
         self,
         interacao: discord.Interaction,
-        quantidade: app_commands.Range[int, 1, 100],
+        quantidade: app_commands.Range[int, 1, 1000],
     ):
         """Remove mensagens recentes do canal atual e informa o total apagado."""
         canal = interacao.channel
@@ -97,7 +97,7 @@ class ModeracaoCog(commands.Cog):
             titulo="Limpeza concluída",
             linhas=[f"Apaguei **{quantidade_apagada}** mensagem(ns)."],
             cor=COR_SUCESSO,
-            delay=12,
+            delay=10,
         )
 
     @grupo_moderacao.command(

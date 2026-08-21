@@ -1,9 +1,16 @@
 """Tasks e comandos: ranking de chamadas + ranking de horas de plantão.
 
-Auto:
-- Ranking de horas TEMPO REAL: mensagem persistente no canal, atualiza a cada 1 min
-- Sábado 11h00: fecha ciclo (apaga tempo real, envia ganhadores às finanças, posta
-semanal)
+Atualização em tempo real (mesmo padrão do ranking de moedas):
+
+1. ``loop_tempo_real_horas`` e ``loop_ranking_moedas`` rodam a cada 1 minuto.
+2. Cada ciclo monta o card de novo e **edita** a mensagem persistente
+   (ou cria se ainda não existir / se a mensagem sumiu).
+3. O ID da mensagem fica em ``paineis_postados`` (nome do painel no config).
+4. Nas horas, a contagem do período ``tempo_real`` soma logs fechados **e**
+   o trecho ainda aberto em call — espelhando o saldo vivo das moedas.
+
+Agendamentos oficiais:
+- Sábado 11h00: fecha ciclo (apaga tempo real, finanças, posta semanal)
 - Sábado 11h05: publica novo ranking tempo real (novo ciclo)
 - Dia 1 às 11h: ranking mensal
 """
@@ -31,7 +38,10 @@ from src.config import (
     RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO,
     TIMEZONE_LOCAL,
 )
-from src.database.conexao import async_session, tentar_reanimar_as_conexoes
+from src.database.conexao import (
+    async_session,
+    tentar_reanimar_as_conexoes,
+)
 from src.database.models import PainelPostado
 from src.plantao.ranking_plantao_service import (
     gerar_view_ranking_chamadas,
@@ -87,12 +97,22 @@ class RankingPlantaoTasks(commands.Cog):
         self.loop_tempo_real_horas.cancel()
         self.loop_ranking_moedas.cancel()
 
-    # ── Tempo real a cada 1 minuto ────────────────────────────────────────
+    # ── Tempo real a cada 1 minuto (horas e moedas usam o mesmo ritmo) ────
+    #
+    # Como é aplicado (igual nos dois rankings):
+    # 1. O loop dispara a cada 60 segundos depois do bot ficar ready.
+    # 2. Monta a LayoutView com os dados atuais do banco (+ ao vivo nas horas).
+    # 3. Busca o message_id salvo em paineis_postados e edita essa mensagem.
+    # 4. Se a mensagem não existir mais, posta de novo e grava o novo id.
+    # Assim o canal mostra sempre a contagem corrente, sem flood de mensagens.
 
     @tasks.loop(minutes=1)
     async def loop_tempo_real_horas(self):
         """
-        Atualiza o card persistente de horas sem deixar uma falha parar o próximo ciclo.
+        Atualiza o card persistente de horas a cada minuto.
+
+        Espelha o ``loop_ranking_moedas``: recalcula totais e edita a mesma
+        mensagem no canal de ranking. Falhas ficam no log e não param o loop.
         """
         try:
             await self._atualizar_ou_criar_tempo_real_horas()
@@ -107,7 +127,12 @@ class RankingPlantaoTasks(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def loop_ranking_moedas(self):
-        """Mantém o ranking de moedas atualizado, isolando falhas do ciclo seguinte."""
+        """
+        Mantém o ranking de moedas atualizado a cada minuto.
+
+        Mesmo contrato do loop de horas: edita a mensagem persistente
+        (saldo vivo em estado_plantao) e isola falhas do ciclo seguinte.
+        """
         try:
             from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
 
@@ -197,6 +222,19 @@ class RankingPlantaoTasks(commands.Cog):
                 await sessao.commit()
 
     async def _atualizar_ou_criar_tempo_real_horas(self) -> None:
+        """
+        Publica ou edita o ranking de horas em tempo real no canal configurado.
+
+        Passo a passo (idêntico à ideia do ranking de moedas):
+        1. Resolve guilda e canal ``RANKING_HORAS_PLANTAO``.
+        2. Gera a view com ``gerar_view_ranking_horas("tempo_real")``, que já
+           inclui logs fechados + segundos ainda em call + filtro de elegíveis.
+        3. Se existe message_id em ``paineis_postados``, edita essa mensagem.
+        4. Se não existe ou a mensagem sumiu, envia uma nova e grava o id.
+
+        Na janela de fechamento de sábado (11h00–11h04) não recria o card;
+        o reinício oficial ocorre às 11h05 pelo ``loop_rankings``.
+        """
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
             return
@@ -217,6 +255,7 @@ class RankingPlantaoTasks(commands.Cog):
             if registro is None:
                 return
 
+        # Contagem tempo real: logs do ciclo + trecho aberto em call (ao vivo)
         view, contagem, inicio, fim, total = await gerar_view_ranking_horas(
             "tempo_real", guild=guild, modo_postagem=False
         )
@@ -225,6 +264,7 @@ class RankingPlantaoTasks(commands.Cog):
         if registro is not None:
             try:
                 mensagem = await canal.fetch_message(int(registro.message_id))
+                # Edita o card existente — evita spam e mantém o histórico do canal
                 await mensagem.edit(view=view)
                 return
             except (discord.NotFound, discord.HTTPException):

@@ -1,9 +1,16 @@
 """Rankings de plantão:
 
 - Chamadas: quantas chamadas cada doutor realizou (tabela chamadas)
-- Horas: tempo em call por membro (soma duracao_segundos em log_plantao) — só relatório
+- Horas: tempo em call por membro (soma de log_plantao.duracao_segundos)
 
-Mesmos ciclos do ranking de recrutadores (semanal sáb 12h / mensal calendário).
+Contagem em tempo real (igual ao ranking de moedas):
+- O cog RankingPlantaoTasks roda um loop a cada 1 minuto.
+- No período ``tempo_real``, além dos logs fechados, soma o trecho
+  ainda aberto em call (estado_plantao.segmento_iniciado_em → agora).
+- Só entram membros elegíveis (mesma regra do ranking de moedas:
+  no servidor + cargo de hierarquia).
+
+Ciclos oficiais: semanal (sábado) e mensal (dia 1), sem trecho ao vivo.
 UI: Components V2.
 """
 
@@ -11,7 +18,10 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import (
+    datetime,
+    timezone,
+)
 from zoneinfo import ZoneInfo
 
 import discord
@@ -30,10 +40,12 @@ from src.config import (
 from src.database.conexao import async_session
 from src.database.models import (
     Chamada,
+    EstadoPlantao,
     LogPlantao,
     RankingHistorico,
     agora,
 )
+from src.plantao.carteira_service import membro_elegivel_ranking_moedas
 from src.recrutamento.ranking_service import (
     obter_periodo_ciclo_mensal,
     obter_periodo_ciclo_semanal,
@@ -98,19 +110,59 @@ async def buscar_chamadas_por_doutor(
         return {int(did): int(quantidade) for did, quantidade in resultado.all()}
 
 
+async def _somar_segundos_em_call_ao_vivo() -> dict[int, int]:
+    """
+    Segundos ainda não gravados no log: plantão ligado e cronômetro aberto.
+
+    Como o ranking de moedas lê o saldo vivo em ``estado_plantao``, o ranking
+    de horas em tempo real precisa enxergar o trecho corrente da call.
+    Só conta ``segmento_iniciado_em`` → agora (mesmo critério usado ao sair
+    da call para gravar ``duracao_segundos``). Quem está surdo/pausado não
+    tem segmento aberto e não entra aqui.
+    """
+    agora_utc = datetime.now(timezone.utc)
+    ao_vivo: dict[int, int] = {}
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(EstadoPlantao).where(
+                EstadoPlantao.toggle_ligado.is_(True),
+                EstadoPlantao.em_call_valida.is_(True),
+                EstadoPlantao.segmento_iniciado_em.is_not(None),
+            )
+        )
+        for estado in resultado.scalars().all():
+            inicio_segmento = estado.segmento_iniciado_em
+            if inicio_segmento is None:
+                continue
+            if inicio_segmento.tzinfo is None:
+                inicio_segmento = inicio_segmento.replace(tzinfo=timezone.utc)
+            decorrido = int((agora_utc - inicio_segmento).total_seconds())
+            if decorrido > 0:
+                ao_vivo[int(estado.discord_id)] = decorrido
+    return ao_vivo
+
+
 async def buscar_horas_por_membro(
     inicio_utc: datetime,
     fim_utc: datetime,
     *,
     guild: discord.Guild | None = None,
+    incluir_ao_vivo: bool = False,
 ) -> dict[int, int]:
     """
-    {discord_id: segundos_totais} a partir de log_plantao.duracao_segundos.
+    Devolve ``{discord_id: segundos_totais}`` no intervalo pedido.
 
-    Exclui:
+    Base (sempre):
+    - Soma ``log_plantao.duracao_segundos`` dos eventos já fechados no período.
+
+    Tempo real (``incluir_ao_vivo=True``), no mesmo espírito do ranking de moedas:
+    - Soma também o trecho ainda aberto em call (não está no log até sair).
+    - O loop de 1 min em ``ranking_plantao_tasks`` republica o card com esses totais.
+
+    Filtro final (guild informada):
     - IDs em RANKING_HORAS_IDS_EXCLUIDOS
-    - membros com cargos em RANKING_HORAS_CARGOS_EXCLUIDOS
-    - quem não está mais no servidor (quando guild é informada)
+    - cargos em RANKING_HORAS_CARGOS_EXCLUIDOS
+    - mesma elegibilidade do ranking de moedas (no servidor + hierarquia)
     """
     async with async_session() as session:
         resultado = await session.execute(
@@ -128,6 +180,15 @@ async def buscar_horas_por_membro(
         )
         bruto = {int(did): int(segs) for did, segs in resultado.all() if int(segs) > 0}
 
+    # Contagem ao vivo: só no ranking tempo real (não mistura no semanal/mensal oficial)
+    if incluir_ao_vivo:
+        for discord_id, segundos_abertos in (
+            await _somar_segundos_em_call_ao_vivo()
+        ).items():
+            bruto[discord_id] = int(bruto.get(discord_id, 0)) + int(segundos_abertos)
+            if bruto[discord_id] <= 0:
+                bruto.pop(discord_id, None)
+
     return filtrar_participantes_ranking_horas(bruto, guild=guild)
 
 
@@ -136,7 +197,15 @@ def filtrar_participantes_ranking_horas(
     *,
     guild: discord.Guild | None = None,
 ) -> dict[int, int]:
-    """Aplica exclusões de ID, cargo e saída do servidor."""
+    """
+    Aplica as mesmas regras do ranking de moedas, mais exclusões de horas.
+
+    Fora do ranking:
+    - IDs em RANKING_HORAS_IDS_EXCLUIDOS
+    - quem saiu do servidor
+    - quem não tem mais cargo da hierarquia (mesma regra das moedas)
+    - cargos em RANKING_HORAS_CARGOS_EXCLUIDOS (ex.: Exonerado / Adv)
+    """
     ids_bloqueados = {
         int(id_bloqueado) for id_bloqueado in (RANKING_HORAS_IDS_EXCLUIDOS or [])
     }
@@ -152,8 +221,8 @@ def filtrar_participantes_ranking_horas(
             continue
         if guild is not None:
             membro = guild.get_member(int(discord_id))
-            if membro is None:
-                # Saiu do hospital / servidor → fora do ranking
+            # Saiu do servidor OU sem hierarquia → fora (igual ranking de moedas)
+            if not membro_elegivel_ranking_moedas(membro):
                 continue
             if any(cargo.id in cargos_bloqueados for cargo in membro.roles):
                 continue
@@ -516,12 +585,24 @@ async def gerar_view_ranking_horas(
 ) -> tuple[discord.ui.LayoutView, dict[int, int], datetime, datetime, int]:
     """Reúne período, filtro de participantes e card de horas para publicação.
 
-    Usa a guilda, quando disponível, para remover ex-membros e cargos excluídos antes
-    de montar o ranking. A tupla inclui os dados usados e o intervalo, impedindo que
-    um histórico seja salvo com números diferentes dos que foram divulgados.
+    Usa a guilda, quando disponível, para remover ex-membros e quem perdeu
+    cargo de hierarquia (mesma regra do ranking de moedas).
+
+    Em ``periodo == "tempo_real"`` a contagem inclui o tempo ainda em call
+    (trecho aberto), para o card acompanhar o minuto a minuto como o ranking
+    de moedas acompanha o saldo. Semanal e mensal usam só logs fechados.
+
+    A tupla inclui contagem e datas para o histórico bater com o card publicado.
     """
     inicio, fim, periodo_view = _periodos("horas", periodo, referencia, modo_postagem)
-    contagem = await buscar_horas_por_membro(inicio, fim, guild=guild)
+    # Tempo real = logs do ciclo + segundos ainda abertos em call (como saldo vivo)
+    incluir_ao_vivo = periodo_view == "tempo_real" and not modo_postagem
+    contagem = await buscar_horas_por_membro(
+        inicio,
+        fim,
+        guild=guild,
+        incluir_ao_vivo=incluir_ao_vivo,
+    )
     view, total = montar_view_ranking_horas(
         contagem, inicio, fim, periodo=periodo_view, guild=guild
     )
