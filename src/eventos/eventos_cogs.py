@@ -24,6 +24,10 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
+from src.eventos.eventos_mensagens_views import (
+    montar_view_mensagem_apagada,
+    montar_view_mensagem_editada,
+)
 from src.utils.formatacao import formatar_hms
 from src.utils.logger import (
     COR_AVISO,
@@ -346,46 +350,66 @@ class EventosAuditoriaCog(commands.Cog):
             alvo_id=mensagem.author.id if mensagem.author else None,
         )
         conteudo = (mensagem.content or "").strip() or "_sem texto_"
-        if len(conteudo) > 1500:
-            conteudo = conteudo[:1500] + "…"
+        if len(conteudo) > 1800:
+            conteudo = conteudo[:1800] + "…"
 
-        cabecalho = "\n".join(
-            [
-                f"-  `✍️` **Autor:** {_mencao(mensagem.author)}",
-                f"-  `#️⃣` **Canal:** {mensagem.channel.mention}",
-                "-  `💬` **Conteúdo:**",
-            ]
+        view = montar_view_mensagem_apagada(
+            guilda=mensagem.guild,
+            autor=mensagem.author,
+            canal=mensagem.channel,
+            conteudo=conteudo,
+            enviada_em=mensagem.created_at,
+            apagada_em=datetime.now(timezone.utc),
+            id_da_mensagem=mensagem.id,
+            quem_apagou=executor,
         )
-        bloco_conteudo = f"> {conteudo}"
-        bloco_meta = "\n".join(
-            [
-                f"-  `📤` **Enviada em:** {_ts(mensagem.created_at)}",
-                f"-  `🗑️` **Apagada em:** {_ts(datetime.now(timezone.utc))}",
-                f"-  `🆔` **ID da mensagem:** `{mensagem.id}`",
-                f"-  `❓` **Quem apagou:** {_mencao(executor)}",
-            ]
-        )
+
+        # Anexos da mensagem original vão em tópico (arquivado após 2s)
         arquivos: list[discord.File] = []
         for anexo in mensagem.attachments[:5]:
             try:
                 arquivos.append(await anexo.to_file())
             except (discord.HTTPException, discord.NotFound):
-                bloco_meta += f"\n-  `📎` **Anexo (URL):** {anexo.url}"
+                pass
 
-        await _publicar(
+        import asyncio
+
+        from src.utils.logger import resolver_canal_de_log
+
+        canal_log = await resolver_canal_de_log(
             mensagem.guild,
             "LOG_MENSAGENS_DELETADAS",
-            titulo="🗑️ Mensagem apagada",
-            linhas=cabecalho,
-            blocos_extra=[bloco_conteudo, bloco_meta],
-            cor=COR_ERRO,
-            url_do_avatar=(
-                mensagem.author.display_avatar.url if mensagem.author else None
-            ),
-            arquivos=arquivos or None,
-            abrir_topico_para_anexos=bool(arquivos),
-            nome_do_topico=f"anexos-{mensagem.id}"[:100],
+            cliente=self.bot,
         )
+        if canal_log is None:
+            return
+        try:
+            msg_log = await canal_log.send(view=view)
+            registrador.info(
+                "Log publicado em LOG_MENSAGENS_DELETADAS (canal %s)",
+                getattr(canal_log, "id", "?"),
+            )
+            if arquivos:
+                try:
+                    topico = await msg_log.create_thread(
+                        name=f"anexos-{mensagem.id}"[:100]
+                    )
+                    await topico.send(files=arquivos)
+                    await asyncio.sleep(2)
+                    try:
+                        await topico.edit(
+                            archived=True,
+                            locked=True,
+                            reason="Arquivar anexos da mensagem apagada",
+                        )
+                    except discord.HTTPException:
+                        await topico.edit(archived=True)
+                except (discord.Forbidden, discord.HTTPException) as erro:
+                    registrador.warning(
+                        "Tópico de anexos (msg apagada) falhou: %s", erro
+                    )
+        except Exception:
+            registrador.exception("Falha ao publicar LOG_MENSAGENS_DELETADAS")
 
     @commands.Cog.listener()
     async def on_bulk_message_delete(self, mensagens: list[discord.Message]):
@@ -420,31 +444,33 @@ class EventosAuditoriaCog(commands.Cog):
         if len(self._ids_de_edicao_recentes) > 300:
             self._ids_de_edicao_recentes.clear()
 
-        texto_antes = (antes.content or "").strip() or "_vazio_"
-        texto_depois = (depois.content or "").strip() or "_vazio_"
-        if len(texto_antes) > 900:
-            texto_antes = texto_antes[:900] + "…"
-        if len(texto_depois) > 900:
-            texto_depois = texto_depois[:900] + "…"
+        view = montar_view_mensagem_editada(
+            guilda=depois.guild,
+            autor=depois.author,
+            canal=depois.channel,
+            conteudo_anterior=antes.content or "",
+            conteudo_novo=depois.content or "",
+            id_da_mensagem=depois.id,
+            url_da_mensagem=depois.jump_url,
+        )
 
-        await _publicar(
+        from src.utils.logger import resolver_canal_de_log
+
+        canal_log = await resolver_canal_de_log(
             depois.guild,
             "LOG_MENSAGENS_EDITADAS",
-            titulo="✒️ Mensagem editada",
-            linhas=[
-                f"-  `✍️` **Autor:** {_mencao(depois.author)}",
-                f"-  `#️⃣` **Canal:** {depois.channel.mention}",
-                "-  `📝` **Conteúdo anterior:**",
-                f"> {texto_antes}",
-                "-  `🆕` **Conteúdo novo:**",
-                f"> {texto_depois}",
-                f"-  `🆔` **ID da mensagem:** `{depois.id}`",
-            ],
-            cor=COR_AVISO,
-            url_do_avatar=(depois.author.display_avatar.url if depois.author else None),
-            url_do_link=depois.jump_url,
-            rotulo_do_link="Abrir mensagem",
+            cliente=self.bot,
         )
+        if canal_log is None:
+            return
+        try:
+            await canal_log.send(view=view)
+            registrador.info(
+                "Log publicado em LOG_MENSAGENS_EDITADAS (canal %s)",
+                getattr(canal_log, "id", "?"),
+            )
+        except Exception:
+            registrador.exception("Falha ao publicar LOG_MENSAGENS_EDITADAS")
 
     # ── Voz (LOG_VOZ) ───────────────────────────────────────────────────
 
@@ -729,31 +755,82 @@ class EventosAuditoriaCog(commands.Cog):
         url_antiga: str | None,
         url_nova: str | None,
     ) -> None:
-        arquivos: list[discord.File] = []
+        """
+        Card no canal + tópico com avatar antigo (arquivo ou link).
+
+        O tópico é arquivado após 2 segundos, igual chamadas/advertências.
+        """
+        import asyncio
+
+        from src.utils.log_container import LogContainerView
+        from src.utils.logger import resolver_canal_de_log
+
+        linhas = "\n".join(
+            [
+                f"-  `👤` **Membro:** {_mencao(membro)}",
+                f"-  `📁` **Tipo:** {tipo}",
+            ]
+        )
+        view = LogContainerView(
+            titulo="🖼️ Avatar alterado",
+            linhas=linhas,
+            guild=membro.guild,
+            cor=COR_INFO,
+            avatar_url=url_nova,
+            link_url=url_nova,
+            link_label="Abrir avatar atual",
+        )
+
+        canal_log = await resolver_canal_de_log(
+            membro.guild, "LOG_AVATARES", cliente=self.bot
+        )
+        if canal_log is None:
+            return
+
+        arquivo_antigo = None
         if url_antiga:
-            arquivo = await baixar_arquivo_de_url(
+            arquivo_antigo = await baixar_arquivo_de_url(
                 self.bot,
                 url_antiga,
                 f"avatar_antigo_{membro.id}.png",
             )
-            if arquivo is not None:
-                arquivos.append(arquivo)
-        await _publicar(
-            membro.guild,
-            "LOG_AVATARES",
-            titulo="🖼️ Avatar alterado",
-            linhas=[
-                f"-  `👤` **Membro:** {_mencao(membro)}",
-                f"-  `📁` **Tipo:** {tipo}",
-            ],
-            cor=COR_INFO,
-            url_do_avatar=url_nova,
-            arquivos=arquivos or None,
-            abrir_topico_para_anexos=bool(arquivos),
-            nome_do_topico=f"avatar-antigo-{membro.id}"[:100],
-            url_do_link=url_nova,
-            rotulo_do_link="Abrir avatar atual",
-        )
+
+        try:
+            msg_log = await canal_log.send(view=view)
+            registrador.info(
+                "Log publicado em LOG_AVATARES (canal %s)",
+                getattr(canal_log, "id", "?"),
+            )
+            if url_antiga:
+                try:
+                    topico = await msg_log.create_thread(
+                        name=f"avatar-antigo-{membro.id}"[:100]
+                    )
+                    if arquivo_antigo is not None:
+                        await topico.send(
+                            content="**Avatar anterior**",
+                            files=[arquivo_antigo],
+                        )
+                    else:
+                        await topico.send(
+                            content=(
+                                "**Avatar anterior** (download indisponível)\n"
+                                f"{url_antiga}"
+                            )
+                        )
+                    await asyncio.sleep(2)
+                    try:
+                        await topico.edit(
+                            archived=True,
+                            locked=True,
+                            reason="Arquivar avatar antigo",
+                        )
+                    except discord.HTTPException:
+                        await topico.edit(archived=True)
+                except (discord.Forbidden, discord.HTTPException) as erro:
+                    registrador.warning("Tópico de avatar antigo falhou: %s", erro)
+        except Exception:
+            registrador.exception("Falha ao publicar LOG_AVATARES")
 
     # ── Entrada / saída de membros ───────────────────────────────────────
 

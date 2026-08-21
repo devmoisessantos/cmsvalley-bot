@@ -8,6 +8,7 @@ O envio genérico passa por ``publicar_log_auditoria`` — caminho único.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import (
     datetime,
@@ -170,21 +171,31 @@ async def publicar_log_auditoria(
             try:
                 topico = await mensagem.create_thread(name=nome)
                 await topico.send(files=arquivos)
-                # Fecha/arquiva como nas chamadas e advertências
+                # Mesmo fluxo de chamadas/advertências: espera 2s e arquiva
+                await asyncio.sleep(2)
                 try:
                     await topico.edit(
                         archived=True,
                         locked=True,
                         reason="Arquivar tópico de anexo do log",
                     )
-                except discord.HTTPException:
+                except discord.HTTPException as erro_fechar:
+                    registrador.warning(
+                        "Falha ao arquivar tópico do log %s: %s",
+                        chave_do_canal,
+                        erro_fechar,
+                    )
                     try:
                         await topico.edit(
                             archived=True,
                             reason="Arquivar tópico de anexo do log",
                         )
-                    except discord.HTTPException:
-                        pass
+                    except discord.HTTPException as erro_fallback:
+                        registrador.warning(
+                            "Fallback archived falhou no log %s: %s",
+                            chave_do_canal,
+                            erro_fallback,
+                        )
             except (discord.Forbidden, discord.HTTPException) as erro_topico:
                 registrador.warning(
                     "Não foi possível abrir tópico no log %s: %s",
