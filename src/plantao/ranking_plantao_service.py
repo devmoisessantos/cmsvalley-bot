@@ -344,12 +344,16 @@ def montar_view_ranking_chamadas(
     )
 
     agora_ts = int(datetime.now(ZoneInfo("UTC")).timestamp())
-    rodape = (
-        f"-# {guild.name} • <t:{agora_ts}:f>"
-        if guild
-        else f"-# Ranking • <t:{agora_ts}:f>"
-    )
-    icon_url = guild.icon.url if guild.icon else None
+    if periodo == "tempo_real":
+        nome_guilda = guild.name if guild else "CENTRO MÉDICO SUL VALLEY"
+        rodape = f"-# {nome_guilda} • atualizado em tempo real · <t:{agora_ts}:R>"
+    else:
+        rodape = (
+            f"-# {guild.name} • <t:{agora_ts}:f>"
+            if guild
+            else f"-# Ranking • <t:{agora_ts}:f>"
+        )
+    icon_url = guild.icon.url if guild and guild.icon else None
 
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(
@@ -493,11 +497,16 @@ def montar_view_ranking_horas(
     corpo, total = _montar_corpo_horas_com_premios(contagem_segundos)
 
     agora_ts = int(datetime.now(ZoneInfo("UTC")).timestamp())
-    rodape = (
-        f"-# Relatório · {guild.name} • <t:{agora_ts}:f>"
-        if guild
-        else f"-# Relatório • <t:{agora_ts}:f>"
-    )
+    # Tempo real: mesmo rodapé do ranking de moedas (relativo + “atualizado em tempo real”)
+    if periodo == "tempo_real":
+        nome_guilda = guild.name if guild else "CENTRO MÉDICO SUL VALLEY"
+        rodape = f"-# {nome_guilda} • atualizado em tempo real · <t:{agora_ts}:R>"
+    else:
+        rodape = (
+            f"-# Relatório · {guild.name} • <t:{agora_ts}:f>"
+            if guild
+            else f"-# Relatório • <t:{agora_ts}:f>"
+        )
     icon_url = guild.icon.url if guild and guild.icon else None
 
     componentes: list = []

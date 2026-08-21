@@ -12,7 +12,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import discord
-from discord import app_commands
 from discord.ext import (
     commands,
     tasks,
@@ -26,28 +25,14 @@ from src.config import (
     TIMEZONE_LOCAL,
 )
 from src.recrutamento.ranking_service import (
-    buscar_historico_por_id,
     gerar_view_ranking,
-    listar_historico,
-    montar_view_historico_item,
     salvar_historico,
 )
-from src.utils.mensagens import (
-    responder_erro,
-    responder_sucesso,
-    responder_view,
-)
-from src.utils.permissions import is_authorized
 
 logger = logging.getLogger(__name__)
 
 
 class RankingRecrutadoresTasks(commands.Cog):
-    ranking_group = app_commands.Group(
-        name="ranking",
-        description="Ranking de recrutadores (tempo real, semanal, mensal, histórico)",
-    )
-
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._ultima_postagem_semanal: str | None = None
@@ -176,240 +161,6 @@ class RankingRecrutadoresTasks(commands.Cog):
                 )
                 await canal_erros.send(view=erro_view)
             return False
-
-    # ── /ranking tempo-real ──────────────────────────────────────────────
-
-    @ranking_group.command(
-        name="recrutamento-tempo-real",
-        description="Ranking da semana atual em tempo real (parcial)",
-    )
-    @app_commands.describe(
-        escopo="Semanal (ciclo atual) ou mensal (mês atual)",
-    )
-    @app_commands.choices(
-        escopo=[
-            app_commands.Choice(name="Semanal (ciclo atual)", value="semanal"),
-            app_commands.Choice(name="Mensal (mês atual)", value="mensal"),
-        ]
-    )
-    async def ranking_tempo_real(
-        self,
-        interaction: discord.Interaction,
-        escopo: app_commands.Choice[str] = None,
-    ):
-        """Exibe ao solicitante a parcial semanal ou mensal ainda em andamento.
-
-        O resultado é enviado apenas de forma efêmera para não publicar dados
-        parciais no canal. A opção de escopo define se a contagem considera o
-        ciclo semanal atual ou o mês atual.
-        """
-        await interaction.response.defer(ephemeral=True)
-        tipo_consulta = (
-            "tempo_real" if (escopo is None or escopo.value == "semanal") else "mensal"
-        )
-
-        try:
-            if tipo_consulta == "mensal":
-                view, *_ = await gerar_view_ranking(
-                    "mensal",
-                    guild=interaction.guild,
-                    modo_postagem=False,
-                )
-            else:
-                view, *_ = await gerar_view_ranking(
-                    "tempo_real",
-                    guild=interaction.guild,
-                    modo_postagem=False,
-                )
-            await responder_view(
-                interaction,
-                view,
-                ephemeral=True,
-            )
-        except Exception as erro:
-            await responder_erro(
-                interaction,
-                titulo="Erro inesperado",
-                linhas=[
-                    f"Erro ao gerar ranking: `{erro}`",
-                ],
-            )
-
-    # ── /ranking postar ──────────────────────────────────────────────────
-
-    @ranking_group.command(
-        name="recrutamento-postar",
-        description="Gera e posta ranking oficial (salva no histórico)",
-    )
-    @app_commands.describe(
-        tipo="Semanal (semana que fecha) ou mensal (mês anterior)",
-        no_canal="Se True, posta no canal oficial. Se False, só mostra pra você.",
-    )
-    @app_commands.choices(
-        tipo=[
-            app_commands.Choice(name="Semanal", value="semanal"),
-            app_commands.Choice(name="Mensal", value="mensal"),
-        ]
-    )
-    @is_authorized()
-    async def ranking_postar(
-        self,
-        interaction: discord.Interaction,
-        tipo: app_commands.Choice[str],
-        no_canal: bool = False,
-    ):
-        """Gera o fechamento oficial e, se solicitado, publica-o no canal.
-
-        Quando ``no_canal`` é falso, mostra apenas uma prévia efêmera. Quando é
-        verdadeiro, envia a mensagem no Discord e grava no banco o período, os
-        totais e o endereço da publicação para preservar o histórico oficial.
-        """
-        await interaction.response.defer(ephemeral=True)
-        tipo_val = tipo.value
-
-        try:
-            (
-                view,
-                contagem,
-                inicio,
-                fim,
-                total_rec,
-                total_pago,
-            ) = await gerar_view_ranking(
-                tipo_val,
-                guild=interaction.guild,
-                modo_postagem=True,
-            )
-        except Exception as erro:
-            await responder_erro(
-                interaction,
-                titulo="Falha inesperada",
-                linhas=[
-                    f"Erro: `{erro}`",
-                ],
-            )
-            return
-
-        if not no_canal:
-            await responder_view(
-                interaction,
-                view,
-                ephemeral=True,
-            )
-            return
-
-        canal_id = CANAIS.get("RANKING_RECRUTADORES") or 0
-        if not canal_id:
-            await responder_erro(
-                interaction,
-                titulo="Canal não configurado",
-                linhas=[
-                    "`CANAIS['RANKING_RECRUTADORES']` não configurado no config.",
-                ],
-            )
-            return
-
-        canal = interaction.guild.get_channel(canal_id) if interaction.guild else None
-        if canal is None:
-            await responder_erro(
-                interaction,
-                titulo="Não encontrado",
-                linhas=[
-                    f"Canal `{canal_id}` não encontrado.",
-                ],
-            )
-            return
-
-        mensagem = await canal.send(view=view)
-        await salvar_historico(
-            tipo=tipo_val,
-            inicio=inicio,
-            fim=fim,
-            contagem=contagem,
-            total_recrutamentos=total_rec,
-            total_pago=total_pago,
-            channel_id=canal.id,
-            message_id=mensagem.id,
-        )
-        await responder_sucesso(
-            interaction,
-            titulo="Ranking postado",
-            linhas=[
-                f"Ranking **{tipo_val}** postado em {canal.mention} e salvo no "
-                f"histórico.",
-            ],
-        )
-
-    # ── /ranking historico ───────────────────────────────────────────────
-
-    @ranking_group.command(
-        name="recrutamento-historico",
-        description="Lista os últimos rankings salvos ou reabre um por ID",
-    )
-    @app_commands.describe(
-        tipo="Filtrar por tipo (opcional)",
-        limite="Quantidade de registros na lista (1–25)",
-        id="ID do histórico para reabrir o ranking completo",
-    )
-    @app_commands.choices(
-        tipo=[
-            app_commands.Choice(name="Todos", value="todos"),
-            app_commands.Choice(name="Semanal", value="semanal"),
-            app_commands.Choice(name="Mensal", value="mensal"),
-        ]
-    )
-    async def ranking_historico(
-        self,
-        interaction: discord.Interaction,
-        tipo: app_commands.Choice[str] = None,
-        limite: app_commands.Range[int, 1, 25] = 10,
-        id: int | None = None,
-    ):
-        """Consulta fechamentos anteriores por lista filtrada ou identificador.
-
-        Um ``id`` reabre o cartão completo de um fechamento específico; sem
-        ele, a rotina envia uma lista limitada e opcionalmente filtrada. Isso
-        permite consultar dados consolidados sem recalcular períodos passados.
-        """
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            if id is not None:
-                registro = await buscar_historico_por_id(id)
-                if registro is None:
-                    await responder_erro(
-                        interaction,
-                        titulo="Não encontrado",
-                        linhas=[
-                            f"Histórico `#{id}` não encontrado.",
-                        ],
-                    )
-                    return
-                view = montar_view_historico_item(registro, guild=interaction.guild)
-                await responder_view(
-                    interaction,
-                    view,
-                    ephemeral=True,
-                )
-                return
-
-            filtro = None if (tipo is None or tipo.value == "todos") else tipo.value
-            registros = await listar_historico(tipo=filtro, limite=limite)
-
-            view = montar_view_lista_historico_com_ids(registros, interaction.guild)
-            await responder_view(
-                interaction,
-                view,
-                ephemeral=True,
-            )
-        except Exception as erro:
-            await responder_erro(
-                interaction,
-                titulo="Falha inesperada",
-                linhas=[
-                    f"Erro: `{erro}`",
-                ],
-            )
 
 
 def montar_view_lista_historico_com_ids(
