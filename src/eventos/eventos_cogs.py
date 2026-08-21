@@ -34,7 +34,6 @@ from src.utils.logger import (
     COR_ERRO,
     COR_INFO,
     COR_SUCESSO,
-    arquivo_de_asset_discord,
     baixar_arquivo_de_url,
     buscar_executor_no_audit_log,
     cargo_ja_foi_logado_pelo_bot,
@@ -688,10 +687,14 @@ class EventosAuditoriaCog(commands.Cog):
         url_guild_antes = antes.guild_avatar.url if antes.guild_avatar else None
         url_guild_depois = depois.guild_avatar.url if depois.guild_avatar else None
         if url_guild_antes != url_guild_depois:
+            bytes_antigos = await self._ler_bytes_do_asset(
+                antes.guild_avatar,
+                rotulo="avatar do servidor",
+            )
             await self._log_avatar(
                 depois,
                 tipo="Avatar do servidor",
-                asset_antigo=antes.guild_avatar,
+                bytes_antigos=bytes_antigos,
                 url_antiga=url_guild_antes,
                 url_nova=url_guild_depois or depois.display_avatar.url,
             )
@@ -730,6 +733,16 @@ class EventosAuditoriaCog(commands.Cog):
     async def on_user_update(self, antes: discord.User, depois: discord.User):
         if antes.avatar == depois.avatar:
             return
+
+        # Lê os bytes ANTES de qualquer outro await — o CDN do avatar
+        # antigo pode deixar de responder se demorarmos demais.
+        asset_antigo = antes.avatar or antes.display_avatar
+        url_antiga = asset_antigo.url if asset_antigo else None
+        bytes_antigos = await self._ler_bytes_do_asset(
+            asset_antigo,
+            rotulo="avatar global",
+        )
+
         try:
             id_guild = int(GUILD_ID or 0)
         except (TypeError, ValueError):
@@ -745,27 +758,122 @@ class EventosAuditoriaCog(commands.Cog):
         await self._log_avatar(
             membro,
             tipo="Avatar global",
-            asset_antigo=antes.display_avatar,
-            url_antiga=antes.display_avatar.url,
+            bytes_antigos=bytes_antigos,
+            url_antiga=url_antiga,
             url_nova=depois.display_avatar.url,
         )
+
+    async def _ler_bytes_do_asset(
+        self,
+        asset: discord.Asset | None,
+        *,
+        rotulo: str = "avatar",
+    ) -> bytes | None:
+        """
+        Baixa os bytes de um Asset o mais cedo possível.
+
+        Ordem:
+        1. asset.read() (HTTP do próprio discord.py)
+        2. bot.http.get_from_cdn(url)
+        3. aiohttp com User-Agent
+        """
+        if asset is None:
+            return None
+
+        url = None
+        try:
+            url = str(asset.with_size(1024).url)
+        except Exception:
+            try:
+                url = str(asset.url)
+            except Exception:
+                url = None
+
+        # 1) Asset.read
+        try:
+            dados = await asset.with_size(1024).read()
+            if dados:
+                registrador.info(
+                    "Avatar %s lido via Asset.read (%s bytes)",
+                    rotulo,
+                    len(dados),
+                )
+                return dados
+        except Exception as erro:
+            registrador.warning("Asset.read falhou (%s): %s", rotulo, erro)
+
+        # 2) CDN via sessão do bot
+        if url and hasattr(self.bot, "http"):
+            try:
+                dados = await self.bot.http.get_from_cdn(url)
+                if dados:
+                    registrador.info(
+                        "Avatar %s lido via get_from_cdn (%s bytes)",
+                        rotulo,
+                        len(dados),
+                    )
+                    return dados
+            except Exception as erro:
+                registrador.warning("get_from_cdn falhou (%s): %s", rotulo, erro)
+
+        # 3) aiohttp fallback
+        if url:
+            arquivo = await baixar_arquivo_de_url(self.bot, url, f"{rotulo}.png")
+            if arquivo is not None:
+                try:
+                    dados = arquivo.fp.read()
+                    arquivo.fp.seek(0)
+                    if dados:
+                        registrador.info(
+                            "Avatar %s lido via aiohttp (%s bytes)",
+                            rotulo,
+                            len(dados),
+                        )
+                        return dados
+                except Exception as erro:
+                    registrador.warning(
+                        "Leitura do File aiohttp falhou (%s): %s",
+                        rotulo,
+                        erro,
+                    )
+
+        registrador.error("Não foi possível obter bytes do %s (url=%s)", rotulo, url)
+        return None
+
+    def _arquivo_de_bytes(
+        self,
+        dados: bytes,
+        nome_base: str,
+    ) -> discord.File:
+        """Monta discord.File a partir dos bytes brutos (png/gif/jpg)."""
+        from io import BytesIO
+
+        if dados[:6] in (b"GIF87a", b"GIF89a"):
+            nome = f"{nome_base}.gif"
+        elif dados[:8] == b"\x89PNG\r\n\x1a\n":
+            nome = f"{nome_base}.png"
+        elif dados[:2] == b"\xff\xd8":
+            nome = f"{nome_base}.jpg"
+        else:
+            nome = f"{nome_base}.png"
+        return discord.File(BytesIO(dados), filename=nome)
 
     async def _log_avatar(
         self,
         membro: discord.Member,
         *,
         tipo: str,
-        asset_antigo: discord.Asset | None = None,
+        bytes_antigos: bytes | None = None,
         url_antiga: str | None = None,
         url_nova: str | None = None,
     ) -> None:
         """
-        Card no canal + tópico com o avatar anterior ANEXADO (bytes).
+        Card no canal + tópico com a imagem ANEXADA.
 
-        Prioridade do arquivo:
-        1. Asset.read() do discord.py (mais confiável)
-        2. Download HTTP da URL do CDN (fallback)
-        Nunca deixa só um link quebrado no tópico.
+        No tópico:
+        - só o arquivo (Discord mostra o preview da imagem)
+        - botão link opcional "Abrir no navegador" (sem URL solta no texto,
+          para não gerar preview duplicado / embed quebrado)
         """
         import asyncio
 
@@ -794,17 +902,11 @@ class EventosAuditoriaCog(commands.Cog):
         if canal_log is None:
             return
 
-        # 1) Asset oficial do Discord
-        arquivo_antigo = await arquivo_de_asset_discord(
-            asset_antigo,
-            nome_base=f"avatar_antigo_{membro.id}",
-        )
-        # 2) Fallback HTTP
-        if arquivo_antigo is None and url_antiga:
-            arquivo_antigo = await baixar_arquivo_de_url(
-                self.bot,
-                url_antiga,
-                f"avatar_antigo_{membro.id}.png",
+        arquivo_antigo = None
+        if bytes_antigos:
+            arquivo_antigo = self._arquivo_de_bytes(
+                bytes_antigos,
+                f"avatar_antigo_{membro.id}",
             )
 
         try:
@@ -815,36 +917,43 @@ class EventosAuditoriaCog(commands.Cog):
                 "sim" if arquivo_antigo else "nao",
             )
 
-            if not url_antiga and arquivo_antigo is None:
+            if arquivo_antigo is None and not url_antiga:
                 return
 
             try:
                 topico = await msg_log.create_thread(
                     name=f"avatar-antigo-{membro.id}"[:100]
                 )
-                if arquivo_antigo is not None:
-                    texto_topico = (
-                        f"-  `🔗` **Link:** [Abrir no navegador]({url_antiga})\n"
-                        if url_antiga
-                        else ""
+
+                # Botão link (opcional) — sem colar URL no texto
+                view_do_topico = None
+                if url_antiga:
+                    view_do_topico = discord.ui.View(timeout=None)
+                    view_do_topico.add_item(
+                        discord.ui.Button(
+                            style=discord.ButtonStyle.link,
+                            label="Abrir no navegador",
+                            url=url_antiga,
+                        )
                     )
-                    texto_topico += "-  `🖼️` **Avatar anterior:**"
+
+                if arquivo_antigo is not None:
                     await topico.send(
-                        content=texto_topico,
+                        content="-  `🖼️` **Avatar anterior:**",
                         file=arquivo_antigo,
+                        view=view_do_topico,
                     )
                 else:
-                    # Último recurso: avisa que não conseguiu anexar
                     registrador.error(
-                        "Não foi possível anexar avatar antigo de %s "
-                        "(asset e download falharam)",
+                        "Avatar antigo sem bytes para %s — não anexa imagem",
                         membro.id,
                     )
                     await topico.send(
                         content=(
                             "⚠️ Não foi possível anexar a imagem do avatar "
                             "anterior (download falhou)."
-                        )
+                        ),
+                        view=view_do_topico,
                     )
 
                 await asyncio.sleep(2)
