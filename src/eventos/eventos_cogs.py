@@ -34,7 +34,6 @@ from src.utils.logger import (
     COR_ERRO,
     COR_INFO,
     COR_SUCESSO,
-    baixar_arquivo_de_url,
     buscar_executor_no_audit_log,
     cargo_ja_foi_logado_pelo_bot,
     log_mudanca_cargo,
@@ -690,6 +689,7 @@ class EventosAuditoriaCog(commands.Cog):
             bytes_antigos = await self._ler_bytes_do_asset(
                 antes.guild_avatar,
                 rotulo="avatar do servidor",
+                user_id=depois.id,
             )
             await self._log_avatar(
                 depois,
@@ -736,11 +736,20 @@ class EventosAuditoriaCog(commands.Cog):
 
         # Lê os bytes ANTES de qualquer outro await — o CDN do avatar
         # antigo pode deixar de responder se demorarmos demais.
-        asset_antigo = antes.avatar or antes.display_avatar
-        url_antiga = asset_antigo.url if asset_antigo else None
+        # Preferir antes.avatar (hash antigo real). display_avatar pode
+        # apontar para decoração/default e atrapalhar GIF animado.
+        asset_antigo = (
+            antes.avatar if antes.avatar is not None else antes.display_avatar
+        )
+        url_antiga = None
+        try:
+            url_antiga = str(asset_antigo.url) if asset_antigo else None
+        except Exception:
+            url_antiga = None
         bytes_antigos = await self._ler_bytes_do_asset(
             asset_antigo,
             rotulo="avatar global",
+            user_id=antes.id,
         )
 
         try:
@@ -768,76 +777,172 @@ class EventosAuditoriaCog(commands.Cog):
         asset: discord.Asset | None,
         *,
         rotulo: str = "avatar",
+        user_id: int | None = None,
     ) -> bytes | None:
         """
-        Baixa os bytes de um Asset o mais cedo possível.
+        Baixa bytes de avatar (incluindo GIF animado).
 
-        Ordem:
-        1. asset.read() (HTTP do próprio discord.py)
-        2. bot.http.get_from_cdn(url)
-        3. aiohttp com User-Agent
+        Avatares animados usam hash ``a_...`` e o CDN pode recusar
+        ``?size=1024`` em alguns casos. Tentamos várias formas, na ordem:
+
+        1. asset.to_file() / asset.read() (sem forçar size)
+        2. read com sizes 256, 512, 1024
+        3. get_from_cdn em URLs alternativas (.gif / sem query)
+        4. aiohttp com User-Agent em cada URL candidata
         """
         if asset is None:
             return None
 
-        url = None
+        urls_candidatas: list[str] = []
+
+        def _adicionar_url(url: str | None) -> None:
+            if not url:
+                return
+            if url not in urls_candidatas:
+                urls_candidatas.append(url)
+
+        # URL natural do asset
         try:
-            url = str(asset.with_size(1024).url)
+            _adicionar_url(str(asset.url))
         except Exception:
-            try:
-                url = str(asset.url)
-            except Exception:
-                url = None
+            pass
 
-        # 1) Asset.read
+        # Variantes sem query e com sizes comuns
         try:
-            dados = await asset.with_size(1024).read()
-            if dados:
-                registrador.info(
-                    "Avatar %s lido via Asset.read (%s bytes)",
-                    rotulo,
-                    len(dados),
-                )
-                return dados
-        except Exception as erro:
-            registrador.warning("Asset.read falhou (%s): %s", rotulo, erro)
+            base = str(asset.url).split("?")[0]
+            _adicionar_url(base)
+            for size in (256, 512, 1024, 128):
+                _adicionar_url(f"{base}?size={size}")
+        except Exception:
+            pass
 
-        # 2) CDN via sessão do bot
-        if url and hasattr(self.bot, "http"):
+        # Montagem manual (GIF animado) a partir do hash
+        try:
+            hash_avatar = getattr(asset, "key", None)
+            if hash_avatar and user_id:
+                animado = bool(getattr(asset, "is_animated", lambda: False)())
+                # key pode vir sem a_ ; is_animated é a fonte da verdade
+                ext = "gif" if animado or str(hash_avatar).startswith("a_") else "png"
+                base_manual = (
+                    f"https://cdn.discordapp.com/avatars/{user_id}/{hash_avatar}.{ext}"
+                )
+                _adicionar_url(base_manual)
+                for size in (256, 512, 1024):
+                    _adicionar_url(f"{base_manual}?size={size}")
+                # media.discordapp.net às vezes responde quando cdn falha
+                base_media = base_manual.replace(
+                    "cdn.discordapp.com", "media.discordapp.net"
+                )
+                _adicionar_url(base_media)
+                for size in (256, 512):
+                    _adicionar_url(f"{base_media}?size={size}")
+        except Exception:
+            pass
+
+        # 1) API oficial do Asset — primeiro SEM with_size (melhor p/ GIF)
+        for tentativa in (
+            "read_simples",
+            "to_file",
+            "size_256",
+            "size_512",
+            "size_1024",
+        ):
             try:
-                dados = await self.bot.http.get_from_cdn(url)
+                if tentativa == "read_simples":
+                    dados = await asset.read()
+                elif tentativa == "to_file":
+                    if not hasattr(asset, "to_file"):
+                        continue
+                    arquivo = await asset.to_file()
+                    dados = arquivo.fp.read()
+                    arquivo.fp.seek(0)
+                elif tentativa == "size_256":
+                    dados = await asset.with_size(256).read()
+                elif tentativa == "size_512":
+                    dados = await asset.with_size(512).read()
+                else:
+                    dados = await asset.with_size(1024).read()
                 if dados:
                     registrador.info(
-                        "Avatar %s lido via get_from_cdn (%s bytes)",
+                        "Avatar %s lido via %s (%s bytes)",
                         rotulo,
+                        tentativa,
                         len(dados),
                     )
                     return dados
             except Exception as erro:
-                registrador.warning("get_from_cdn falhou (%s): %s", rotulo, erro)
+                registrador.warning(
+                    "Avatar %s — %s falhou: %s",
+                    rotulo,
+                    tentativa,
+                    erro,
+                )
 
-        # 3) aiohttp fallback
-        if url:
-            arquivo = await baixar_arquivo_de_url(self.bot, url, f"{rotulo}.png")
-            if arquivo is not None:
+        # 2) get_from_cdn do bot em cada URL
+        if hasattr(self.bot, "http"):
+            for url in urls_candidatas:
                 try:
-                    dados = arquivo.fp.read()
-                    arquivo.fp.seek(0)
-                    if dados:
+                    dados = await self.bot.http.get_from_cdn(url)
+                    if dados and not (
+                        len(dados) < 200 and b"Invalid resource" in dados
+                    ):
                         registrador.info(
-                            "Avatar %s lido via aiohttp (%s bytes)",
+                            "Avatar %s via get_from_cdn (%s bytes) url=%s",
                             rotulo,
                             len(dados),
+                            url[:80],
                         )
                         return dados
                 except Exception as erro:
-                    registrador.warning(
-                        "Leitura do File aiohttp falhou (%s): %s",
-                        rotulo,
-                        erro,
-                    )
+                    registrador.debug("get_from_cdn falhou %s: %s", url[:60], erro)
 
-        registrador.error("Não foi possível obter bytes do %s (url=%s)", rotulo, url)
+        # 3) aiohttp em cada URL
+        try:
+            import aiohttp
+
+            cabecalhos = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "image/gif,image/png,image/webp,image/*,*/*;q=0.8",
+            }
+            async with aiohttp.ClientSession(headers=cabecalhos) as sessao:
+                for url in urls_candidatas:
+                    try:
+                        async with sessao.get(
+                            url,
+                            timeout=aiohttp.ClientTimeout(total=20),
+                            allow_redirects=True,
+                        ) as resposta:
+                            if resposta.status != 200:
+                                continue
+                            dados = await resposta.read()
+                            if not dados:
+                                continue
+                            if b"Invalid resource" in dados[:200]:
+                                continue
+                            # JSON de erro do Discord não é imagem
+                            if dados[:1] == b"{":
+                                continue
+                            registrador.info(
+                                "Avatar %s via aiohttp (%s bytes) url=%s",
+                                rotulo,
+                                len(dados),
+                                url[:80],
+                            )
+                            return dados
+                    except Exception:
+                        continue
+        except Exception as erro:
+            registrador.warning("aiohttp geral falhou (%s): %s", rotulo, erro)
+
+        registrador.error(
+            "Não foi possível obter bytes do %s | urls=%s",
+            rotulo,
+            urls_candidatas[:5],
+        )
         return None
 
     def _arquivo_de_bytes(
