@@ -280,19 +280,94 @@ async def baixar_arquivo_de_url(
     url: str,
     nome_do_arquivo: str,
 ) -> discord.File | None:
-    """Baixa uma URL (ex.: avatar antigo) e devolve um discord.File."""
+    """
+    Baixa uma URL (ex.: avatar no CDN) e devolve um discord.File.
+
+    Usa User-Agent e timeout, no mesmo espírito do download da chamada.
+    Prefira ``arquivo_de_asset_discord`` quando ainda tiver o Asset em mão.
+    """
+    if not url:
+        return None
     try:
         import aiohttp
 
-        async with aiohttp.ClientSession() as sessao:
-            async with sessao.get(url) as resposta:
+        cabecalhos = {
+            "User-Agent": (
+                "Mozilla/5.0 (compatible; CMSValleyBot/1.0; +https://discord.com)"
+            ),
+            "Accept": "image/*,*/*;q=0.8",
+        }
+        async with aiohttp.ClientSession(headers=cabecalhos) as sessao:
+            async with sessao.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resposta:
                 if resposta.status != 200:
+                    registrador.warning(
+                        "Download de mídia status=%s url=%s",
+                        resposta.status,
+                        url[:120],
+                    )
                     return None
                 dados = await resposta.read()
-                return discord.File(BytesIO(dados), filename=nome_do_arquivo)
+                if not dados:
+                    return None
+                tipo = (resposta.headers.get("Content-Type") or "").lower()
+                nome = nome_do_arquivo
+                if "gif" in tipo and not nome.lower().endswith(".gif"):
+                    nome = nome.rsplit(".", 1)[0] + ".gif"
+                elif "png" in tipo and not nome.lower().endswith(".png"):
+                    nome = nome.rsplit(".", 1)[0] + ".png"
+                elif ("jpeg" in tipo or "jpg" in tipo) and not nome.lower().endswith(
+                    (".jpg", ".jpeg")
+                ):
+                    nome = nome.rsplit(".", 1)[0] + ".jpg"
+                elif "webp" in tipo and not nome.lower().endswith(".webp"):
+                    nome = nome.rsplit(".", 1)[0] + ".webp"
+                return discord.File(BytesIO(dados), filename=nome)
     except Exception as erro:
-        registrador.debug("Falha ao baixar mídia %s: %s", url, erro)
+        registrador.warning("Falha ao baixar mídia %s: %s", url[:120], erro)
         return None
+
+
+async def arquivo_de_asset_discord(
+    asset: discord.Asset | None,
+    nome_base: str = "avatar",
+) -> discord.File | None:
+    """
+    Lê um Asset do discord.py (avatar, guild_avatar, etc.) via API oficial.
+
+    Mais confiável que baixar a URL do CDN com aiohttp.
+    """
+    if asset is None:
+        return None
+    try:
+        # Garante resolução boa sem quebrar o asset
+        try:
+            asset_lido = asset.with_size(1024)
+        except Exception:
+            asset_lido = asset
+        dados = await asset_lido.read()
+        if not dados:
+            return None
+        # Detecta GIF pelo header
+        if dados[:6] in (b"GIF87a", b"GIF89a"):
+            nome = f"{nome_base}.gif"
+        elif dados[:8] == b"\x89PNG\r\n\x1a\n":
+            nome = f"{nome_base}.png"
+        elif dados[:2] == b"\xff\xd8":
+            nome = f"{nome_base}.jpg"
+        else:
+            nome = f"{nome_base}.png"
+        return discord.File(BytesIO(dados), filename=nome)
+    except Exception as erro:
+        registrador.warning("Falha ao ler Asset Discord: %s", erro)
+        # Fallback: tenta a URL do asset
+        try:
+            url = str(asset.url)
+        except Exception:
+            return None
+        return await baixar_arquivo_de_url(None, url, f"{nome_base}.png")
 
 
 async def log_cargo(
@@ -398,6 +473,7 @@ __all__ = [
     "resolver_canal_de_log",
     "buscar_executor_no_audit_log",
     "baixar_arquivo_de_url",
+    "arquivo_de_asset_discord",
     "obter_id_do_canal_de_log",
     "log_cargo",
     "log_mudanca_cargo",

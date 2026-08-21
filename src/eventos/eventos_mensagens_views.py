@@ -69,7 +69,7 @@ def montar_view_mensagem_apagada(
     )
 
     # Card 2 — conteúdo (Section + thumbnail) + meta
-    linha_autor_tempo = f"**{nome_autor}** · {_ts(enviada_em, 'f')}"
+    linha_autor_tempo = f"# **{nome_autor}** — {_ts(enviada_em, 'f')}"
     texto_conteudo = (conteudo or "_sem texto_").strip()
     if len(texto_conteudo) > 1800:
         texto_conteudo = texto_conteudo[:1800] + "…"

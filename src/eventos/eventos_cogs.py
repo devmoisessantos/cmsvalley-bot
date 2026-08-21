@@ -34,6 +34,7 @@ from src.utils.logger import (
     COR_ERRO,
     COR_INFO,
     COR_SUCESSO,
+    arquivo_de_asset_discord,
     baixar_arquivo_de_url,
     buscar_executor_no_audit_log,
     cargo_ja_foi_logado_pelo_bot,
@@ -690,6 +691,7 @@ class EventosAuditoriaCog(commands.Cog):
             await self._log_avatar(
                 depois,
                 tipo="Avatar do servidor",
+                asset_antigo=antes.guild_avatar,
                 url_antiga=url_guild_antes,
                 url_nova=url_guild_depois or depois.display_avatar.url,
             )
@@ -743,6 +745,7 @@ class EventosAuditoriaCog(commands.Cog):
         await self._log_avatar(
             membro,
             tipo="Avatar global",
+            asset_antigo=antes.display_avatar,
             url_antiga=antes.display_avatar.url,
             url_nova=depois.display_avatar.url,
         )
@@ -752,13 +755,17 @@ class EventosAuditoriaCog(commands.Cog):
         membro: discord.Member,
         *,
         tipo: str,
-        url_antiga: str | None,
-        url_nova: str | None,
+        asset_antigo: discord.Asset | None = None,
+        url_antiga: str | None = None,
+        url_nova: str | None = None,
     ) -> None:
         """
-        Card no canal + tópico com avatar antigo (arquivo ou link).
+        Card no canal + tópico com o avatar anterior ANEXADO (bytes).
 
-        O tópico é arquivado após 2 segundos, igual chamadas/advertências.
+        Prioridade do arquivo:
+        1. Asset.read() do discord.py (mais confiável)
+        2. Download HTTP da URL do CDN (fallback)
+        Nunca deixa só um link quebrado no tópico.
         """
         import asyncio
 
@@ -787,8 +794,13 @@ class EventosAuditoriaCog(commands.Cog):
         if canal_log is None:
             return
 
-        arquivo_antigo = None
-        if url_antiga:
+        # 1) Asset oficial do Discord
+        arquivo_antigo = await arquivo_de_asset_discord(
+            asset_antigo,
+            nome_base=f"avatar_antigo_{membro.id}",
+        )
+        # 2) Fallback HTTP
+        if arquivo_antigo is None and url_antiga:
             arquivo_antigo = await baixar_arquivo_de_url(
                 self.bot,
                 url_antiga,
@@ -798,37 +810,57 @@ class EventosAuditoriaCog(commands.Cog):
         try:
             msg_log = await canal_log.send(view=view)
             registrador.info(
-                "Log publicado em LOG_AVATARES (canal %s)",
+                "Log publicado em LOG_AVATARES (canal %s) arquivo=%s",
                 getattr(canal_log, "id", "?"),
+                "sim" if arquivo_antigo else "nao",
             )
-            if url_antiga:
-                try:
-                    topico = await msg_log.create_thread(
-                        name=f"avatar-antigo-{membro.id}"[:100]
+
+            if not url_antiga and arquivo_antigo is None:
+                return
+
+            try:
+                topico = await msg_log.create_thread(
+                    name=f"avatar-antigo-{membro.id}"[:100]
+                )
+                if arquivo_antigo is not None:
+                    texto_topico = (
+                        f"-  `🔗` **Link:** [Abrir no navegador]({url_antiga})\n"
+                        if url_antiga
+                        else ""
                     )
-                    if arquivo_antigo is not None:
-                        await topico.send(
-                            content="**Avatar anterior**",
-                            files=[arquivo_antigo],
+                    texto_topico += "-  `🖼️` **Avatar anterior:**"
+                    await topico.send(
+                        content=texto_topico,
+                        file=arquivo_antigo,
+                    )
+                else:
+                    # Último recurso: avisa que não conseguiu anexar
+                    registrador.error(
+                        "Não foi possível anexar avatar antigo de %s "
+                        "(asset e download falharam)",
+                        membro.id,
+                    )
+                    await topico.send(
+                        content=(
+                            "⚠️ Não foi possível anexar a imagem do avatar "
+                            "anterior (download falhou)."
                         )
-                    else:
-                        await topico.send(
-                            content=(
-                                "**Avatar anterior** (download indisponível)\n"
-                                f"{url_antiga}"
-                            )
-                        )
-                    await asyncio.sleep(2)
+                    )
+
+                await asyncio.sleep(2)
+                try:
+                    await topico.edit(
+                        archived=True,
+                        locked=True,
+                        reason="Arquivar avatar antigo",
+                    )
+                except discord.HTTPException:
                     try:
-                        await topico.edit(
-                            archived=True,
-                            locked=True,
-                            reason="Arquivar avatar antigo",
-                        )
-                    except discord.HTTPException:
                         await topico.edit(archived=True)
-                except (discord.Forbidden, discord.HTTPException) as erro:
-                    registrador.warning("Tópico de avatar antigo falhou: %s", erro)
+                    except discord.HTTPException:
+                        pass
+            except (discord.Forbidden, discord.HTTPException) as erro:
+                registrador.warning("Tópico de avatar antigo falhou: %s", erro)
         except Exception:
             registrador.exception("Falha ao publicar LOG_AVATARES")
 
