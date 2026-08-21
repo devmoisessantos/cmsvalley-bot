@@ -702,32 +702,7 @@ class EventosAuditoriaCog(commands.Cog):
         ids_antes = {c.id for c in antes.roles}
         ids_depois = {c.id for c in depois.roles}
         if ids_antes != ids_depois:
-            if not cargo_ja_foi_logado_pelo_bot(depois.id):
-                adicionados = [
-                    c.mention
-                    for c in depois.roles
-                    if c.id in (ids_depois - ids_antes) and not c.is_default()
-                ]
-                removidos = [
-                    c.name
-                    for c in antes.roles
-                    if c.id in (ids_antes - ids_depois) and not c.is_default()
-                ]
-                if adicionados or removidos:
-                    executor = await buscar_executor_no_audit_log(
-                        depois.guild,
-                        discord.AuditLogAction.member_role_update,
-                        alvo_id=depois.id,
-                    )
-                    if executor is None:
-                        executor = self.bot.user
-                    await log_mudanca_cargo(
-                        depois.guild,
-                        candidato=depois,
-                        executor=executor,
-                        cargos_adicionados=adicionados or None,
-                        cargos_removidos=removidos or None,
-                    )
+            await self._log_cargo_somente_manual(antes, depois, ids_antes, ids_depois)
 
     @commands.Cog.listener()
     async def on_user_update(self, antes: discord.User, depois: discord.User):
@@ -770,6 +745,72 @@ class EventosAuditoriaCog(commands.Cog):
             bytes_antigos=bytes_antigos,
             url_antiga=url_antiga,
             url_nova=depois.display_avatar.url,
+        )
+
+    async def _log_cargo_somente_manual(
+        self,
+        antes: discord.Member,
+        depois: discord.Member,
+        ids_antes: set[int],
+        ids_depois: set[int],
+    ) -> None:
+        """
+        Loga alteração de cargo só quando foi manual (um humano no Discord).
+
+        Mudanças feitas pelo bot (recrutamento, whitelist, gerenciar cargos,
+        etc.) já publicam o card com o executor correto via log_mudanca_cargo.
+        Se logássemos aqui também, saía em dobro — um com o staff e outro
+        com @CMS Valley.
+        """
+        if cargo_ja_foi_logado_pelo_bot(depois.id, segundos=15.0):
+            return
+
+        executor = await buscar_executor_no_audit_log(
+            depois.guild,
+            discord.AuditLogAction.member_role_update,
+            alvo_id=depois.id,
+            segundos_de_tolerancia=15,
+        )
+
+        # Quem aparece no audit log como o bot = ação automatizada
+        id_do_bot = self.bot.user.id if self.bot.user else None
+        if executor is not None and id_do_bot is not None:
+            if int(executor.id) == int(id_do_bot):
+                registrador.debug(
+                    "Cargo alterado pelo bot em %s — log fica a cargo do serviço",
+                    depois.id,
+                )
+                return
+
+        # Sem entrada de audit log: na dúvida não duplica serviço do bot
+        # (recrutamento costuma ser rápido; humano manual quase sempre deixa rastros)
+        if executor is None:
+            registrador.debug(
+                "Cargo alterado em %s sem executor no audit log — ignorado "
+                "para evitar duplicata com serviços do bot",
+                depois.id,
+            )
+            return
+
+        adicionados = [
+            cargo.mention
+            for cargo in depois.roles
+            if cargo.id in (ids_depois - ids_antes) and not cargo.is_default()
+        ]
+        removidos = [
+            cargo.mention
+            for cargo in antes.roles
+            if cargo.id in (ids_antes - ids_depois) and not cargo.is_default()
+        ]
+        if not adicionados and not removidos:
+            return
+
+        await log_mudanca_cargo(
+            depois.guild,
+            candidato=depois,
+            executor=executor,
+            cargos_adicionados=adicionados or None,
+            cargos_removidos=removidos or None,
         )
 
     async def _ler_bytes_do_asset(
@@ -1030,9 +1071,10 @@ class EventosAuditoriaCog(commands.Cog):
                     name=f"avatar-antigo-{membro.id}"[:100]
                 )
 
-                # Botão link (opcional) — sem colar URL no texto
+                # Botão só se a imagem foi anexada (URL de GIF antigo no CDN
+                # costuma voltar {"message":"Invalid resource ..."}).
                 view_do_topico = None
-                if url_antiga:
+                if arquivo_antigo is not None and url_antiga:
                     view_do_topico = discord.ui.View(timeout=None)
                     view_do_topico.add_item(
                         discord.ui.Button(
@@ -1056,9 +1098,8 @@ class EventosAuditoriaCog(commands.Cog):
                     await topico.send(
                         content=(
                             "⚠️ Não foi possível anexar a imagem do avatar "
-                            "anterior (download falhou)."
+                            "anterior (download do GIF/PNG falhou)."
                         ),
-                        view=view_do_topico,
                     )
 
                 await asyncio.sleep(2)

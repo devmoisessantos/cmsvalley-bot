@@ -397,7 +397,7 @@ async def log_cargo(
         linhas += f"\n- {extra}"
 
     view_do_log = LogContainerView(
-        titulo="🔍 📋 Ação de Cargo",
+        titulo="📋 Ação de Cargo",
         linhas=linhas,
         guild=guilda,
         cor=COR_INFO,
@@ -431,7 +431,7 @@ async def log_mudanca_cargo(
     await publicar_log_auditoria(
         guilda,
         "LOG_CARGOS",
-        titulo="🔍 🔧 Alteração de Cargo(s)",
+        titulo="🔧 Alteração de Cargo(s)",
         linhas=partes,
         cor=COR_INFO,
         url_do_avatar=candidato.display_avatar.url,
