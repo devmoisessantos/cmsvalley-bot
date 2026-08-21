@@ -4,8 +4,10 @@ Ouvintes de auditoria do Discord (domínio eventos).
 Cada tipo de evento publica no canal configurado em CANAIS via
 ``publicar_log_auditoria`` (helper único em utils/logger.py).
 
-Intents necessárias (já ligadas no bot): members, message_content, guilds.
-Permissão recomendada no cargo do bot: Ver registro de auditoria.
+LOG_HORAS neste domínio = tempo em call de voz do servidor inteiro
+(não é plantão). Plantão continua só em LOG_PLANTAO.
+
+Se um canal de log estiver com ID 0, aquele tipo fica desligado.
 """
 
 from __future__ import annotations
@@ -19,7 +21,11 @@ from datetime import (
 import discord
 from discord.ext import commands
 
-from src.config import GUILD_ID
+from src.config import (
+    CANAIS,
+    GUILD_ID,
+)
+from src.utils.formatacao import formatar_hms
 from src.utils.logger import (
     COR_AVISO,
     COR_ERRO,
@@ -29,6 +35,7 @@ from src.utils.logger import (
     buscar_executor_no_audit_log,
     cargo_ja_foi_logado_pelo_bot,
     log_mudanca_cargo,
+    obter_id_do_canal_de_log,
     publicar_log_auditoria,
 )
 
@@ -36,46 +43,81 @@ registrador = logging.getLogger(__name__)
 
 
 def _servidor_correto(guilda: discord.Guild | None) -> bool:
-    """Ignora eventos de outros servidores (o bot pode estar em mais de um)."""
+    """
+    Só processa a guilda principal.
+
+    Se GUILD_ID não estiver configurado (0), aceita qualquer guilda para
+    não silenciar todos os logs por configuração incompleta.
+    """
     if guilda is None:
         return False
     try:
-        return int(guilda.id) == int(GUILD_ID)
+        id_configurado = int(GUILD_ID or 0)
     except (TypeError, ValueError):
+        id_configurado = 0
+    if id_configurado <= 0:
         return True
+    return int(guilda.id) == id_configurado
 
 
-def _mencao_usuario(usuario: discord.abc.User | None) -> str:
+def _mencao(usuario: discord.abc.User | None) -> str:
     if usuario is None:
         return "_desconhecido_"
-    return f"{usuario.mention} (`{usuario.id}`)"
+    return f"{usuario.mention}"
 
 
-def _formato_timestamp(data: datetime | None) -> str:
+def _ts(data: datetime | None, estilo: str = "F") -> str:
     if data is None:
         return "—"
     if data.tzinfo is None:
         data = data.replace(tzinfo=timezone.utc)
-    return f"<t:{int(data.timestamp())}:F>"
+    return f"<t:{int(data.timestamp())}:{estilo}>"
+
+
+async def _fid(discord_id: int) -> str:
+    """ID FiveM quando existir; senão traço."""
+    try:
+        from src.recrutamento.recrutamento_service import resolver_id_fivem
+
+        valor = await resolver_id_fivem(int(discord_id))
+        if valor:
+            return str(valor)
+    except Exception:
+        pass
+    return "—"
+
+
+def _cargo_principal(membro: discord.Member) -> str:
+    """Menção do cargo mais alto (exceto @everyone)."""
+    cargos = [c for c in membro.roles if not c.is_default()]
+    if not cargos:
+        return "—"
+    cargo = max(cargos, key=lambda c: c.position)
+    return cargo.mention
 
 
 class EventosAuditoriaCog(commands.Cog):
     """
     Centraliza os listeners de auditoria do servidor.
 
-    Cargos: qualquer mudança (manual, bot ou comando) gera log em LOG_CARGOS.
+    - Canais, mensagens, voz, apelidos, avatares, cargos, moderação
+    - Horas em call (servidor inteiro, independente de plantão)
     """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Cache simples para não logar a mesma edição duas vezes
         self._ids_de_edicao_recentes: set[int] = set()
+        # Controle de sessão de voz para LOG_HORAS (servidor inteiro)
+        # discord_id -> {"canal_id": int, "entrou_em": datetime}
+        self._sessoes_de_voz: dict[int, dict] = {}
+        # Total de segundos em voz nesta execução do bot
+        self._total_segundos_em_voz: dict[int, int] = {}
 
-    # ── Canais e categorias ──────────────────────────────────────────────
+    # ── Canais ───────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_guild_channel_create(self, canal: discord.abc.GuildChannel):
-        """1. Canal criado."""
+        """Canal criado."""
         if not _servidor_correto(canal.guild):
             return
         executor = await buscar_executor_no_audit_log(
@@ -84,25 +126,33 @@ class EventosAuditoriaCog(commands.Cog):
             alvo_id=canal.id,
         )
         tipo = (
-            type(canal).__name__.replace("Channel", "").replace("Category", "Categoria")
+            "Categoria"
+            if isinstance(canal, discord.CategoryChannel)
+            else (
+                "Canal de voz"
+                if isinstance(canal, discord.VoiceChannel)
+                else "Canal de texto"
+            )
         )
+        mencao = getattr(canal, "mention", f"`{canal.name}`")
         await publicar_log_auditoria(
             canal.guild,
             "LOG_CANAIS",
-            titulo="📁 Canal criado",
+            titulo="🔍 📁 Canal criado",
             linhas=[
-                f"- **Canal:** {getattr(canal, 'mention', canal.name)} (`{canal.id}`)",
-                f"- **Nome:** `{canal.name}`",
-                f"- **Tipo:** `{tipo}`",
-                f"- **Categoria:** `{canal.category.name if canal.category else '—'}`",
-                f"- **Criado por:** {_mencao_usuario(executor)}",
+                f"**Canal:** {mencao} (`{canal.id}`)",
+                f"**Nome:** `{canal.name}`",
+                f"**Tipo:** {tipo}",
+                f"**Categoria:** `{canal.category.name if canal.category else '—'}`",
+                "",
+                f"**Criado por:** {_mencao(executor)}",
             ],
             cor=COR_SUCESSO,
         )
 
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, canal: discord.abc.GuildChannel):
-        """2. Canal excluído."""
+        """Canal excluído."""
         if not _servidor_correto(canal.guild):
             return
         executor = await buscar_executor_no_audit_log(
@@ -110,16 +160,30 @@ class EventosAuditoriaCog(commands.Cog):
             discord.AuditLogAction.channel_delete,
             alvo_id=canal.id,
         )
+        tipo = (
+            "Categoria"
+            if isinstance(canal, discord.CategoryChannel)
+            else (
+                "Canal de voz"
+                if isinstance(canal, discord.VoiceChannel)
+                else "Canal de texto"
+            )
+        )
+        categoria = canal.category
+        linhas = [
+            f"**Nome:** {canal.name} (`{canal.id}`)",
+            f"**Tipo:** {tipo}",
+        ]
+        if categoria is not None:
+            linhas.append(f"**Categoria:** {categoria.name} **ID:** (`{categoria.id}`)")
+        else:
+            linhas.append("**Categoria:** —")
+        linhas.extend(["", f"**Excluído por:** {_mencao(executor)}"])
         await publicar_log_auditoria(
             canal.guild,
             "LOG_CANAIS",
-            titulo="🗑️ Canal excluído",
-            linhas=[
-                f"- **Nome:** `{canal.name}`",
-                f"- **ID:** `{canal.id}`",
-                f"- **Categoria:** `{canal.category.name if canal.category else '—'}`",
-                f"- **Excluído por:** {_mencao_usuario(executor)}",
-            ],
+            titulo="🔍 🗑️ Canal excluído",
+            linhas=linhas,
             cor=COR_ERRO,
         )
 
@@ -129,47 +193,76 @@ class EventosAuditoriaCog(commands.Cog):
         antes: discord.abc.GuildChannel,
         depois: discord.abc.GuildChannel,
     ):
-        """
-        3–9. Renomeado, movido, tópico, slowmode, NSFW, permissões.
-        """
+        """Renomear, mover, tópico, slowmode, NSFW, permissões."""
         if not _servidor_correto(depois.guild):
             return
 
-        mudancas: list[str] = []
+        alteracoes: list[tuple[str, list[str]]] = []
 
         if antes.name != depois.name:
-            mudancas.append(f"- **Nome:** `{antes.name}` → `{depois.name}`")
+            alteracoes.append(
+                (
+                    "Canal renomeado",
+                    [
+                        f"**Antes:** `{antes.name}`",
+                        f"**Depois:** `{depois.name}`",
+                    ],
+                )
+            )
 
-        categoria_antes = antes.category.id if antes.category else None
-        categoria_depois = depois.category.id if depois.category else None
-        if categoria_antes != categoria_depois:
+        cat_antes = antes.category.id if antes.category else None
+        cat_depois = depois.category.id if depois.category else None
+        if cat_antes != cat_depois:
             nome_antes = antes.category.name if antes.category else "—"
             nome_depois = depois.category.name if depois.category else "—"
-            mudancas.append(f"- **Categoria:** `{nome_antes}` → `{nome_depois}`")
+            alteracoes.append(
+                (
+                    "Canal movido de categoria",
+                    [
+                        f"**Antes:** `{nome_antes}`",
+                        f"**Depois:** `{nome_depois}`",
+                    ],
+                )
+            )
 
         if isinstance(antes, discord.TextChannel) and isinstance(
             depois, discord.TextChannel
         ):
             if (antes.topic or "") != (depois.topic or ""):
-                mudancas.append(
-                    f"- **Tópico/descrição:**\n"
-                    f"  Antes: {(antes.topic or '—')[:200]}\n"
-                    f"  Depois: {(depois.topic or '—')[:200]}"
+                alteracoes.append(
+                    (
+                        "Tópico/descrição alterado",
+                        [
+                            f"**Antes:** {(antes.topic or '—')[:300]}",
+                            f"**Depois:** {(depois.topic or '—')[:300]}",
+                        ],
+                    )
                 )
             if antes.slowmode_delay != depois.slowmode_delay:
-                mudancas.append(
-                    f"- **Slowmode:** `{antes.slowmode_delay}s` → "
-                    f"`{depois.slowmode_delay}s`"
+                alteracoes.append(
+                    (
+                        "Slowmode alterado",
+                        [
+                            f"**Antes:** `{antes.slowmode_delay}s`",
+                            f"**Depois:** `{depois.slowmode_delay}s`",
+                        ],
+                    )
                 )
             if antes.nsfw != depois.nsfw:
                 estado = "ativado" if depois.nsfw else "desativado"
-                mudancas.append(f"- **NSFW:** {estado}")
+                alteracoes.append(
+                    ("NSFW ativado/desativado", [f"**Estado:** {estado}"])
+                )
 
-        # Permissões (overwrites)
         if antes.overwrites != depois.overwrites:
-            mudancas.append("- **Permissões do canal:** alteradas")
+            alteracoes.append(
+                (
+                    "Permissões do canal alteradas",
+                    ["**Detalhe:** overwrites modificados"],
+                )
+            )
 
-        if not mudancas:
+        if not alteracoes:
             return
 
         executor = await buscar_executor_no_audit_log(
@@ -177,24 +270,30 @@ class EventosAuditoriaCog(commands.Cog):
             discord.AuditLogAction.channel_update,
             alvo_id=depois.id,
         )
-        linhas = [
-            f"- **Canal:** {getattr(depois, 'mention', depois.name)} (`{depois.id}`)",
-            *mudancas,
-            f"- **Alterado por:** {_mencao_usuario(executor)}",
-        ]
-        await publicar_log_auditoria(
-            depois.guild,
-            "LOG_CANAIS",
-            titulo="✏️ Canal atualizado",
-            linhas=linhas,
-            cor=COR_AVISO,
-        )
+        fid_executor = "—"
+        if executor is not None:
+            fid_executor = await _fid(executor.id)
 
-    # ── Mensagens deletadas ──────────────────────────────────────────────
+        for titulo_alt, detalhe in alteracoes:
+            linhas = [
+                f"**Canal:** {getattr(depois, 'mention', depois.name)} (`{depois.id}`)",
+                f"**Alteração:** {titulo_alt}",
+                *detalhe,
+                "",
+                f"**Responsável pela alteração:** {_mencao(executor)} **FID:** `{fid_executor}`",
+            ]
+            await publicar_log_auditoria(
+                depois.guild,
+                "LOG_CANAIS",
+                titulo="🔍 📝 Canal atualizado",
+                linhas=linhas,
+                cor=COR_AVISO,
+            )
+
+    # ── Mensagens ────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_message_delete(self, mensagem: discord.Message):
-        """Log de mensagem apagada (autor, canal, conteúdo, anexos, datas, quem apagou)."""
         if mensagem.guild is None or not _servidor_correto(mensagem.guild):
             return
         if mensagem.author and mensagem.author.bot:
@@ -205,35 +304,30 @@ class EventosAuditoriaCog(commands.Cog):
             discord.AuditLogAction.message_delete,
             alvo_id=mensagem.author.id if mensagem.author else None,
         )
-
-        conteudo = (mensagem.content or "").strip()
-        if not conteudo:
-            conteudo = "_sem texto_"
+        conteudo = (mensagem.content or "").strip() or "_sem texto_"
         if len(conteudo) > 1500:
             conteudo = conteudo[:1500] + "…"
 
         linhas = [
-            f"- **Autor:** {_mencao_usuario(mensagem.author)}",
-            f"- **Canal:** {mensagem.channel.mention}",
-            f"- **Conteúdo:**\n>>> {conteudo}",
-            f"- **Enviada em:** {_formato_timestamp(mensagem.created_at)}",
-            f"- **Apagada em:** {_formato_timestamp(datetime.now(timezone.utc))}",
-            f"- **ID da mensagem:** `{mensagem.id}`",
-            f"- **Quem apagou:** {_mencao_usuario(executor)}",
+            f"**Autor:** {_mencao(mensagem.author)}",
+            f"**Canal:** {mensagem.channel.mention}",
+            f"**Conteúdo:**\n>>> {conteudo}",
+            f"**Enviada em:** {_ts(mensagem.created_at)}",
+            f"**Apagada em:** {_ts(datetime.now(timezone.utc))}",
+            f"**ID da mensagem:** `{mensagem.id}`",
+            f"**Quem apagou:** {_mencao(executor)}",
         ]
-
         arquivos: list[discord.File] = []
         for anexo in mensagem.attachments[:5]:
             try:
-                arquivo = await anexo.to_file()
-                arquivos.append(arquivo)
+                arquivos.append(await anexo.to_file())
             except (discord.HTTPException, discord.NotFound):
-                linhas.append(f"- **Anexo (URL):** {anexo.url}")
+                linhas.append(f"**Anexo (URL):** {anexo.url}")
 
         await publicar_log_auditoria(
             mensagem.guild,
             "LOG_MENSAGENS_DELETADAS",
-            titulo="🗑️ Mensagem apagada",
+            titulo="🔍 🗑️ Mensagem apagada",
             linhas=linhas,
             cor=COR_ERRO,
             url_do_avatar=(
@@ -246,82 +340,61 @@ class EventosAuditoriaCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_bulk_message_delete(self, mensagens: list[discord.Message]):
-        """Várias mensagens apagadas de uma vez (purge)."""
         if not mensagens:
             return
         guilda = mensagens[0].guild
         if guilda is None or not _servidor_correto(guilda):
             return
-        canal = mensagens[0].channel
         await publicar_log_auditoria(
             guilda,
             "LOG_MENSAGENS_DELETADAS",
-            titulo="🗑️ Mensagens apagadas em massa",
+            titulo="🔍 🗑️ Mensagens apagadas em massa",
             linhas=[
-                f"- **Canal:** {canal.mention}",
-                f"- **Quantidade:** **{len(mensagens)}**",
-                f"- **Quando:** {_formato_timestamp(datetime.now(timezone.utc))}",
+                f"**Canal:** {mensagens[0].channel.mention}",
+                f"**Quantidade:** **{len(mensagens)}**",
+                f"**Quando:** {_ts(datetime.now(timezone.utc))}",
             ],
             cor=COR_ERRO,
         )
 
-    # ── Mensagens editadas ───────────────────────────────────────────────
-
     @commands.Cog.listener()
-    async def on_message_edit(
-        self,
-        antes: discord.Message,
-        depois: discord.Message,
-    ):
-        """
-        Log de edição.
-
-        Ignora:
-        - mensagem de bot
-        - quando só mudou embed automático (conteúdo igual)
-        """
+    async def on_message_edit(self, antes: discord.Message, depois: discord.Message):
         if depois.guild is None or not _servidor_correto(depois.guild):
             return
         if depois.author and depois.author.bot:
             return
-
-        conteudo_antes = antes.content or ""
-        conteudo_depois = depois.content or ""
-        if conteudo_antes == conteudo_depois:
-            # Só embed/anexo/componente mudou — não loga
+        if (antes.content or "") == (depois.content or ""):
             return
-
         if depois.id in self._ids_de_edicao_recentes:
             return
         self._ids_de_edicao_recentes.add(depois.id)
-        if len(self._ids_de_edicao_recentes) > 200:
+        if len(self._ids_de_edicao_recentes) > 300:
             self._ids_de_edicao_recentes.clear()
 
-        texto_antes = conteudo_antes.strip() or "_vazio_"
-        texto_depois = conteudo_depois.strip() or "_vazio_"
+        texto_antes = (antes.content or "").strip() or "_vazio_"
+        texto_depois = (depois.content or "").strip() or "_vazio_"
         if len(texto_antes) > 900:
             texto_antes = texto_antes[:900] + "…"
         if len(texto_depois) > 900:
             texto_depois = texto_depois[:900] + "…"
 
-        link = depois.jump_url
         await publicar_log_auditoria(
             depois.guild,
             "LOG_MENSAGENS_EDITADAS",
-            titulo="✏️ Mensagem editada",
+            titulo="🔍 ✏️ Mensagem editada",
             linhas=[
-                f"- **Autor:** {_mencao_usuario(depois.author)}",
-                f"- **Canal:** {depois.channel.mention}",
-                f"- **Conteúdo anterior:**\n>>> {texto_antes}",
-                f"- **Conteúdo novo:**\n>>> {texto_depois}",
-                f"- **ID da mensagem:** `{depois.id}`",
-                f"- **Link:** [abrir mensagem]({link})",
+                f"**Autor:** {_mencao(depois.author)}",
+                f"**Canal:** {depois.channel.mention}",
+                f"**Conteúdo anterior:**\n>>> {texto_antes}",
+                f"**Conteúdo novo:**\n>>> {texto_depois}",
+                f"**ID da mensagem:** `{depois.id}`",
+                f"**Link:** [abrir mensagem]({depois.jump_url})",
             ],
             cor=COR_AVISO,
             url_do_avatar=(depois.author.display_avatar.url if depois.author else None),
         )
 
-    # ── Voz ──────────────────────────────────────────────────────────────
+    # ── Voz + LOG_HORAS (servidor inteiro, não plantão) ───────────────────
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -330,166 +403,270 @@ class EventosAuditoriaCog(commands.Cog):
         antes: discord.VoiceState,
         depois: discord.VoiceState,
     ):
-        """Entrada, saída, troca, move por staff, mute/surdez de servidor, stream."""
         if not _servidor_correto(membro.guild):
             return
         if membro.bot:
             return
 
-        linhas_base = [f"- **Membro:** {_mencao_usuario(membro)}"]
-        titulo = None
-        cor = COR_INFO
-        extras: list[str] = []
-
         canal_antes = antes.channel
         canal_depois = depois.channel
+        agora = datetime.now(timezone.utc)
 
+        # Entrada em call
         if canal_antes is None and canal_depois is not None:
-            titulo = "🔊 Entrou em call"
-            cor = COR_SUCESSO
-            extras.append(f"- **Canal:** {canal_depois.mention}")
-        elif canal_antes is not None and canal_depois is None:
-            titulo = "🔇 Saiu da call"
-            cor = COR_AVISO
-            extras.append(f"- **Canal:** {canal_antes.mention}")
-        elif (
+            self._sessoes_de_voz[membro.id] = {
+                "canal_id": canal_depois.id,
+                "entrou_em": agora,
+            }
+            await publicar_log_auditoria(
+                membro.guild,
+                "LOG_VOZ",
+                titulo="🔍 🔊 Entrada em canal de voz",
+                linhas=[
+                    f"**Membro:** {_mencao(membro)}",
+                    f"**Canal:** {canal_depois.mention} **ID:** (`{canal_depois.id}`)",
+                    f"**Entrada:** {_ts(agora)}",
+                ],
+                cor=COR_SUCESSO,
+                url_do_avatar=membro.display_avatar.url,
+            )
+            # LOG_HORAS: início de contagem (servidor inteiro)
+            fid = await _fid(membro.id)
+            await publicar_log_auditoria(
+                membro.guild,
+                "LOG_HORAS",
+                titulo="🔍 🟢 Contagem de horas iniciada",
+                linhas=[
+                    f"**Membro:** {_mencao(membro)} **FID:** (`{fid}`)",
+                    f"**Cargo:** {_cargo_principal(membro)}",
+                    f"**Canal:** {canal_depois.mention}",
+                    "",
+                    f"**Início:** {_ts(agora)}",
+                ],
+                cor=COR_SUCESSO,
+                url_do_avatar=membro.display_avatar.url,
+            )
+            return
+
+        # Saída da call
+        if canal_antes is not None and canal_depois is None:
+            sessao = self._sessoes_de_voz.pop(membro.id, None)
+            entrou_em = sessao["entrou_em"] if sessao else None
+            if entrou_em is None and antes.channel:
+                # Sem sessão em memória (restart): ainda loga saída sem duração
+                entrou_em = None
+            duracao = 0
+            if entrou_em is not None:
+                if entrou_em.tzinfo is None:
+                    entrou_em = entrou_em.replace(tzinfo=timezone.utc)
+                duracao = max(0, int((agora - entrou_em).total_seconds()))
+                self._total_segundos_em_voz[membro.id] = (
+                    int(self._total_segundos_em_voz.get(membro.id, 0)) + duracao
+                )
+
+            await publicar_log_auditoria(
+                membro.guild,
+                "LOG_VOZ",
+                titulo="🔍 🔇 Saída do canal de voz",
+                linhas=[
+                    f"**Membro:** {_mencao(membro)}",
+                    f"**Canal:** {canal_antes.mention} **ID:** (`{canal_antes.id}`)",
+                    "",
+                    f"**Entrou:** {_ts(entrou_em, 't') if entrou_em else '—'}",
+                    f"**Saiu:** {_ts(agora, 't')}",
+                    f"**Tempo conectado:** `{formatar_hms(duracao) if duracao else '—'}`",
+                ],
+                cor=COR_AVISO,
+                url_do_avatar=membro.display_avatar.url,
+            )
+
+            fid = await _fid(membro.id)
+            total = int(self._total_segundos_em_voz.get(membro.id, 0))
+            await publicar_log_auditoria(
+                membro.guild,
+                "LOG_HORAS",
+                titulo="🔍 🔴 Horas em call encerrada",
+                linhas=[
+                    f"**Membro:** {_mencao(membro)} **FID:** (`{fid}`)",
+                    "",
+                    f"**Início:** {_ts(entrou_em, 't') if entrou_em else '—'}",
+                    f"**Fim:** {_ts(agora, 't')}",
+                    f"**Duração:** `{formatar_hms(duracao) if duracao else '—'}`",
+                    "",
+                    f"**Total acumulado (nesta sessão do bot):** `{formatar_hms(total)}`",
+                ],
+                cor=COR_ERRO,
+                url_do_avatar=membro.display_avatar.url,
+            )
+            return
+
+        # Mudou de canal
+        if (
             canal_antes is not None
             and canal_depois is not None
             and canal_antes.id != canal_depois.id
         ):
-            # Pode ter sido movido por staff
+            # Atualiza sessão de horas para o novo canal (mantém início original)
+            if membro.id in self._sessoes_de_voz:
+                self._sessoes_de_voz[membro.id]["canal_id"] = canal_depois.id
+            else:
+                self._sessoes_de_voz[membro.id] = {
+                    "canal_id": canal_depois.id,
+                    "entrou_em": agora,
+                }
+
             executor = await buscar_executor_no_audit_log(
                 membro.guild,
                 discord.AuditLogAction.member_move,
                 alvo_id=membro.id,
             )
             if executor is not None:
-                titulo = "🔁 Foi movido de call"
-                extras.append(f"- **De:** {canal_antes.mention}")
-                extras.append(f"- **Para:** {canal_depois.mention}")
-                extras.append(f"- **Movido por:** {_mencao_usuario(executor)}")
+                titulo = "🔍 🔁 Foi movido de call"
+                extra = [f"**Movido por:** {_mencao(executor)}"]
             else:
-                titulo = "🔄 Mudou de canal de voz"
-                extras.append(f"- **De:** {canal_antes.mention}")
-                extras.append(f"- **Para:** {canal_depois.mention}")
-            cor = COR_INFO
+                titulo = "🔍 🔄 Mudança de canal de voz"
+                extra = []
 
-        # Mute / surdez de servidor
+            await publicar_log_auditoria(
+                membro.guild,
+                "LOG_VOZ",
+                titulo=titulo,
+                linhas=[
+                    f"**Membro:** {_mencao(membro)}",
+                    f"**De:** {canal_antes.mention} --> **Para:** {canal_depois.mention}",
+                    *extra,
+                    "",
+                    f"**Data:** {_ts(agora)}",
+                ],
+                cor=COR_INFO,
+                url_do_avatar=membro.display_avatar.url,
+            )
+
+        # Mute / surdez de servidor / stream
+        extras: list[str] = []
+        titulo_extra = None
         if antes.mute != depois.mute:
-            estado = "mutado" if depois.mute else "desmutado"
-            extras.append(f"- **Servidor mutou/desmutou:** {estado}")
-            if titulo is None:
-                titulo = "🔇 Mute de servidor"
+            extras.append(
+                f"**Mute servidor:** {'mutado' if depois.mute else 'desmutado'}"
+            )
+            titulo_extra = "🔍 🔇 Mute de servidor"
         if antes.deaf != depois.deaf:
-            estado = "ensurdecido" if depois.deaf else "desensurdecido"
-            extras.append(f"- **Servidor ensurdeceu/desensurdeceu:** {estado}")
-            if titulo is None:
-                titulo = "🔈 Surdez de servidor"
-
-        # Transmissão (stream)
+            extras.append(
+                f"**Surdez servidor:** "
+                f"{'ensurdecido' if depois.deaf else 'desensurdecido'}"
+            )
+            titulo_extra = "🔍 🔈 Surdez de servidor"
         if antes.self_stream != depois.self_stream:
-            estado = "começou" if depois.self_stream else "parou"
-            extras.append(f"- **Transmissão:** {estado}")
-            if titulo is None:
-                titulo = "📺 Transmissão"
-                cor = COR_INFO
+            extras.append(
+                f"**Transmissão:** {'começou' if depois.self_stream else 'parou'}"
+            )
+            titulo_extra = "🔍 📺 Transmissão"
 
-        if titulo is None:
-            return
+        if titulo_extra and extras:
+            await publicar_log_auditoria(
+                membro.guild,
+                "LOG_VOZ",
+                titulo=titulo_extra,
+                linhas=[f"**Membro:** {_mencao(membro)}", *extras],
+                cor=COR_INFO,
+                url_do_avatar=membro.display_avatar.url,
+            )
 
-        await publicar_log_auditoria(
-            membro.guild,
-            "LOG_VOZ",
-            titulo=titulo,
-            linhas=linhas_base + extras,
-            cor=cor,
-            url_do_avatar=membro.display_avatar.url,
-        )
-
-    # ── Apelidos, avatares e cargos ──────────────────────────────────────
+    # ── Apelidos, avatares, cargos ───────────────────────────────────────
 
     @commands.Cog.listener()
-    async def on_member_update(
-        self,
-        antes: discord.Member,
-        depois: discord.Member,
-    ):
-        """Apelido, avatar do servidor e cargos (qualquer origem)."""
+    async def on_member_update(self, antes: discord.Member, depois: discord.Member):
         if not _servidor_correto(depois.guild):
             return
 
-        # Apelido
         if antes.nick != depois.nick:
-            await self._log_apelido(antes, depois)
+            executor = await buscar_executor_no_audit_log(
+                depois.guild,
+                discord.AuditLogAction.member_update,
+                alvo_id=depois.id,
+            )
+            if executor is None or executor.id == depois.id:
+                texto_executor = "Próprio usuário"
+            else:
+                texto_executor = _mencao(executor)
+            fid = await _fid(depois.id)
+            await publicar_log_auditoria(
+                depois.guild,
+                "LOG_APELIDOS",
+                titulo="🔍 🪪 Apelido alterado",
+                linhas=[
+                    f"**Membro:** {_mencao(depois)} **FID:** (`{fid}`)",
+                    "",
+                    f"**Antes:** `{antes.nick or '—'}`",
+                    f"**Depois:** `{depois.nick or '—'}`",
+                    "",
+                    f"**Alterado por:** {texto_executor}",
+                ],
+                cor=COR_INFO,
+                url_do_avatar=depois.display_avatar.url,
+            )
 
-        # Avatar do servidor (display_avatar pode mudar com guild avatar)
-        avatar_guild_antes = antes.guild_avatar
-        avatar_guild_depois = depois.guild_avatar
-        url_antes = avatar_guild_antes.url if avatar_guild_antes else None
-        url_depois = avatar_guild_depois.url if avatar_guild_depois else None
-        if url_antes != url_depois:
+        url_guild_antes = antes.guild_avatar.url if antes.guild_avatar else None
+        url_guild_depois = depois.guild_avatar.url if depois.guild_avatar else None
+        if url_guild_antes != url_guild_depois:
             await self._log_avatar(
                 depois,
                 tipo="Avatar do servidor",
-                url_antiga=url_antes,
-                url_nova=url_depois or depois.display_avatar.url,
+                url_antiga=url_guild_antes,
+                url_nova=url_guild_depois or depois.display_avatar.url,
             )
 
-        # Cargos — expande para TODO o servidor (manual, bot ou comando)
-        ids_antes = {cargo.id for cargo in antes.roles}
-        ids_depois = {cargo.id for cargo in depois.roles}
+        ids_antes = {c.id for c in antes.roles}
+        ids_depois = {c.id for c in depois.roles}
         if ids_antes != ids_depois:
-            await self._log_cargos(antes, depois, ids_antes, ids_depois)
+            if not cargo_ja_foi_logado_pelo_bot(depois.id):
+                adicionados = [
+                    c.mention
+                    for c in depois.roles
+                    if c.id in (ids_depois - ids_antes) and not c.is_default()
+                ]
+                removidos = [
+                    c.name
+                    for c in antes.roles
+                    if c.id in (ids_antes - ids_depois) and not c.is_default()
+                ]
+                if adicionados or removidos:
+                    executor = await buscar_executor_no_audit_log(
+                        depois.guild,
+                        discord.AuditLogAction.member_role_update,
+                        alvo_id=depois.id,
+                    )
+                    if executor is None:
+                        executor = self.bot.user
+                    await log_mudanca_cargo(
+                        depois.guild,
+                        candidato=depois,
+                        executor=executor,
+                        cargos_adicionados=adicionados or None,
+                        cargos_removidos=removidos or None,
+                    )
 
     @commands.Cog.listener()
     async def on_user_update(self, antes: discord.User, depois: discord.User):
-        """Avatar global (User)."""
         if antes.avatar == depois.avatar:
             return
-        # Propaga para o membro na guild principal, se existir
-        guilda = self.bot.get_guild(int(GUILD_ID)) if GUILD_ID else None
+        try:
+            id_guild = int(GUILD_ID or 0)
+        except (TypeError, ValueError):
+            id_guild = 0
+        guilda = self.bot.get_guild(id_guild) if id_guild else None
+        if guilda is None and self.bot.guilds:
+            guilda = self.bot.guilds[0]
         if guilda is None:
             return
         membro = guilda.get_member(depois.id)
         if membro is None:
             return
-        url_antiga = antes.display_avatar.url
-        url_nova = depois.display_avatar.url
         await self._log_avatar(
             membro,
             tipo="Avatar global",
-            url_antiga=url_antiga,
-            url_nova=url_nova,
-        )
-
-    async def _log_apelido(
-        self,
-        antes: discord.Member,
-        depois: discord.Member,
-    ) -> None:
-        """Registra mudança de apelido e tenta achar quem alterou."""
-        executor = await buscar_executor_no_audit_log(
-            depois.guild,
-            discord.AuditLogAction.member_update,
-            alvo_id=depois.id,
-        )
-        if executor is None or executor.id == depois.id:
-            texto_executor = "Próprio usuário"
-        else:
-            texto_executor = _mencao_usuario(executor)
-
-        await publicar_log_auditoria(
-            depois.guild,
-            "LOG_APELIDOS",
-            titulo="🏷️ Apelido alterado",
-            linhas=[
-                f"- **Membro:** {_mencao_usuario(depois)}",
-                f"- **Antes:** `{antes.nick or '—'}`",
-                f"- **Depois:** `{depois.nick or '—'}`",
-                f"- **Alterado por:** {texto_executor}",
-            ],
-            cor=COR_INFO,
-            url_do_avatar=depois.display_avatar.url,
+            url_antiga=antes.display_avatar.url,
+            url_nova=depois.display_avatar.url,
         )
 
     async def _log_avatar(
@@ -500,9 +677,6 @@ class EventosAuditoriaCog(commands.Cog):
         url_antiga: str | None,
         url_nova: str | None,
     ) -> None:
-        """
-        Mostra avatar atual no card e anexa a imagem antiga em tópico.
-        """
         arquivos: list[discord.File] = []
         if url_antiga:
             arquivo = await baixar_arquivo_de_url(
@@ -512,17 +686,16 @@ class EventosAuditoriaCog(commands.Cog):
             )
             if arquivo is not None:
                 arquivos.append(arquivo)
-
         await publicar_log_auditoria(
             membro.guild,
             "LOG_AVATARES",
-            titulo="🖼️ Avatar alterado",
+            titulo="🔍 🖼️ Avatar alterado",
             linhas=[
-                f"- **Membro:** {_mencao_usuario(membro)}",
-                f"- **Tipo:** {tipo}",
-                f"- **Avatar atual:** [abrir]({url_nova})"
+                f"**Membro:** {_mencao(membro)}",
+                f"**Tipo:** {tipo}",
+                f"**Avatar atual:** [abrir]({url_nova})"
                 if url_nova
-                else "- **Avatar atual:** —",
+                else "**Avatar atual:** —",
             ],
             cor=COR_INFO,
             url_do_avatar=url_nova,
@@ -531,76 +704,22 @@ class EventosAuditoriaCog(commands.Cog):
             nome_do_topico=f"avatar-antigo-{membro.id}"[:100],
         )
 
-    async def _log_cargos(
-        self,
-        antes: discord.Member,
-        depois: discord.Member,
-        ids_antes: set[int],
-        ids_depois: set[int],
-    ) -> None:
-        """
-        Qualquer alteração de cargo no servidor (manual, bot ou slash).
-
-        Usa o audit log para preencher “Alterado por”.
-        Debounce de poucos segundos evita card duplicado quando um serviço
-        do bot já chamou ``log_mudanca_cargo`` e o Discord dispara o evento.
-        """
-        # Se um serviço do bot já publicou o card (log_mudanca_cargo), não repete
-        if cargo_ja_foi_logado_pelo_bot(depois.id):
-            return
-
-        adicionados_ids = ids_depois - ids_antes
-        removidos_ids = ids_antes - ids_depois
-
-        nomes_adicionados = [
-            cargo.mention
-            for cargo in depois.roles
-            if cargo.id in adicionados_ids and not cargo.is_default()
-        ]
-        nomes_removidos = [
-            cargo.name
-            for cargo in antes.roles
-            if cargo.id in removidos_ids and not cargo.is_default()
-        ]
-
-        if not nomes_adicionados and not nomes_removidos:
-            return
-
-        executor = await buscar_executor_no_audit_log(
-            depois.guild,
-            discord.AuditLogAction.member_role_update,
-            alvo_id=depois.id,
-        )
-        if executor is None:
-            executor = self.bot.user
-
-        await log_mudanca_cargo(
-            depois.guild,
-            candidato=depois,
-            executor=executor,
-            cargos_adicionados=nomes_adicionados or None,
-            cargos_removidos=nomes_removidos or None,
-        )
-
-    # ── Moderação (audit log periódico seria pesado; usamos eventos nativos) ─
+    # ── Moderação ────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_member_ban(self, guilda: discord.Guild, usuario: discord.User):
-        """Ban."""
         if not _servidor_correto(guilda):
             return
         executor = await buscar_executor_no_audit_log(
-            guilda,
-            discord.AuditLogAction.ban,
-            alvo_id=usuario.id,
+            guilda, discord.AuditLogAction.ban, alvo_id=usuario.id
         )
         await publicar_log_auditoria(
             guilda,
             "LOG_MODERACAO",
-            titulo="🔨 Ban",
+            titulo="🔍 🔨 Ban",
             linhas=[
-                f"- **Membro:** {_mencao_usuario(usuario)}",
-                f"- **Aplicado por:** {_mencao_usuario(executor)}",
+                f"**Membro:** {_mencao(usuario)}",
+                f"**Aplicado por:** {_mencao(executor)}",
             ],
             cor=COR_ERRO,
             url_do_avatar=usuario.display_avatar.url,
@@ -608,21 +727,18 @@ class EventosAuditoriaCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_unban(self, guilda: discord.Guild, usuario: discord.User):
-        """Unban."""
         if not _servidor_correto(guilda):
             return
         executor = await buscar_executor_no_audit_log(
-            guilda,
-            discord.AuditLogAction.unban,
-            alvo_id=usuario.id,
+            guilda, discord.AuditLogAction.unban, alvo_id=usuario.id
         )
         await publicar_log_auditoria(
             guilda,
             "LOG_MODERACAO",
-            titulo="♻️ Unban",
+            titulo="🔍 ♻️ Unban",
             linhas=[
-                f"- **Membro:** {_mencao_usuario(usuario)}",
-                f"- **Removido por:** {_mencao_usuario(executor)}",
+                f"**Membro:** {_mencao(usuario)}",
+                f"**Removido por:** {_mencao(executor)}",
             ],
             cor=COR_SUCESSO,
             url_do_avatar=usuario.display_avatar.url,
@@ -630,9 +746,11 @@ class EventosAuditoriaCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, membro: discord.Member):
-        """Kick (se houver entrada recente de kick no audit log)."""
         if not _servidor_correto(membro.guild):
             return
+        # Encerra sessão de voz se ainda estiver marcada
+        if membro.id in self._sessoes_de_voz:
+            self._sessoes_de_voz.pop(membro.id, None)
         executor = await buscar_executor_no_audit_log(
             membro.guild,
             discord.AuditLogAction.kick,
@@ -640,15 +758,14 @@ class EventosAuditoriaCog(commands.Cog):
             segundos_de_tolerancia=15,
         )
         if executor is None:
-            # Saída voluntária — não é moderação
             return
         await publicar_log_auditoria(
             membro.guild,
             "LOG_MODERACAO",
-            titulo="👢 Kick",
+            titulo="🔍 👢 Kick",
             linhas=[
-                f"- **Membro:** {_mencao_usuario(membro)}",
-                f"- **Aplicado por:** {_mencao_usuario(executor)}",
+                f"**Membro:** {_mencao(membro)}",
+                f"**Aplicado por:** {_mencao(executor)}",
             ],
             cor=COR_AVISO,
             url_do_avatar=membro.display_avatar.url,
@@ -656,19 +773,13 @@ class EventosAuditoriaCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_audit_log_entry_create(self, entrada: discord.AuditLogEntry):
-        """
-        Captura timeout, remoção de timeout e alterações finas de moderação
-        quando o Discord emite a entrada de audit log.
-        """
         guilda = entrada.guild
         if guilda is None or not _servidor_correto(guilda):
             return
-
         acao = entrada.action
         alvo = entrada.target
         executor = entrada.user
 
-        # Timeout / remoção de timeout
         if acao == discord.AuditLogAction.member_update and entrada.changes:
             for mudanca in entrada.changes:
                 if getattr(mudanca, "key", None) == "communication_disabled_until":
@@ -678,12 +789,12 @@ class EventosAuditoriaCog(commands.Cog):
                         await publicar_log_auditoria(
                             guilda,
                             "LOG_MODERACAO",
-                            titulo="⏳ Timeout aplicado",
+                            titulo="🔍 ⏳ Timeout aplicado",
                             linhas=[
-                                f"- **Membro:** {_mencao_usuario(alvo)}",
-                                f"- **Até:** {_formato_timestamp(depois_v)}",
-                                f"- **Aplicado por:** {_mencao_usuario(executor)}",
-                                f"- **Motivo:** {entrada.reason or '—'}",
+                                f"**Membro:** {_mencao(alvo)}",
+                                f"**Até:** {_ts(depois_v)}",
+                                f"**Aplicado por:** {_mencao(executor)}",
+                                f"**Motivo:** {entrada.reason or '—'}",
                             ],
                             cor=COR_AVISO,
                         )
@@ -691,25 +802,24 @@ class EventosAuditoriaCog(commands.Cog):
                         await publicar_log_auditoria(
                             guilda,
                             "LOG_MODERACAO",
-                            titulo="✅ Timeout removido",
+                            titulo="🔍 ✅ Timeout removido",
                             linhas=[
-                                f"- **Membro:** {_mencao_usuario(alvo)}",
-                                f"- **Removido por:** {_mencao_usuario(executor)}",
+                                f"**Membro:** {_mencao(alvo)}",
+                                f"**Removido por:** {_mencao(executor)}",
                             ],
                             cor=COR_SUCESSO,
                         )
 
-        # Mudança de permissões de cargo no servidor
         if acao in (
             discord.AuditLogAction.role_update,
             discord.AuditLogAction.role_create,
             discord.AuditLogAction.role_delete,
         ):
             mapa = {
-                discord.AuditLogAction.role_create: ("🆕 Cargo criado", COR_SUCESSO),
-                discord.AuditLogAction.role_delete: ("🗑️ Cargo excluído", COR_ERRO),
+                discord.AuditLogAction.role_create: ("🔍 🆕 Cargo criado", COR_SUCESSO),
+                discord.AuditLogAction.role_delete: ("🔍 🗑️ Cargo excluído", COR_ERRO),
                 discord.AuditLogAction.role_update: (
-                    "✏️ Cargo / permissões alterados",
+                    "🔍 ✏️ Cargo / permissões alterados",
                     COR_AVISO,
                 ),
             }
@@ -720,15 +830,37 @@ class EventosAuditoriaCog(commands.Cog):
                 "LOG_MODERACAO",
                 titulo=titulo,
                 linhas=[
-                    f"- **Cargo:** `{nome}`",
-                    f"- **Alterado por:** {_mencao_usuario(executor)}",
-                    f"- **Motivo:** {entrada.reason or '—'}",
+                    f"**Cargo:** `{nome}`",
+                    f"**Alterado por:** {_mencao(executor)}",
+                    f"**Motivo:** {entrada.reason or '—'}",
                 ],
                 cor=cor,
             )
 
 
 async def setup(bot: commands.Bot) -> None:
-    """Registra os ouvintes de auditoria do servidor."""
+    """Registra os ouvintes e informa quais canais de log estão ativos."""
     await bot.add_cog(EventosAuditoriaCog(bot))
-    registrador.info("EventosAuditoriaCog registrado (logs de auditoria do servidor)")
+    chaves = [
+        "LOG_CANAIS",
+        "LOG_MENSAGENS_DELETADAS",
+        "LOG_MENSAGENS_EDITADAS",
+        "LOG_VOZ",
+        "LOG_APELIDOS",
+        "LOG_AVATARES",
+        "LOG_MODERACAO",
+        "LOG_HORAS",
+        "LOG_CARGOS",
+    ]
+    ativos = []
+    desligados = []
+    for chave in chaves:
+        if obter_id_do_canal_de_log(chave) > 0:
+            ativos.append(f"{chave}={CANAIS.get(chave)}")
+        else:
+            desligados.append(chave)
+    registrador.info(
+        "EventosAuditoriaCog registrado — ativos: %s | desligados (ID 0): %s",
+        ativos or ["nenhum"],
+        desligados or ["nenhum"],
+    )

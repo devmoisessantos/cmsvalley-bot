@@ -71,6 +71,11 @@ async def publicar_log_auditoria(
     """
     id_do_canal = obter_id_do_canal_de_log(chave_do_canal)
     if id_do_canal <= 0:
+        registrador.debug(
+            "Log %s desligado (CANAIS['%s'] = 0)",
+            chave_do_canal,
+            chave_do_canal,
+        )
         return None
 
     canal = guilda.get_channel(id_do_canal)
@@ -279,7 +284,7 @@ async def log_mudanca_cargo(
     await publicar_log_auditoria(
         guilda,
         "LOG_CARGOS",
-        titulo="🔧 Alteração de Cargo(s)",
+        titulo="🔍 🔧 Alteração de Cargo(s)",
         linhas=partes,
         cor=COR_INFO,
         url_do_avatar=candidato.display_avatar.url,

@@ -135,27 +135,6 @@ async def registrar_evento_plantao(
     )
     await canal.send(view=view)
 
-    # Espelha eventos de horas no canal LOG_HORAS (quando configurado)
-    eventos_de_horas = {
-        "TOGGLE_ON",
-        "TOGGLE_OFF",
-        "SAIU_CALL",
-        "CALL_ENCERRADA",
-        "DESLIGAMENTO_AUTOMATICO",
-        "CALL_ENCERRADA_POR_AFK",
-    }
-    if evento in eventos_de_horas:
-        from src.utils.logger import publicar_log_auditoria
-
-        await publicar_log_auditoria(
-            guild,
-            "LOG_HORAS",
-            titulo=titulo,
-            linhas=linhas,
-            cor=cor,
-            url_do_avatar=membro.display_avatar.url if membro else None,
-        )
-
 
 async def resolver_id_fivem_e_validar(discord_id: int) -> str | None:
     """Retorna o id_fivem se o discord_id tiver um Recrutamento aprovado.
