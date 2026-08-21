@@ -34,6 +34,7 @@ from src.utils.logger import (
     COR_ERRO,
     COR_INFO,
     COR_SUCESSO,
+    buscar_executor_alteracao_canal,
     buscar_executor_no_audit_log,
     cargo_ja_foi_logado_pelo_bot,
     log_mudanca_cargo,
@@ -166,6 +167,8 @@ class EventosAuditoriaCog(commands.Cog):
             canal.guild,
             discord.AuditLogAction.channel_create,
             alvo_id=canal.id,
+            segundos_de_tolerancia=45,
+            limite=15,
         )
         tipo = (
             "Categoria"
@@ -200,6 +203,8 @@ class EventosAuditoriaCog(commands.Cog):
             canal.guild,
             discord.AuditLogAction.channel_delete,
             alvo_id=canal.id,
+            segundos_de_tolerancia=45,
+            limite=15,
         )
         tipo = (
             "Categoria"
@@ -212,7 +217,9 @@ class EventosAuditoriaCog(commands.Cog):
         )
         categoria = canal.category
         if categoria is not None:
-            linha_cat = f"-  `📂` **Categoria:** {categoria.name} • (`{categoria.id}`)"
+            linha_cat = (
+                f"-  `📂` **Categoria:** {categoria.name} **ID:** (`{categoria.id}`)"
+            )
         else:
             linha_cat = "-  `📂` **Categoria:** —"
         await _publicar(
@@ -306,10 +313,10 @@ class EventosAuditoriaCog(commands.Cog):
         if not alteracoes:
             return
 
-        executor = await buscar_executor_no_audit_log(
+        # Permissões usam overwrite_*; nome/tópico usam channel_update
+        executor = await buscar_executor_alteracao_canal(
             depois.guild,
-            discord.AuditLogAction.channel_update,
-            alvo_id=depois.id,
+            depois.id,
         )
         fid_executor = "—"
         if executor is not None:

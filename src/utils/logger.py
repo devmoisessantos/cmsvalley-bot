@@ -244,26 +244,44 @@ async def publicar_log_auditoria(
 
 async def buscar_executor_no_audit_log(
     guilda: discord.Guild,
-    acao: discord.AuditLogAction,
+    acao: discord.AuditLogAction | list[discord.AuditLogAction] | None = None,
     *,
     alvo_id: int | None = None,
-    limite: int = 6,
-    segundos_de_tolerancia: int = 20,
+    limite: int = 12,
+    segundos_de_tolerancia: int = 30,
 ) -> discord.abc.User | None:
-    """Tenta descobrir quem fez a ação pelo Audit Log recente."""
+    """
+    Tenta descobrir quem fez a ação pelo Audit Log recente.
+
+    ``acao`` pode ser uma ação ou lista (tenta na ordem).
+    """
+    if acao is None:
+        lista_acoes: list[discord.AuditLogAction | None] = [None]
+    elif isinstance(acao, list):
+        lista_acoes = list(acao)
+    else:
+        lista_acoes = [acao]
+
     try:
-        async for entrada in guilda.audit_logs(limit=limite, action=acao):
-            if entrada.created_at is None:
-                continue
-            idade = (datetime.now(timezone.utc) - entrada.created_at).total_seconds()
-            if idade > segundos_de_tolerancia:
-                continue
-            if alvo_id is not None:
-                alvo = entrada.target
-                id_do_alvo = getattr(alvo, "id", None)
-                if id_do_alvo is not None and int(id_do_alvo) != int(alvo_id):
+        for acao_atual in lista_acoes:
+            kwargs = {"limit": limite}
+            if acao_atual is not None:
+                kwargs["action"] = acao_atual
+            async for entrada in guilda.audit_logs(**kwargs):
+                if entrada.created_at is None:
                     continue
-            return entrada.user
+                idade = (
+                    datetime.now(timezone.utc) - entrada.created_at
+                ).total_seconds()
+                if idade > segundos_de_tolerancia:
+                    continue
+                if alvo_id is not None:
+                    alvo = entrada.target
+                    id_do_alvo = getattr(alvo, "id", None)
+                    if id_do_alvo is not None and int(id_do_alvo) != int(alvo_id):
+                        continue
+                if entrada.user is not None:
+                    return entrada.user
     except discord.Forbidden:
         registrador.warning(
             "Sem permissão 'Ver registro de auditoria' em %s — "
@@ -272,6 +290,67 @@ async def buscar_executor_no_audit_log(
         )
     except discord.HTTPException as erro_http:
         registrador.debug("Audit log indisponível: %s", erro_http)
+    return None
+
+
+async def buscar_executor_alteracao_canal(
+    guilda: discord.Guild,
+    canal_id: int,
+    *,
+    limite: int = 15,
+    segundos_de_tolerancia: int = 45,
+) -> discord.abc.User | None:
+    """
+    Descobre quem alterou um canal (nome, tópico, permissões, etc.).
+
+    Permissões de canal no Discord geram entradas ``overwrite_create``,
+    ``overwrite_update`` ou ``overwrite_delete``. Nessas entradas o
+    *target* é o cargo/membro da overwrite — o canal fica em ``extra``.
+    Por isso a busca genérica por alvo_id=canal falhava.
+    """
+    acoes = [
+        discord.AuditLogAction.channel_update,
+        discord.AuditLogAction.overwrite_update,
+        discord.AuditLogAction.overwrite_create,
+        discord.AuditLogAction.overwrite_delete,
+    ]
+    try:
+        for acao in acoes:
+            async for entrada in guilda.audit_logs(limit=limite, action=acao):
+                if entrada.created_at is None:
+                    continue
+                idade = (
+                    datetime.now(timezone.utc) - entrada.created_at
+                ).total_seconds()
+                if idade > segundos_de_tolerancia:
+                    continue
+
+                # channel_update: target é o canal
+                id_alvo = getattr(entrada.target, "id", None)
+                if id_alvo is not None and int(id_alvo) == int(canal_id):
+                    if entrada.user is not None:
+                        return entrada.user
+
+                # overwrite_*: canal vem em extra / extra.channel
+                extra = getattr(entrada, "extra", None)
+                if extra is not None:
+                    id_canal_extra = getattr(extra, "id", None)
+                    if id_canal_extra is None:
+                        canal_extra = getattr(extra, "channel", None)
+                        id_canal_extra = getattr(canal_extra, "id", None)
+                    if id_canal_extra is not None and int(id_canal_extra) == int(
+                        canal_id
+                    ):
+                        if entrada.user is not None:
+                            return entrada.user
+    except discord.Forbidden:
+        registrador.warning(
+            "Sem permissão 'Ver registro de auditoria' ao buscar "
+            "responsável do canal %s",
+            canal_id,
+        )
+    except discord.HTTPException as erro_http:
+        registrador.debug("Audit log (canal) indisponível: %s", erro_http)
     return None
 
 
@@ -397,7 +476,7 @@ async def log_cargo(
         linhas += f"\n- {extra}"
 
     view_do_log = LogContainerView(
-        titulo="📋 Ação de Cargo",
+        titulo="🔍 📋 Ação de Cargo",
         linhas=linhas,
         guild=guilda,
         cor=COR_INFO,
@@ -431,7 +510,7 @@ async def log_mudanca_cargo(
     await publicar_log_auditoria(
         guilda,
         "LOG_CARGOS",
-        titulo="🔧 Alteração de Cargo(s)",
+        titulo="🔍 🔧 Alteração de Cargo(s)",
         linhas=partes,
         cor=COR_INFO,
         url_do_avatar=candidato.display_avatar.url,
@@ -472,6 +551,7 @@ __all__ = [
     "publicar_log_auditoria",
     "resolver_canal_de_log",
     "buscar_executor_no_audit_log",
+    "buscar_executor_alteracao_canal",
     "baixar_arquivo_de_url",
     "arquivo_de_asset_discord",
     "obter_id_do_canal_de_log",
