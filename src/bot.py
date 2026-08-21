@@ -169,6 +169,7 @@ CAMINHOS_DOS_COGS = [
     "src.ranking.ranking_cogs",
     "src.hierarquia.hierarquia_cogs",
     "src.hierarquia.hierarquia_class",
+    "src.eventos.eventos_cogs",
     "src.recrutamento.recrutamento_cogs",
     "src.recrutamento.ranking_tasks",
     "src.notificacoes.notificar_cogs",

@@ -3,7 +3,7 @@
 Funções de log de auditoria (cargos, decisões e logs genéricos do servidor).
 
 Todas usam LogContainerView (Components V2).
-O envio genérico passa por ``publicar_log_auditoria`` para um único padrão visual.
+O envio genérico passa por ``publicar_log_auditoria`` — caminho único.
 """
 
 from __future__ import annotations
@@ -29,21 +29,78 @@ from src.utils.mensagens import (
 registrador = logging.getLogger(__name__)
 
 # Membros cujo log de cargo acabou de ser publicado por um serviço do bot.
-# O listener de on_member_update consulta isto para não duplicar o card.
 _cargos_publicados_pelo_bot: dict[int, float] = {}
 
 
 def obter_id_do_canal_de_log(chave_do_canal: str) -> int:
-    """
-    Lê o ID do canal em CANAIS.
-
-    Retorna 0 quando a chave não existe ou está desligada (valor 0).
-    """
+    """Lê o ID do canal em CANAIS. 0 = desligado."""
     valor = CANAIS.get(chave_do_canal) or 0
     try:
         return int(valor)
     except (TypeError, ValueError):
         return 0
+
+
+async def resolver_canal_de_log(
+    guilda: discord.Guild,
+    chave_do_canal: str,
+    *,
+    cliente: discord.Client | None = None,
+) -> discord.abc.Messageable | None:
+    """
+    Resolve o canal de log de forma resistente a cache frio.
+
+    Ordem:
+    1. guilda.get_channel
+    2. cliente.get_channel
+    3. guilda.fetch_channel / cliente.fetch_channel
+    """
+    id_do_canal = obter_id_do_canal_de_log(chave_do_canal)
+    if id_do_canal <= 0:
+        registrador.warning(
+            "Log %s desligado: CANAIS['%s'] = 0 — configure o ID no config.py",
+            chave_do_canal,
+            chave_do_canal,
+        )
+        return None
+
+    canal = guilda.get_channel(id_do_canal)
+    if canal is not None:
+        return canal
+
+    if cliente is not None:
+        canal = cliente.get_channel(id_do_canal)
+        if canal is not None:
+            return canal
+
+    # Cache pode não ter o canal (restart, canal novo, falta de intent parcial)
+    try:
+        if cliente is not None:
+            canal = await cliente.fetch_channel(id_do_canal)
+        else:
+            canal = await guilda.fetch_channel(id_do_canal)
+        return canal
+    except discord.NotFound:
+        registrador.error(
+            "Canal de log %s não existe (ID %s). Confira o config.py.",
+            chave_do_canal,
+            id_do_canal,
+        )
+    except discord.Forbidden:
+        registrador.error(
+            "Sem permissão para ver/enviar no canal de log %s (ID %s). "
+            "O bot precisa Ver canal + Enviar mensagens nesse canal.",
+            chave_do_canal,
+            id_do_canal,
+        )
+    except discord.HTTPException as erro_http:
+        registrador.error(
+            "Falha ao buscar canal de log %s (ID %s): %s",
+            chave_do_canal,
+            id_do_canal,
+            erro_http,
+        )
+    return None
 
 
 async def publicar_log_auditoria(
@@ -58,32 +115,27 @@ async def publicar_log_auditoria(
     arquivos: list[discord.File] | None = None,
     abrir_topico_para_anexos: bool = False,
     nome_do_topico: str | None = None,
+    cliente: discord.Client | None = None,
 ) -> discord.Message | None:
     """
-    Publica um card de log no canal configurado em CANAIS[chave_do_canal].
+    Publica um card de log no canal CANAIS[chave_do_canal].
 
-    - Se o ID for 0 ou o canal não existir, não faz nada (retorna None).
-    - ``linhas`` pode ser string pronta ou lista de itens (juntos com quebra).
-    - ``arquivos`` / ``abrir_topico_para_anexos``: anexa arquivos na mensagem
-      ou, se pedido, cria um tópico na mensagem e envia os anexos lá.
-
-    Este é o caminho único para logs de auditoria do servidor.
+    Use sempre este helper nos listeners de auditoria.
+    Falhas são registradas em WARNING/ERROR (não só debug).
     """
-    id_do_canal = obter_id_do_canal_de_log(chave_do_canal)
-    if id_do_canal <= 0:
-        registrador.debug(
-            "Log %s desligado (CANAIS['%s'] = 0)",
-            chave_do_canal,
-            chave_do_canal,
-        )
+    canal = await resolver_canal_de_log(
+        guilda,
+        chave_do_canal,
+        cliente=cliente,
+    )
+    if canal is None:
         return None
 
-    canal = guilda.get_channel(id_do_canal)
-    if canal is None or not isinstance(canal, (discord.TextChannel, discord.Thread)):
-        registrador.debug(
-            "Canal de log %s (%s) não encontrado",
+    if not hasattr(canal, "send"):
+        registrador.error(
+            "Canal de log %s não aceita send (tipo %s)",
             chave_do_canal,
-            id_do_canal,
+            type(canal).__name__,
         )
         return None
 
@@ -91,6 +143,10 @@ async def publicar_log_auditoria(
         texto_das_linhas = "\n".join(linhas)
     else:
         texto_das_linhas = linhas
+
+    # Discord limita o tamanho do TextDisplay — corta com aviso
+    if len(texto_das_linhas) > 3800:
+        texto_das_linhas = texto_das_linhas[:3800] + "\n…"
 
     view_do_log = LogContainerView(
         titulo=titulo,
@@ -102,7 +158,6 @@ async def publicar_log_auditoria(
     )
 
     try:
-        # Anexos grandes / imagem antiga vão no tópico para não poluir o card
         if abrir_topico_para_anexos and arquivos:
             mensagem = await canal.send(view=view_do_log)
             nome = (nome_do_topico or "anexos-do-log")[:100]
@@ -115,9 +170,8 @@ async def publicar_log_auditoria(
                     chave_do_canal,
                     erro_topico,
                 )
-                # Fallback: tenta anexar na própria mensagem (reenvia)
                 try:
-                    await canal.send(view=view_do_log, files=arquivos)
+                    await canal.send(files=arquivos)
                 except discord.HTTPException:
                     pass
             return mensagem
@@ -126,18 +180,32 @@ async def publicar_log_auditoria(
             mensagem = await canal.send(view=view_do_log, files=arquivos)
         else:
             mensagem = await canal.send(view=view_do_log)
+        registrador.info(
+            "Log publicado em %s (canal %s): %s",
+            chave_do_canal,
+            getattr(canal, "id", "?"),
+            titulo,
+        )
         return mensagem
     except discord.Forbidden:
-        registrador.warning(
-            "Sem permissão para enviar log em %s (%s)",
+        registrador.error(
+            "Sem permissão para ENVIAR no canal de log %s (ID %s). "
+            "Marque Ver canal + Enviar mensagens + Incorporar links para o bot.",
             chave_do_canal,
-            id_do_canal,
+            getattr(canal, "id", "?"),
         )
     except discord.HTTPException as erro_http:
-        registrador.warning(
-            "Falha HTTP ao enviar log em %s: %s",
+        registrador.error(
+            "HTTP ao enviar log %s: %s | titulo=%s",
             chave_do_canal,
             erro_http,
+            titulo,
+        )
+    except Exception:
+        registrador.exception(
+            "Erro inesperado ao publicar log %s (titulo=%s)",
+            chave_do_canal,
+            titulo,
         )
     return None
 
@@ -150,11 +218,7 @@ async def buscar_executor_no_audit_log(
     limite: int = 6,
     segundos_de_tolerancia: int = 20,
 ) -> discord.abc.User | None:
-    """
-    Tenta descobrir quem fez a ação pelo Audit Log recente.
-
-    Retorna o usuário executor ou None se não houver permissão / entrada.
-    """
+    """Tenta descobrir quem fez a ação pelo Audit Log recente."""
     try:
         async for entrada in guilda.audit_logs(limit=limite, action=acao):
             if entrada.created_at is None:
@@ -169,32 +233,23 @@ async def buscar_executor_no_audit_log(
                     continue
             return entrada.user
     except discord.Forbidden:
-        registrador.debug("Sem permissão view_audit_log em %s", guilda.id)
+        registrador.warning(
+            "Sem permissão 'Ver registro de auditoria' em %s — "
+            "campos 'quem fez' podem ficar vazios",
+            guilda.id,
+        )
     except discord.HTTPException as erro_http:
         registrador.debug("Audit log indisponível: %s", erro_http)
     return None
 
 
 async def baixar_arquivo_de_url(
-    sessao_http: discord.Client | None,
+    _sessao_http: discord.Client | None,
     url: str,
     nome_do_arquivo: str,
 ) -> discord.File | None:
     """Baixa uma URL (ex.: avatar antigo) e devolve um discord.File."""
     try:
-        if sessao_http is not None and hasattr(sessao_http, "http"):
-            # Usa o connector do bot quando possível
-            import aiohttp
-
-            async with aiohttp.ClientSession() as sessao:
-                async with sessao.get(url) as resposta:
-                    if resposta.status != 200:
-                        return None
-                    dados = await resposta.read()
-                    return discord.File(
-                        BytesIO(dados),
-                        filename=nome_do_arquivo,
-                    )
         import aiohttp
 
         async with aiohttp.ClientSession() as sessao:
@@ -218,17 +273,12 @@ async def log_cargo(
     cargo: str,
     extra: str = "",
 ):
-    """
-    Log simples de uma ação de cargo em um canal qualquer.
-
-    Preferível usar log_mudanca_cargo ou log_decisao quando fizer sentido.
-    """
+    """Log simples de uma ação de cargo em um canal qualquer."""
     canal = guilda.get_channel(canal_id)
     if canal is None:
         return
 
     momento_atual = int(datetime.now(timezone.utc).timestamp())
-
     linhas = (
         f"**{acao}**\n"
         f"- **Membro:** {candidato.mention} (`{candidato.id}`)\n"
@@ -240,7 +290,7 @@ async def log_cargo(
         linhas += f"\n- {extra}"
 
     view_do_log = LogContainerView(
-        titulo="📋 Ação de Cargo",
+        titulo="🔍 📋 Ação de Cargo",
         linhas=linhas,
         guild=guilda,
         cor=COR_INFO,
@@ -257,29 +307,19 @@ async def log_mudanca_cargo(
     cargos_adicionados: list[str] | None = None,
     cargos_removidos: list[str] | None = None,
 ):
-    """
-    Auditoria de alteração de cargos (bot ou manual).
-
-    Envia no canal LOG_CARGOS. Também usada pelos serviços do bot quando
-    eles mesmos aplicam cargos, para manter o mesmo visual.
-    """
-    partes = [f"- **Membro:** {candidato.mention} (`{candidato.id}`)"]
-
-    if cargos_adicionados:
-        lista_adicionados = ", ".join(cargos_adicionados)
-        partes.append(f"- **Adicionados:** {lista_adicionados}")
-
-    if cargos_removidos:
-        lista_removidos = ", ".join(cargos_removidos)
-        partes.append(f"- **Removidos:** {lista_removidos}")
-
-    partes.append(f"- **Alterado por:** {executor.mention}")
-
+    """Auditoria de alteração de cargos (bot ou manual) → LOG_CARGOS."""
     import time
 
     _cargos_publicados_pelo_bot[int(candidato.id)] = time.monotonic()
     if len(_cargos_publicados_pelo_bot) > 400:
         _cargos_publicados_pelo_bot.clear()
+
+    partes = [f"**Membro:** {candidato.mention} (`{candidato.id}`)"]
+    if cargos_adicionados:
+        partes.append(f"**Adicionados:** {', '.join(cargos_adicionados)}")
+    if cargos_removidos:
+        partes.append(f"**Removidos:** {', '.join(cargos_removidos)}")
+    partes.append(f"**Alterado por:** {executor.mention}")
 
     await publicar_log_auditoria(
         guilda,
@@ -300,7 +340,7 @@ async def log_decisao(
     cor: discord.Color = COR_INFO,
     url_do_avatar: str | None = None,
 ):
-    """Log genérico de decisão administrativa no canal indicado."""
+    """Log genérico de decisão administrativa."""
     await publicar_log_auditoria(
         guilda,
         chave_do_canal,
@@ -311,27 +351,28 @@ async def log_decisao(
     )
 
 
-# Cores exportadas para os listeners de auditoria
-__all__ = [
-    "publicar_log_auditoria",
-    "buscar_executor_no_audit_log",
-    "baixar_arquivo_de_url",
-    "obter_id_do_canal_de_log",
-    "log_cargo",
-    "log_mudanca_cargo",
-    "log_decisao",
-    "COR_INFO",
-    "COR_SUCESSO",
-    "COR_AVISO",
-    "COR_ERRO",
-]
-
-
 def cargo_ja_foi_logado_pelo_bot(discord_id: int, segundos: float = 4.0) -> bool:
-    """True se um serviço do bot já publicou log de cargo deste membro agora há pouco."""
+    """True se um serviço do bot já publicou log de cargo deste membro há pouco."""
     import time
 
     momento = _cargos_publicados_pelo_bot.get(int(discord_id))
     if momento is None:
         return False
     return (time.monotonic() - momento) < segundos
+
+
+__all__ = [
+    "publicar_log_auditoria",
+    "resolver_canal_de_log",
+    "buscar_executor_no_audit_log",
+    "baixar_arquivo_de_url",
+    "obter_id_do_canal_de_log",
+    "log_cargo",
+    "log_mudanca_cargo",
+    "log_decisao",
+    "cargo_ja_foi_logado_pelo_bot",
+    "COR_INFO",
+    "COR_SUCESSO",
+    "COR_AVISO",
+    "COR_ERRO",
+]

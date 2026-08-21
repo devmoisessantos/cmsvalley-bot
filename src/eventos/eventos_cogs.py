@@ -4,8 +4,7 @@ Ouvintes de auditoria do Discord (domínio eventos).
 Cada tipo de evento publica no canal configurado em CANAIS via
 ``publicar_log_auditoria`` (helper único em utils/logger.py).
 
-LOG_HORAS neste domínio = tempo em call de voz do servidor inteiro
-(não é plantão). Plantão continua só em LOG_PLANTAO.
+LOG_HORAS fica no plantão (plantao_logger). Aqui só LOG_VOZ para calls.
 
 Se um canal de log estiver com ID 0, aquele tipo fica desligado.
 """
@@ -36,10 +35,43 @@ from src.utils.logger import (
     cargo_ja_foi_logado_pelo_bot,
     log_mudanca_cargo,
     obter_id_do_canal_de_log,
-    publicar_log_auditoria,
 )
 
 registrador = logging.getLogger(__name__)
+
+# Preenchido no setup — o helper usa para fetch_channel se o cache estiver frio
+_bot_global: commands.Bot | None = None
+
+
+async def _publicar(
+    guilda: discord.Guild,
+    chave: str,
+    *,
+    titulo: str,
+    linhas: list[str] | str,
+    cor=None,
+    url_do_avatar: str | None = None,
+    arquivos=None,
+    abrir_topico_para_anexos: bool = False,
+    nome_do_topico: str | None = None,
+):
+    """Atalho: sempre envia o cliente do bot e captura erro do listener."""
+    kwargs = {
+        "titulo": titulo,
+        "linhas": linhas,
+        "url_do_avatar": url_do_avatar,
+        "cliente": _bot_global,
+        "arquivos": arquivos,
+        "abrir_topico_para_anexos": abrir_topico_para_anexos,
+        "nome_do_topico": nome_do_topico,
+    }
+    if cor is not None:
+        kwargs["cor"] = cor
+    try:
+        return await _publicar(guilda, chave, **kwargs)
+    except Exception:
+        registrador.exception("Falha no listener ao publicar %s (%s)", chave, titulo)
+        return None
 
 
 def _servidor_correto(guilda: discord.Guild | None) -> bool:
@@ -107,7 +139,7 @@ class EventosAuditoriaCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._ids_de_edicao_recentes: set[int] = set()
-        # Controle de sessão de voz para LOG_HORAS (servidor inteiro)
+        # Sessão de voz para calcular tempo conectado no LOG_VOZ
         # discord_id -> {"canal_id": int, "entrou_em": datetime}
         self._sessoes_de_voz: dict[int, dict] = {}
         # Total de segundos em voz nesta execução do bot
@@ -135,7 +167,7 @@ class EventosAuditoriaCog(commands.Cog):
             )
         )
         mencao = getattr(canal, "mention", f"`{canal.name}`")
-        await publicar_log_auditoria(
+        await _publicar(
             canal.guild,
             "LOG_CANAIS",
             titulo="🔍 📁 Canal criado",
@@ -179,7 +211,7 @@ class EventosAuditoriaCog(commands.Cog):
         else:
             linhas.append("**Categoria:** —")
         linhas.extend(["", f"**Excluído por:** {_mencao(executor)}"])
-        await publicar_log_auditoria(
+        await _publicar(
             canal.guild,
             "LOG_CANAIS",
             titulo="🔍 🗑️ Canal excluído",
@@ -282,7 +314,7 @@ class EventosAuditoriaCog(commands.Cog):
                 "",
                 f"**Responsável pela alteração:** {_mencao(executor)} **FID:** `{fid_executor}`",
             ]
-            await publicar_log_auditoria(
+            await _publicar(
                 depois.guild,
                 "LOG_CANAIS",
                 titulo="🔍 📝 Canal atualizado",
@@ -324,7 +356,7 @@ class EventosAuditoriaCog(commands.Cog):
             except (discord.HTTPException, discord.NotFound):
                 linhas.append(f"**Anexo (URL):** {anexo.url}")
 
-        await publicar_log_auditoria(
+        await _publicar(
             mensagem.guild,
             "LOG_MENSAGENS_DELETADAS",
             titulo="🔍 🗑️ Mensagem apagada",
@@ -345,7 +377,7 @@ class EventosAuditoriaCog(commands.Cog):
         guilda = mensagens[0].guild
         if guilda is None or not _servidor_correto(guilda):
             return
-        await publicar_log_auditoria(
+        await _publicar(
             guilda,
             "LOG_MENSAGENS_DELETADAS",
             titulo="🔍 🗑️ Mensagens apagadas em massa",
@@ -378,7 +410,7 @@ class EventosAuditoriaCog(commands.Cog):
         if len(texto_depois) > 900:
             texto_depois = texto_depois[:900] + "…"
 
-        await publicar_log_auditoria(
+        await _publicar(
             depois.guild,
             "LOG_MENSAGENS_EDITADAS",
             titulo="🔍 ✏️ Mensagem editada",
@@ -394,7 +426,7 @@ class EventosAuditoriaCog(commands.Cog):
             url_do_avatar=(depois.author.display_avatar.url if depois.author else None),
         )
 
-    # ── Voz + LOG_HORAS (servidor inteiro, não plantão) ───────────────────
+    # ── Voz (LOG_VOZ) ───────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -418,7 +450,7 @@ class EventosAuditoriaCog(commands.Cog):
                 "canal_id": canal_depois.id,
                 "entrou_em": agora,
             }
-            await publicar_log_auditoria(
+            await _publicar(
                 membro.guild,
                 "LOG_VOZ",
                 titulo="🔍 🔊 Entrada em canal de voz",
@@ -426,22 +458,6 @@ class EventosAuditoriaCog(commands.Cog):
                     f"**Membro:** {_mencao(membro)}",
                     f"**Canal:** {canal_depois.mention} **ID:** (`{canal_depois.id}`)",
                     f"**Entrada:** {_ts(agora)}",
-                ],
-                cor=COR_SUCESSO,
-                url_do_avatar=membro.display_avatar.url,
-            )
-            # LOG_HORAS: início de contagem (servidor inteiro)
-            fid = await _fid(membro.id)
-            await publicar_log_auditoria(
-                membro.guild,
-                "LOG_HORAS",
-                titulo="🔍 🟢 Contagem de horas iniciada",
-                linhas=[
-                    f"**Membro:** {_mencao(membro)} **FID:** (`{fid}`)",
-                    f"**Cargo:** {_cargo_principal(membro)}",
-                    f"**Canal:** {canal_depois.mention}",
-                    "",
-                    f"**Início:** {_ts(agora)}",
                 ],
                 cor=COR_SUCESSO,
                 url_do_avatar=membro.display_avatar.url,
@@ -464,7 +480,7 @@ class EventosAuditoriaCog(commands.Cog):
                     int(self._total_segundos_em_voz.get(membro.id, 0)) + duracao
                 )
 
-            await publicar_log_auditoria(
+            await _publicar(
                 membro.guild,
                 "LOG_VOZ",
                 titulo="🔍 🔇 Saída do canal de voz",
@@ -477,25 +493,6 @@ class EventosAuditoriaCog(commands.Cog):
                     f"**Tempo conectado:** `{formatar_hms(duracao) if duracao else '—'}`",
                 ],
                 cor=COR_AVISO,
-                url_do_avatar=membro.display_avatar.url,
-            )
-
-            fid = await _fid(membro.id)
-            total = int(self._total_segundos_em_voz.get(membro.id, 0))
-            await publicar_log_auditoria(
-                membro.guild,
-                "LOG_HORAS",
-                titulo="🔍 🔴 Horas em call encerrada",
-                linhas=[
-                    f"**Membro:** {_mencao(membro)} **FID:** (`{fid}`)",
-                    "",
-                    f"**Início:** {_ts(entrou_em, 't') if entrou_em else '—'}",
-                    f"**Fim:** {_ts(agora, 't')}",
-                    f"**Duração:** `{formatar_hms(duracao) if duracao else '—'}`",
-                    "",
-                    f"**Total acumulado (nesta sessão do bot):** `{formatar_hms(total)}`",
-                ],
-                cor=COR_ERRO,
                 url_do_avatar=membro.display_avatar.url,
             )
             return
@@ -527,7 +524,7 @@ class EventosAuditoriaCog(commands.Cog):
                 titulo = "🔍 🔄 Mudança de canal de voz"
                 extra = []
 
-            await publicar_log_auditoria(
+            await _publicar(
                 membro.guild,
                 "LOG_VOZ",
                 titulo=titulo,
@@ -563,7 +560,7 @@ class EventosAuditoriaCog(commands.Cog):
             titulo_extra = "🔍 📺 Transmissão"
 
         if titulo_extra and extras:
-            await publicar_log_auditoria(
+            await _publicar(
                 membro.guild,
                 "LOG_VOZ",
                 titulo=titulo_extra,
@@ -590,7 +587,7 @@ class EventosAuditoriaCog(commands.Cog):
             else:
                 texto_executor = _mencao(executor)
             fid = await _fid(depois.id)
-            await publicar_log_auditoria(
+            await _publicar(
                 depois.guild,
                 "LOG_APELIDOS",
                 titulo="🔍 🪪 Apelido alterado",
@@ -686,7 +683,7 @@ class EventosAuditoriaCog(commands.Cog):
             )
             if arquivo is not None:
                 arquivos.append(arquivo)
-        await publicar_log_auditoria(
+        await _publicar(
             membro.guild,
             "LOG_AVATARES",
             titulo="🔍 🖼️ Avatar alterado",
@@ -704,6 +701,28 @@ class EventosAuditoriaCog(commands.Cog):
             nome_do_topico=f"avatar-antigo-{membro.id}"[:100],
         )
 
+    # ── Entrada / saída de membros ───────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_member_join(self, membro: discord.Member):
+        """LOG_MEMBROS: entrou no servidor."""
+        if not _servidor_correto(membro.guild):
+            return
+        fid = await _fid(membro.id)
+        await _publicar(
+            membro.guild,
+            "LOG_MEMBROS",
+            titulo="🔍 📥 Membro entrou",
+            linhas=[
+                f"**Membro:** {_mencao(membro)} (`{membro.id}`)",
+                f"**FID:** (`{fid}`)",
+                f"**Conta criada:** {_ts(membro.created_at)}",
+                f"**Entrou em:** {_ts(datetime.now(timezone.utc))}",
+            ],
+            cor=COR_SUCESSO,
+            url_do_avatar=membro.display_avatar.url,
+        )
+
     # ── Moderação ────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
@@ -713,7 +732,7 @@ class EventosAuditoriaCog(commands.Cog):
         executor = await buscar_executor_no_audit_log(
             guilda, discord.AuditLogAction.ban, alvo_id=usuario.id
         )
-        await publicar_log_auditoria(
+        await _publicar(
             guilda,
             "LOG_MODERACAO",
             titulo="🔍 🔨 Ban",
@@ -732,7 +751,7 @@ class EventosAuditoriaCog(commands.Cog):
         executor = await buscar_executor_no_audit_log(
             guilda, discord.AuditLogAction.unban, alvo_id=usuario.id
         )
-        await publicar_log_auditoria(
+        await _publicar(
             guilda,
             "LOG_MODERACAO",
             titulo="🔍 ♻️ Unban",
@@ -748,9 +767,23 @@ class EventosAuditoriaCog(commands.Cog):
     async def on_member_remove(self, membro: discord.Member):
         if not _servidor_correto(membro.guild):
             return
-        # Encerra sessão de voz se ainda estiver marcada
         if membro.id in self._sessoes_de_voz:
             self._sessoes_de_voz.pop(membro.id, None)
+
+        fid = await _fid(membro.id)
+        await _publicar(
+            membro.guild,
+            "LOG_MEMBROS",
+            titulo="🔍 📤 Membro saiu",
+            linhas=[
+                f"**Membro:** {_mencao(membro)} (`{membro.id}`)",
+                f"**FID:** (`{fid}`)",
+                f"**Saiu em:** {_ts(datetime.now(timezone.utc))}",
+            ],
+            cor=COR_AVISO,
+            url_do_avatar=membro.display_avatar.url,
+        )
+
         executor = await buscar_executor_no_audit_log(
             membro.guild,
             discord.AuditLogAction.kick,
@@ -759,7 +792,7 @@ class EventosAuditoriaCog(commands.Cog):
         )
         if executor is None:
             return
-        await publicar_log_auditoria(
+        await _publicar(
             membro.guild,
             "LOG_MODERACAO",
             titulo="🔍 👢 Kick",
@@ -786,7 +819,7 @@ class EventosAuditoriaCog(commands.Cog):
                     antes_v = mudanca.old
                     depois_v = mudanca.new
                     if depois_v and not antes_v:
-                        await publicar_log_auditoria(
+                        await _publicar(
                             guilda,
                             "LOG_MODERACAO",
                             titulo="🔍 ⏳ Timeout aplicado",
@@ -799,7 +832,7 @@ class EventosAuditoriaCog(commands.Cog):
                             cor=COR_AVISO,
                         )
                     elif antes_v and not depois_v:
-                        await publicar_log_auditoria(
+                        await _publicar(
                             guilda,
                             "LOG_MODERACAO",
                             titulo="🔍 ✅ Timeout removido",
@@ -825,7 +858,7 @@ class EventosAuditoriaCog(commands.Cog):
             }
             titulo, cor = mapa[acao]
             nome = getattr(alvo, "name", None) or getattr(alvo, "id", "—")
-            await publicar_log_auditoria(
+            await _publicar(
                 guilda,
                 "LOG_MODERACAO",
                 titulo=titulo,
@@ -837,9 +870,56 @@ class EventosAuditoriaCog(commands.Cog):
                 cor=cor,
             )
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Confere se os canais de log são alcançáveis após o bot conectar."""
+        from src.utils.logger import resolver_canal_de_log
+
+        guilda = None
+        try:
+            gid = int(GUILD_ID or 0)
+            if gid:
+                guilda = self.bot.get_guild(gid)
+        except (TypeError, ValueError):
+            guilda = None
+        if guilda is None and self.bot.guilds:
+            guilda = self.bot.guilds[0]
+        if guilda is None:
+            registrador.error("Auditoria: nenhuma guilda disponível no on_ready")
+            return
+
+        chaves = [
+            "LOG_CANAIS",
+            "LOG_MENSAGENS_DELETADAS",
+            "LOG_MENSAGENS_EDITADAS",
+            "LOG_VOZ",
+            "LOG_APELIDOS",
+            "LOG_MEMBROS",
+            "LOG_AVATARES",
+            "LOG_MODERACAO",
+            "LOG_HORAS",
+            "LOG_CARGOS",
+        ]
+        for chave in chaves:
+            canal = await resolver_canal_de_log(guilda, chave, cliente=self.bot)
+            if canal is not None:
+                registrador.info(
+                    "Auditoria OK %s → #%s (%s)",
+                    chave,
+                    getattr(canal, "name", "?"),
+                    getattr(canal, "id", "?"),
+                )
+            else:
+                registrador.error(
+                    "Auditoria FALHOU %s — canal inacessível ou ID 0",
+                    chave,
+                )
+
 
 async def setup(bot: commands.Bot) -> None:
     """Registra os ouvintes e informa quais canais de log estão ativos."""
+    global _bot_global
+    _bot_global = bot
     await bot.add_cog(EventosAuditoriaCog(bot))
     chaves = [
         "LOG_CANAIS",
@@ -847,6 +927,7 @@ async def setup(bot: commands.Bot) -> None:
         "LOG_MENSAGENS_EDITADAS",
         "LOG_VOZ",
         "LOG_APELIDOS",
+        "LOG_MEMBROS",
         "LOG_AVATARES",
         "LOG_MODERACAO",
         "LOG_HORAS",
