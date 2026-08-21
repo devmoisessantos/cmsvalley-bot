@@ -35,6 +35,7 @@ from src.utils.logger import (
     cargo_ja_foi_logado_pelo_bot,
     log_mudanca_cargo,
     obter_id_do_canal_de_log,
+    publicar_log_auditoria,
 )
 
 registrador = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ async def _publicar(
     if cor is not None:
         kwargs["cor"] = cor
     try:
-        return await _publicar(guilda, chave, **kwargs)
+        return await publicar_log_auditoria(guilda, chave, **kwargs)
     except Exception:
         registrador.exception("Falha no listener ao publicar %s (%s)", chave, titulo)
         return None
