@@ -116,6 +116,9 @@ async def publicar_log_auditoria(
     abrir_topico_para_anexos: bool = False,
     nome_do_topico: str | None = None,
     cliente: discord.Client | None = None,
+    url_do_link: str | None = None,
+    rotulo_do_link: str = "Abrir mensagem",
+    blocos_extra: list[str] | None = None,
 ) -> discord.Message | None:
     """
     Publica um card de log no canal CANAIS[chave_do_canal].
@@ -155,6 +158,9 @@ async def publicar_log_auditoria(
         cor=cor,
         avatar_url=url_do_avatar,
         midia_urls=urls_de_midia,
+        link_url=url_do_link,
+        link_label=rotulo_do_link,
+        blocos_extra=blocos_extra,
     )
 
     try:
@@ -164,6 +170,21 @@ async def publicar_log_auditoria(
             try:
                 topico = await mensagem.create_thread(name=nome)
                 await topico.send(files=arquivos)
+                # Fecha/arquiva como nas chamadas e advertências
+                try:
+                    await topico.edit(
+                        archived=True,
+                        locked=True,
+                        reason="Arquivar tópico de anexo do log",
+                    )
+                except discord.HTTPException:
+                    try:
+                        await topico.edit(
+                            archived=True,
+                            reason="Arquivar tópico de anexo do log",
+                        )
+                    except discord.HTTPException:
+                        pass
             except (discord.Forbidden, discord.HTTPException) as erro_topico:
                 registrador.warning(
                     "Não foi possível abrir tópico no log %s: %s",

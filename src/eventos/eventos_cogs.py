@@ -55,6 +55,9 @@ async def _publicar(
     arquivos=None,
     abrir_topico_para_anexos: bool = False,
     nome_do_topico: str | None = None,
+    url_do_link: str | None = None,
+    rotulo_do_link: str = "Abrir mensagem",
+    blocos_extra: list[str] | None = None,
 ):
     """Atalho: sempre envia o cliente do bot e captura erro do listener."""
     kwargs = {
@@ -65,6 +68,9 @@ async def _publicar(
         "arquivos": arquivos,
         "abrir_topico_para_anexos": abrir_topico_para_anexos,
         "nome_do_topico": nome_do_topico,
+        "url_do_link": url_do_link,
+        "rotulo_do_link": rotulo_do_link,
+        "blocos_extra": blocos_extra,
     }
     if cor is not None:
         kwargs["cor"] = cor
@@ -171,14 +177,13 @@ class EventosAuditoriaCog(commands.Cog):
         await _publicar(
             canal.guild,
             "LOG_CANAIS",
-            titulo="🔍 📁 Canal criado",
+            titulo="📁 Canal criado",
             linhas=[
-                f"**Canal:** {mencao} (`{canal.id}`)",
-                f"**Nome:** `{canal.name}`",
-                f"**Tipo:** {tipo}",
-                f"**Categoria:** `{canal.category.name if canal.category else '—'}`",
-                "",
-                f"**Criado por:** {_mencao(executor)}",
+                f"-  `#️⃣` **Canal:** {mencao} (`{canal.id}`)",
+                f"-  `🏷️` **Nome:** `{canal.name}`",
+                f"-  `📁` **Tipo:** {tipo}",
+                f"-  `📂` **Categoria:** `{canal.category.name if canal.category else '—'}`",
+                f"-  `👤` **Criado por:** {_mencao(executor)}",
             ],
             cor=COR_SUCESSO,
         )
@@ -203,20 +208,22 @@ class EventosAuditoriaCog(commands.Cog):
             )
         )
         categoria = canal.category
-        linhas = [
-            f"**Nome:** {canal.name} (`{canal.id}`)",
-            f"**Tipo:** {tipo}",
-        ]
         if categoria is not None:
-            linhas.append(f"**Categoria:** {categoria.name} **ID:** (`{categoria.id}`)")
+            linha_cat = (
+                f"-  `📂` **Categoria:** {categoria.name} **ID:** (`{categoria.id}`)"
+            )
         else:
-            linhas.append("**Categoria:** —")
-        linhas.extend(["", f"**Excluído por:** {_mencao(executor)}"])
+            linha_cat = "-  `📂` **Categoria:** —"
         await _publicar(
             canal.guild,
             "LOG_CANAIS",
-            titulo="🔍 🗑️ Canal excluído",
-            linhas=linhas,
+            titulo="🗑️ Canal excluído",
+            linhas=[
+                f"-  `🏷️` **Nome:** {canal.name} (`{canal.id}`)",
+                f"-  `📁` **Tipo:** {tipo}",
+                linha_cat,
+                f"-  `👤` **Excluído por:** {_mencao(executor)}",
+            ],
             cor=COR_ERRO,
         )
 
@@ -237,8 +244,8 @@ class EventosAuditoriaCog(commands.Cog):
                 (
                     "Canal renomeado",
                     [
-                        f"**Antes:** `{antes.name}`",
-                        f"**Depois:** `{depois.name}`",
+                        f"-  `⬅️` **Antes:** `{antes.name}`",
+                        f"-  `➡️` **Depois:** `{depois.name}`",
                     ],
                 )
             )
@@ -252,8 +259,8 @@ class EventosAuditoriaCog(commands.Cog):
                 (
                     "Canal movido de categoria",
                     [
-                        f"**Antes:** `{nome_antes}`",
-                        f"**Depois:** `{nome_depois}`",
+                        f"-  `⬅️` **Antes:** `{nome_antes}`",
+                        f"-  `➡️` **Depois:** `{nome_depois}`",
                     ],
                 )
             )
@@ -309,16 +316,17 @@ class EventosAuditoriaCog(commands.Cog):
 
         for titulo_alt, detalhe in alteracoes:
             linhas = [
-                f"**Canal:** {getattr(depois, 'mention', depois.name)} (`{depois.id}`)",
-                f"**Alteração:** {titulo_alt}",
+                f"-  `#️⃣` **Canal:** {getattr(depois, 'mention', depois.name)} "
+                f"(`{depois.id}`)",
+                f"-  `🔄` **Alteração:** {titulo_alt}",
                 *detalhe,
-                "",
-                f"**Responsável pela alteração:** {_mencao(executor)} **FID:** `{fid_executor}`",
+                f"-  `👤` **Responsável pela alteração:** {_mencao(executor)} "
+                f"**FID:** `{fid_executor}`",
             ]
             await _publicar(
                 depois.guild,
                 "LOG_CANAIS",
-                titulo="🔍 📝 Canal atualizado",
+                titulo="✏️ Canal atualizado",
                 linhas=linhas,
                 cor=COR_AVISO,
             )
@@ -341,27 +349,35 @@ class EventosAuditoriaCog(commands.Cog):
         if len(conteudo) > 1500:
             conteudo = conteudo[:1500] + "…"
 
-        linhas = [
-            f"**Autor:** {_mencao(mensagem.author)}",
-            f"**Canal:** {mensagem.channel.mention}",
-            f"**Conteúdo:**\n>>> {conteudo}",
-            f"**Enviada em:** {_ts(mensagem.created_at)}",
-            f"**Apagada em:** {_ts(datetime.now(timezone.utc))}",
-            f"**ID da mensagem:** `{mensagem.id}`",
-            f"**Quem apagou:** {_mencao(executor)}",
-        ]
+        cabecalho = "\n".join(
+            [
+                f"-  `✍️` **Autor:** {_mencao(mensagem.author)}",
+                f"-  `#️⃣` **Canal:** {mensagem.channel.mention}",
+                "-  `💬` **Conteúdo:**",
+            ]
+        )
+        bloco_conteudo = f"> {conteudo}"
+        bloco_meta = "\n".join(
+            [
+                f"-  `📤` **Enviada em:** {_ts(mensagem.created_at)}",
+                f"-  `🗑️` **Apagada em:** {_ts(datetime.now(timezone.utc))}",
+                f"-  `🆔` **ID da mensagem:** `{mensagem.id}`",
+                f"-  `❓` **Quem apagou:** {_mencao(executor)}",
+            ]
+        )
         arquivos: list[discord.File] = []
         for anexo in mensagem.attachments[:5]:
             try:
                 arquivos.append(await anexo.to_file())
             except (discord.HTTPException, discord.NotFound):
-                linhas.append(f"**Anexo (URL):** {anexo.url}")
+                bloco_meta += f"\n-  `📎` **Anexo (URL):** {anexo.url}"
 
         await _publicar(
             mensagem.guild,
             "LOG_MENSAGENS_DELETADAS",
-            titulo="🔍 🗑️ Mensagem apagada",
-            linhas=linhas,
+            titulo="🗑️ Mensagem apagada",
+            linhas=cabecalho,
+            blocos_extra=[bloco_conteudo, bloco_meta],
             cor=COR_ERRO,
             url_do_avatar=(
                 mensagem.author.display_avatar.url if mensagem.author else None
@@ -414,17 +430,20 @@ class EventosAuditoriaCog(commands.Cog):
         await _publicar(
             depois.guild,
             "LOG_MENSAGENS_EDITADAS",
-            titulo="🔍 ✏️ Mensagem editada",
+            titulo="✒️ Mensagem editada",
             linhas=[
-                f"**Autor:** {_mencao(depois.author)}",
-                f"**Canal:** {depois.channel.mention}",
-                f"**Conteúdo anterior:**\n>>> {texto_antes}",
-                f"**Conteúdo novo:**\n>>> {texto_depois}",
-                f"**ID da mensagem:** `{depois.id}`",
-                f"**Link:** [abrir mensagem]({depois.jump_url})",
+                f"-  `✍️` **Autor:** {_mencao(depois.author)}",
+                f"-  `#️⃣` **Canal:** {depois.channel.mention}",
+                "-  `📝` **Conteúdo anterior:**",
+                f"> {texto_antes}",
+                "-  `🆕` **Conteúdo novo:**",
+                f"> {texto_depois}",
+                f"-  `🆔` **ID da mensagem:** `{depois.id}`",
             ],
             cor=COR_AVISO,
             url_do_avatar=(depois.author.display_avatar.url if depois.author else None),
+            url_do_link=depois.jump_url,
+            rotulo_do_link="Abrir mensagem",
         )
 
     # ── Voz (LOG_VOZ) ───────────────────────────────────────────────────
@@ -454,11 +473,12 @@ class EventosAuditoriaCog(commands.Cog):
             await _publicar(
                 membro.guild,
                 "LOG_VOZ",
-                titulo="🔍 🔊 Entrada em canal de voz",
+                titulo="🔊 Entrada em canal de voz",
                 linhas=[
-                    f"**Membro:** {_mencao(membro)}",
-                    f"**Canal:** {canal_depois.mention} **ID:** (`{canal_depois.id}`)",
-                    f"**Entrada:** {_ts(agora)}",
+                    f"-  `👤` **Membro:** {_mencao(membro)}",
+                    f"-  `#️⃣` **Canal:** {canal_depois.mention} "
+                    f"**ID:** (`{canal_depois.id}`)",
+                    f"-  `➡️` **Entrada:** {_ts(agora)}",
                 ],
                 cor=COR_SUCESSO,
                 url_do_avatar=membro.display_avatar.url,
@@ -484,14 +504,15 @@ class EventosAuditoriaCog(commands.Cog):
             await _publicar(
                 membro.guild,
                 "LOG_VOZ",
-                titulo="🔍 🔇 Saída do canal de voz",
+                titulo="🚪 Saída do canal de voz",
                 linhas=[
-                    f"**Membro:** {_mencao(membro)}",
-                    f"**Canal:** {canal_antes.mention} **ID:** (`{canal_antes.id}`)",
-                    "",
-                    f"**Entrou:** {_ts(entrou_em, 't') if entrou_em else '—'}",
-                    f"**Saiu:** {_ts(agora, 't')}",
-                    f"**Tempo conectado:** `{formatar_hms(duracao) if duracao else '—'}`",
+                    f"-  `👤` **Membro:** {_mencao(membro)}",
+                    f"-  `#️⃣` **Canal:** {canal_antes.mention} "
+                    f"**ID:** (`{canal_antes.id}`)",
+                    f"-  `➡️` **Entrou:** {_ts(entrou_em, 't') if entrou_em else '—'}",
+                    f"-  `⬅️` **Saiu:** {_ts(agora, 't')}",
+                    f"-  `⏱️` **Tempo conectado:** "
+                    f"`{formatar_hms(duracao) if duracao else '—'}`",
                 ],
                 cor=COR_AVISO,
                 url_do_avatar=membro.display_avatar.url,
@@ -519,10 +540,10 @@ class EventosAuditoriaCog(commands.Cog):
                 alvo_id=membro.id,
             )
             if executor is not None:
-                titulo = "🔍 🔁 Foi movido de call"
-                extra = [f"**Movido por:** {_mencao(executor)}"]
+                titulo = "🔁 Foi movido de call"
+                extra = [f"-  `👤` **Movido por:** {_mencao(executor)}"]
             else:
-                titulo = "🔍 🔄 Mudança de canal de voz"
+                titulo = "🔁 Se moveu de call"
                 extra = []
 
             await _publicar(
@@ -530,42 +551,77 @@ class EventosAuditoriaCog(commands.Cog):
                 "LOG_VOZ",
                 titulo=titulo,
                 linhas=[
-                    f"**Membro:** {_mencao(membro)}",
-                    f"**De:** {canal_antes.mention} --> **Para:** {canal_depois.mention}",
+                    f"-  `👤` **Membro:** {_mencao(membro)}",
+                    f"-  `⬅️` **De:** {canal_antes.mention} --> "
+                    f"`➡️` **Para:** {canal_depois.mention}",
                     *extra,
-                    "",
-                    f"**Data:** {_ts(agora)}",
+                    f"-  `📅` **Data:** {_ts(agora)}",
                 ],
                 cor=COR_INFO,
                 url_do_avatar=membro.display_avatar.url,
             )
 
         # Mute / surdez de servidor / stream
-        extras: list[str] = []
-        titulo_extra = None
         if antes.mute != depois.mute:
-            extras.append(
-                f"**Mute servidor:** {'mutado' if depois.mute else 'desmutado'}"
+            responsavel = await buscar_executor_no_audit_log(
+                membro.guild,
+                discord.AuditLogAction.member_update,
+                alvo_id=membro.id,
             )
-            titulo_extra = "🔍 🔇 Mute de servidor"
-        if antes.deaf != depois.deaf:
-            extras.append(
-                f"**Surdez servidor:** "
-                f"{'ensurdecido' if depois.deaf else 'desensurdecido'}"
+            estado = "mutado" if depois.mute else "desmutado"
+            titulo_mute = (
+                "🔇 Silenciar voz do servidor"
+                if depois.mute
+                else "🔊 Reativar voz do servidor"
             )
-            titulo_extra = "🔍 🔈 Surdez de servidor"
-        if antes.self_stream != depois.self_stream:
-            extras.append(
-                f"**Transmissão:** {'começou' if depois.self_stream else 'parou'}"
-            )
-            titulo_extra = "🔍 📺 Transmissão"
-
-        if titulo_extra and extras:
             await _publicar(
                 membro.guild,
                 "LOG_VOZ",
-                titulo=titulo_extra,
-                linhas=[f"**Membro:** {_mencao(membro)}", *extras],
+                titulo=titulo_mute,
+                linhas=[
+                    f"-  `👤` **Membro:** {_mencao(membro)}",
+                    f"-  `🔇` **Mute servidor:** {estado}",
+                    f"-  `👤` **Mutado por:** {_mencao(responsavel)}",
+                ],
+                cor=COR_AVISO,
+                url_do_avatar=membro.display_avatar.url,
+            )
+
+        if antes.deaf != depois.deaf:
+            responsavel = await buscar_executor_no_audit_log(
+                membro.guild,
+                discord.AuditLogAction.member_update,
+                alvo_id=membro.id,
+            )
+            estado = "ensurdecido" if depois.deaf else "desensurdecido"
+            titulo_surdez = (
+                "🙉 Desativar áudio do servidor"
+                if depois.deaf
+                else "👂 Reativar áudio do servidor"
+            )
+            await _publicar(
+                membro.guild,
+                "LOG_VOZ",
+                titulo=titulo_surdez,
+                linhas=[
+                    f"-  `👤` **Membro:** {_mencao(membro)}",
+                    f"-  `🙉` **Surdez servidor:** {estado}",
+                    f"-  `👤` **Alterado por:** {_mencao(responsavel)}",
+                ],
+                cor=COR_AVISO,
+                url_do_avatar=membro.display_avatar.url,
+            )
+
+        if antes.self_stream != depois.self_stream:
+            estado = "começou" if depois.self_stream else "parou"
+            await _publicar(
+                membro.guild,
+                "LOG_VOZ",
+                titulo="📺 Transmissão",
+                linhas=[
+                    f"-  `👤` **Membro:** {_mencao(membro)}",
+                    f"-  `📺` **Transmissão:** {estado}",
+                ],
                 cor=COR_INFO,
                 url_do_avatar=membro.display_avatar.url,
             )
@@ -591,14 +647,12 @@ class EventosAuditoriaCog(commands.Cog):
             await _publicar(
                 depois.guild,
                 "LOG_APELIDOS",
-                titulo="🔍 🪪 Apelido alterado",
+                titulo="🪪 Apelido alterado",
                 linhas=[
-                    f"**Membro:** {_mencao(depois)} **FID:** (`{fid}`)",
-                    "",
-                    f"**Antes:** `{antes.nick or '—'}`",
-                    f"**Depois:** `{depois.nick or '—'}`",
-                    "",
-                    f"**Alterado por:** {texto_executor}",
+                    f"-  `👤` **Membro:** {_mencao(depois)} **FID:** (`{fid}`)",
+                    f"-  `⬅️` **Antes:** `{antes.nick or '—'}`",
+                    f"-  `➡️` **Depois:** `{depois.nick or '—'}`",
+                    f"-  `👤` **Alterado por:** {texto_executor}",
                 ],
                 cor=COR_INFO,
                 url_do_avatar=depois.display_avatar.url,
@@ -687,19 +741,18 @@ class EventosAuditoriaCog(commands.Cog):
         await _publicar(
             membro.guild,
             "LOG_AVATARES",
-            titulo="🔍 🖼️ Avatar alterado",
+            titulo="🖼️ Avatar alterado",
             linhas=[
-                f"**Membro:** {_mencao(membro)}",
-                f"**Tipo:** {tipo}",
-                f"**Avatar atual:** [abrir]({url_nova})"
-                if url_nova
-                else "**Avatar atual:** —",
+                f"-  `👤` **Membro:** {_mencao(membro)}",
+                f"-  `📁` **Tipo:** {tipo}",
             ],
             cor=COR_INFO,
             url_do_avatar=url_nova,
             arquivos=arquivos or None,
             abrir_topico_para_anexos=bool(arquivos),
             nome_do_topico=f"avatar-antigo-{membro.id}"[:100],
+            url_do_link=url_nova,
+            rotulo_do_link="Abrir avatar atual",
         )
 
     # ── Entrada / saída de membros ───────────────────────────────────────
@@ -713,7 +766,7 @@ class EventosAuditoriaCog(commands.Cog):
         await _publicar(
             membro.guild,
             "LOG_MEMBROS",
-            titulo="🔍 📥 Membro entrou",
+            titulo="📥 Membro entrou",
             linhas=[
                 f"**Membro:** {_mencao(membro)} (`{membro.id}`)",
                 f"**FID:** (`{fid}`)",
@@ -736,7 +789,7 @@ class EventosAuditoriaCog(commands.Cog):
         await _publicar(
             guilda,
             "LOG_MODERACAO",
-            titulo="🔍 🔨 Ban",
+            titulo="🔨 Ban",
             linhas=[
                 f"**Membro:** {_mencao(usuario)}",
                 f"**Aplicado por:** {_mencao(executor)}",
@@ -755,7 +808,7 @@ class EventosAuditoriaCog(commands.Cog):
         await _publicar(
             guilda,
             "LOG_MODERACAO",
-            titulo="🔍 ♻️ Unban",
+            titulo="♻️ Unban",
             linhas=[
                 f"**Membro:** {_mencao(usuario)}",
                 f"**Removido por:** {_mencao(executor)}",
@@ -775,7 +828,7 @@ class EventosAuditoriaCog(commands.Cog):
         await _publicar(
             membro.guild,
             "LOG_MEMBROS",
-            titulo="🔍 📤 Membro saiu",
+            titulo="📤 Membro saiu",
             linhas=[
                 f"**Membro:** {_mencao(membro)} (`{membro.id}`)",
                 f"**FID:** (`{fid}`)",
@@ -796,7 +849,7 @@ class EventosAuditoriaCog(commands.Cog):
         await _publicar(
             membro.guild,
             "LOG_MODERACAO",
-            titulo="🔍 👢 Kick",
+            titulo="👢 Kick",
             linhas=[
                 f"**Membro:** {_mencao(membro)}",
                 f"**Aplicado por:** {_mencao(executor)}",
@@ -823,7 +876,7 @@ class EventosAuditoriaCog(commands.Cog):
                         await _publicar(
                             guilda,
                             "LOG_MODERACAO",
-                            titulo="🔍 ⏳ Timeout aplicado",
+                            titulo="⏳ Timeout aplicado",
                             linhas=[
                                 f"**Membro:** {_mencao(alvo)}",
                                 f"**Até:** {_ts(depois_v)}",
@@ -836,7 +889,7 @@ class EventosAuditoriaCog(commands.Cog):
                         await _publicar(
                             guilda,
                             "LOG_MODERACAO",
-                            titulo="🔍 ✅ Timeout removido",
+                            titulo="✅ Timeout removido",
                             linhas=[
                                 f"**Membro:** {_mencao(alvo)}",
                                 f"**Removido por:** {_mencao(executor)}",
