@@ -212,9 +212,7 @@ class EventosAuditoriaCog(commands.Cog):
         )
         categoria = canal.category
         if categoria is not None:
-            linha_cat = (
-                f"-  `📂` **Categoria:** {categoria.name} **ID:** (`{categoria.id}`)"
-            )
+            linha_cat = f"-  `📂` **Categoria:** {categoria.name} • (`{categoria.id}`)"
         else:
             linha_cat = "-  `📂` **Categoria:** —"
         await _publicar(
@@ -502,7 +500,7 @@ class EventosAuditoriaCog(commands.Cog):
                 linhas=[
                     f"-  `👤` **Membro:** {_mencao(membro)}",
                     f"-  `#️⃣` **Canal:** {canal_depois.mention} "
-                    f"**ID:** (`{canal_depois.id}`)",
+                    f" • (`{canal_depois.id}`)",
                     f"-  `➡️` **Entrada:** {_ts(agora)}",
                 ],
                 cor=COR_SUCESSO,
@@ -532,8 +530,7 @@ class EventosAuditoriaCog(commands.Cog):
                 titulo="🚪 Saída do canal de voz",
                 linhas=[
                     f"-  `👤` **Membro:** {_mencao(membro)}",
-                    f"-  `#️⃣` **Canal:** {canal_antes.mention} "
-                    f"**ID:** (`{canal_antes.id}`)",
+                    f"-  `#️⃣` **Canal:** {canal_antes.mention}  • (`{canal_antes.id}`)",
                     f"-  `➡️` **Entrou:** {_ts(entrou_em, 't') if entrou_em else '—'}",
                     f"-  `⬅️` **Saiu:** {_ts(agora, 't')}",
                     f"-  `⏱️` **Tempo conectado:** "
