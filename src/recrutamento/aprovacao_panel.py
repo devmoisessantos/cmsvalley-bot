@@ -32,7 +32,10 @@ from src.database.models import (
     Usuario,
 )
 from src.recrutamento.recrutamento_class import NovoRecrutamento
-from src.utils.error_handling import LoggingViewMixin, ignorar_falha_cosmetica
+from src.utils.error_handling import (
+    LoggingViewMixin,
+    ignorar_falha_cosmetica,
+)
 from src.utils.logger import (
     log_decisao,
     log_mudanca_cargo,

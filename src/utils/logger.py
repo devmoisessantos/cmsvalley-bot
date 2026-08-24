@@ -519,14 +519,94 @@ async def log_mudanca_cargo(
 
 async def log_decisao(
     guilda: discord.Guild,
+    canal_ou_chave=None,
     *,
-    titulo: str,
-    linhas: str | list[str],
+    titulo: str = "Decisão",
+    linhas: str | list[str] | None = None,
     chave_do_canal: str = "LOG_AUDITORIA_ADMIN",
     cor: discord.Color = COR_INFO,
     url_do_avatar: str | None = None,
+    # Assinatura antiga (recrutamento, etc.) — mantida para não quebrar
+    candidato: discord.abc.User | None = None,
+    executor: discord.abc.User | None = None,
+    cargo: str | None = None,
+    extra: str = "",
 ):
-    """Log genérico de decisão administrativa."""
+    """
+    Log de decisão administrativa.
+
+    Duas formas de uso:
+
+    1) Nova (genérica)::
+
+        await log_decisao(guilda, titulo="...", linhas=[...], chave_do_canal="LOG_...")
+
+    2) Antiga (recrutamento / aprovação)::
+
+        await log_decisao(
+            guilda,
+            CANAIS["LOG_APROVACOES"],  # id do canal
+            titulo="✅ Candidato Aprovado",
+            candidato=membro,
+            executor=staff,
+            cargo="@Enfermeiro",
+            extra="Nota: 90%",
+            cor=discord.Color.green(),
+        )
+    """
+    # Resolve canal: id numérico antigo OU chave em CANAIS
+    id_do_canal = 0
+    if isinstance(canal_ou_chave, int):
+        id_do_canal = int(canal_ou_chave)
+    elif isinstance(canal_ou_chave, str) and canal_ou_chave.isdigit():
+        id_do_canal = int(canal_ou_chave)
+    elif isinstance(canal_ou_chave, str) and canal_ou_chave in CANAIS:
+        chave_do_canal = canal_ou_chave
+    # senão mantém chave_do_canal padrão / informada
+
+    # Monta linhas no formato antigo quando não vierem prontas
+    if linhas is None:
+        partes: list[str] = []
+        if candidato is not None:
+            partes.append(f"- **Membro:** {candidato.mention} (`{candidato.id}`)")
+        if cargo:
+            partes.append(f"- **Cargo:** {cargo}")
+        if executor is not None:
+            partes.append(f"- **Por:** {executor.mention}")
+        if extra:
+            partes.append(f"- {extra}")
+        linhas = partes if partes else ["_sem detalhes_"]
+        if url_do_avatar is None and candidato is not None:
+            avatar = getattr(candidato, "display_avatar", None)
+            if avatar is not None:
+                url_do_avatar = avatar.url
+
+    # Envio por ID direto (assinatura antiga com CANAIS["LOG_..."])
+    if id_do_canal > 0:
+        canal = guilda.get_channel(id_do_canal)
+        if canal is None:
+            try:
+                canal = await guilda.fetch_channel(id_do_canal)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                registrador.warning("log_decisao: canal %s não encontrado", id_do_canal)
+                return
+        if isinstance(linhas, list):
+            texto = "\n".join(linhas)
+        else:
+            texto = linhas
+        view_do_log = LogContainerView(
+            titulo=titulo,
+            linhas=texto,
+            guild=guilda,
+            cor=cor,
+            avatar_url=url_do_avatar,
+        )
+        try:
+            await canal.send(view=view_do_log)
+        except (discord.Forbidden, discord.HTTPException) as erro:
+            registrador.warning("log_decisao falhou no canal %s: %s", id_do_canal, erro)
+        return
+
     await publicar_log_auditoria(
         guilda,
         chave_do_canal,
