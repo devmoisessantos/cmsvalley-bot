@@ -99,12 +99,14 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
     """Painel persistente no canal CANAL_REGISTRAR_AUSENCIA."""
 
     def __init__(self, guilda: discord.Guild | None = None):
+        """
+        Monta o painel com estrutura FIXA.
+
+        A árvore de componentes precisa ser a mesma no envio e no add_view
+        após o restart. Por isso o título é sempre TextDisplay.
+        """
         super().__init__(timeout=None)
         self.guild_ref = guilda
-
-        url_icone = None
-        if guilda is not None and guilda.icon is not None:
-            url_icone = guilda.icon.url
 
         componentes: list = []
         titulo = (
@@ -114,15 +116,8 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
             "Diretoria.\n"
             "Caso tenha dúvidas, entre em contato com os Gerais!"
         )
-        if url_icone:
-            componentes.append(
-                discord.ui.Section(
-                    titulo,
-                    accessory=discord.ui.Thumbnail(url_icone),
-                )
-            )
-        else:
-            componentes.append(discord.ui.TextDisplay(titulo))
+        # Sempre TextDisplay — estrutura idêntica em todo restart
+        componentes.append(discord.ui.TextDisplay(titulo))
 
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from src.config import (
     CARGOS,
     CARGOS_PUNICOES,
+    META_PROMOCAO_MARGEM,
     TRILHAS_PROMOCAO,
 )
 from src.cursos.cursos_service import (
@@ -181,6 +182,7 @@ def montar_checklist_trilha(
     trilha: dict,
     *,
     segundos_plantao: int | None = None,
+    contagens_extras: dict | None = None,
 ) -> dict:
     """
     Avalia requisitos e monta o corpo do CardView em seções.
@@ -258,6 +260,10 @@ def montar_checklist_trilha(
     bloco_plantao: list[str] = ["## ⏱️ Horas de Plantão"]
     segundos_minimos = int(trilha.get("segundos_minimos_plantao") or 0)
     total_seg = int(segundos_plantao or 0)
+    margem = float(META_PROMOCAO_MARGEM or 1.0)
+    if margem <= 0 or margem > 1:
+        margem = 1.0
+    minimo_aceitavel = int(segundos_minimos * margem)
 
     if segundos_minimos > 0:
         if total_seg >= segundos_minimos:
@@ -265,30 +271,64 @@ def montar_checklist_trilha(
                 f"- ✅ **Plantão completo:** `{formatar_hms(total_seg)}` "
                 f"(mínimo `{formatar_hms(segundos_minimos)}`)"
             )
+        elif total_seg >= minimo_aceitavel:
+            bloco_plantao.append(
+                f"- ✅ **Plantão próximo da meta:** `{formatar_hms(total_seg)}` "
+                f"(meta `{formatar_hms(segundos_minimos)}`, "
+                f"aceito a partir de `{formatar_hms(minimo_aceitavel)}`)"
+            )
         else:
             pode_enviar = False
-            falta = max(0, segundos_minimos - total_seg)
+            falta = max(0, minimo_aceitavel - total_seg)
             bloco_plantao.append(
                 f"- ❌ **Plantão incompleto:** `{formatar_hms(total_seg)}` de "
                 f"`{formatar_hms(segundos_minimos)}` exigidas"
             )
             bloco_plantao.append(
-                f"- ⚠️ Tempo restante: **{_formatar_falta_legivel(falta)}** "
-                "em chamada com plantão ativo"
-            )
-            bloco_plantao.append(
-                "> 🔔 Permaneça em call válida até atingir o tempo mínimo."
+                f"- ⚠️ Faltam **{_formatar_falta_legivel(falta)}** "
+                f"para atingir a margem de {int(margem * 100)}%"
             )
             pendencias.append(
                 f"Completar o tempo de plantão (faltam "
-                f"**{_formatar_falta_legivel(falta)}"
-                f"**)"
+                f"**{_formatar_falta_legivel(falta)}**)"
             )
     else:
         bloco_plantao.append(
             f"- ℹ️ Banco de horas registrado: `{formatar_hms(total_seg)}` "
             "(sem mínimo nesta trilha)"
         )
+
+    # ── Outras metas (config por trilha) ────────────────────────────
+    bloco_metas: list[str] = ["## 🎯 Metas da Trilha"]
+    contagens = contagens_extras or {}
+    teve_meta_extra = False
+    for chave_meta, rotulo_meta in (
+        ("meta_laudos", "Laudos"),
+        ("meta_recrutamentos", "Recrutamentos"),
+        ("meta_chamadas", "Chamadas"),
+        ("meta_cursos_aplicados", "Cursos aplicados"),
+    ):
+        exigido = int(trilha.get(chave_meta) or 0)
+        if exigido <= 0:
+            continue
+        teve_meta_extra = True
+        atual = int(contagens.get(chave_meta, 0) or 0)
+        minimo_meta = int(exigido * margem)
+        if atual >= exigido:
+            bloco_metas.append(f"- ✅ **{rotulo_meta}:** `{atual}` (meta `{exigido}`)")
+        elif atual >= minimo_meta:
+            bloco_metas.append(
+                f"- ✅ **{rotulo_meta} (próximo):** `{atual}` "
+                f"(meta `{exigido}`, aceito `{minimo_meta}`+)"
+            )
+        else:
+            pode_enviar = False
+            bloco_metas.append(f"- ❌ **{rotulo_meta}:** `{atual}` de `{exigido}`")
+            pendencias.append(
+                f"Atingir meta de {rotulo_meta.lower()} ({atual}/{exigido})"
+            )
+    if not teve_meta_extra:
+        bloco_metas.append("- ℹ️ Nenhuma meta extra configurada nesta trilha")
 
     observacao = (trilha.get("observacao") or "").strip()
     if observacao:
@@ -311,7 +351,13 @@ def montar_checklist_trilha(
             )
 
     linhas: list[str] = []
-    for bloco in (bloco_situacao, bloco_cursos, bloco_plantao, bloco_resumo):
+    for bloco in (
+        bloco_situacao,
+        bloco_cursos,
+        bloco_plantao,
+        bloco_metas,
+        bloco_resumo,
+    ):
         if linhas:
             linhas.append("")  # espaço entre seções
         linhas.extend(bloco)
@@ -332,16 +378,106 @@ def montar_checklist_trilha(
     }
 
 
+async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
+    """
+    Conta laudos, recrutamentos, chamadas e cursos aplicados do membro.
+
+    Usa o ORM (sem SQL solto). Valores 0 quando a tabela não tiver registros.
+    """
+    from sqlalchemy import (
+        func,
+        select,
+    )
+
+    from src.database.conexao import async_session
+    from src.database.models import (
+        Recrutamento,
+        SolicitacaoCurso,
+    )
+
+    contagens = {
+        "meta_laudos": 0,
+        "meta_recrutamentos": 0,
+        "meta_chamadas": 0,
+        "meta_cursos_aplicados": 0,
+    }
+
+    try:
+        from src.laudos.laudos_service import contar_laudos_psicologo
+
+        contagens["meta_laudos"] = int(await contar_laudos_psicologo(discord_id) or 0)
+    except Exception:
+        pass
+
+    async with async_session() as sessao:
+        # Recrutamentos em que a pessoa foi o recrutador e aprovou
+        try:
+            resultado = await sessao.execute(
+                select(func.count())
+                .select_from(Recrutamento)
+                .where(
+                    Recrutamento.discord_id_recrutador == discord_id,
+                    Recrutamento.status == "APROVADO",
+                )
+            )
+            contagens["meta_recrutamentos"] = int(resultado.scalar() or 0)
+        except Exception:
+            pass
+
+        # Cursos em que atuou como instrutor e concluiu
+        try:
+            resultado = await sessao.execute(
+                select(func.count())
+                .select_from(SolicitacaoCurso)
+                .where(
+                    SolicitacaoCurso.instrutor_id == discord_id,
+                    SolicitacaoCurso.status.in_(
+                        ["CONCLUIDO", "APROVADO", "FINALIZADO"]
+                    ),
+                )
+            )
+            contagens["meta_cursos_aplicados"] = int(resultado.scalar() or 0)
+        except Exception:
+            pass
+
+        # Chamadas: tenta modelo de presença se existir
+        try:
+            from src.database.models import RegistroChamada
+
+            resultado = await sessao.execute(
+                select(func.count())
+                .select_from(RegistroChamada)
+                .where(RegistroChamada.discord_id == discord_id)
+            )
+            contagens["meta_chamadas"] = int(resultado.scalar() or 0)
+        except Exception:
+            try:
+                from src.database.models import PresencaChamada
+
+                resultado = await sessao.execute(
+                    select(func.count())
+                    .select_from(PresencaChamada)
+                    .where(PresencaChamada.discord_id == discord_id)
+                )
+                contagens["meta_chamadas"] = int(resultado.scalar() or 0)
+            except Exception:
+                pass
+
+    return contagens
+
+
 async def montar_checklist_trilha_async(
     membro: discord.Member,
     trilha: dict,
 ) -> dict:
-    """Checklist completo consultando o banco de horas do plantão."""
+    """Checklist completo: horas + metas configuradas na trilha."""
     segundos = await obter_segundos_plantao_totais(membro.id)
+    contagens = await _contar_metas_do_membro(membro.id)
     return montar_checklist_trilha(
         membro,
         trilha,
         segundos_plantao=segundos,
+        contagens_extras=contagens,
     )
 
 

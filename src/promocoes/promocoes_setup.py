@@ -7,7 +7,10 @@ import logging
 import discord
 from sqlalchemy import select
 
-from src.config import CANAIS, GUILD_ID
+from src.config import (
+    CANAIS,
+    GUILD_ID,
+)
 from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.promocoes.promocoes_views import PainelPromocaoLayout

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -13,6 +15,8 @@ from src.ausencia.ausencia_panel import (
     CUSTOM_ID_APROVAR_RETORNO,
     CUSTOM_ID_REPROVAR,
     CUSTOM_ID_REPROVAR_RETORNO,
+    CUSTOM_ID_RETORNAR,
+    CUSTOM_ID_SOLICITAR,
     PainelAusenciaLayout,
     processar_decisao_ausencia,
     processar_decisao_retorno,
@@ -27,12 +31,31 @@ from src.utils.mensagens import (
 )
 from src.utils.permissions import is_authorized
 
+registrador = logging.getLogger(__name__)
+
 
 class AusenciaCogs(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Painel persistente (botão fixo)
-        self.bot.add_view(PainelAusenciaLayout())
+
+    async def cog_load(self) -> None:
+        """Registra o painel persistente assim que o cog sobe."""
+        self._registrar_painel_persistente()
+
+    def _registrar_painel_persistente(self) -> None:
+        """
+        add_view com a MESMA estrutura de componentes da mensagem publicada.
+
+        Sem guilda no construtor (título sempre TextDisplay), para o Discord
+        reconhecer os custom_id após restart/deploy.
+        """
+        view = PainelAusenciaLayout(guilda=None)
+        self.bot.add_view(view)
+        registrador.info(
+            "Painel de ausência registrado (custom_id %s / %s)",
+            CUSTOM_ID_SOLICITAR,
+            CUSTOM_ID_RETORNAR,
+        )
 
     @app_commands.command(
         name="painel-ausencia",
@@ -40,19 +63,12 @@ class AusenciaCogs(commands.Cog):
     )
     @app_commands.default_permissions(administrator=True)
     async def painel_ausencia(self, interacao: discord.Interaction):
-        """Força uma nova publicação do painel sem duplicar seu registro de controle.
-
-        Remove a referência persistida anterior antes de chamar a garantia de
-        publicação. Isso é útil para recuperar um painel apagado ou atualizado,
-        mantendo a mensagem de confirmação visível apenas ao administrador.
-        """
+        """Republica o painel e re-registra a view persistente."""
         if not is_authorized(interacao.user):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
-                linhas=[
-                    "Sem permissão.",
-                ],
+                linhas=["Sem permissão."],
             )
             return
         await interacao.response.defer(ephemeral=True)
@@ -67,6 +83,8 @@ class AusenciaCogs(commands.Cog):
                 await sessao.commit()
 
         await garantir_painel_ausencia(self.bot, interacao)
+        self._registrar_painel_persistente()
+
         canal_id = CANAIS.get("CANAL_REGISTRAR_AUSENCIA") or 0
         await responder_sucesso(
             interacao,
@@ -81,11 +99,30 @@ class AusenciaCogs(commands.Cog):
 
     @commands.Cog.listener()
     async def on_interaction(self, interacao: discord.Interaction):
-        """Botões de aprovar/recusar (ausência e retorno) após restart."""
+        """
+        Botões dinâmicos (aprovar/recusar) e fallback do painel principal.
+
+        Após restart o Discord ainda entrega o clique; este listener garante
+        que custom_id dinâmicos continuem funcionando sem add_view por pedido.
+        """
         if interacao.type is not discord.InteractionType.component:
             return
         data = interacao.data or {}
         custom_id = str(data.get("custom_id") or "")
+
+        # Painel principal — fallback se a LayoutView não capturou
+        if custom_id == CUSTOM_ID_SOLICITAR:
+            if interacao.response.is_done():
+                return
+            view = PainelAusenciaLayout(guilda=interacao.guild)
+            await view._ao_solicitar(interacao)
+            return
+        if custom_id == CUSTOM_ID_RETORNAR:
+            if interacao.response.is_done():
+                return
+            view = PainelAusenciaLayout(guilda=interacao.guild)
+            await view._ao_retornar(interacao)
+            return
 
         # Retorno precisa vir antes de "ausencia:aprovar:" (prefixo comum)
         if custom_id.startswith(CUSTOM_ID_APROVAR_RETORNO):
