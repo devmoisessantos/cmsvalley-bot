@@ -18,10 +18,7 @@ uma data com fuso com outra sem fuso quebra em Python, e esse erro aparecia na
 virada do dia.
 """
 
-from datetime import (
-    datetime,
-    timezone,
-)
+from datetime import datetime, timezone
 
 import discord
 from sqlalchemy import select
@@ -38,10 +35,7 @@ from src.database.conexao import async_session
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_logger import registrar_evento_plantao
 from src.utils.error_handling import capturar_erro_e_logar
-from src.utils.formatacao import (
-    formatar_dinheiro,
-    formatar_reais,
-)
+from src.utils.formatacao import formatar_dinheiro, formatar_reais
 
 
 def garantir_aware(data_e_hora: datetime) -> datetime:
@@ -389,6 +383,99 @@ def retomar_cronometro_moeda(estado: EstadoPlantao) -> None:
 # ---------------------------------------------------------------------------
 # Administração de estado (comandos /plantao)
 # ---------------------------------------------------------------------------
+
+
+def calcular_segundos_do_segmento_aberto(estado: EstadoPlantao | None) -> int:
+    """
+    Segundos do trecho ainda aberto (segmento_iniciado_em → agora).
+
+    Só conta se o cronômetro está rodando: em call válida e sem pausa
+    (surdo). Quem está pausado tem segmento_iniciado_em = None e devolve 0.
+    """
+    if estado is None:
+        return 0
+    if not estado.toggle_ligado:
+        return 0
+    if estado.segmento_iniciado_em is None:
+        return 0
+
+    inicio_do_segmento = garantir_aware(estado.segmento_iniciado_em)
+    decorrido = int((datetime.now(timezone.utc) - inicio_do_segmento).total_seconds())
+    if decorrido < 0:
+        return 0
+    return decorrido
+
+
+async def calcular_segundos_historico_fechado(discord_id: int) -> int:
+    """
+    Soma só o tempo já gravado em log (segmentos fechados).
+
+    Não inclui o trecho ainda aberto em call. O total sobe quando o membro
+    sai da call ou encerra o serviço — aí o segmento vira log.
+    """
+    from sqlalchemy import func
+
+    from src.database.models import LogPlantao
+
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
+                LogPlantao.discord_id == discord_id,
+                LogPlantao.duracao_segundos.is_not(None),
+                LogPlantao.duracao_segundos > 0,
+            )
+        )
+        return int(resultado.scalar_one() or 0)
+
+
+async def calcular_segundos_plantao_atual(
+    discord_id: int,
+    estado: EstadoPlantao | None,
+) -> int:
+    """
+    Tempo contado no plantão atual (desde o último TOGGLE_ON).
+
+    - Logs fechados depois do último entrar em serviço
+    - Mais o segmento ainda aberto (se o cronômetro estiver rodando)
+
+    Pausa (surdo) zera o segmento aberto: o tempo para de crescer até
+    retomar. Fora de serviço devolve 0.
+    """
+    from sqlalchemy import func
+
+    from src.database.models import LogPlantao
+
+    if estado is None or not estado.toggle_ligado:
+        return 0
+
+    async with async_session() as sessao:
+        resultado_toggle = await sessao.execute(
+            select(LogPlantao.criado_em)
+            .where(
+                LogPlantao.discord_id == discord_id,
+                LogPlantao.evento == "TOGGLE_ON",
+            )
+            .order_by(LogPlantao.criado_em.desc())
+            .limit(1)
+        )
+        inicio_do_plantao = resultado_toggle.scalar_one_or_none()
+
+        if inicio_do_plantao is None:
+            segundos_fechados = 0
+        else:
+            inicio_aware = garantir_aware(inicio_do_plantao)
+            resultado_soma = await sessao.execute(
+                select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
+                    LogPlantao.discord_id == discord_id,
+                    LogPlantao.duracao_segundos.is_not(None),
+                    LogPlantao.duracao_segundos > 0,
+                    LogPlantao.criado_em >= inicio_aware,
+                )
+            )
+            segundos_fechados = int(resultado_soma.scalar_one() or 0)
+
+    segundos_abertos = calcular_segundos_do_segmento_aberto(estado)
+    return segundos_fechados + segundos_abertos
 
 
 async def consultar_estado_plantao(discord_id: int) -> EstadoPlantao | None:

@@ -259,10 +259,25 @@ class PlantaoTasks(commands.Cog):
                         continue
 
                     # Está surdo: garante que o cronômetro de moeda está pausado
+                    # e grava o trecho no log (sem isso o tempo some do ciclo).
                     if estado.segmento_iniciado_em is not None:
-                        pausar_cronometro_moeda(
-                            estado, motivo="Surdo detectado no loop AFK"
+                        segundos_fechados = pausar_cronometro_moeda(
+                            estado,
+                            motivo="Surdo detectado no loop AFK",
                         )
+                        if segundos_fechados > 0:
+                            await registrar_evento_plantao(
+                                guild,
+                                estado.discord_id,
+                                "MOEDA_PAUSADA",
+                                estado.id_fivem,
+                                canal_id=estado.canal_atual_id,
+                                duracao_segundos=segundos_fechados,
+                                detalhes=(
+                                    "Surdo detectado no loop AFK — "
+                                    "tempo não conta para moeda"
+                                ),
+                            )
 
                     if (
                         estado.afk_mudo_surdo_desde is None

@@ -4,18 +4,18 @@ Painel de plantao: bater ponto de entrada e de saida.
 E o painel que o membro mais usa no servidor. Tem tres partes:
 - `PainelPlantaoLayout`: o card fixo do canal, com os botoes.
 - `AcaoServicoView`: a confirmacao depois do clique.
-- `InformacoesPlantaoView`: o resumo de horas da pessoa.
+- `InformacoesPlantaoView`: o resumo de horas da pessoa, com tempo do
+  plantao atual atualizado ao vivo enquanto o card estiver aberto.
 
 `ModalInformarIDFivem` aparece quando o bot ainda nao sabe o ID FiveM de quem
 esta batendo ponto. Sem esse ID, a hora nao pode ser lancada, por isso o
 formulario e obrigatorio antes de continuar.
 """
 
+from __future__ import annotations
+
+import asyncio
 import logging
-from datetime import (
-    datetime,
-    timezone,
-)
 
 import discord
 from sqlalchemy import select
@@ -29,8 +29,9 @@ from src.config import (
 from src.database.conexao import async_session
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_service import (
+    calcular_segundos_historico_fechado,
+    calcular_segundos_plantao_atual,
     desligar_servico,
-    garantir_aware,
     ligar_servico,
     membro_pode_informar_id_manualmente,
     solicitar_troca_moedas,
@@ -54,6 +55,11 @@ from src.utils.mensagens import (
     responder_sucesso,
     responder_view,
 )
+
+# Intervalo do refresh ao vivo do card de informações (segundos).
+# 1s atende o pedido de "segundo a segundo"; se o Discord limitar a edição,
+# o loop engole o 429 e tenta de novo no próximo ciclo.
+INTERVALO_ATUALIZACAO_AO_VIVO_SEGUNDOS = 1
 
 logger = logging.getLogger(__name__)
 
@@ -129,12 +135,25 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
             )
         else:
             novo_estado = await _buscar_estado(self.membro.id)
-            nova_view = InformacoesPlantaoView(self.membro, novo_estado)
+            tempo_ciclo = await calcular_segundos_plantao_atual(
+                self.membro.id,
+                novo_estado,
+            )
+            tempo_total = await calcular_segundos_historico_fechado(
+                self.membro.id
+            )
+            nova_view = InformacoesPlantaoView(
+                self.membro,
+                novo_estado,
+                tempo_total_segundos=tempo_total,
+                tempo_ciclo_segundos=tempo_ciclo,
+            )
             await responder_view(
                 interaction,
                 nova_view,
                 ephemeral=True,
-            )  # 👈 sem "resultado_texto" no content
+            )
+            nova_view.iniciar_atualizacao_ao_vivo(interaction)
 
 
 class AcaoServicoView(LoggingViewMixin, discord.ui.LayoutView):
@@ -340,25 +359,24 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         return botao
 
     async def _ao_ver_informacoes(self, interaction: discord.Interaction):
-        from sqlalchemy import func
-
-        from src.database.models import LogPlantao
-
         estado = await _buscar_estado(interaction.user.id)
-        async with async_session() as session:
-            resultado_da_consulta = await session.execute(
-                select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
-                    LogPlantao.discord_id == interaction.user.id,
-                    LogPlantao.duracao_segundos.is_not(None),
-                )
-            )
-            tempo_total = int(resultado_da_consulta.scalar_one() or 0)
-        view = InformacoesPlantaoView(interaction.user, estado, tempo_total)
+        tempo_ciclo = await calcular_segundos_plantao_atual(
+            interaction.user.id,
+            estado,
+        )
+        tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
+        view = InformacoesPlantaoView(
+            interaction.user,
+            estado,
+            tempo_total_segundos=tempo_total,
+            tempo_ciclo_segundos=tempo_ciclo,
+        )
         await responder_view(
             interaction,
             view,
             ephemeral=True,
         )
+        view.iniciar_atualizacao_ao_vivo(interaction)
 
 
 async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
@@ -372,6 +390,10 @@ async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
 class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
     """
     Status pessoal do plantão — sem coordenação/chamada (isso vive em outros canais).
+
+    Enquanto o membro está em serviço, o card é republicado a cada segundo com
+    o tempo do plantão atual (segmento aberto + logs do serviço). O histórico
+    só muda quando um segmento fecha (sair da call ou do serviço).
     """
 
     def __init__(
@@ -379,38 +401,70 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         membro: discord.Member,
         estado: EstadoPlantao | None,
         tempo_total_segundos: int = 0,
+        tempo_ciclo_segundos: int = 0,
     ):
-        super().__init__(timeout=180)
+        super().__init__(timeout=300)
         self.membro = membro
+        self.estado = estado
+        self.tempo_total_segundos = int(tempo_total_segundos or 0)
+        self.tempo_ciclo_segundos = int(tempo_ciclo_segundos or 0)
+        self._tarefa_ao_vivo: asyncio.Task | None = None
+        self._interacao_ao_vivo: discord.Interaction | None = None
+        self._parar_atualizacao = False
 
+        self._montar_conteudo()
+
+    def _montar_conteudo(self) -> None:
+        """
+        Reconstrói o container com os tempos atuais.
+
+        LayoutView não permite trocar itens depois de criado com a mesma
+        facilidade de um View clássico; por isso o loop ao vivo monta uma
+        view nova a cada tick. Este método serve à montagem inicial.
+        """
+        # Limpa itens anteriores se houver reuso
+        for item in list(self.children):
+            self.remove_item(item)
+
+        estado = self.estado
         online = estado is not None and estado.toggle_ligado
         saldo = estado.saldo_moedas if estado else 0
-        segundos_ciclo = estado.segundos_acumulados if estado else 0
 
         linha_call = None
-        tempo_call = 0
-        if online and estado.em_call_valida and estado.call_entrada_em:
-            entrada = garantir_aware(estado.call_entrada_em)
-            tempo_call = int((datetime.now(timezone.utc) - entrada).total_seconds())
-            status_texto = f"🟢 Em Serviço (nesta call: {formatar_hms(tempo_call)})"
-            nome_call = NOMES_CANAIS_PLANTAO.get(estado.canal_atual_id, "Desconhecida")
+        if online and estado.em_call_valida:
+            cronometro_rodando = estado.segmento_iniciado_em is not None
+            if cronometro_rodando:
+                status_texto = (
+                    "🟢 Em Serviço (cronômetro rodando nesta call)"
+                )
+            else:
+                status_texto = (
+                    "🟡 Em Serviço (cronômetro pausado — surdo / AFK)"
+                )
+            nome_call = NOMES_CANAIS_PLANTAO.get(
+                estado.canal_atual_id,
+                "Desconhecida",
+            )
             linha_call = f"`📍` Você está em call de plantão: **{nome_call}**"
         elif online:
             status_texto = "🟢 Em Serviço (aguardando conexão em uma call)"
             linha_call = "`📍` Nenhuma call conectada — selecione uma abaixo"
         else:
             status_texto = (
-                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
+                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o '
+                "cronômetro)"
             )
 
         linhas = (
             f"`⏱️` **Status:** {status_texto}\n"
-            f"`⏳` **Tempo do ciclo:** `{formatar_hms(segundos_ciclo + tempo_call)}`\n"
+            f"`⏳` **Tempo do ciclo:** "
+            f"`{formatar_hms(self.tempo_ciclo_segundos)}`\n"
             f"`🗓️` **Tempo total (histórico):** "
-            f"`{formatar_hms(tempo_total_segundos)}`\n"
+            f"`{formatar_hms(self.tempo_total_segundos)}`\n"
             f"`💰` **Moedas (saldo):** **{saldo}** "
             f"({formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
-            f"`💵` **Valor por moeda:** {formatar_dinheiro(VALOR_MOEDA_INGAME)} / 30 min"
+            f"`💵` **Valor por moeda:** "
+            f"{formatar_dinheiro(VALOR_MOEDA_INGAME)} / 30 min"
         )
         if linha_call:
             linhas += f"\n{linha_call}"
@@ -418,11 +472,13 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         row_botao = discord.ui.ActionRow()
         if online:
             botao = discord.ui.Button(
-                label="🔴 Sair do Serviço", style=discord.ButtonStyle.danger
+                label="🔴 Sair do Serviço",
+                style=discord.ButtonStyle.danger,
             )
         else:
             botao = discord.ui.Button(
-                label="🟢 Entrar em Serviço", style=discord.ButtonStyle.success
+                label="🟢 Entrar em Serviço",
+                style=discord.ButtonStyle.success,
             )
         botao.callback = self._ao_toggle
         row_botao.add_item(botao)
@@ -435,12 +491,14 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         botao_carteira.callback = self._ao_carteira
         row_botao.add_item(botao_carteira)
 
-        avatar_url = membro.display_avatar.url
-        componentes = [
-            discord.ui.Section(
-                f"# 🛡️ Plantão — {membro.display_name}\n{linhas}",
-                accessory=discord.ui.Thumbnail(avatar_url),
-            ),
+        url_do_avatar = self.membro.display_avatar.url
+        secao = discord.ui.Section(
+            f"# 🛡️ Plantão — {self.membro.display_name}\n{linhas}",
+            accessory=discord.ui.Thumbnail(url_do_avatar),
+        )
+
+        componentes: list = [
+            secao,
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             row_botao,
         ]
@@ -459,25 +517,148 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
     def _select_calls(self) -> discord.ui.Select:
         opcoes = [
             discord.SelectOption(
-                label=NOMES_CANAIS_PLANTAO[canal_id], value=str(canal_id)
+                label=NOMES_CANAIS_PLANTAO[canal_id],
+                value=str(canal_id),
             )
             for canal_id in obter_ids_canais_plantao_em_ordem()
         ]
         select_menu = discord.ui.Select(
-            placeholder="📍 Clique aqui para trocar de call", options=opcoes
+            placeholder="📍 Clique aqui para trocar de call",
+            options=opcoes,
         )
         select_menu.callback = self._ao_selecionar_call
         return select_menu
+
+    def iniciar_atualizacao_ao_vivo(
+        self,
+        interacao: discord.Interaction,
+    ) -> None:
+        """
+        Liga o loop que republica o card a cada segundo enquanto em serviço.
+
+        Fora de serviço o ciclo já está fechado; não há o que atualizar ao vivo.
+        """
+        em_servico = self.estado is not None and self.estado.toggle_ligado
+        if not em_servico:
+            return
+
+        self._interacao_ao_vivo = interacao
+        self._parar_atualizacao = False
+        if self._tarefa_ao_vivo is not None and not self._tarefa_ao_vivo.done():
+            self._tarefa_ao_vivo.cancel()
+        self._tarefa_ao_vivo = asyncio.create_task(
+            self._loop_atualizacao_ao_vivo()
+        )
+
+    def _parar_loop_ao_vivo(self) -> None:
+        self._parar_atualizacao = True
+        if self._tarefa_ao_vivo is not None and not self._tarefa_ao_vivo.done():
+            self._tarefa_ao_vivo.cancel()
+        self._tarefa_ao_vivo = None
+
+    async def _loop_atualizacao_ao_vivo(self) -> None:
+        """
+        Atualiza o card enquanto o membro está em serviço e a view viva.
+
+        Fora de serviço o histórico já está fechado e o ciclo fica em zero;
+        o loop para sozinho. Em serviço, relê o estado e recalcula os tempos.
+        """
+        try:
+            while not self._parar_atualizacao:
+                await asyncio.sleep(INTERVALO_ATUALIZACAO_AO_VIVO_SEGUNDOS)
+
+                if self._parar_atualizacao:
+                    return
+                if self._interacao_ao_vivo is None:
+                    return
+
+                estado = await _buscar_estado(self.membro.id)
+                if estado is None or not estado.toggle_ligado:
+                    # Saiu de serviço por outro caminho: um último refresh e para
+                    tempo_total = await calcular_segundos_historico_fechado(
+                        self.membro.id
+                    )
+                    nova_view = InformacoesPlantaoView(
+                        self.membro,
+                        estado,
+                        tempo_total_segundos=tempo_total,
+                        tempo_ciclo_segundos=0,
+                    )
+                    try:
+                        await editar_mensagem_original(
+                            self._interacao_ao_vivo,
+                            view=nova_view,
+                        )
+                    except (discord.HTTPException, discord.NotFound):
+                        return
+                    return
+
+                tempo_ciclo = await calcular_segundos_plantao_atual(
+                    self.membro.id,
+                    estado,
+                )
+                # Histórico só com segmentos fechados (não cresce no segundo)
+                tempo_total = await calcular_segundos_historico_fechado(
+                    self.membro.id
+                )
+                nova_view = InformacoesPlantaoView(
+                    self.membro,
+                    estado,
+                    tempo_total_segundos=tempo_total,
+                    tempo_ciclo_segundos=tempo_ciclo,
+                )
+                # Transfere o controle do loop para a view nova
+                nova_view._interacao_ao_vivo = self._interacao_ao_vivo
+                nova_view._tarefa_ao_vivo = self._tarefa_ao_vivo
+                try:
+                    await editar_mensagem_original(
+                        self._interacao_ao_vivo,
+                        view=nova_view,
+                    )
+                except discord.NotFound:
+                    return
+                except discord.HTTPException as erro_http:
+                    # Rate limit ou falha transitória: tenta de novo no próximo tick
+                    logger.warning(
+                        "Falha ao atualizar card de plantao ao vivo de %s: %s",
+                        self.membro.id,
+                        erro_http,
+                    )
+                    continue
+
+                # Continua o loop na view antiga (mesma task); a mensagem já
+                # mostra a view nova, mas o callback dos botões dela é que vale.
+                # Para o próximo tick, lemos de novo do banco — não precisamos
+                # trocar a task.
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception(
+                "Loop ao vivo do plantao encerrou com erro para %s",
+                self.membro.id,
+            )
+
+    async def on_timeout(self) -> None:
+        self._parar_loop_ao_vivo()
 
     async def _ao_toggle(self, interaction: discord.Interaction):
         estado_antes = await _buscar_estado(interaction.user.id)
         ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
 
         if ja_ligado:
+            self._parar_loop_ao_vivo()
             await interaction.response.defer(ephemeral=True)
             await desligar_servico(interaction.user)
             novo_estado = await _buscar_estado(interaction.user.id)
-            nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+            tempo_total = await calcular_segundos_historico_fechado(
+                interaction.user.id
+            )
+            nova_view = InformacoesPlantaoView(
+                interaction.user,
+                novo_estado,
+                tempo_total_segundos=tempo_total,
+                tempo_ciclo_segundos=0,
+            )
             await editar_mensagem_original(
                 interaction,
                 view=nova_view,
@@ -501,14 +682,26 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
+        self._parar_loop_ao_vivo()
         await interaction.response.defer(ephemeral=True)
         await ligar_servico(interaction.user, id_fivem)
         novo_estado = await _buscar_estado(interaction.user.id)
-        nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+        tempo_ciclo = await calcular_segundos_plantao_atual(
+            interaction.user.id,
+            novo_estado,
+        )
+        tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
+        nova_view = InformacoesPlantaoView(
+            interaction.user,
+            novo_estado,
+            tempo_total_segundos=tempo_total,
+            tempo_ciclo_segundos=tempo_ciclo,
+        )
         await editar_mensagem_original(
             interaction,
             view=nova_view,
         )
+        nova_view.iniciar_atualizacao_ao_vivo(interaction)
 
     async def _ao_carteira(self, interaction: discord.Interaction):
         from src.plantao.carteira_panel import abrir_carteira
@@ -667,11 +860,25 @@ class ModalTrocarMoedasPlantao(
 
         try:
             novo_estado = await _buscar_estado(interaction.user.id)
-            nova_view = InformacoesPlantaoView(interaction.user, novo_estado)
+            tempo_ciclo = await calcular_segundos_plantao_atual(
+                interaction.user.id,
+                novo_estado,
+            )
+            tempo_total = await calcular_segundos_historico_fechado(
+                interaction.user.id
+            )
+            nova_view = InformacoesPlantaoView(
+                interaction.user,
+                novo_estado,
+                tempo_total_segundos=tempo_total,
+                tempo_ciclo_segundos=tempo_ciclo,
+            )
             await editar_mensagem_original(
                 interaction,
                 view=nova_view,
             )
+            if novo_estado is not None and novo_estado.toggle_ligado:
+                nova_view.iniciar_atualizacao_ao_vivo(interaction)
         except discord.HTTPException as erro_em_executar_troca:
             # Enfeite que falhou: atualizar o card da troca de moedas.
             # A acao principal ja tinha dado certo, entao so registro.

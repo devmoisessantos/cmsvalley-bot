@@ -1,13 +1,22 @@
 [tool.ruff]
+
 line-length = 88
 
 [tool.ruff.lint]
+
 select = ["E", "F", "I"]
 
+ignore = ["E501"]
+
 [tool.ruff.lint.isort]
+
 combine-as-imports = true
 force-wrap-aliases = true
+
 [tool.pytest.ini_options]
+
 testpaths = ["tests"]
+
 asyncio_mode = "auto"
+
 python_files = ["teste_*.py"]
