@@ -365,6 +365,10 @@ async def responder_view(
     O parâmetro `texto` existe para as views clássicas antigas, que precisam de
     uma frase explicando o que escolher. Em Components V2 o texto já vai dentro
     da própria view, então lá ele não é necessário.
+
+    Se a interação já tiver sido reconhecida entre o is_done() e o
+    send_message (corrida rara entre dois handlers), cai no followup em
+    vez de estourar HTTP 40060.
     """
     interacao_ja_foi_respondida = interacao.response.is_done()
 
@@ -376,12 +380,27 @@ async def responder_view(
         )
         return mensagem_enviada
 
-    await interacao.response.send_message(
-        content=texto,
-        view=view,
-        ephemeral=ephemeral,
-    )
-    return await interacao.original_response()
+    try:
+        await interacao.response.send_message(
+            content=texto,
+            view=view,
+            ephemeral=ephemeral,
+        )
+        return await interacao.original_response()
+    except discord.HTTPException as erro_http:
+        # 40060 = Interaction has already been acknowledged
+        ja_reconhecida = (
+            getattr(erro_http, "code", None) == 40060
+            or "already been acknowledged" in str(erro_http).lower()
+        )
+        if not ja_reconhecida:
+            raise
+        mensagem_enviada = await interacao.followup.send(
+            content=texto,
+            view=view,
+            ephemeral=ephemeral,
+        )
+        return mensagem_enviada
 
 
 # ---------------------------------------------------------------------------
