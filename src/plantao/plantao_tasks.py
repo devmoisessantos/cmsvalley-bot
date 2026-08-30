@@ -407,7 +407,15 @@ async def executar_housekeeping_plantao(bot: commands.Bot):
                 continue
 
             if estado.em_call_valida:
-                await _finalizar_periodo_em_call(estado)
+                await _finalizar_periodo_em_call(
+                    estado,
+                    guild,
+                    evento="HOUSEKEEPING_CALL_ENCERRADA",
+                    motivo=(
+                        f"Plantao aberto ha mais de "
+                        f"{HOUSEKEEPING_LIMITE_HORAS}h sem atualizacao"
+                    ),
+                )
 
             estado.toggle_ligado = False
             estado.ocioso_desde = None
