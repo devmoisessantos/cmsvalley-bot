@@ -712,7 +712,7 @@ class ViewAceitarAgendamento(LoggingViewMixin, discord.ui.LayoutView):
             custom_id=f"{CUSTOM_ID_ACEITAR}{solicitacao_id}",
             disabled=ja_aceito,
         )
-        botao.callback = self._ao_aceitar
+        # Callback via on_interaction no cog (sobrevive a restart)
         linha.add_item(botao)
         componentes.append(linha)
         componentes.append(discord.ui.TextDisplay(_rodape(guild)))
@@ -955,11 +955,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 max_values=len(opcoes),
                 custom_id=f"cursos:sel_decisao:{solicitacao_id}:{modo}",
             )
-            seletor.callback = (
-                self._ao_select_aprovar
-                if modo == "selecionar_aprovar"
-                else self._ao_select_reprovar
-            )
+            # Callback via on_interaction no cog (sobrevive a restart)
             linha.add_item(seletor)
             componentes.append(linha)
             linha2 = discord.ui.ActionRow()
@@ -968,7 +964,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"{CUSTOM_ID_CANCELA_DECISAO}{solicitacao_id}",
             )
-            botao_cancelar.callback = self._ao_cancelar_confirmacao
+            # Callback via on_interaction no cog (sobrevive a restart)
             linha2.add_item(botao_cancelar)
             componentes.append(linha2)
         else:
@@ -978,14 +974,13 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 emoji="✅",
                 custom_id=f"{CUSTOM_ID_APROVAR}{solicitacao_id}",
             )
-            botao_ok.callback = self._ao_abrir_select_aprovar
             botao_nao = discord.ui.Button(
                 label="Reprovar",
                 style=discord.ButtonStyle.danger,
                 emoji="❌",
                 custom_id=f"{CUSTOM_ID_REPROVAR}{solicitacao_id}",
             )
-            botao_nao.callback = self._ao_abrir_select_reprovar
+            # Callbacks via on_interaction no cog (sobrevivem a restart)
             linha.add_item(botao_ok)
             linha.add_item(botao_nao)
             componentes.append(linha)
@@ -1455,6 +1450,169 @@ async def publicar_resultado_final(
             contexto="publicar_resultado_final",
             usuario=staff,
         )
+
+
+async def montar_view_decisao_a_partir_do_banco(
+    guilda: discord.Guild,
+    solicitacao_id: int,
+    *,
+    modo: str = "normal",
+) -> ViewDecisaoCurso | None:
+    """
+    Reconstroi o card de decisao a partir do banco (apos restart).
+
+    Usado pelo on_interaction para editar a mensagem sem depender da view
+    que existia na memoria antes do deploy.
+    """
+    registro = await obter_solicitacao_curso(solicitacao_id)
+    if registro is None:
+        return None
+    aluno = guilda.get_member(registro.discord_id)
+    membro_ref = aluno
+    if membro_ref is None:
+
+        class _Fake:
+            mention = f"<@{registro.discord_id}>"
+            id = registro.discord_id
+            display_avatar = type("A", (), {"url": None})()
+
+        membro_ref = _Fake()  # type: ignore
+
+    titulo, corpo = montar_linhas_corpo_pedido(
+        membro=membro_ref,  # type: ignore[arg-type]
+        registro=registro,
+    )
+    if registro.observacao_instrutor:
+        corpo += (
+            f"\n\n### 📌 Observação do instrutor\n> {registro.observacao_instrutor}"
+        )
+    url = getattr(getattr(membro_ref, "display_avatar", None), "url", None)
+    chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+    return ViewDecisaoCurso(
+        titulo=titulo,
+        corpo=corpo,
+        guild=guilda,
+        solicitacao_id=registro.id,
+        url_avatar=url,
+        modo=modo,
+        chaves_cursos=chaves,
+    )
+
+
+async def processar_clique_aceitar_curso(
+    interacao: discord.Interaction,
+    solicitacao_id: int,
+) -> None:
+    """Abre o modal de aceitar agendamento (instrutor/diretoria)."""
+    membro = interacao.user
+    if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(membro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Apenas **Instrutor** ou **Diretoria** pode aceitar."],
+        )
+        return
+    await interacao.response.send_modal(
+        ModalObservacaoInstrutor(
+            solicitacao_id=solicitacao_id,
+            instrutor_id=membro.id,
+            mensagem_agendamento=interacao.message,
+        )
+    )
+
+
+async def processar_clique_abrir_decisao(
+    interacao: discord.Interaction,
+    solicitacao_id: int,
+    modo: str,
+) -> None:
+    """Troca o card para o select de aprovar ou reprovar."""
+    membro = interacao.user
+    if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(membro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Apenas **Instrutor** ou **Diretoria**."],
+        )
+        return
+    if interacao.guild is None:
+        await responder_erro(
+            interacao,
+            titulo="Contexto inválido",
+            linhas=["Use este botão dentro do servidor."],
+        )
+        return
+    view = await montar_view_decisao_a_partir_do_banco(
+        interacao.guild,
+        solicitacao_id,
+        modo=modo,
+    )
+    if view is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=[f"`#{solicitacao_id}`"],
+        )
+        return
+    await editar_mensagem_original(interacao, view=view)
+
+
+async def processar_clique_cancelar_decisao(
+    interacao: discord.Interaction,
+    solicitacao_id: int,
+) -> None:
+    """Volta o card ao modo normal (Aprovar / Reprovar)."""
+    await processar_clique_abrir_decisao(
+        interacao,
+        solicitacao_id,
+        modo="normal",
+    )
+
+
+async def processar_select_decisao_curso(
+    interacao: discord.Interaction,
+    solicitacao_id: int,
+    modo: str,
+) -> None:
+    """Aplica a decisão parcial a partir do select (após restart ou no mesmo uptime)."""
+    membro = interacao.user
+    if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(membro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Apenas **Instrutor** ou **Diretoria**."],
+        )
+        return
+    if interacao.guild is None:
+        await responder_erro(
+            interacao,
+            titulo="Contexto inválido",
+            linhas=["Use este botão dentro do servidor."],
+        )
+        return
+
+    view = await montar_view_decisao_a_partir_do_banco(
+        interacao.guild,
+        solicitacao_id,
+        modo=modo,
+    )
+    if view is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=[f"`#{solicitacao_id}`"],
+        )
+        return
+
+    marcados = list((interacao.data or {}).get("values") or [])
+    todas = view.chaves_cursos or await view._carregar_chaves()
+    if modo == "selecionar_aprovar":
+        aprovadas = [c for c in todas if c in marcados]
+        reprovadas = [c for c in todas if c not in marcados]
+    else:
+        reprovadas = [c for c in todas if c in marcados]
+        aprovadas = [c for c in todas if c not in marcados]
+    await view._aplicar_decisao_parcial(interacao, aprovadas, reprovadas)
 
 
 def view_persistente_cursos() -> PainelCursosLayout:

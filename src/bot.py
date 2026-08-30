@@ -188,6 +188,7 @@ CAMINHOS_DOS_COGS = [
     "src.entrada.entrada_listener",
     "src.wipe.wipe_cogs",
     "src.wipe.wipe_listener",
+    "src.banco.banco_cogs",
 ]
 
 
