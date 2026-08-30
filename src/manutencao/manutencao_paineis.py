@@ -30,6 +30,7 @@ from src.membros.membros_setup import (
 )
 from src.promocoes.promocoes_setup import garantir_painel_promocao
 from src.punicoes.punicoes_cogs import garantir_painel_punicoes
+from src.screenshare.screenshare_setup import garantir_painel_screenshare
 from src.tickets.tickets_setup import (
     garantir_painel_ticket_denuncias,
     garantir_painel_ticket_suporte,
@@ -64,6 +65,7 @@ FUNCOES_GARANTIR_PAINEL = {
     "ausencia": garantir_painel_ausencia,
     "ticket_suporte": garantir_painel_ticket_suporte,
     "ticket_denuncias": garantir_painel_ticket_denuncias,
+    "screenshare": garantir_painel_screenshare,
 }
 
 NOMES_DOS_PAINEIS = list(FUNCOES_GARANTIR_PAINEL.keys())

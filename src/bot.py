@@ -56,6 +56,8 @@ from src.promocoes.promocoes_setup import garantir_painel_promocao
 from src.punicoes.punicoes_cogs import garantir_painel_punicoes
 from src.punicoes.punicoes_panel import PainelPunicoesLayout
 from src.recrutamento.recrutamento_panel import PainelRecrutamentoLayout
+from src.screenshare.screenshare_panel import PainelScreenshareLayout
+from src.screenshare.screenshare_setup import garantir_painel_screenshare
 from src.tickets.tickets_panel import (
     PainelTicketDenunciasLayout,
     PainelTicketSuporteLayout,
@@ -179,6 +181,8 @@ CAMINHOS_DOS_COGS = [
     "src.bau.bau_cogs",
     "src.bau.bau_tasks",
     "src.bau.bau_listener",
+    "src.screenshare.screenshare_cogs",
+    "src.screenshare.screenshare_tasks",
     "src.financas.financas_cogs",
     "src.cursos.cursos_cogs",
     "src.promocoes.promocoes_cogs",
@@ -217,6 +221,7 @@ class CmsValleyBot(commands.Bot):
         self.painel_plantao_view = None
         self.painel_laudos_view = None
         self.painel_bau_view = None
+        self.painel_screenshare_view = None
         self.painel_eventos_gate_view = None
         self.painel_boas_vindas_view = None
         self.painel_tutoriais_view = None
@@ -450,6 +455,7 @@ class CmsValleyBot(commands.Bot):
         self.painel_punicoes_view = PainelPunicoesLayout(guild=servidor)
         self.painel_laudos_view = PainelLaudosLayout(servidor)
         self.painel_bau_view = PainelBauLayout(servidor)
+        self.painel_screenshare_view = PainelScreenshareLayout(servidor)
         self.painel_notificacao_view = PainelNotificacaoLayout(guilda=servidor)
         self.painel_ticket_suporte_view = PainelTicketSuporteLayout(guilda=servidor)
         self.painel_ticket_denuncias_view = PainelTicketDenunciasLayout(guilda=servidor)
@@ -472,6 +478,7 @@ class CmsValleyBot(commands.Bot):
             ("painel_plantao", self.painel_plantao_view),
             ("painel_laudos", self.painel_laudos_view),
             ("painel_bau", self.painel_bau_view),
+            ("painel_screenshare", self.painel_screenshare_view),
             ("painel_eventos_gate", self.painel_eventos_gate_view),
             ("painel_boas_vindas", self.painel_boas_vindas_view),
             ("painel_tutoriais", self.painel_tutoriais_view),
@@ -536,6 +543,7 @@ class CmsValleyBot(commands.Bot):
             garantir_painel_punicoes,
             garantir_painel_laudos,
             garantir_painel_bau,
+            garantir_painel_screenshare,
             garantir_painel_cursos,
             garantir_painel_promocao,
             garantir_painel_demissao,
