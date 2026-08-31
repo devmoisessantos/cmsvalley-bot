@@ -19,7 +19,7 @@ logger = logging.getLogger("cmsvalley-bot.keepalive")
 # Endpoint real do OCR (pode ser .../ocr/ems). O keep-alive prefere a raiz do host.
 EMS_OCR_API_URL = os.getenv(
     "EMS_OCR_API_URL",
-    "https://ems-ocr-api-59sa.onrender.com/ocr/ems",
+    "https://ems-ocr-api.onrender.com/ocr/ems",
 )
 
 # Se quiser forçar outra URL de ping (ex.: https://servico.onrender.com/health)

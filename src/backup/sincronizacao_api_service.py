@@ -10,7 +10,7 @@ Fluxo no reinício / task automática:
      Nunca DELETE / UPDATE destrutivo.
 
 Env:
-  CMSVALLEY_API_URL   — ex: https://ems-ocr-api-59sa.onrender.com
+  CMSVALLEY_API_URL   — ex: https://ems-ocr-api.onrender.com
   BACKUP_API_TOKEN    — mesmo token configurado na API
 """
 
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 CMSVALLEY_API_URL = os.getenv(
     "CMSVALLEY_API_URL",
-    os.getenv("EMS_OCR_API_URL", "https://ems-ocr-api-59sa.onrender.com"),
+    os.getenv("EMS_OCR_API_URL", "https://ems-ocr-api.onrender.com"),
 ).rstrip("/")
 # Se veio a URL completa do OCR, usa só a origem
 if "/ocr/" in CMSVALLEY_API_URL:

@@ -19,7 +19,7 @@ logger = logging.getLogger("cmsvalley-bot")
 _URL_BRUTA = (
     os.getenv("EMS_OCR_API_URL")
     or os.getenv("CMSVALLEY_API_URL")
-    or "https://ems-ocr-api-59sa.onrender.com"
+    or "https://ems-ocr-api.onrender.com"
 ).strip()
 
 TIMEOUT_SEGUNDOS = 90
@@ -38,7 +38,7 @@ def normalizar_url_ocr_ems(url_bruta: str) -> str:
     """
     texto = (url_bruta or "").strip().rstrip("/")
     if not texto:
-        return "https://ems-ocr-api-59sa.onrender.com/ocr/ems"
+        return "https://ems-ocr-api.onrender.com/ocr/ems"
 
     partes = urlparse(texto)
     caminho = (partes.path or "").rstrip("/")

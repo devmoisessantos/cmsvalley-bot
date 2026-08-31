@@ -19,7 +19,7 @@ logger = logging.getLogger("cmsvalley-bot.tickets.transcript")
 
 CMSVALLEY_API_URL = os.getenv(
     "CMSVALLEY_API_URL",
-    os.getenv("EMS_OCR_API_URL", "https://ems-ocr-api-59sa.onrender.com"),
+    os.getenv("EMS_OCR_API_URL", "https://ems-ocr-api.onrender.com"),
 ).rstrip("/")
 if "/ocr/" in CMSVALLEY_API_URL or CMSVALLEY_API_URL.endswith("/ocr"):
     partes = urlparse(CMSVALLEY_API_URL)
