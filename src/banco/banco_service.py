@@ -17,9 +17,22 @@ from sqlalchemy import (
     or_,
     select,
 )
+from sqlalchemy.exc import IntegrityError
 
 from src.database.conexao import async_session
 from src.database.models import Base
+
+
+class ErroDependenciasBanco(Exception):
+    """
+    Linha não pode ser apagada porque outras tabelas ainda apontam para ela.
+    """
+
+    def __init__(self, mensagem: str, detalhe_sql: str | None = None):
+        super().__init__(mensagem)
+        self.mensagem = mensagem
+        self.detalhe_sql = detalhe_sql
+
 
 # Quantas linhas por página no painel
 LINHAS_POR_PAGINA = 10
@@ -267,21 +280,157 @@ async def buscar_linha_por_pk(
         return dict(mapeamento)
 
 
+def listar_fks_que_apontam_para(nome_da_tabela: str) -> list[tuple[str, str, str]]:
+    """
+    Lista FKs do metadata que referenciam esta tabela.
+
+    Cada item: (tabela_filha, coluna_filha, coluna_pai).
+    """
+    alvo = obter_tabela(nome_da_tabela)
+    resultado: list[tuple[str, str, str]] = []
+    for nome_filha, tabela_filha in Base.metadata.tables.items():
+        for coluna in tabela_filha.columns:
+            for fk in coluna.foreign_keys:
+                if fk.column.table is alvo:
+                    resultado.append((nome_filha, coluna.name, fk.column.name))
+    return resultado
+
+
+async def resumir_dependencias(
+    nome_da_tabela: str,
+    valores_pk: dict[str, Any],
+) -> list[str]:
+    """
+    Conta quantas linhas em tabelas filhas ainda apontam para esta PK.
+    """
+    resumos: list[str] = []
+    for tabela_filha, coluna_filha, coluna_pai in listar_fks_que_apontam_para(
+        nome_da_tabela
+    ):
+        if coluna_pai not in valores_pk:
+            continue
+        valor_pai = valores_pk[coluna_pai]
+        filha = obter_tabela(tabela_filha)
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(func.count())
+                .select_from(filha)
+                .where(filha.c[coluna_filha] == valor_pai)
+            )
+            total = int(resultado.scalar_one() or 0)
+        if total > 0:
+            resumos.append(f"`{tabela_filha}.{coluna_filha}` → {total} linha(s)")
+    return resumos
+
+
+def _mensagem_amigavel_fk(erro: IntegrityError, nome_da_tabela: str) -> str:
+    """Traduz IntegrityError de FK para texto legível no painel."""
+    texto = str(getattr(erro, "orig", None) or erro)
+    # tenta extrair nome da constraint / tabela
+    trecho = texto
+    if "violates foreign key constraint" in texto:
+        trecho = "outras tabelas ainda referenciam esta linha (foreign key)."
+    return (
+        f"Não dá para apagar em `{nome_da_tabela}`: {trecho} "
+        "Use **Apagar em cascata** para remover as dependências primeiro, "
+        "ou apague manualmente as linhas filhas."
+    )
+
+
 async def apagar_linha_por_pk(
     nome_da_tabela: str,
     valores_pk: dict[str, Any],
 ) -> bool:
     """
     Apaga a linha identificada pela PK. Devolve True se apagou.
+
+    Se houver FK impedindo, levanta ``ErroDependenciasBanco`` com mensagem clara.
     """
     tabela = obter_tabela(nome_da_tabela)
     comando = delete(tabela)
     for nome_coluna, valor in valores_pk.items():
         comando = comando.where(tabela.c[nome_coluna] == valor)
     async with async_session() as sessao:
-        resultado = await sessao.execute(comando)
-        await sessao.commit()
+        try:
+            resultado = await sessao.execute(comando)
+            await sessao.commit()
+        except IntegrityError as erro:
+            await sessao.rollback()
+            dependencias = await resumir_dependencias(nome_da_tabela, valores_pk)
+            base = _mensagem_amigavel_fk(erro, nome_da_tabela)
+            if dependencias:
+                base += " Dependências: " + "; ".join(dependencias) + "."
+            raise ErroDependenciasBanco(base, detalhe_sql=str(erro)) from erro
         return int(resultado.rowcount or 0) > 0
+
+
+async def apagar_linha_em_cascata(
+    nome_da_tabela: str,
+    valores_pk: dict[str, Any],
+    *,
+    _visitados: set[tuple[str, str]] | None = None,
+) -> dict[str, int]:
+    """
+    Apaga a linha e, antes, as linhas de tabelas filhas (FKs do metadata).
+
+    Percorre as FKs de forma recursiva (ex.: respostas_prova → recrutamentos → usuarios).
+    Devolve contagem por tabela apagada.
+    """
+    if _visitados is None:
+        _visitados = set()
+
+    chave_visita = (nome_da_tabela, codificar_pk(valores_pk))
+    if chave_visita in _visitados:
+        return {}
+    _visitados.add(chave_visita)
+
+    contagem: dict[str, int] = {}
+
+    for tabela_filha, coluna_filha, coluna_pai in listar_fks_que_apontam_para(
+        nome_da_tabela
+    ):
+        if coluna_pai not in valores_pk:
+            continue
+        valor_pai = valores_pk[coluna_pai]
+        filha = obter_tabela(tabela_filha)
+        pks_filha = [coluna.name for coluna in filha.primary_key.columns]
+
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(filha).where(filha.c[coluna_filha] == valor_pai)
+            )
+            linhas_filhas = [dict(m) for m in resultado.mappings().all()]
+
+        for linha_filha in linhas_filhas:
+            pk_filha = {chave: linha_filha.get(chave) for chave in pks_filha}
+            sub = await apagar_linha_em_cascata(
+                tabela_filha,
+                pk_filha,
+                _visitados=_visitados,
+            )
+            for nome, qtd in sub.items():
+                contagem[nome] = contagem.get(nome, 0) + qtd
+
+    # por fim apaga a própria linha (sem passar pelo check amigável de novo)
+    tabela = obter_tabela(nome_da_tabela)
+    comando = delete(tabela)
+    for nome_coluna, valor in valores_pk.items():
+        comando = comando.where(tabela.c[nome_coluna] == valor)
+    async with async_session() as sessao:
+        try:
+            resultado = await sessao.execute(comando)
+            await sessao.commit()
+        except IntegrityError as erro:
+            await sessao.rollback()
+            raise ErroDependenciasBanco(
+                _mensagem_amigavel_fk(erro, nome_da_tabela)
+                + " Mesmo em cascata restou alguma referência fora do metadata.",
+                detalhe_sql=str(erro),
+            ) from erro
+        apagadas = int(resultado.rowcount or 0)
+    if apagadas:
+        contagem[nome_da_tabela] = contagem.get(nome_da_tabela, 0) + apagadas
+    return contagem
 
 
 async def atualizar_campo(

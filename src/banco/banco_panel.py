@@ -17,6 +17,8 @@ import discord
 
 from src.banco.banco_service import (
     LINHAS_POR_PAGINA,
+    ErroDependenciasBanco,
+    apagar_linha_em_cascata,
     apagar_linha_por_pk,
     atualizar_campo,
     buscar_linha_por_pk,
@@ -29,6 +31,7 @@ from src.banco.banco_service import (
     listar_linhas,
     listar_nomes_das_tabelas,
     pk_da_linha,
+    resumir_dependencias,
     resumo_da_linha,
     tabela_e_conhecida,
     texto_do_filtro_ativo,
@@ -52,6 +55,7 @@ CUSTOM_BTN_PROXIMA = "banco:pag_prox"
 CUSTOM_BTN_ATUALIZAR = "banco:atualizar"
 CUSTOM_BTN_INSERIR = "banco:inserir"
 CUSTOM_BTN_APAGAR = "banco:apagar"
+CUSTOM_BTN_APAGAR_CASCATA = "banco:apagar_cascata"
 CUSTOM_BTN_VOLTAR = "banco:voltar"
 CUSTOM_BTN_BUSCAR = "banco:buscar"
 CUSTOM_BTN_LIMPAR_FILTRO = "banco:limpar_filtro"
@@ -382,7 +386,9 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.TextDisplay(texto),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(
-                "### ✏️ Ações\n-# Escolha um campo para editar, ou apague a linha."
+                "### ✏️ Ações\n"
+                "-# Edite um campo, apague só esta linha, ou use **cascata** "
+                "para remover também o que aponta para ela (FK)."
             ),
         ]
 
@@ -412,6 +418,13 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
             custom_id=CUSTOM_BTN_APAGAR,
         )
         botao_apagar.callback = self._ao_apagar
+        botao_cascata = discord.ui.Button(
+            label="Apagar em cascata",
+            style=discord.ButtonStyle.danger,
+            emoji="💥",
+            custom_id=CUSTOM_BTN_APAGAR_CASCATA,
+        )
+        botao_cascata.callback = self._ao_apagar_cascata
         botao_voltar = discord.ui.Button(
             label="Voltar às linhas",
             style=discord.ButtonStyle.secondary,
@@ -420,6 +433,7 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         )
         botao_voltar.callback = self._ao_voltar_linhas
         linha_acoes.add_item(botao_apagar)
+        linha_acoes.add_item(botao_cascata)
         linha_acoes.add_item(botao_voltar)
         componentes.append(linha_acoes)
 
@@ -593,6 +607,18 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         valores_pk = decodificar_pk(self.linha_selecionada_pk)
         try:
             apagou = await apagar_linha_por_pk(self.nome_da_tabela, valores_pk)
+        except ErroDependenciasBanco as erro:
+            registrador.warning("Apagar bloqueado por FK: %s", erro.mensagem)
+            await responder_erro(
+                interacao,
+                titulo="Não foi possível apagar",
+                linhas=[
+                    erro.mensagem[:350],
+                    "Use o botão **Apagar em cascata** nesta linha se quiser "
+                    "remover também as dependências.",
+                ],
+            )
+            return
         except Exception as erro:
             registrador.exception("Falha ao apagar linha: %s", erro)
             await responder_erro(
@@ -609,6 +635,67 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
                 modo="linhas",
                 linha_selecionada_pk=None,
                 mensagem_status=status,
+            ),
+        )
+
+    async def _ao_apagar_cascata(self, interacao: discord.Interaction):
+        if not _membro_e_admin(interacao.user):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Apenas administradores."],
+            )
+            return
+        if not self.nome_da_tabela or not self.linha_selecionada_pk:
+            await responder_erro(
+                interacao,
+                titulo="Nada selecionado",
+                linhas=["Escolha uma linha antes de apagar."],
+            )
+            return
+        valores_pk = decodificar_pk(self.linha_selecionada_pk)
+        try:
+            dependencias = await resumir_dependencias(
+                self.nome_da_tabela,
+                valores_pk,
+            )
+            contagem = await apagar_linha_em_cascata(
+                self.nome_da_tabela,
+                valores_pk,
+            )
+        except ErroDependenciasBanco as erro:
+            registrador.warning("Cascata bloqueada: %s", erro.mensagem)
+            await responder_erro(
+                interacao,
+                titulo="Cascata incompleta",
+                linhas=[erro.mensagem[:350]],
+            )
+            return
+        except Exception as erro:
+            registrador.exception("Falha ao apagar em cascata: %s", erro)
+            await responder_erro(
+                interacao,
+                titulo="Falha ao apagar em cascata",
+                linhas=[str(erro)[:200]],
+            )
+            return
+
+        partes = [f"`{tabela}`: {qtd}" for tabela, qtd in sorted(contagem.items())]
+        if not partes:
+            status = "Nada foi apagado (linha já não existia)."
+        else:
+            extra = ""
+            if dependencias:
+                extra = f" Dependências prévias: {'; '.join(dependencias)}."
+            status = "Cascata OK · " + "; ".join(partes) + "." + extra
+
+        await self._republicar(
+            interacao,
+            **self._kwargs_estado(
+                pagina=self.pagina,
+                modo="linhas",
+                linha_selecionada_pk=None,
+                mensagem_status=status[:300],
             ),
         )
 
