@@ -116,6 +116,8 @@ async def atualizar_hierarquia(
 
     Se o canal de hierarquia nao for encontrado, registra o erro no log e desiste em
     silencio, sem derrubar o bot.
+
+    Falha em um cargo nao interrompe os demais: cada cargo e tratado isoladamente.
     """
     canal = guild.get_channel(CANAIS["HIERARQUIA_SUL"])
     if canal is None:
@@ -131,101 +133,130 @@ async def atualizar_hierarquia(
         if cargo is None:
             continue
 
-        # 👇 NOVO — pula cargos que não foram afetados, se o filtro foi passado
         if somente_cargos is not None and cargo.id not in somente_cargos:
             continue
 
         membros = membros_por_cargo.get(cargo.id, [])
         cards = montar_cards_cargo_paginado(cargo, membros)
 
-        async with async_session() as session:
-            # Busca TODAS as mensagens deste cargo
-            resultado = await session.execute(
-                select(MensagemHierarquia)
-                .where(MensagemHierarquia.cargo_id == cargo.id)
-                .order_by(MensagemHierarquia.pagina)
+        try:
+            await _publicar_cards_do_cargo(canal, cargo, cards)
+        except Exception as erro:
+            registrador.exception(
+                "Falha ao atualizar hierarquia do cargo %s (%s): %s",
+                nome_cargo,
+                cargo.id,
+                erro,
             )
-            registros = resultado.scalars().all()
 
-            # Se existem registros, edita as mensagens existentes
-            if registros:
-                for posicao_do_card, registro in enumerate(registros):
-                    if posicao_do_card >= len(cards):
-                        # Se tem mais registros que cards, apaga o excesso
-                        try:
-                            mensagem_em_excesso = await canal.fetch_message(
-                                registro.message_id
-                            )
-                            await mensagem_em_excesso.delete()
-                        except discord.NotFound as erro_em_atualizar_hierarquia:
-                            # A mensagem ja nao existe mais no canal, entao nao ha
-                            # nada para apagar. O registro do banco e removido logo
-                            # abaixo de qualquer forma.
-                            # Enfeite que falhou: atualizar hierarquia.
-                            # A acao principal ja tinha dado certo, entao so registro.
-                            ignorar_falha_cosmetica(
-                                erro_em_atualizar_hierarquia,
-                                o_que_falhou="atualizar hierarquia",
-                            )
-                        except discord.Forbidden:
-                            logging.warning(
-                                "Sem permissao para apagar a mensagem %s da "
-                                "hierarquia no canal %s.",
-                                registro.message_id,
-                                canal.id,
-                            )
-                        except discord.HTTPException as falha_do_discord:
-                            logging.warning(
-                                "Falha ao apagar a mensagem %s da hierarquia: %s",
-                                registro.message_id,
-                                falha_do_discord,
-                            )
-                        await session.delete(registro)
-                        continue
 
-                    try:
-                        mensagem = await canal.fetch_message(registro.message_id)
-                        await mensagem.edit(
-                            view=_embrulhar_em_view(cards[posicao_do_card])
-                        )
-                    except discord.NotFound:
-                        # Mensagem foi apagada, cria nova
-                        nova_mensagem = await canal.send(
-                            view=_embrulhar_em_view(cards[posicao_do_card])
-                        )
-                        registro.message_id = nova_mensagem.id
-                        registro.canal_id = canal.id
+async def _publicar_cards_do_cargo(
+    canal: discord.abc.Messageable,
+    cargo: discord.Role,
+    cards: list[discord.ui.Container],
+) -> None:
+    """
+    Sincroniza as mensagens de um cargo com a lista de cards.
 
-                # Se tem mais cards que registros, cria os novos
-                for posicao_do_card in range(len(registros), len(cards)):
+    Edita as que já existem, cria as que faltam e apaga o excesso.
+    """
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(MensagemHierarquia)
+            .where(MensagemHierarquia.cargo_id == cargo.id)
+            .order_by(MensagemHierarquia.pagina)
+        )
+        registros = list(resultado.scalars().all())
+
+        if registros:
+            for posicao_do_card, registro in enumerate(registros):
+                if posicao_do_card >= len(cards):
+                    await _apagar_mensagem_em_excesso(canal, registro)
+                    await session.delete(registro)
+                    continue
+
+                try:
+                    mensagem = await canal.fetch_message(registro.message_id)
+                    await mensagem.edit(view=_embrulhar_em_view(cards[posicao_do_card]))
+                except discord.NotFound:
+                    # Mensagem foi apagada no canal: cria de novo e atualiza o registro
                     nova_mensagem = await canal.send(
                         view=_embrulhar_em_view(cards[posicao_do_card])
                     )
-                    session.add(
-                        MensagemHierarquia(
-                            cargo_id=cargo.id,
-                            pagina=posicao_do_card + 1,
-                            canal_id=canal.id,
-                            message_id=nova_mensagem.id,
-                        )
+                    registro.message_id = nova_mensagem.id
+                    registro.canal_id = canal.id
+                except discord.Forbidden:
+                    registrador.warning(
+                        "Sem permissão para editar a mensagem %s da hierarquia "
+                        "no canal %s.",
+                        registro.message_id,
+                        getattr(canal, "id", "?"),
+                    )
+                except discord.HTTPException as falha_do_discord:
+                    registrador.warning(
+                        "Falha ao editar a mensagem %s da hierarquia: %s",
+                        registro.message_id,
+                        falha_do_discord,
                     )
 
-                await session.commit()
-                continue  # Vai para o próximo cargo
-
-            # Não existem registros, cria tudo do zero
-            for posicao_do_card, card in enumerate(cards):
-                nova_mensagem = await canal.send(view=_embrulhar_em_view(card))
+            # Cria páginas extras se o cargo cresceu
+            for posicao_do_card in range(len(registros), len(cards)):
+                nova_mensagem = await canal.send(
+                    view=_embrulhar_em_view(cards[posicao_do_card])
+                )
                 session.add(
                     MensagemHierarquia(
                         cargo_id=cargo.id,
                         pagina=posicao_do_card + 1,
-                        canal_id=canal.id,
+                        canal_id=getattr(canal, "id", 0),
                         message_id=nova_mensagem.id,
                     )
                 )
 
             await session.commit()
+            return
+
+        # Sem registros: cria tudo do zero
+        for posicao_do_card, card in enumerate(cards):
+            nova_mensagem = await canal.send(view=_embrulhar_em_view(card))
+            session.add(
+                MensagemHierarquia(
+                    cargo_id=cargo.id,
+                    pagina=posicao_do_card + 1,
+                    canal_id=getattr(canal, "id", 0),
+                    message_id=nova_mensagem.id,
+                )
+            )
+
+        await session.commit()
+
+
+async def _apagar_mensagem_em_excesso(
+    canal: discord.abc.Messageable,
+    registro: MensagemHierarquia,
+) -> None:
+    """Tenta apagar no Discord a mensagem que sobrou depois da paginação encolher."""
+    try:
+        mensagem_em_excesso = await canal.fetch_message(registro.message_id)
+        await mensagem_em_excesso.delete()
+    except discord.NotFound as erro_em_atualizar_hierarquia:
+        # Já não existe no canal; o registro some no session.delete de qualquer forma.
+        ignorar_falha_cosmetica(
+            erro_em_atualizar_hierarquia,
+            o_que_falhou="atualizar hierarquia",
+        )
+    except discord.Forbidden:
+        registrador.warning(
+            "Sem permissão para apagar a mensagem %s da hierarquia no canal %s.",
+            registro.message_id,
+            getattr(canal, "id", "?"),
+        )
+    except discord.HTTPException as falha_do_discord:
+        registrador.warning(
+            "Falha ao apagar a mensagem %s da hierarquia: %s",
+            registro.message_id,
+            falha_do_discord,
+        )
 
 
 def _embrulhar_em_view(container: discord.ui.Container) -> discord.ui.LayoutView:

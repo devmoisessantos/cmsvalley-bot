@@ -3,6 +3,7 @@ Painel ephemeral de administração do banco (Components V2).
 
 Sem timeout: fica aberto até o administrador fechar ou a mensagem ephemeral
 expirar no Discord. Navegação por selects e botões; edição/inserção via modal.
+Busca e filtro por coluna (discord_id, id_fivem, etc.) direto no painel.
 """
 
 from __future__ import annotations
@@ -22,11 +23,13 @@ from src.banco.banco_service import (
     inserir_linha,
     listar_chaves_primarias,
     listar_colunas,
+    listar_colunas_buscaveis,
     listar_linhas,
     listar_nomes_das_tabelas,
     pk_da_linha,
     resumo_da_linha,
     tabela_e_conhecida,
+    texto_do_filtro_ativo,
 )
 from src.utils.error_handling import (
     LoggingModalMixin,
@@ -42,6 +45,7 @@ registrador = logging.getLogger(__name__)
 CUSTOM_SELECT_TABELA = "banco:sel_tabela"
 CUSTOM_SELECT_LINHA = "banco:sel_linha"
 CUSTOM_SELECT_CAMPO = "banco:sel_campo"
+CUSTOM_SELECT_COLUNA_FILTRO = "banco:sel_col_filtro"
 CUSTOM_BTN_ANTERIOR = "banco:pag_ant"
 CUSTOM_BTN_PROXIMA = "banco:pag_prox"
 CUSTOM_BTN_ATUALIZAR = "banco:atualizar"
@@ -49,6 +53,8 @@ CUSTOM_BTN_INSERIR = "banco:inserir"
 CUSTOM_BTN_APAGAR = "banco:apagar"
 CUSTOM_BTN_EDITAR = "banco:editar"
 CUSTOM_BTN_VOLTAR = "banco:voltar"
+CUSTOM_BTN_BUSCAR = "banco:buscar"
+CUSTOM_BTN_LIMPAR_FILTRO = "banco:limpar_filtro"
 
 
 def _membro_e_admin(membro: discord.Member | discord.User) -> bool:
@@ -72,6 +78,8 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         linha_selecionada_pk: str | None = None,
         modo: str = "tabelas",
         mensagem_status: str | None = None,
+        filtros: dict[str, str] | None = None,
+        busca_livre: str | None = None,
     ):
         super().__init__(timeout=None)
         self.nome_da_tabela = nome_da_tabela
@@ -79,6 +87,8 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         self.linha_selecionada_pk = linha_selecionada_pk
         self.modo = modo
         self.mensagem_status = mensagem_status
+        self.filtros = dict(filtros) if filtros else {}
+        self.busca_livre = (busca_livre or "").strip() or None
         # preenchidos de forma assíncrona antes do envio quando possível
         self._total_linhas = 0
         self._linhas: list[dict] = []
@@ -92,6 +102,8 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         linha_selecionada_pk: str | None = None,
         modo: str = "tabelas",
         mensagem_status: str | None = None,
+        filtros: dict[str, str] | None = None,
+        busca_livre: str | None = None,
     ) -> PainelBancoView:
         """
         Monta a view já com dados do banco carregados.
@@ -102,12 +114,20 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
             linha_selecionada_pk=linha_selecionada_pk,
             modo=modo,
             mensagem_status=mensagem_status,
+            filtros=filtros,
+            busca_livre=busca_livre,
         )
         if nome_da_tabela and tabela_e_conhecida(nome_da_tabela):
-            view._total_linhas = await contar_linhas(nome_da_tabela)
+            view._total_linhas = await contar_linhas(
+                nome_da_tabela,
+                filtros=view.filtros or None,
+                busca_livre=view.busca_livre,
+            )
             view._linhas = await listar_linhas(
                 nome_da_tabela,
                 pagina=pagina,
+                filtros=view.filtros or None,
+                busca_livre=view.busca_livre,
             )
             if modo == "linha" and linha_selecionada_pk:
                 view._linha_detalhe = await buscar_linha_por_pk(
@@ -116,6 +136,20 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
                 )
         view._montar()
         return view
+
+    def _kwargs_estado(self, **overrides) -> dict:
+        """Estado atual da view, com sobrescritas opcionais para republicar."""
+        base = {
+            "nome_da_tabela": self.nome_da_tabela,
+            "pagina": self.pagina,
+            "linha_selecionada_pk": self.linha_selecionada_pk,
+            "modo": self.modo,
+            "mensagem_status": self.mensagem_status,
+            "filtros": self.filtros or None,
+            "busca_livre": self.busca_livre,
+        }
+        base.update(overrides)
+        return base
 
     def _montar(self) -> None:
         for item in list(self.children):
@@ -132,7 +166,7 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         tabelas = listar_nomes_das_tabelas()
         texto = (
             "# Painel do banco de dados\n"
-            "Escolha uma **tabela** para listar, editar ou apagar linhas.\n"
+            "Escolha uma **tabela** para listar, buscar, editar ou apagar linhas.\n"
             "-# Somente administradores · alterações são imediatas no PostgreSQL"
         )
         if self.mensagem_status:
@@ -177,11 +211,15 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         total_paginas = max(1, (total + LINHAS_POR_PAGINA - 1) // LINHAS_POR_PAGINA)
         pagina_humana = self.pagina + 1
 
+        filtro_txt = texto_do_filtro_ativo(self.filtros, self.busca_livre)
         texto = (
             f"# Tabela `{nome}`\n"
             f"**{total}** linha(s) · página **{pagina_humana}/{total_paginas}**\n"
-            "Selecione uma linha para ver detalhes, editar ou apagar."
+            "Selecione uma linha para ver detalhes, editar ou apagar.\n"
+            "Use **Buscar** para achar por `discord_id`, `id_fivem` ou qualquer coluna."
         )
+        if filtro_txt:
+            texto += f"\n\n🔍 Filtro ativo: {filtro_txt}"
         if self.mensagem_status:
             texto += f"\n\n> {self.mensagem_status}"
 
@@ -210,7 +248,33 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
             linha_sel.add_item(seletor)
             componentes.append(linha_sel)
         else:
-            componentes.append(discord.ui.TextDisplay("-# Nenhuma linha nesta página."))
+            componentes.append(
+                discord.ui.TextDisplay(
+                    "-# Nenhuma linha nesta página"
+                    + (" (com o filtro atual)." if filtro_txt else ".")
+                )
+            )
+
+        # busca / filtro
+        linha_busca = discord.ui.ActionRow()
+        botao_buscar = discord.ui.Button(
+            label="Buscar",
+            style=discord.ButtonStyle.primary,
+            custom_id=CUSTOM_BTN_BUSCAR,
+        )
+        botao_buscar.callback = self._ao_buscar
+        linha_busca.add_item(botao_buscar)
+
+        tem_filtro = bool(filtro_txt)
+        botao_limpar = discord.ui.Button(
+            label="Limpar filtro",
+            style=discord.ButtonStyle.secondary,
+            custom_id=CUSTOM_BTN_LIMPAR_FILTRO,
+            disabled=not tem_filtro,
+        )
+        botao_limpar.callback = self._ao_limpar_filtro
+        linha_busca.add_item(botao_limpar)
+        componentes.append(linha_busca)
 
         # navegação
         linha_nav = discord.ui.ActionRow()
@@ -361,6 +425,8 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
             nome_da_tabela=nome,
             pagina=0,
             modo="linhas",
+            filtros=None,
+            busca_livre=None,
         )
 
     async def _ao_escolher_linha(self, interacao: discord.Interaction):
@@ -374,46 +440,102 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         pk_codificada = (interacao.data or {}).get("values", [None])[0]
         await self._republicar(
             interacao,
-            nome_da_tabela=self.nome_da_tabela,
-            pagina=self.pagina,
-            linha_selecionada_pk=pk_codificada,
-            modo="linha",
+            **self._kwargs_estado(
+                linha_selecionada_pk=pk_codificada,
+                modo="linha",
+                mensagem_status=None,
+            ),
         )
 
     async def _ao_pagina_anterior(self, interacao: discord.Interaction):
         await self._republicar(
             interacao,
-            nome_da_tabela=self.nome_da_tabela,
-            pagina=max(0, self.pagina - 1),
-            modo="linhas",
+            **self._kwargs_estado(
+                pagina=max(0, self.pagina - 1),
+                modo="linhas",
+                linha_selecionada_pk=None,
+                mensagem_status=None,
+            ),
         )
 
     async def _ao_pagina_proxima(self, interacao: discord.Interaction):
         await self._republicar(
             interacao,
-            nome_da_tabela=self.nome_da_tabela,
-            pagina=self.pagina + 1,
-            modo="linhas",
+            **self._kwargs_estado(
+                pagina=self.pagina + 1,
+                modo="linhas",
+                linha_selecionada_pk=None,
+                mensagem_status=None,
+            ),
         )
 
     async def _ao_atualizar(self, interacao: discord.Interaction):
         await self._republicar(
             interacao,
-            nome_da_tabela=self.nome_da_tabela,
-            pagina=self.pagina,
-            modo="linhas",
-            mensagem_status="Lista atualizada.",
+            **self._kwargs_estado(
+                modo="linhas",
+                linha_selecionada_pk=None,
+                mensagem_status="Lista atualizada.",
+            ),
         )
 
     async def _ao_voltar_tabelas(self, interacao: discord.Interaction):
-        await self._republicar(interacao, modo="tabelas")
+        await self._republicar(
+            interacao,
+            modo="tabelas",
+            filtros=None,
+            busca_livre=None,
+        )
 
     async def _ao_voltar_linhas(self, interacao: discord.Interaction):
         await self._republicar(
             interacao,
+            **self._kwargs_estado(
+                modo="linhas",
+                linha_selecionada_pk=None,
+                mensagem_status=None,
+            ),
+        )
+
+    async def _ao_buscar(self, interacao: discord.Interaction):
+        if not _membro_e_admin(interacao.user):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Apenas administradores."],
+            )
+            return
+        if not self.nome_da_tabela:
+            await responder_erro(
+                interacao,
+                titulo="Sem tabela",
+                linhas=["Escolha uma tabela primeiro."],
+            )
+            return
+        await interacao.response.send_modal(
+            ModalBuscarLinha(
+                nome_da_tabela=self.nome_da_tabela,
+                filtros_atuais=self.filtros,
+                busca_livre_atual=self.busca_livre,
+            )
+        )
+
+    async def _ao_limpar_filtro(self, interacao: discord.Interaction):
+        if not _membro_e_admin(interacao.user):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Apenas administradores."],
+            )
+            return
+        await self._republicar(
+            interacao,
             nome_da_tabela=self.nome_da_tabela,
-            pagina=self.pagina,
+            pagina=0,
             modo="linhas",
+            filtros=None,
+            busca_livre=None,
+            mensagem_status="Filtro removido.",
         )
 
     async def _ao_apagar(self, interacao: discord.Interaction):
@@ -445,10 +567,12 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         status = "Linha apagada." if apagou else "Linha não encontrada."
         await self._republicar(
             interacao,
-            nome_da_tabela=self.nome_da_tabela,
-            pagina=self.pagina,
-            modo="linhas",
-            mensagem_status=status,
+            **self._kwargs_estado(
+                pagina=self.pagina,
+                modo="linhas",
+                linha_selecionada_pk=None,
+                mensagem_status=status,
+            ),
         )
 
     async def _ao_escolher_campo(self, interacao: discord.Interaction):
@@ -477,6 +601,8 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
                 nome_do_campo=campo,
                 valor_atual=valor_atual,
                 pagina=self.pagina,
+                filtros=self.filtros,
+                busca_livre=self.busca_livre,
             )
         )
 
@@ -499,8 +625,125 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
             ModalInserirLinha(
                 nome_da_tabela=self.nome_da_tabela,
                 pagina=self.pagina,
+                filtros=self.filtros,
+                busca_livre=self.busca_livre,
             )
         )
+
+
+class ModalBuscarLinha(LoggingModalMixin, discord.ui.Modal, title="Buscar no banco"):
+    """
+    Busca por coluna específica e/ou termo livre (discord_id, id_fivem, etc.).
+    """
+
+    def __init__(
+        self,
+        *,
+        nome_da_tabela: str,
+        filtros_atuais: dict[str, str] | None = None,
+        busca_livre_atual: str | None = None,
+    ):
+        super().__init__()
+        self.nome_da_tabela = nome_da_tabela
+        self.filtros_atuais = dict(filtros_atuais) if filtros_atuais else {}
+
+        colunas = listar_colunas_buscaveis(nome_da_tabela)
+        dica_colunas = ", ".join(colunas[:8])
+        if len(colunas) > 8:
+            dica_colunas += ", …"
+
+        self.coluna = discord.ui.TextInput(
+            label="Coluna (opcional)",
+            style=discord.TextStyle.short,
+            required=False,
+            max_length=60,
+            placeholder=f"ex: discord_id, id_fivem… ({dica_colunas[:80]})",
+            default="",
+        )
+        self.valor_coluna = discord.ui.TextInput(
+            label="Valor da coluna (igualdade)",
+            style=discord.TextStyle.short,
+            required=False,
+            max_length=100,
+            placeholder="ex: 123456789012345678 · vazio = ignorar",
+            default="",
+        )
+        self.busca_livre = discord.ui.TextInput(
+            label="Busca livre (IDs / texto)",
+            style=discord.TextStyle.short,
+            required=False,
+            max_length=100,
+            placeholder="Cola discord_id, id_fivem ou trecho de texto",
+            default=(busca_livre_atual or "")[:100],
+        )
+        self.add_item(self.coluna)
+        self.add_item(self.valor_coluna)
+        self.add_item(self.busca_livre)
+
+    async def on_submit(self, interacao: discord.Interaction):
+        if not _membro_e_admin(interacao.user):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Apenas administradores."],
+            )
+            return
+
+        filtros: dict[str, str] = {}
+        nome_coluna = (self.coluna.value or "").strip()
+        valor = (self.valor_coluna.value or "").strip()
+        livre = (self.busca_livre.value or "").strip() or None
+
+        if nome_coluna:
+            colunas_validas = set(listar_colunas(self.nome_da_tabela))
+            if nome_coluna not in colunas_validas:
+                await responder_erro(
+                    interacao,
+                    titulo="Coluna inválida",
+                    linhas=[
+                        f"`{nome_coluna}` não existe em `{self.nome_da_tabela}`.",
+                        "Colunas: " + ", ".join(sorted(colunas_validas))[:300],
+                    ],
+                )
+                return
+            if valor:
+                filtros[nome_coluna] = valor
+
+        if not filtros and not livre:
+            await responder_erro(
+                interacao,
+                titulo="Busca vazia",
+                linhas=[
+                    "Informe uma coluna + valor, ou uma busca livre "
+                    "(discord_id, id_fivem, etc.).",
+                ],
+            )
+            return
+
+        try:
+            # valida conversão antes de aplicar (evita tela vazia por tipo errado)
+            total = await contar_linhas(
+                self.nome_da_tabela,
+                filtros=filtros or None,
+                busca_livre=livre,
+            )
+        except Exception as erro:
+            await responder_erro(
+                interacao,
+                titulo="Filtro inválido",
+                linhas=[str(erro)[:300]],
+            )
+            return
+
+        view = await PainelBancoView.criar(
+            nome_da_tabela=self.nome_da_tabela,
+            pagina=0,
+            modo="linhas",
+            filtros=filtros or None,
+            busca_livre=livre,
+            mensagem_status=f"Busca aplicada · {total} resultado(s).",
+        )
+        await interacao.response.edit_message(view=view)
 
 
 class ModalEditarCampo(LoggingModalMixin, discord.ui.Modal, title="Editar campo"):
@@ -512,12 +755,16 @@ class ModalEditarCampo(LoggingModalMixin, discord.ui.Modal, title="Editar campo"
         nome_do_campo: str,
         valor_atual,
         pagina: int,
+        filtros: dict[str, str] | None = None,
+        busca_livre: str | None = None,
     ):
         super().__init__()
         self.nome_da_tabela = nome_da_tabela
         self.pk_codificada = pk_codificada
         self.nome_do_campo = nome_do_campo
         self.pagina = pagina
+        self.filtros = filtros
+        self.busca_livre = busca_livre
         self.campo = discord.ui.TextInput(
             label=f"Valor de {nome_do_campo}"[:45],
             style=discord.TextStyle.paragraph,
@@ -555,6 +802,8 @@ class ModalEditarCampo(LoggingModalMixin, discord.ui.Modal, title="Editar campo"
             pagina=self.pagina,
             linha_selecionada_pk=self.pk_codificada,
             modo="linha",
+            filtros=self.filtros,
+            busca_livre=self.busca_livre,
             mensagem_status=f"Campo `{self.nome_do_campo}` atualizado.",
         )
         await interacao.response.edit_message(view=view)
@@ -566,10 +815,19 @@ class ModalInserirLinha(LoggingModalMixin, discord.ui.Modal, title="Inserir linh
     não-PK autoincrementáveis quando possível.
     """
 
-    def __init__(self, *, nome_da_tabela: str, pagina: int):
+    def __init__(
+        self,
+        *,
+        nome_da_tabela: str,
+        pagina: int,
+        filtros: dict[str, str] | None = None,
+        busca_livre: str | None = None,
+    ):
         super().__init__()
         self.nome_da_tabela = nome_da_tabela
         self.pagina = pagina
+        self.filtros = filtros
+        self.busca_livre = busca_livre
         self.campos_usados: list[str] = []
         self.inputs: list[discord.ui.TextInput] = []
 
@@ -620,6 +878,8 @@ class ModalInserirLinha(LoggingModalMixin, discord.ui.Modal, title="Inserir linh
             nome_da_tabela=self.nome_da_tabela,
             pagina=self.pagina,
             modo="linhas",
+            filtros=self.filtros,
+            busca_livre=self.busca_livre,
             mensagem_status="Linha inserida.",
         )
         await interacao.response.edit_message(view=view)
