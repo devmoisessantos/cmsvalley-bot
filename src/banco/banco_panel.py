@@ -4,6 +4,9 @@ Painel ephemeral de administração do banco (Components V2).
 Sem timeout: fica aberto até o administrador fechar ou a mensagem ephemeral
 expirar no Discord. Navegação por selects e botões; edição/inserção via modal.
 Busca e filtro por coluna (discord_id, id_fivem, etc.) direto no painel.
+
+Visual alinhado aos outros fluxos ephemeral do projeto (título #, seções ###,
+separators, botões com emoji, accent_color por contexto).
 """
 
 from __future__ import annotations
@@ -23,7 +26,6 @@ from src.banco.banco_service import (
     inserir_linha,
     listar_chaves_primarias,
     listar_colunas,
-    listar_colunas_buscaveis,
     listar_linhas,
     listar_nomes_das_tabelas,
     pk_da_linha,
@@ -45,22 +47,32 @@ registrador = logging.getLogger(__name__)
 CUSTOM_SELECT_TABELA = "banco:sel_tabela"
 CUSTOM_SELECT_LINHA = "banco:sel_linha"
 CUSTOM_SELECT_CAMPO = "banco:sel_campo"
-CUSTOM_SELECT_COLUNA_FILTRO = "banco:sel_col_filtro"
 CUSTOM_BTN_ANTERIOR = "banco:pag_ant"
 CUSTOM_BTN_PROXIMA = "banco:pag_prox"
 CUSTOM_BTN_ATUALIZAR = "banco:atualizar"
 CUSTOM_BTN_INSERIR = "banco:inserir"
 CUSTOM_BTN_APAGAR = "banco:apagar"
-CUSTOM_BTN_EDITAR = "banco:editar"
 CUSTOM_BTN_VOLTAR = "banco:voltar"
 CUSTOM_BTN_BUSCAR = "banco:buscar"
 CUSTOM_BTN_LIMPAR_FILTRO = "banco:limpar_filtro"
+
+COR_TABELAS = discord.Color.dark_teal()
+COR_LINHAS = discord.Color.blurple()
+COR_DETALHE = discord.Color.orange()
 
 
 def _membro_e_admin(membro: discord.Member | discord.User) -> bool:
     if not isinstance(membro, discord.Member):
         return False
     return bool(membro.guild_permissions.administrator)
+
+
+def _placeholder_curto(texto: str, limite: int = 100) -> str:
+    """Garante o limite do Discord em placeholders (≤ 100)."""
+    texto = (texto or "").strip()
+    if len(texto) <= limite:
+        return texto
+    return texto[: limite - 1] + "…"
 
 
 class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
@@ -89,7 +101,6 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         self.mensagem_status = mensagem_status
         self.filtros = dict(filtros) if filtros else {}
         self.busca_livre = (busca_livre or "").strip() or None
-        # preenchidos de forma assíncrona antes do envio quando possível
         self._total_linhas = 0
         self._linhas: list[dict] = []
 
@@ -105,9 +116,7 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         filtros: dict[str, str] | None = None,
         busca_livre: str | None = None,
     ) -> PainelBancoView:
-        """
-        Monta a view já com dados do banco carregados.
-        """
+        """Monta a view já com dados do banco carregados."""
         view = cls(
             nome_da_tabela=nome_da_tabela,
             pagina=pagina,
@@ -165,29 +174,36 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
     def _montar_lista_tabelas(self) -> None:
         tabelas = listar_nomes_das_tabelas()
         texto = (
-            "# Painel do banco de dados\n"
-            "Escolha uma **tabela** para listar, buscar, editar ou apagar linhas.\n"
+            "# 🗄️ Painel do banco\n"
+            "Escolha uma **tabela** para listar, buscar, editar ou apagar linhas.\n\n"
             "-# Somente administradores · alterações são imediatas no PostgreSQL"
         )
         if self.mensagem_status:
             texto += f"\n\n> {self.mensagem_status}"
 
-        componentes: list = [discord.ui.TextDisplay(texto)]
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes: list = [
+            discord.ui.TextDisplay(texto),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay(
+                f"### 📋 Tabelas disponíveis\n"
+                f"`{len(tabelas)}` tabela(s) registradas no bot."
+            ),
+        ]
 
-        # Discord limita 25 opções por select — fatia em blocos
         for indice_bloco in range(0, len(tabelas), 25):
             bloco = tabelas[indice_bloco : indice_bloco + 25]
             opcoes = [
                 discord.SelectOption(
                     label=nome[:100],
                     value=nome,
-                    description=f"Tabela `{nome}`"[:100],
+                    description=_placeholder_curto(f"Tabela `{nome}`"),
                 )
                 for nome in bloco
             ]
             seletor = discord.ui.Select(
-                placeholder=f"Tabelas ({indice_bloco + 1}–{indice_bloco + len(bloco)})…",
+                placeholder=_placeholder_curto(
+                    f"Tabelas ({indice_bloco + 1}–{indice_bloco + len(bloco)})…"
+                ),
                 options=opcoes,
                 custom_id=f"{CUSTOM_SELECT_TABELA}:{indice_bloco}",
                 min_values=1,
@@ -201,7 +217,7 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(
             discord.ui.Container(
                 *componentes,
-                accent_color=discord.Color.dark_teal(),
+                accent_color=COR_TABELAS,
             )
         )
 
@@ -210,23 +226,25 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         total = self._total_linhas
         total_paginas = max(1, (total + LINHAS_POR_PAGINA - 1) // LINHAS_POR_PAGINA)
         pagina_humana = self.pagina + 1
-
         filtro_txt = texto_do_filtro_ativo(self.filtros, self.busca_livre)
+
         texto = (
-            f"# Tabela `{nome}`\n"
-            f"**{total}** linha(s) · página **{pagina_humana}/{total_paginas}**\n"
-            "Selecione uma linha para ver detalhes, editar ou apagar.\n"
-            "Use **Buscar** para achar por `discord_id`, `id_fivem` ou qualquer coluna."
+            f"# 🗄️ Tabela `{nome}`\n"
+            f"**{total}** linha(s) · página **{pagina_humana}/{total_paginas}**\n\n"
+            "Selecione uma linha para ver detalhes, editar ou apagar."
         )
         if filtro_txt:
-            texto += f"\n\n🔍 Filtro ativo: {filtro_txt}"
+            texto += f"\n\n🔍 **Filtro ativo:** {filtro_txt}"
         if self.mensagem_status:
             texto += f"\n\n> {self.mensagem_status}"
 
-        componentes: list = [discord.ui.TextDisplay(texto)]
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        componentes: list = [
+            discord.ui.TextDisplay(texto),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+        ]
 
         if self._linhas:
+            componentes.append(discord.ui.TextDisplay("### 📄 Linhas desta página"))
             opcoes = []
             for linha in self._linhas:
                 pk = pk_da_linha(nome, linha)
@@ -237,7 +255,7 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
                     )
                 )
             seletor = discord.ui.Select(
-                placeholder="Escolher linha…",
+                placeholder=_placeholder_curto("Escolher linha…"),
                 options=opcoes,
                 custom_id=CUSTOM_SELECT_LINHA,
                 min_values=1,
@@ -250,16 +268,24 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         else:
             componentes.append(
                 discord.ui.TextDisplay(
-                    "-# Nenhuma linha nesta página"
-                    + (" (com o filtro atual)." if filtro_txt else ".")
+                    "### 📄 Linhas desta página\n"
+                    "-# Nenhuma linha" + (" com o filtro atual." if filtro_txt else ".")
                 )
             )
 
-        # busca / filtro
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.TextDisplay(
+                "### 🔍 Busca e navegação\n"
+                "-# Busque por `discord_id`, `id_fivem` ou qualquer coluna."
+            )
+        )
+
         linha_busca = discord.ui.ActionRow()
         botao_buscar = discord.ui.Button(
             label="Buscar",
             style=discord.ButtonStyle.primary,
+            emoji="🔍",
             custom_id=CUSTOM_BTN_BUSCAR,
         )
         botao_buscar.callback = self._ao_buscar
@@ -269,18 +295,28 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         botao_limpar = discord.ui.Button(
             label="Limpar filtro",
             style=discord.ButtonStyle.secondary,
+            emoji="🧹",
             custom_id=CUSTOM_BTN_LIMPAR_FILTRO,
             disabled=not tem_filtro,
         )
         botao_limpar.callback = self._ao_limpar_filtro
         linha_busca.add_item(botao_limpar)
+
+        botao_at = discord.ui.Button(
+            label="Atualizar",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔄",
+            custom_id=CUSTOM_BTN_ATUALIZAR,
+        )
+        botao_at.callback = self._ao_atualizar
+        linha_busca.add_item(botao_at)
         componentes.append(linha_busca)
 
-        # navegação
         linha_nav = discord.ui.ActionRow()
         botao_ant = discord.ui.Button(
             label="Anterior",
             style=discord.ButtonStyle.secondary,
+            emoji="◀️",
             custom_id=CUSTOM_BTN_ANTERIOR,
             disabled=self.pagina <= 0,
         )
@@ -288,19 +324,22 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         botao_prox = discord.ui.Button(
             label="Próxima",
             style=discord.ButtonStyle.secondary,
+            emoji="▶️",
             custom_id=CUSTOM_BTN_PROXIMA,
             disabled=pagina_humana >= total_paginas,
         )
         botao_prox.callback = self._ao_pagina_proxima
         botao_ins = discord.ui.Button(
-            label="Inserir linha",
+            label="Inserir",
             style=discord.ButtonStyle.success,
+            emoji="➕",
             custom_id=CUSTOM_BTN_INSERIR,
         )
         botao_ins.callback = self._ao_inserir
         botao_vol = discord.ui.Button(
             label="Tabelas",
             style=discord.ButtonStyle.primary,
+            emoji="📋",
             custom_id=CUSTOM_BTN_VOLTAR,
         )
         botao_vol.callback = self._ao_voltar_tabelas
@@ -310,20 +349,10 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         linha_nav.add_item(botao_vol)
         componentes.append(linha_nav)
 
-        botao_at = discord.ui.Button(
-            label="Atualizar",
-            style=discord.ButtonStyle.secondary,
-            custom_id=CUSTOM_BTN_ATUALIZAR,
-        )
-        botao_at.callback = self._ao_atualizar
-        linha_at = discord.ui.ActionRow()
-        linha_at.add_item(botao_at)
-        componentes.append(linha_at)
-
         self.add_item(
             discord.ui.Container(
                 *componentes,
-                accent_color=discord.Color.blurple(),
+                accent_color=COR_LINHAS,
             )
         )
 
@@ -337,30 +366,36 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
                 texto_valor = "∅" if valor is None else str(valor)
                 if len(texto_valor) > 80:
                     texto_valor = texto_valor[:77] + "..."
-                partes.append(f"`{chave}`: {texto_valor}")
+                partes.append(f"> - **{chave}:** `{texto_valor}`")
             detalhes = "\n".join(partes)
-        componentes: list = [
-            discord.ui.TextDisplay(
-                f"# Linha em `{nome}`\n"
-                f"PK: `{self.linha_selecionada_pk}`\n\n"
-                f"{detalhes or '_Sem dados._'}\n\n"
-                "Escolha um campo para editar, ou apague a linha."
-            )
-        ]
+
+        texto = (
+            f"# 🗄️ Linha em `{nome}`\n"
+            f"**PK:** `{self.linha_selecionada_pk}`\n\n"
+            f"### 📌 Campos\n"
+            f"{detalhes or '_Sem dados._'}"
+        )
         if self.mensagem_status:
-            componentes.append(discord.ui.TextDisplay(f"> {self.mensagem_status}"))
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            texto += f"\n\n> {self.mensagem_status}"
+
+        componentes: list = [
+            discord.ui.TextDisplay(texto),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay(
+                "### ✏️ Ações\n-# Escolha um campo para editar, ou apague a linha."
+            ),
+        ]
 
         colunas = listar_colunas(nome)
-        # select de campos (até 25)
+        pks = set(listar_chaves_primarias(nome))
         opcoes = [
             discord.SelectOption(label=coluna[:100], value=coluna)
             for coluna in colunas[:25]
-            if coluna not in listar_chaves_primarias(nome)
+            if coluna not in pks
         ]
         if opcoes:
             seletor = discord.ui.Select(
-                placeholder="Campo para editar…",
+                placeholder=_placeholder_curto("Campo para editar…"),
                 options=opcoes,
                 custom_id=CUSTOM_SELECT_CAMPO,
             )
@@ -373,12 +408,14 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         botao_apagar = discord.ui.Button(
             label="Apagar linha",
             style=discord.ButtonStyle.danger,
+            emoji="🗑️",
             custom_id=CUSTOM_BTN_APAGAR,
         )
         botao_apagar.callback = self._ao_apagar
         botao_voltar = discord.ui.Button(
             label="Voltar às linhas",
             style=discord.ButtonStyle.secondary,
+            emoji="◀️",
             custom_id=CUSTOM_BTN_VOLTAR,
         )
         botao_voltar.callback = self._ao_voltar_linhas
@@ -389,7 +426,7 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(
             discord.ui.Container(
                 *componentes,
-                accent_color=discord.Color.orange(),
+                accent_color=COR_DETALHE,
             )
         )
 
@@ -631,7 +668,7 @@ class PainelBancoView(LoggingViewMixin, discord.ui.LayoutView):
         )
 
 
-class ModalBuscarLinha(LoggingModalMixin, discord.ui.Modal, title="Buscar no banco"):
+class ModalBuscarLinha(LoggingModalMixin, discord.ui.Modal, title="🔍 Buscar no banco"):
     """
     Busca por coluna específica e/ou termo livre (discord_id, id_fivem, etc.).
     """
@@ -647,25 +684,20 @@ class ModalBuscarLinha(LoggingModalMixin, discord.ui.Modal, title="Buscar no ban
         self.nome_da_tabela = nome_da_tabela
         self.filtros_atuais = dict(filtros_atuais) if filtros_atuais else {}
 
-        colunas = listar_colunas_buscaveis(nome_da_tabela)
-        dica_colunas = ", ".join(colunas[:8])
-        if len(colunas) > 8:
-            dica_colunas += ", …"
-
         self.coluna = discord.ui.TextInput(
             label="Coluna (opcional)",
             style=discord.TextStyle.short,
             required=False,
             max_length=60,
-            placeholder=f"ex: discord_id, id_fivem… ({dica_colunas[:80]})",
+            placeholder=_placeholder_curto("ex: discord_id, id_fivem, status"),
             default="",
         )
         self.valor_coluna = discord.ui.TextInput(
-            label="Valor da coluna (igualdade)",
+            label="Valor da coluna",
             style=discord.TextStyle.short,
             required=False,
             max_length=100,
-            placeholder="ex: 123456789012345678 · vazio = ignorar",
+            placeholder=_placeholder_curto("igualdade exata · vazio = ignorar"),
             default="",
         )
         self.busca_livre = discord.ui.TextInput(
@@ -673,7 +705,7 @@ class ModalBuscarLinha(LoggingModalMixin, discord.ui.Modal, title="Buscar no ban
             style=discord.TextStyle.short,
             required=False,
             max_length=100,
-            placeholder="Cola discord_id, id_fivem ou trecho de texto",
+            placeholder=_placeholder_curto("cole discord_id ou id_fivem"),
             default=(busca_livre_atual or "")[:100],
         )
         self.add_item(self.coluna)
@@ -721,7 +753,6 @@ class ModalBuscarLinha(LoggingModalMixin, discord.ui.Modal, title="Buscar no ban
             return
 
         try:
-            # valida conversão antes de aplicar (evita tela vazia por tipo errado)
             total = await contar_linhas(
                 self.nome_da_tabela,
                 filtros=filtros or None,
@@ -746,7 +777,7 @@ class ModalBuscarLinha(LoggingModalMixin, discord.ui.Modal, title="Buscar no ban
         await interacao.response.edit_message(view=view)
 
 
-class ModalEditarCampo(LoggingModalMixin, discord.ui.Modal, title="Editar campo"):
+class ModalEditarCampo(LoggingModalMixin, discord.ui.Modal, title="✏️ Editar campo"):
     def __init__(
         self,
         *,
@@ -766,11 +797,12 @@ class ModalEditarCampo(LoggingModalMixin, discord.ui.Modal, title="Editar campo"
         self.filtros = filtros
         self.busca_livre = busca_livre
         self.campo = discord.ui.TextInput(
-            label=f"Valor de {nome_do_campo}"[:45],
+            label=_placeholder_curto(f"Valor de {nome_do_campo}", 45),
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=1000,
             default=str(valor_atual) if valor_atual is not None else "",
+            placeholder=_placeholder_curto("novo valor · null = NULL"),
         )
         self.add_item(self.campo)
 
@@ -809,10 +841,10 @@ class ModalEditarCampo(LoggingModalMixin, discord.ui.Modal, title="Editar campo"
         await interacao.response.edit_message(view=view)
 
 
-class ModalInserirLinha(LoggingModalMixin, discord.ui.Modal, title="Inserir linha"):
+class ModalInserirLinha(LoggingModalMixin, discord.ui.Modal, title="➕ Inserir linha"):
     """
     Discord só permite 5 campos no modal. Usa as primeiras colunas
-    não-PK autoincrementáveis quando possível.
+    não-PK quando possível.
     """
 
     def __init__(
@@ -835,7 +867,6 @@ class ModalInserirLinha(LoggingModalMixin, discord.ui.Modal, title="Inserir linh
         colunas = [
             coluna for coluna in listar_colunas(nome_da_tabela) if coluna not in pks
         ][:5]
-        # se não houver colunas além da PK, inclui a PK
         if not colunas:
             colunas = list(listar_chaves_primarias(nome_da_tabela))[:5]
 
@@ -845,7 +876,7 @@ class ModalInserirLinha(LoggingModalMixin, discord.ui.Modal, title="Inserir linh
                 style=discord.TextStyle.short,
                 required=False,
                 max_length=200,
-                placeholder="vazio = omitir · null = NULL",
+                placeholder=_placeholder_curto("vazio = omitir · null = NULL"),
             )
             self.campos_usados.append(coluna)
             self.inputs.append(entrada)
