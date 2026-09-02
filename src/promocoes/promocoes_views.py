@@ -13,6 +13,7 @@ from src.promocoes.promocoes_service import (
     decidir_solicitacao,
     listar_cargos_destino,
     membro_e_paramedico,
+    membro_ja_tem_area,
     montar_checklist_trilha_async,
     obter_solicitacao,
     obter_solicitacao_pendente,
@@ -213,9 +214,9 @@ class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         cargo_destino = valores[0]
-        # Paramédico pedindo cargo pretendido = primeira área: só cursos.
-        # Demais cargos / seguir trilha = checklist completo com metas.
-        if membro_e_paramedico(membro):
+        # Paramédico SEM área ainda = primeira área (cursos + horas da área).
+        # Quem já tem área ou outro cargo = checklist completo com metas.
+        if membro_e_paramedico(membro) and not membro_ja_tem_area(membro):
             candidatas = trilhas_para_cargo_destino(cargo_destino)
             trilha = candidatas[0] if candidatas else None
             modo = "primeira_area_paramedico"
@@ -581,7 +582,8 @@ async def processar_escolha_trilha(
 
     ``modo``:
     - ``trilha``: cargo origem + cursos + plantão + metas (Seguir trilha).
-    - ``primeira_area_paramedico``: só cursos (Paramédico no cargo pretendido).
+    - ``primeira_area_paramedico``: cursos + plantão da área, sem metas
+      de produção (Paramédico ainda sem área).
     """
     membro = interacao.user
     if not isinstance(membro, discord.Member):

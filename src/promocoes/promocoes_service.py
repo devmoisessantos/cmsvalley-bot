@@ -8,6 +8,11 @@ import discord
 from sqlalchemy import select
 
 from src.config import (
+    CARGO_DOUTOR,
+    CARGO_INSTRUTOR,
+    CARGO_PARAMEDICO,
+    CARGO_PSICOLOGO,
+    CARGO_RECRUTADOR,
     CARGOS,
     CARGOS_PUNICOES,
     META_PROMOCAO_MARGEM,
@@ -177,13 +182,25 @@ def _formatar_falta_legivel(segundos: int) -> str:
     return "".join(partes) if horas else f"{minutos}min{segs:02d}s"
 
 
-# Cargo que pode pedir primeira área só com cursos (sem metas da trilha)
-CARGO_PARAMEDICO = "🚑・Paramédico"
+CARGOS_DE_AREA = (
+    CARGO_DOUTOR,
+    CARGO_PSICOLOGO,
+    CARGO_RECRUTADOR,
+    CARGO_INSTRUTOR,
+)
 
 
 def membro_e_paramedico(membro: discord.Member) -> bool:
     """True se o membro tem o cargo de Paramédico."""
     return membro_tem_cargo_nome(membro, CARGO_PARAMEDICO)
+
+
+def membro_ja_tem_area(membro: discord.Member) -> bool:
+    """True se o membro já possui algum cargo de área médica."""
+    for nome_cargo in CARGOS_DE_AREA:
+        if membro_tem_cargo_nome(membro, nome_cargo):
+            return True
+    return False
 
 
 def montar_checklist_trilha(
@@ -202,22 +219,20 @@ def montar_checklist_trilha(
 
     Modos:
     - ``trilha`` (padrão): cargo de origem + cursos + plantão + metas.
-    - ``primeira_area_paramedico``: só cursos essenciais do destino (sem metas
-      nem plantão mínimo). Usado quando o Paramédico escolhe cargo pretendido
-      em vez de seguir a trilha sequencial.
+    - ``primeira_area_paramedico``: cursos + plantão da área escolhida,
+      sem metas de produção. Usado quando o Paramédico ainda não tem área.
     """
     pode_enviar = True
     pendencias: list[str] = []
-    modo_livre = modo == "primeira_area_paramedico" or (
-        not exigir_metas and not exigir_cargo_origem and not exigir_plantao
-    )
+    modo_primeira_area = modo == "primeira_area_paramedico"
 
     # ── Situação atual ─────────────────────────────────────────────
     bloco_situacao: list[str] = ["## 📌 Situação Atual"]
-    if modo_livre:
+    if modo_primeira_area:
         bloco_situacao.append(
-            "- ℹ️ **Modo Paramédico — primeira área:** só cursos obrigatórios "
-            "(sem metas de laudos/chamadas/recrutamentos)"
+            "- ℹ️ **Modo Paramédico — primeira área:** cursos práticos + "
+            "curso da área + horas de plantão da área (sem metas de "
+            "laudos/chamadas/recrutamentos)"
         )
 
     advertencias = membro_tem_advertencia_bloqueante(membro)
@@ -382,13 +397,17 @@ def montar_checklist_trilha(
     if observacao:
         bloco_plantao.append(f"> 📌 *{observacao}*")
 
+    if trilha.get("exige_avaliacao_hp"):
+        bloco_metas.append(
+            "- ℹ️ **Avaliação do Responsável HP obrigatória** nesta trilha "
+            "(a diretoria confere com `/avaliacao-membro`)."
+        )
+
     # ── Resumo ─────────────────────────────────────────────────────
     bloco_resumo: list[str] = ["## 🎯 Resumo"]
     if pode_enviar:
         bloco_resumo.append("- ✅ **Todos os pré-requisitos foram atendidos.**")
     else:
-        bloco_resumo.append("## 🎯 Resumo das Pendências")
-        # remove header duplicate - rebuild
         bloco_resumo = ["## 🎯 Resumo das Pendências"]
         for indice, item in enumerate(pendencias, start=1):
             bloco_resumo.append(f"{indice}. {item}")
@@ -505,7 +524,8 @@ async def montar_checklist_trilha_async(
     Checklist completo.
 
     - modo ``trilha``: cargo origem + cursos + plantão + metas.
-    - modo ``primeira_area_paramedico``: só cursos (Paramédico escolhendo área).
+    - modo ``primeira_area_paramedico``: cursos + plantão da área, sem
+      metas de produção (Paramédico ainda sem área).
     """
     segundos = await obter_segundos_plantao_totais(membro.id)
     contagens = await _contar_metas_do_membro(membro.id)
@@ -516,7 +536,7 @@ async def montar_checklist_trilha_async(
             segundos_plantao=segundos,
             contagens_extras=contagens,
             exigir_cargo_origem=False,
-            exigir_plantao=False,
+            exigir_plantao=True,
             exigir_metas=False,
             modo=modo,
         )
