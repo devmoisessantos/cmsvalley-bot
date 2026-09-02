@@ -33,7 +33,11 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
     Os cargos exibidos no select são apenas aqueles que o executor pode gerenciar.
     """
 
-    def __init__(self, membro_executor: discord.Member):
+    def __init__(
+        self,
+        membro_executor: discord.Member,
+        membro_pre_selecionado: discord.Member | None = None,
+    ):
         super().__init__(timeout=180)
 
         # Descobre quais escopos o executor pertence
@@ -52,8 +56,8 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
                 if nome_do_cargo not in self.nomes_dos_cargos_permitidos:
                     self.nomes_dos_cargos_permitidos.append(nome_do_cargo)
 
-        # Estado da seleção atual
-        self.candidato_selecionado: discord.Member | None = None
+        # Estado da seleção atual (pré-preenchido quando vem da ficha admin)
+        self.candidato_selecionado: discord.Member | None = membro_pre_selecionado
         self.cargo_selecionado: str | None = None
 
         # Monta os componentes visuais do painel

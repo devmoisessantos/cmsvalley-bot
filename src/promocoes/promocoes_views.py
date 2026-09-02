@@ -12,6 +12,7 @@ from src.promocoes.promocoes_service import (
     criar_solicitacao_promocao,
     decidir_solicitacao,
     listar_cargos_destino,
+    membro_e_paramedico,
     montar_checklist_trilha_async,
     obter_solicitacao,
     obter_solicitacao_pendente,
@@ -19,6 +20,7 @@ from src.promocoes.promocoes_service import (
     obter_trilha_por_destino_e_origem,
     registrar_historico,
     trilhas_a_partir_do_membro,
+    trilhas_para_cargo_destino,
 )
 from src.utils.error_handling import (
     LoggingViewMixin,
@@ -65,8 +67,8 @@ class PainelPromocaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         texto = (
             "Peça avanço de cargo conforme a hierarquia do hospital.\n\n"
-            "O bot confere **advertências**, **cargo atual** e **cursos** "
-            "antes de enviar à diretoria."
+            "O bot confere **advertências**, **cursos**, **plantão** e **metas** "
+            "(laudos, chamadas, recrutamentos) conforme o modo escolhido."
         )
         if url_icone:
             bloco_topo = discord.ui.Section(
@@ -83,12 +85,12 @@ class PainelPromocaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 discord.ui.TextDisplay(
                     "## 📌 Antes de solicitar\n\n"
-                    "✅ Não possua **Adv 01** ou **Adv 02** ativa.\n"
-                    "✅ Tenha o cargo de origem da promoção desejada.\n"
-                    "✅ Conclua os **cursos obrigatórios** da trilha.\n"
-                    "✅ Use **cargo pretendido** para escolher o destino direto.\n"
-                    "✅ Use **Seguir trilha** para ver só o que parte do seu cargo "
-                    "atual."
+                    "✅ Sem **Adv 01** / **Adv 02** ativa.\n"
+                    "✅ **Seguir trilha** — exige cargo de origem, cursos, plantão e "
+                    "**metas** (chamadas, laudos, etc.).\n"
+                    "✅ **Cargo pretendido** — para **Paramédico** pedindo primeira "
+                    "área (ex.: Psicólogo): só **cursos obrigatórios**, sem metas.\n"
+                    "✅ Demais cargos no menu seguem a trilha completa."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 linha,
@@ -210,18 +212,27 @@ class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Use o painel no servidor."],
             )
             return
-        trilha = obter_trilha_por_destino_e_origem(valores[0], membro)
+        cargo_destino = valores[0]
+        # Paramédico pedindo cargo pretendido = primeira área: só cursos.
+        # Demais cargos / seguir trilha = checklist completo com metas.
+        if membro_e_paramedico(membro):
+            candidatas = trilhas_para_cargo_destino(cargo_destino)
+            trilha = candidatas[0] if candidatas else None
+            modo = "primeira_area_paramedico"
+        else:
+            trilha = obter_trilha_por_destino_e_origem(cargo_destino, membro)
+            modo = "trilha"
         if trilha is None:
             await responder_erro(
                 interacao,
                 titulo="Trilha não encontrada",
                 linhas=[
-                    f"Não há promoção cadastrada para `{valores[0]}`.",
+                    f"Não há promoção cadastrada para `{cargo_destino}`.",
                     "Fale com a diretoria ou use **Seguir trilha**.",
                 ],
             )
             return
-        await processar_escolha_trilha(interacao, trilha["chave"])
+        await processar_escolha_trilha(interacao, trilha["chave"], modo=modo)
 
     async def _ao_seguir_trilha(self, interacao: discord.Interaction):
         if interacao.user.id != self.solicitante_id:
@@ -316,7 +327,7 @@ class ViewSelectTrilha(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Escolha uma trilha."],
             )
             return
-        await processar_escolha_trilha(interacao, valores[0])
+        await processar_escolha_trilha(interacao, valores[0], modo="trilha")
 
 
 class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
@@ -562,16 +573,15 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
 async def processar_escolha_trilha(
     interacao: discord.Interaction,
     chave_trilha: str,
+    *,
+    modo: str = "trilha",
 ) -> None:
     """
     Atende o clique do membro numa trilha de carreira.
 
-    Confere que quem clicou e um membro do servidor e que a trilha escolhida existe
-    na configuracao. Depois segue para as regras de promocao daquela trilha.
-
-    A conferencia de que a pessoa e membro existe porque o painel pode ser clicado
-    na mensagem direta, onde o Discord nao informa cargos — e sem cargo nao ha como
-    decidir promocao.
+    ``modo``:
+    - ``trilha``: cargo origem + cursos + plantão + metas (Seguir trilha).
+    - ``primeira_area_paramedico``: só cursos (Paramédico no cargo pretendido).
     """
     membro = interacao.user
     if not isinstance(membro, discord.Member):
@@ -591,11 +601,14 @@ async def processar_escolha_trilha(
         )
         return
 
+    if modo == "primeira_area_paramedico" and not membro_e_paramedico(membro):
+        modo = "trilha"
+
     try:
         if not interacao.response.is_done():
             await interacao.response.defer(ephemeral=True)
 
-        checklist = await montar_checklist_trilha_async(membro, trilha)
+        checklist = await montar_checklist_trilha_async(membro, trilha, modo=modo)
         if not checklist.get("pode_enviar"):
             await responder_aviso(
                 interacao,
@@ -628,10 +641,17 @@ async def processar_escolha_trilha(
             )
             return
 
+        # Em primeira área, registra origem real (Paramédico), não o de_cargo da trilha
+        cargo_origem_registro = (
+            "🚑・Paramédico"
+            if modo == "primeira_area_paramedico"
+            else trilha["de_cargo"]
+        )
         registro = await criar_solicitacao_promocao(
             discord_id=membro.id,
-            chave_trilha=chave_trilha,
-            cargo_de=trilha["de_cargo"],
+            chave_trilha=chave_trilha
+            + (":primeira_area" if modo == "primeira_area_paramedico" else ""),
+            cargo_de=cargo_origem_registro,
             cargo_para=trilha["para_cargo"],
             resumo_checklist="\n".join(checklist.get("linhas") or []),
         )

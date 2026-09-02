@@ -177,22 +177,48 @@ def _formatar_falta_legivel(segundos: int) -> str:
     return "".join(partes) if horas else f"{minutos}min{segs:02d}s"
 
 
+# Cargo que pode pedir primeira área só com cursos (sem metas da trilha)
+CARGO_PARAMEDICO = "🚑・Paramédico"
+
+
+def membro_e_paramedico(membro: discord.Member) -> bool:
+    """True se o membro tem o cargo de Paramédico."""
+    return membro_tem_cargo_nome(membro, CARGO_PARAMEDICO)
+
+
 def montar_checklist_trilha(
     membro: discord.Member,
     trilha: dict,
     *,
     segundos_plantao: int | None = None,
     contagens_extras: dict | None = None,
+    exigir_cargo_origem: bool = True,
+    exigir_plantao: bool = True,
+    exigir_metas: bool = True,
+    modo: str = "trilha",
 ) -> dict:
     """
     Avalia requisitos e monta o corpo do CardView em seções.
-    (Situação atual → Cursos → Plantão → Resumo)
+
+    Modos:
+    - ``trilha`` (padrão): cargo de origem + cursos + plantão + metas.
+    - ``primeira_area_paramedico``: só cursos essenciais do destino (sem metas
+      nem plantão mínimo). Usado quando o Paramédico escolhe cargo pretendido
+      em vez de seguir a trilha sequencial.
     """
     pode_enviar = True
     pendencias: list[str] = []
+    modo_livre = modo == "primeira_area_paramedico" or (
+        not exigir_metas and not exigir_cargo_origem and not exigir_plantao
+    )
 
     # ── Situação atual ─────────────────────────────────────────────
     bloco_situacao: list[str] = ["## 📌 Situação Atual"]
+    if modo_livre:
+        bloco_situacao.append(
+            "- ℹ️ **Modo Paramédico — primeira área:** só cursos obrigatórios "
+            "(sem metas de laudos/chamadas/recrutamentos)"
+        )
 
     advertencias = membro_tem_advertencia_bloqueante(membro)
     if advertencias:
@@ -214,14 +240,26 @@ def montar_checklist_trilha(
         pode_enviar = False
         bloco_situacao.append(f"- ⚠️ Você **já possui** o cargo `{cargo_para}`")
         pendencias.append(f"Cargo destino `{cargo_para}` já atribuído")
-    elif tem_de:
-        bloco_situacao.append(f"- ✅ Cargo atual: `{cargo_de}`")
+    elif exigir_cargo_origem:
+        if tem_de:
+            bloco_situacao.append(f"- ✅ Cargo atual: `{cargo_de}`")
+        else:
+            pode_enviar = False
+            bloco_situacao.append(
+                f"- ❌ Cargo atual exigido: `{cargo_de}` (você não possui)"
+            )
+            pendencias.append(f"Obter o cargo `{cargo_de}`")
     else:
-        pode_enviar = False
-        bloco_situacao.append(
-            f"- ❌ Cargo atual exigido: `{cargo_de}` (você não possui)"
-        )
-        pendencias.append(f"Obter o cargo `{cargo_de}`")
+        # Primeira área: não exige o cargo intermediário da trilha
+        if membro_e_paramedico(membro):
+            bloco_situacao.append(
+                f"- ✅ Paramédico pedindo área `{cargo_para}` "
+                f"(origem da trilha `{cargo_de}` dispensada neste modo)"
+            )
+        else:
+            bloco_situacao.append(
+                f"- ℹ️ Cargo de origem da trilha (`{cargo_de}`) não exigido neste modo"
+            )
 
     # ── Cursos ─────────────────────────────────────────────────────
     bloco_cursos: list[str] = ["## 📚 Cursos Obrigatórios"]
@@ -265,7 +303,12 @@ def montar_checklist_trilha(
         margem = 1.0
     minimo_aceitavel = int(segundos_minimos * margem)
 
-    if segundos_minimos > 0:
+    if not exigir_plantao:
+        bloco_plantao.append(
+            f"- ℹ️ Plantão **não exigido** neste modo "
+            f"(registrado: `{formatar_hms(total_seg)}`)"
+        )
+    elif segundos_minimos > 0:
         if total_seg >= segundos_minimos:
             bloco_plantao.append(
                 f"- ✅ **Plantão completo:** `{formatar_hms(total_seg)}` "
@@ -302,33 +345,38 @@ def montar_checklist_trilha(
     bloco_metas: list[str] = ["## 🎯 Metas da Trilha"]
     contagens = contagens_extras or {}
     teve_meta_extra = False
-    for chave_meta, rotulo_meta in (
-        ("meta_laudos", "Laudos"),
-        ("meta_recrutamentos", "Recrutamentos"),
-        ("meta_chamadas", "Chamadas"),
-        ("meta_cursos_aplicados", "Cursos aplicados"),
-    ):
-        exigido = int(trilha.get(chave_meta) or 0)
-        if exigido <= 0:
-            continue
-        teve_meta_extra = True
-        atual = int(contagens.get(chave_meta, 0) or 0)
-        minimo_meta = int(exigido * margem)
-        if atual >= exigido:
-            bloco_metas.append(f"- ✅ **{rotulo_meta}:** `{atual}` (meta `{exigido}`)")
-        elif atual >= minimo_meta:
-            bloco_metas.append(
-                f"- ✅ **{rotulo_meta} (próximo):** `{atual}` "
-                f"(meta `{exigido}`, aceito `{minimo_meta}`+)"
-            )
-        else:
-            pode_enviar = False
-            bloco_metas.append(f"- ❌ **{rotulo_meta}:** `{atual}` de `{exigido}`")
-            pendencias.append(
-                f"Atingir meta de {rotulo_meta.lower()} ({atual}/{exigido})"
-            )
-    if not teve_meta_extra:
-        bloco_metas.append("- ℹ️ Nenhuma meta extra configurada nesta trilha")
+    if not exigir_metas:
+        bloco_metas.append("- ℹ️ Metas **dispensadas** neste modo (só cursos + conduta)")
+    else:
+        for chave_meta, rotulo_meta in (
+            ("meta_laudos", "Laudos"),
+            ("meta_recrutamentos", "Recrutamentos"),
+            ("meta_chamadas", "Chamadas"),
+            ("meta_cursos_aplicados", "Cursos aplicados"),
+        ):
+            exigido = int(trilha.get(chave_meta) or 0)
+            if exigido <= 0:
+                continue
+            teve_meta_extra = True
+            atual = int(contagens.get(chave_meta, 0) or 0)
+            minimo_meta = int(exigido * margem)
+            if atual >= exigido:
+                bloco_metas.append(
+                    f"- ✅ **{rotulo_meta}:** `{atual}` (meta `{exigido}`)"
+                )
+            elif atual >= minimo_meta:
+                bloco_metas.append(
+                    f"- ✅ **{rotulo_meta} (próximo):** `{atual}` "
+                    f"(meta `{exigido}`, aceito `{minimo_meta}`+)"
+                )
+            else:
+                pode_enviar = False
+                bloco_metas.append(f"- ❌ **{rotulo_meta}:** `{atual}` de `{exigido}`")
+                pendencias.append(
+                    f"Atingir meta de {rotulo_meta.lower()} ({atual}/{exigido})"
+                )
+        if not teve_meta_extra:
+            bloco_metas.append("- ℹ️ Nenhuma meta extra configurada nesta trilha")
 
     observacao = (trilha.get("observacao") or "").strip()
     if observacao:
@@ -372,6 +420,7 @@ def montar_checklist_trilha(
         "chave": trilha["chave"],
         "rotulo": trilha.get("rotulo") or trilha["chave"],
         "segundos_plantao": total_seg,
+        "modo": modo,
         "titulo_card": (
             "📋 Requisitos completos" if pode_enviar else "📋 Requisitos incompletos"
         ),
@@ -380,17 +429,19 @@ def montar_checklist_trilha(
 
 async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
     """
-    Conta laudos, recrutamentos, chamadas e cursos aplicados do membro.
+    Conta laudos, recrutamentos, chamadas (como doutor) e cursos aplicados.
 
-    Usa o ORM (sem SQL solto). Valores 0 quando a tabela não tiver registros.
+    Usa os models reais do projeto:
+    - Laudo.discord_id_psicologo
+    - Recrutamento (recrutador + APROVADO)
+    - Chamada.doutor_id
+    - SolicitacaoCurso.instrutor_id
     """
-    from sqlalchemy import (
-        func,
-        select,
-    )
+    from sqlalchemy import func
 
-    from src.database.conexao import async_session
     from src.database.models import (
+        Chamada,
+        Laudo,
         Recrutamento,
         SolicitacaoCurso,
     )
@@ -402,66 +453,44 @@ async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
         "meta_cursos_aplicados": 0,
     }
 
-    try:
-        from src.laudos.laudos_service import contar_laudos_psicologo
-
-        contagens["meta_laudos"] = int(await contar_laudos_psicologo(discord_id) or 0)
-    except Exception:
-        pass
-
     async with async_session() as sessao:
+        # Laudos emitidos como psicólogo
+        resultado = await sessao.execute(
+            select(func.count())
+            .select_from(Laudo)
+            .where(Laudo.discord_id_psicologo == discord_id)
+        )
+        contagens["meta_laudos"] = int(resultado.scalar_one() or 0)
+
         # Recrutamentos em que a pessoa foi o recrutador e aprovou
-        try:
-            resultado = await sessao.execute(
-                select(func.count())
-                .select_from(Recrutamento)
-                .where(
-                    Recrutamento.discord_id_recrutador == discord_id,
-                    Recrutamento.status == "APROVADO",
-                )
+        resultado = await sessao.execute(
+            select(func.count())
+            .select_from(Recrutamento)
+            .where(
+                Recrutamento.discord_id_recrutador == discord_id,
+                Recrutamento.status == "APROVADO",
             )
-            contagens["meta_recrutamentos"] = int(resultado.scalar() or 0)
-        except Exception:
-            pass
+        )
+        contagens["meta_recrutamentos"] = int(resultado.scalar_one() or 0)
+
+        # Chamadas em que o membro foi o doutor responsável
+        resultado = await sessao.execute(
+            select(func.count())
+            .select_from(Chamada)
+            .where(Chamada.doutor_id == discord_id)
+        )
+        contagens["meta_chamadas"] = int(resultado.scalar_one() or 0)
 
         # Cursos em que atuou como instrutor e concluiu
-        try:
-            resultado = await sessao.execute(
-                select(func.count())
-                .select_from(SolicitacaoCurso)
-                .where(
-                    SolicitacaoCurso.instrutor_id == discord_id,
-                    SolicitacaoCurso.status.in_(
-                        ["CONCLUIDO", "APROVADO", "FINALIZADO"]
-                    ),
-                )
+        resultado = await sessao.execute(
+            select(func.count())
+            .select_from(SolicitacaoCurso)
+            .where(
+                SolicitacaoCurso.instrutor_id == discord_id,
+                SolicitacaoCurso.status.in_(["CONCLUIDO", "APROVADO", "FINALIZADO"]),
             )
-            contagens["meta_cursos_aplicados"] = int(resultado.scalar() or 0)
-        except Exception:
-            pass
-
-        # Chamadas: tenta modelo de presença se existir
-        try:
-            from src.database.models import RegistroChamada
-
-            resultado = await sessao.execute(
-                select(func.count())
-                .select_from(RegistroChamada)
-                .where(RegistroChamada.discord_id == discord_id)
-            )
-            contagens["meta_chamadas"] = int(resultado.scalar() or 0)
-        except Exception:
-            try:
-                from src.database.models import PresencaChamada
-
-                resultado = await sessao.execute(
-                    select(func.count())
-                    .select_from(PresencaChamada)
-                    .where(PresencaChamada.discord_id == discord_id)
-                )
-                contagens["meta_chamadas"] = int(resultado.scalar() or 0)
-            except Exception:
-                pass
+        )
+        contagens["meta_cursos_aplicados"] = int(resultado.scalar_one() or 0)
 
     return contagens
 
@@ -469,15 +498,37 @@ async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
 async def montar_checklist_trilha_async(
     membro: discord.Member,
     trilha: dict,
+    *,
+    modo: str = "trilha",
 ) -> dict:
-    """Checklist completo: horas + metas configuradas na trilha."""
+    """
+    Checklist completo.
+
+    - modo ``trilha``: cargo origem + cursos + plantão + metas.
+    - modo ``primeira_area_paramedico``: só cursos (Paramédico escolhendo área).
+    """
     segundos = await obter_segundos_plantao_totais(membro.id)
     contagens = await _contar_metas_do_membro(membro.id)
+    if modo == "primeira_area_paramedico":
+        return montar_checklist_trilha(
+            membro,
+            trilha,
+            segundos_plantao=segundos,
+            contagens_extras=contagens,
+            exigir_cargo_origem=False,
+            exigir_plantao=False,
+            exigir_metas=False,
+            modo=modo,
+        )
     return montar_checklist_trilha(
         membro,
         trilha,
         segundos_plantao=segundos,
         contagens_extras=contagens,
+        exigir_cargo_origem=True,
+        exigir_plantao=True,
+        exigir_metas=True,
+        modo="trilha",
     )
 
 

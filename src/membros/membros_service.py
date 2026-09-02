@@ -1,4 +1,4 @@
-"""Consultas e formatação da ficha de membros (domínio membros).
+"""Consultas, formatação e mutações da ficha de membros (domínio membros).
 
 Toda lógica de banco de gerenciar-membros fica aqui.
 O painel só monta interface e chama estas funções.
@@ -11,6 +11,7 @@ from datetime import (
     timedelta,
     timezone,
 )
+from typing import Any
 
 import discord
 from sqlalchemy import (
@@ -26,14 +27,35 @@ from src.database.models import (
     CasoBau,
     Chamada,
     EstadoPlantao,
+    EventosGate,
     FaltaChamada,
     HistoricoCargo,
+    HistoricoPromocao,
     Laudo,
     LogPlantao,
+    MovimentacaoMoeda,
+    Presenca,
     Punicao,
     Recrutamento,
+    SnapshotCargosMembro,
+    SolicitacaoAusencia,
+    SolicitacaoCurso,
+    SolicitacaoDemissao,
+    SolicitacaoPromocao,
+    Ticket,
     Usuario,
 )
+
+# Status canônicos da tabela usuarios (evita typo no modal livre)
+STATUS_USUARIO_CANONICOS = (
+    "VISITANTE",
+    "ESTUDANTE",
+    "PROVA",
+    "APROVADO",
+)
+
+
+# ── Resolução de IDs ─────────────────────────────────────────────────────
 
 
 async def resolver_id_fivem_do_membro(discord_id: int) -> str | None:
@@ -106,6 +128,9 @@ async def resolver_discord_id_por_fivem(id_fivem: str) -> int | None:
         return int(valor) if valor else None
 
 
+# ── Leituras básicas ─────────────────────────────────────────────────────
+
+
 async def buscar_estado_plantao(discord_id: int) -> EstadoPlantao | None:
     """Obtém o estado de plantão sem criar um registro inexistente."""
     async with async_session() as sessao:
@@ -134,6 +159,20 @@ async def buscar_recrutamento_como_candidato(discord_id: int) -> Recrutamento | 
             .limit(1)
         )
         return resultado.scalar_one_or_none()
+
+
+async def listar_recrutamentos_candidato(
+    discord_id: int, limite: int = 8
+) -> list[Recrutamento]:
+    """Histórico de processos de recrutamento do membro como candidato."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Recrutamento)
+            .where(Recrutamento.discord_id_candidato == discord_id)
+            .order_by(Recrutamento.id.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
 
 
 async def estatisticas_como_recrutador(
@@ -198,6 +237,32 @@ async def estatisticas_chamadas(discord_id: int) -> tuple[int, int]:
     return faltas_n, doutor_n
 
 
+async def listar_faltas_chamada(discord_id: int, limite: int = 8) -> list[FaltaChamada]:
+    """Últimas faltas de chamada do membro."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(FaltaChamada)
+            .where(FaltaChamada.discord_id == discord_id)
+            .order_by(FaltaChamada.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_chamadas_como_doutor(
+    discord_id: int, limite: int = 5
+) -> list[Chamada]:
+    """Últimas chamadas em que o membro foi o doutor responsável."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Chamada)
+            .where(Chamada.doutor_id == discord_id)
+            .order_by(Chamada.criada_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
 async def tempo_total_segundos_plantao(discord_id: int) -> int:
     """Soma apenas durações concluídas para não contar plantões ainda abertos."""
     async with async_session() as sessao:
@@ -228,11 +293,7 @@ async def listar_punicoes(
     so_ativas: bool | None = None,
     limite: int = 10,
 ) -> list[Punicao]:
-    """Consulta punições com filtro de atividade que distingue histórico e pendências.
-
-    ``so_ativas`` aceita verdadeiro, falso ou nulo; o último caso não filtra o
-    status. O limite evita carregar todo o histórico disciplinar em uma ficha.
-    """
+    """Consulta punições com filtro de atividade."""
     async with async_session() as sessao:
         consulta = select(Punicao).where(Punicao.discord_id == discord_id)
         if so_ativas is True:
@@ -277,11 +338,7 @@ async def listar_casos_bau_membro(
     so_abertos: bool = True,
     limite: int = 8,
 ) -> list[CasoBau]:
-    """Localiza casos pelo Discord ou FiveM para cobrir vínculos incompletos.
-
-    Não consulta nada sem ao menos um identificador, prevenindo a exposição de
-    casos de outros membros. Por padrão traz apenas casos ainda abertos.
-    """
+    """Localiza casos pelo Discord ou FiveM."""
     async with async_session() as sessao:
         filtros = []
         if discord_id:
@@ -304,11 +361,7 @@ async def listar_verbais_bau(
     id_fivem: str | None,
     limite: int = 8,
 ) -> list[AdvertenciaVerbalBau]:
-    """Busca advertências por qualquer identificador disponível do membro.
-
-    Retorna uma lista vazia sem identificadores para impedir uma consulta ampla
-    indevida. A ordenação prioriza as advertências registradas mais recentemente.
-    """
+    """Busca advertências verbais de baú."""
     async with async_session() as sessao:
         filtros = []
         if discord_id:
@@ -330,7 +383,7 @@ async def listar_laudos_como_paciente(
     discord_id: int,
     limite: int = 8,
 ) -> list[Laudo]:
-    """Lista atendimentos recebidos, limitando o histórico exibido na ficha."""
+    """Lista atendimentos recebidos."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Laudo)
@@ -345,7 +398,7 @@ async def listar_laudos_como_psicologo(
     discord_id: int,
     limite: int = 8,
 ) -> list[Laudo]:
-    """Lista atendimentos realizados pelo psicólogo, dos mais recentes aos antigos."""
+    """Lista atendimentos realizados pelo psicólogo."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(Laudo)
@@ -356,10 +409,146 @@ async def listar_laudos_como_psicologo(
         return list(resultado.scalars().all())
 
 
+# ── Novos blocos ─────────────────────────────────────────────────────────
+
+
+async def listar_ausencias(
+    discord_id: int, limite: int = 6
+) -> list[SolicitacaoAusencia]:
+    """Solicitações de ausência do membro (mais recentes)."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoAusencia)
+            .where(SolicitacaoAusencia.discord_id == discord_id)
+            .order_by(SolicitacaoAusencia.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_demissoes(
+    discord_id: int, limite: int = 5
+) -> list[SolicitacaoDemissao]:
+    """Pedidos de demissão do membro."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoDemissao)
+            .where(SolicitacaoDemissao.discord_id == discord_id)
+            .order_by(SolicitacaoDemissao.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_solicitacoes_promocao(
+    discord_id: int, limite: int = 6
+) -> list[SolicitacaoPromocao]:
+    """Pedidos de promoção."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoPromocao)
+            .where(SolicitacaoPromocao.discord_id == discord_id)
+            .order_by(SolicitacaoPromocao.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_historico_promocoes(
+    discord_id: int, limite: int = 6
+) -> list[HistoricoPromocao]:
+    """Histórico permanente de promoções / rebaixamentos."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(HistoricoPromocao)
+            .where(HistoricoPromocao.discord_id == discord_id)
+            .order_by(HistoricoPromocao.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_movimentacoes_moedas(
+    discord_id: int, limite: int = 10
+) -> list[MovimentacaoMoeda]:
+    """Extrato recente de moedas."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(MovimentacaoMoeda)
+            .where(MovimentacaoMoeda.discord_id == discord_id)
+            .order_by(MovimentacaoMoeda.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_presencas_gate(
+    discord_id: int, limite: int = 8
+) -> list[tuple[Presenca, EventosGate | None]]:
+    """Últimas presenças GATE com dados do evento quando existir."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Presenca)
+            .where(Presenca.discord_id == discord_id)
+            .order_by(Presenca.confirmed_at.desc())
+            .limit(limite)
+        )
+        presencas = list(resultado.scalars().all())
+        saida: list[tuple[Presenca, EventosGate | None]] = []
+        for presenca in presencas:
+            evento = None
+            if presenca.evento_id:
+                r_ev = await sessao.execute(
+                    select(EventosGate).where(EventosGate.id == presenca.evento_id)
+                )
+                evento = r_ev.scalar_one_or_none()
+            saida.append((presenca, evento))
+        return saida
+
+
+async def listar_tickets_membro(discord_id: int, limite: int = 6) -> list[Ticket]:
+    """Tickets abertos ou recentes do membro."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Ticket)
+            .where(Ticket.autor_discord_id == discord_id)
+            .order_by(Ticket.aberto_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def listar_cursos_membro(
+    discord_id: int, limite: int = 6
+) -> list[SolicitacaoCurso]:
+    """Solicitações de curso do membro."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso)
+            .where(SolicitacaoCurso.discord_id == discord_id)
+            .order_by(SolicitacaoCurso.criado_em.desc())
+            .limit(limite)
+        )
+        return list(resultado.scalars().all())
+
+
+async def buscar_snapshot_cargos(
+    discord_id: int,
+) -> SnapshotCargosMembro | None:
+    """Snapshot de cargos para rejoin."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SnapshotCargosMembro).where(
+                SnapshotCargosMembro.discord_id == discord_id
+            )
+        )
+        return resultado.scalar_one_or_none()
+
+
 async def contagens_resumo_ficha(
     discord_id: int, id_fivem: str | None
 ) -> dict[str, int]:
-    """Contagens rápidas para o resumo da ficha (badges nos blocos)."""
+    """Contagens rápidas para o resumo e badges do cabeçalho."""
     punicoes_ativas = await contar_punicoes_ativas(discord_id)
     casos_bau = await listar_casos_bau_membro(
         discord_id=discord_id, id_fivem=id_fivem, so_abertos=True, limite=50
@@ -373,6 +562,49 @@ async def contagens_resumo_ficha(
     faltas_n, doutor_n = await estatisticas_chamadas(discord_id)
     total_rec, _, _ = await estatisticas_como_recrutador(discord_id)
 
+    async with async_session() as sessao:
+        aus_pend = await sessao.execute(
+            select(func.count())
+            .select_from(SolicitacaoAusencia)
+            .where(
+                SolicitacaoAusencia.discord_id == discord_id,
+                SolicitacaoAusencia.status.in_(
+                    ("pendente", "aprovada", "retorno_pendente")
+                ),
+            )
+        )
+        ausencias_abertas = int(aus_pend.scalar_one() or 0)
+
+        dem_pend = await sessao.execute(
+            select(func.count())
+            .select_from(SolicitacaoDemissao)
+            .where(
+                SolicitacaoDemissao.discord_id == discord_id,
+                SolicitacaoDemissao.status == "pendente",
+            )
+        )
+        demissoes_pendentes = int(dem_pend.scalar_one() or 0)
+
+        prom_pend = await sessao.execute(
+            select(func.count())
+            .select_from(SolicitacaoPromocao)
+            .where(
+                SolicitacaoPromocao.discord_id == discord_id,
+                SolicitacaoPromocao.status == "PENDENTE",
+            )
+        )
+        promocoes_pendentes = int(prom_pend.scalar_one() or 0)
+
+        tickets_abertos = await sessao.execute(
+            select(func.count())
+            .select_from(Ticket)
+            .where(
+                Ticket.autor_discord_id == discord_id,
+                Ticket.status.in_(("aberto", "assumido")),
+            )
+        )
+        tickets_n = int(tickets_abertos.scalar_one() or 0)
+
     return {
         "punicoes_ativas": punicoes_ativas,
         "casos_bau_abertos": len(casos_bau),
@@ -383,16 +615,163 @@ async def contagens_resumo_ficha(
         "faltas_chamada": faltas_n,
         "chamadas_doutor": doutor_n,
         "recrutamentos": total_rec,
+        "ausencias_abertas": ausencias_abertas,
+        "demissoes_pendentes": demissoes_pendentes,
+        "promocoes_pendentes": promocoes_pendentes,
+        "tickets_abertos": tickets_n,
     }
 
 
-def formatar_cargos_do_membro(membro: discord.Member) -> str:
-    """Organiza menções em grupos para caberem com clareza na ficha do membro.
+# ── Mutações administrativas ─────────────────────────────────────────────
 
-    Mantém a ordem de hierarquia e exclui ``@everyone``, que todos possuem e
-    não acrescenta informação administrativa. Cada linha recebe até três cargos
-    para evitar um bloco visual excessivamente largo no Discord.
+
+async def zerar_ciclo_plantao(discord_id: int) -> bool:
+    """Zera segundos_acumulados do ciclo atual. True se havia estado."""
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado.scalar_one_or_none()
+        if not estado:
+            return False
+        estado.segundos_acumulados = 0
+        estado.segmento_iniciado_em = (
+            datetime.now(timezone.utc)
+            if estado.toggle_ligado and estado.em_call_valida
+            else None
+        )
+        await session.commit()
+        return True
+
+
+async def ajustar_saldo_moedas(
+    discord_id: int,
+    *,
+    novo_saldo: int | None = None,
+    delta: int | None = None,
+    executor_id: int | None = None,
+    referencia: str | None = None,
+) -> tuple[int, int]:
     """
+    Define saldo absoluto ou aplica delta.
+
+    Registra movimentação AJUSTE_STAFF. Devolve (saldo_anterior, saldo_novo).
+    """
+    if novo_saldo is None and delta is None:
+        raise ValueError("Informe novo_saldo ou delta.")
+    if novo_saldo is not None and novo_saldo < 0:
+        raise ValueError("Saldo não pode ser negativo.")
+
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado.scalar_one_or_none()
+        if estado is None:
+            estado = EstadoPlantao(discord_id=discord_id, saldo_moedas=0)
+            session.add(estado)
+            await session.flush()
+
+        antigo = int(estado.saldo_moedas or 0)
+        if novo_saldo is not None:
+            novo = int(novo_saldo)
+        else:
+            novo = antigo + int(delta or 0)
+        if novo < 0:
+            raise ValueError("Saldo resultante não pode ser negativo.")
+
+        estado.saldo_moedas = novo
+        session.add(
+            MovimentacaoMoeda(
+                discord_id=discord_id,
+                tipo="AJUSTE_STAFF",
+                valor=novo - antigo,
+                saldo_apos=novo,
+                outro_discord_id=executor_id,
+                referencia=(referencia or "ajuste admin ficha")[:200],
+            )
+        )
+        await session.commit()
+        return antigo, novo
+
+
+async def editar_id_fivem_membro(
+    discord_id: int,
+    id_fivem: str | None,
+) -> str | None:
+    """
+    Atualiza id_fivem em EstadoPlantao e Usuario.
+    Passar None ou string vazia limpa o vínculo.
+    Devolve o valor anterior.
+    """
+    valor = (id_fivem or "").strip() or None
+    if valor is not None and not valor.isdigit():
+        raise ValueError("ID FiveM deve conter apenas números.")
+
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado.scalar_one_or_none()
+        if estado is None:
+            estado = EstadoPlantao(discord_id=discord_id)
+            session.add(estado)
+        antigo = estado.id_fivem
+        estado.id_fivem = valor
+
+        r2 = await session.execute(
+            select(Usuario).where(Usuario.discord_id == discord_id)
+        )
+        usuario = r2.scalar_one_or_none()
+        if usuario is None:
+            usuario = Usuario(discord_id=discord_id, id_fivem=valor)
+            session.add(usuario)
+        else:
+            usuario.id_fivem = valor
+        await session.commit()
+        return antigo
+
+
+async def editar_status_usuario(
+    discord_id: int,
+    status: str,
+    nickname: str | None = None,
+    *,
+    sincronizar_nick_discord: str | None = None,
+) -> tuple[str | None, str]:
+    """
+    Atualiza status (e opcionalmente nick) na tabela usuarios.
+    Devolve (status_anterior, status_novo).
+    """
+    status_limpo = status.strip().upper()
+    if status_limpo not in STATUS_USUARIO_CANONICOS:
+        raise ValueError(f"Status inválido. Use: {', '.join(STATUS_USUARIO_CANONICOS)}")
+
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(Usuario).where(Usuario.discord_id == discord_id)
+        )
+        usuario = resultado.scalar_one_or_none()
+        if usuario is None:
+            usuario = Usuario(discord_id=discord_id)
+            session.add(usuario)
+        antigo = usuario.status
+        usuario.status = status_limpo
+        if nickname is not None and nickname.strip():
+            usuario.nickname_atual = nickname.strip()[:100]
+        elif sincronizar_nick_discord:
+            usuario.nickname_atual = sincronizar_nick_discord[:100]
+        if status_limpo == "APROVADO":
+            usuario.ja_foi_aprovado = True
+        await session.commit()
+        return antigo, status_limpo
+
+
+# ── Formatação ───────────────────────────────────────────────────────────
+
+
+def formatar_cargos_do_membro(membro: discord.Member) -> str:
+    """Organiza menções de cargos para a ficha."""
     cargos = [
         cargo
         for cargo in sorted(
@@ -412,7 +791,7 @@ def formatar_cargos_do_membro(membro: discord.Member) -> str:
 
 
 def formatar_timestamp(data_e_hora: datetime | None) -> str:
-    """Converte datas para o formato do Discord, assumindo UTC quando necessário."""
+    """Converte datas para o formato do Discord."""
     if data_e_hora is None:
         return "—"
     if data_e_hora.tzinfo is None:
@@ -421,9 +800,14 @@ def formatar_timestamp(data_e_hora: datetime | None) -> str:
 
 
 def formatar_timestamp_relativo(data_e_hora: datetime | None) -> str:
-    """Converte datas em prazo relativo do Discord, assumindo UTC quando necessário."""
+    """Converte datas em prazo relativo do Discord."""
     if data_e_hora is None:
         return "—"
     if data_e_hora.tzinfo is None:
         data_e_hora = data_e_hora.replace(tzinfo=timezone.utc)
     return f"<t:{int(data_e_hora.timestamp())}:R>"
+
+
+def membro_esta_no_servidor(alvo: Any) -> bool:
+    """True se o alvo é um discord.Member real (não proxy de quem saiu)."""
+    return isinstance(alvo, discord.Member)
