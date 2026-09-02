@@ -215,6 +215,28 @@ CARGOS_HIERARQUIA = [
     "🔰・Enfermeiro (a)",
 ]
 
+# Nomes oficiais dos cargos (promoção, avaliação HP, trilhas).
+# Definidos cedo para qualquer módulo poder importar sem depender
+# do bloco de metas no final do arquivo.
+CARGO_ENFERMEIRO = "🔰・Enfermeiro (a)"
+CARGO_PARAMEDICO = "🚑・Paramédico"
+CARGO_DOUTOR = "🥼・Doutor"
+CARGO_PSICOLOGO = "🩺・Psicólogo"
+CARGO_RECRUTADOR = "✈️・Recrutador"
+CARGO_INSTRUTOR = "🥼・Instrutor"
+CARGO_INSTRUTOR_RESGATE = "🚑・Instrutor Resgate"
+CARGO_SUPERVISOR = "👑・SUPERVISOR"
+CARGO_VICE_DIRETOR = "👑・VICE DIRETOR"
+CARGO_DIRETOR = "👑・DIRETOR"
+CARGO_RESP_DOUTOR = "👑・Responsável Doutor・🥼"
+CARGO_RESP_PSICOLOGO = "👑・Responsável Psicólogo・🧠"
+CARGO_RESP_RECRUTAMENTO = "👑・Responsável Recrutamento・🎯"
+CARGO_RESP_INSTRUTOR = "👑・Responsável Instrutor・🎓"
+CARGO_COORDENADOR = "🔍・COORDENADOR"
+CARGO_VICE_DIRETOR_GERAL = "👑 |  VICE DIRETOR GERAL"
+CARGO_DIRETOR_GERAL = "👑 |  DIRETOR GERAL"
+CARGO_RESPONSAVEL_GERAL = "👑 | RESPONSÁVEL GERAL"
+
 CARGOS_BYPASS_PRESENCA_CHAMADA = [
     "👑・【 GATE 】SUBCOMANDANTE・TÁTICO",
     "👑・【 GATE 】COMANDANTE・TÁTICO",
@@ -1155,27 +1177,8 @@ CURSOS_PARA_SUPERVISOR = (
     CURSOS_PRATICOS_1 + CURSOS_PRATICOS_2 + CURSOS_DE_AREA + ["diretoria"]
 )
 
-# Nomes oficiais dos cargos de área (iguais a CARGOS / CARGOS_HIERARQUIA)
-CARGO_ENFERMEIRO = "🔰・Enfermeiro (a)"
-CARGO_PARAMEDICO = "🚑・Paramédico"
-CARGO_DOUTOR = "🥼・Doutor"
-CARGO_PSICOLOGO = "🩺・Psicólogo"
-CARGO_RECRUTADOR = "✈️・Recrutador"
-CARGO_INSTRUTOR = "🥼・Instrutor"
-CARGO_INSTRUTOR_RESGATE = "🚑・Instrutor Resgate"
-CARGO_SUPERVISOR = "👑・SUPERVISOR"
-CARGO_VICE_DIRETOR = "👑・VICE DIRETOR"
-CARGO_DIRETOR = "👑・DIRETOR"
-CARGO_RESP_DOUTOR = "👑・Responsável Doutor・🥼"
-CARGO_RESP_PSICOLOGO = "👑・Responsável Psicólogo・🧠"
-CARGO_RESP_RECRUTAMENTO = "👑・Responsável Recrutamento・🎯"
-CARGO_RESP_INSTRUTOR = "👑・Responsável Instrutor・🎓"
-CARGO_COORDENADOR = "🔍・COORDENADOR"
-CARGO_VICE_DIRETOR_GERAL = "👑 |  VICE DIRETOR GERAL"
-CARGO_DIRETOR_GERAL = "👑 |  DIRETOR GERAL"
-CARGO_RESPONSAVEL_GERAL = "👑 | RESPONSÁVEL GERAL"
-
 # Metas por cargo — edite aqui sem mexer na lógica do serviço.
+# Os nomes CARGO_* estão definidos junto de CARGOS_HIERARQUIA (acima).
 # Chaves de meta usadas pelo checklist:
 #   segundos_minimos_plantao, meta_laudos, meta_recrutamentos,
 #   meta_chamadas, meta_cursos_aplicados, exige_avaliacao_hp
@@ -1326,12 +1329,23 @@ METAS_POR_CARGO = {
     },
 }
 
-# Horas de plantão só para a PRIMEIRA área do Paramédico (antes das metas de cargo)
+# Horas de ETAPA (incrementais) para a PRIMEIRA área do Paramédico.
+# O total exigido no banco = horas já "pagas" nos degraus anteriores + etapa.
+# Ex.: Paramédico (2h) → Doutor (8h) exige 10h no total de plantão.
 HORAS_PRIMEIRA_AREA = {
     CARGO_DOUTOR: 8 * 3600,
     CARGO_PSICOLOGO: 10 * 3600,
     CARGO_RECRUTADOR: 10 * 3600,
     CARGO_INSTRUTOR: 12 * 3600,
+}
+
+# Etapa Enfermeiro → Paramédico (base da carreira)
+SEGUNDOS_ETAPA_ENFERMEIRO_PARAMEDICO = 2 * 3600
+
+# Acumulado mínimo de plantão para "ter chegado" em cada cargo (via caminho
+# canônico). Preenchido ao montar as trilhas.
+SEGUNDOS_ACUMULADOS_ATE_CARGO: dict[str, int] = {
+    CARGO_ENFERMEIRO: 0,
 }
 
 
@@ -1348,6 +1362,13 @@ def _metas_do_cargo(nome_cargo: str) -> dict:
     }
 
 
+def _registrar_acumulado(nome_cargo: str, segundos_totais: int) -> None:
+    """Guarda o menor total de plantão conhecido para chegar naquele cargo."""
+    atual = SEGUNDOS_ACUMULADOS_ATE_CARGO.get(nome_cargo)
+    if atual is None or segundos_totais < atual:
+        SEGUNDOS_ACUMULADOS_ATE_CARGO[nome_cargo] = int(segundos_totais)
+
+
 def _montar_trilha(
     chave: str,
     rotulo: str,
@@ -1356,12 +1377,18 @@ def _montar_trilha(
     cursos: list[str],
     *,
     usar_metas_do_destino: bool = True,
-    segundos_override: int | None = None,
+    segundos_etapa: int | None = None,
     observacao: str = "",
     primeira_area: bool = False,
     exige_avaliacao_hp: bool | None = None,
 ) -> dict:
-    """Monta um dicionário de trilha com metas vindas de METAS_POR_CARGO."""
+    """
+    Monta uma trilha.
+
+    ``segundos_etapa`` = horas DESTA promoção (o "cronômetro" do degrau).
+    ``segundos_minimos_plantao`` = total no banco = acumulado até a origem
+    + etapa. Assim Paramédico (2h) → Doutor (8h) exige 10h, não 8h.
+    """
     metas = (
         _metas_do_cargo(para_cargo)
         if usar_metas_do_destino
@@ -1374,10 +1401,22 @@ def _montar_trilha(
             "exige_avaliacao_hp": False,
         }
     )
-    if segundos_override is not None:
-        metas["segundos_minimos_plantao"] = int(segundos_override)
+    if segundos_etapa is None:
+        # Sem override: a etapa é o plantão configurado no cargo de destino
+        # (ou zero se não houver meta).
+        segundos_etapa = int(metas.get("segundos_minimos_plantao") or 0)
+    else:
+        segundos_etapa = int(segundos_etapa)
+
+    acumulado_origem = int(SEGUNDOS_ACUMULADOS_ATE_CARGO.get(de_cargo) or 0)
+    segundos_totais = acumulado_origem + segundos_etapa
+    metas["segundos_minimos_plantao"] = segundos_totais
+
     if exige_avaliacao_hp is not None:
         metas["exige_avaliacao_hp"] = bool(exige_avaliacao_hp)
+
+    _registrar_acumulado(para_cargo, segundos_totais)
+
     return {
         "chave": chave,
         "rotulo": rotulo,
@@ -1386,6 +1425,8 @@ def _montar_trilha(
         "cursos_obrigatorios": list(cursos),
         "primeira_area": primeira_area,
         "observacao": observacao,
+        "segundos_etapa": segundos_etapa,
+        "segundos_acumulados_origem": acumulado_origem,
         **metas,
     }
 
@@ -1408,53 +1449,81 @@ TRILHAS_PROMOCAO.append(
         CARGO_ENFERMEIRO,
         CARGO_PARAMEDICO,
         ["resgate"],
-        segundos_override=2 * 3600,
-        observacao="Mínimo 2h de plantão. Boa conduta e sem adv.",
+        usar_metas_do_destino=False,
+        segundos_etapa=SEGUNDOS_ETAPA_ENFERMEIRO_PARAMEDICO,
+        observacao=(
+            "Etapa de 2h de plantão (total 2h no banco). Boa conduta e sem adv."
+        ),
     )
 )
 
 # 2) Paramédico → cada área (primeira área — opção B)
+# Instrutor exige práticos 1.0 e 2.0; demais áreas só 1.0 + curso da área.
 for cargo_area, chave_area, cursos_area in AREAS_MEDICAS:
+    if chave_area == "instrutor":
+        cursos_da_trilha = (
+            list(CURSOS_PRATICOS_1) + list(CURSOS_PRATICOS_2) + list(cursos_area)
+        )
+        texto_cursos = "práticos 1.0 e 2.0 + curso Instrutor"
+    else:
+        cursos_da_trilha = list(CURSOS_PRATICOS_1) + list(cursos_area)
+        texto_cursos = "práticos 1.0 + curso da área"
+    etapa = int(HORAS_PRIMEIRA_AREA.get(cargo_area, 8 * 3600))
     TRILHAS_PROMOCAO.append(
         _montar_trilha(
             f"paramedico_{chave_area}",
             f"Paramédico → {cargo_area}",
             CARGO_PARAMEDICO,
             cargo_area,
-            CURSOS_PRATICOS_1 + cursos_area,
+            cursos_da_trilha,
             usar_metas_do_destino=False,
-            segundos_override=HORAS_PRIMEIRA_AREA.get(cargo_area, 8 * 3600),
+            segundos_etapa=etapa,
             primeira_area=True,
             observacao=(
-                "Primeira área: práticos 1.0 + curso da área + horas de plantão "
-                "da área. Metas de produção só depois da primeira promoção."
+                f"Primeira área: {texto_cursos}. "
+                f"Etapa {etapa // 3600}h além das 2h de Paramédico "
+                f"(total no banco = 2h + etapa). Sem metas de produção."
             ),
         )
     )
 
 # 3) Área → área (todas as combinações, exceto a mesma)
-# Metas e horas do CARGO ATUAL (origem). Só pede outra área quem já bateu
-# a produção do cargo que ocupa agora.
+# Metas de produção do cargo atual; plantão = acumulado na origem + etapa
+# do cargo atual (METAS_POR_CARGO). Instrutor exige práticos 1.0 e 2.0.
 for cargo_de, chave_de, _cursos_de in AREAS_MEDICAS:
     for cargo_para, chave_para, cursos_para in AREAS_MEDICAS:
         if cargo_de == cargo_para:
             continue
-        metas_origem = _metas_do_cargo(cargo_de)
+        if chave_para == "instrutor":
+            cursos_da_trilha = (
+                list(CURSOS_PRATICOS_1) + list(CURSOS_PRATICOS_2) + list(cursos_para)
+            )
+        else:
+            cursos_da_trilha = list(CURSOS_PRATICOS_1) + list(cursos_para)
+        etapa = int(_metas_do_cargo(cargo_de).get("segundos_minimos_plantao") or 0)
         TRILHAS_PROMOCAO.append(
-            {
-                "chave": f"{chave_de}_{chave_para}",
-                "rotulo": f"{cargo_de} → {cargo_para}",
-                "de_cargo": cargo_de,
-                "para_cargo": cargo_para,
-                "cursos_obrigatorios": list(CURSOS_PRATICOS_1 + cursos_para),
-                "primeira_area": False,
-                "observacao": (
-                    "Precisa ter batido a meta e as horas do cargo atual "
-                    "antes de pedir outra área."
+            _montar_trilha(
+                f"{chave_de}_{chave_para}",
+                f"{cargo_de} → {cargo_para}",
+                cargo_de,
+                cargo_para,
+                cursos_da_trilha,
+                usar_metas_do_destino=False,
+                segundos_etapa=etapa,
+                observacao=(
+                    "Meta e etapa de plantão do cargo atual. "
+                    "O total no banco é acumulado + etapa "
+                    "(não desconta o que já foi usado nas promoções anteriores)."
                 ),
-                **metas_origem,
-            }
+            )
         )
+        # Metas de produção vêm do cargo de origem (já batidas para pedir)
+        trilha_area = TRILHAS_PROMOCAO[-1]
+        metas_origem = _metas_do_cargo(cargo_de)
+        trilha_area["meta_laudos"] = metas_origem["meta_laudos"]
+        trilha_area["meta_recrutamentos"] = metas_origem["meta_recrutamentos"]
+        trilha_area["meta_chamadas"] = metas_origem["meta_chamadas"]
+        trilha_area["meta_cursos_aplicados"] = metas_origem["meta_cursos_aplicados"]
 
 # 4) Qualquer área → Supervisor (exige todas as quatro áreas na prática
 #    via cursos; o serviço ainda confere cargos de área quando necessário)

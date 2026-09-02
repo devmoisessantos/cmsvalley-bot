@@ -9,9 +9,10 @@ from src.plantao.plantao_permissoes import e_diretoria
 from src.promocoes.promocoes_service import (
     aplicar_promocao_cargos,
     atualizar_mensagem_solicitacao,
+    cargo_mais_alto_do_membro,
     criar_solicitacao_promocao,
     decidir_solicitacao,
-    listar_cargos_destino,
+    listar_cargos_destino_para_membro,
     membro_e_paramedico,
     membro_ja_tem_area,
     montar_checklist_trilha_async,
@@ -136,19 +137,20 @@ class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=180)
         self.solicitante_id = membro.id
 
-        destinos = listar_cargos_destino()
+        cargo_atual = cargo_mais_alto_do_membro(membro)
+        destinos = listar_cargos_destino_para_membro(membro)
         opcoes = [
             discord.SelectOption(
                 label=nome[:100],
                 value=nome,
-                description="Cargo pretendido",
+                description="Disponível a partir do seu cargo",
             )
             for nome in destinos[:25]
         ]
         if not opcoes:
             opcoes = [
                 discord.SelectOption(
-                    label="Nenhum cargo cadastrado",
+                    label="Nenhuma promoção disponível",
                     value="_vazio",
                 )
             ]
@@ -174,13 +176,19 @@ class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
         botao_trilha.callback = self._ao_seguir_trilha
         linha_botao.add_item(botao_trilha)
 
+        texto_cargo = (
+            f"Cargo mais alto reconhecido: **`{cargo_atual}`**\n"
+            if cargo_atual
+            else "Não encontrei um cargo da hierarquia em você.\n"
+        )
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# Solicitar promoção\n"
-                    "Escolha o **cargo pretendido** na lista **ou** "
-                    "use **Seguir trilha** para ver só as opções a partir do seu cargo "
-                    "atual."
+                    f"{texto_cargo}"
+                    "Só aparecem cargos **a partir do seu posto atual** "
+                    "(nada do que você já passou).\n"
+                    "Escolha o **cargo pretendido** ou use **Seguir trilha**."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha_select,
@@ -252,14 +260,19 @@ class ViewEscolhaPromocao(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
         disponiveis = trilhas_a_partir_do_membro(membro)
+        cargo_atual = cargo_mais_alto_do_membro(membro)
         if not disponiveis:
             await responder_aviso(
                 interacao,
                 titulo="Nenhuma trilha a partir do seu cargo",
                 linhas=[
-                    "Não há promoção cadastrada partindo dos cargos que você possui "
-                    "agora.",
-                    "Você ainda pode escolher um **cargo pretendido** no menu acima.",
+                    (
+                        f"Cargo reconhecido: `{cargo_atual}`."
+                        if cargo_atual
+                        else "Nenhum cargo da hierarquia encontrado."
+                    ),
+                    "Não há promoção cadastrada partindo desse posto.",
+                    "Se achar que falta alguma trilha, fale com a diretoria.",
                 ],
                 delay=60,
             )
@@ -296,14 +309,17 @@ class ViewSelectTrilha(LoggingViewMixin, discord.ui.LayoutView):
         seletor.callback = self._ao_escolher
         linha.add_item(seletor)
 
+        cargo_atual = cargo_mais_alto_do_membro(membro)
         lista_de_trilhas = "\n".join(
             f"• **{trilha_disponivel['rotulo']}**" for trilha_disponivel in trilhas
         )
+        cabecalho = f"Cargo atual: **`{cargo_atual}`**\n" if cargo_atual else ""
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# 🛤️ Seguir trilha\n"
-                    "Opções a partir do **seu cargo atual**:\n"
+                    f"{cabecalho}"
+                    "Só as opções a partir do **seu posto atual**:\n"
                     f"{lista_de_trilhas}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),

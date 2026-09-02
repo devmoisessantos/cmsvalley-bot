@@ -7,17 +7,7 @@ import logging
 import discord
 from sqlalchemy import select
 
-from src.config import (
-    CARGO_DOUTOR,
-    CARGO_INSTRUTOR,
-    CARGO_PARAMEDICO,
-    CARGO_PSICOLOGO,
-    CARGO_RECRUTADOR,
-    CARGOS,
-    CARGOS_PUNICOES,
-    META_PROMOCAO_MARGEM,
-    TRILHAS_PROMOCAO,
-)
+from src.config import CARGOS, CARGOS_PUNICOES
 from src.cursos.cursos_service import (
     listar_cursos_que_faltam,
     menção_cargo_curso,
@@ -33,7 +23,22 @@ from src.utils.formatacao import formatar_hms
 from src.utils.logger import log_mudanca_cargo
 from src.utils.nickname import aplicar_prefixo
 
+try:
+    from src.config import META_PROMOCAO_MARGEM, TRILHAS_PROMOCAO
+except ImportError:
+    META_PROMOCAO_MARGEM = 0.9
+    TRILHAS_PROMOCAO = []
+
 logger = logging.getLogger(__name__)
+
+# Nomes oficiais — espelham src.config (CARGO_*), definidos aqui para o
+# domínio de promoção não quebrar se o config antigo ainda não exportar
+# as constantes novas.
+CARGO_PARAMEDICO = "🚑・Paramédico"
+CARGO_DOUTOR = "🥼・Doutor"
+CARGO_PSICOLOGO = "🩺・Psicólogo"
+CARGO_RECRUTADOR = "✈️・Recrutador"
+CARGO_INSTRUTOR = "🥼・Instrutor"
 
 CARGOS_ADV_BLOQUEIAM = ("🚫┇Adv 01", "🚫┇Adv 02")
 
@@ -51,16 +56,63 @@ def obter_trilha(chave: str) -> dict | None:
     return None
 
 
+def _ordem_hierarquia() -> list[str]:
+    """
+    Ordem do mais alto para o mais baixo (CARGOS_HIERARQUIA).
+
+    Import local evita dependência rígida se o config antigo não exportar.
+    """
+    try:
+        from src.config import CARGOS_HIERARQUIA
+
+        return list(CARGOS_HIERARQUIA)
+    except ImportError:
+        return []
+
+
+def cargo_mais_alto_do_membro(membro: discord.Member) -> str | None:
+    """
+    Devolve o nome do cargo mais alto do membro na hierarquia do hospital.
+
+    Usado para filtrar trilhas: só mostra o que parte desse cargo em diante,
+    nunca promoções de cargos que ele já passou.
+    """
+    for nome_cargo in _ordem_hierarquia():
+        if membro_tem_cargo_nome(membro, nome_cargo):
+            return nome_cargo
+    return None
+
+
 def listar_cargos_destino() -> list[str]:
     """
     Cargos-alvo únicos das trilhas (ordem de cadastro).
-    Usado no select de “cargo pretendido” do painel.
+    Preferir ``listar_cargos_destino_para_membro`` no painel.
     """
     vistos: set[str] = set()
     lista: list[str] = []
     for trilha in TRILHAS_PROMOCAO:
         destino = trilha.get("para_cargo") or ""
         if destino and destino not in vistos:
+            vistos.add(destino)
+            lista.append(destino)
+    return lista
+
+
+def listar_cargos_destino_para_membro(membro: discord.Member) -> list[str]:
+    """
+    Só destinos alcançáveis a partir do cargo mais alto do membro.
+
+    Não lista cargos anteriores (ex.: Paramédico não vê Enfermeiro→Paramédico).
+    """
+    trilhas = trilhas_a_partir_do_membro(membro)
+    vistos: set[str] = set()
+    lista: list[str] = []
+    for trilha in trilhas:
+        destino = trilha.get("para_cargo") or ""
+        if destino and destino not in vistos:
+            # Não oferecer destino que o membro já possui
+            if membro_tem_cargo_nome(membro, destino):
+                continue
             vistos.add(destino)
             lista.append(destino)
     return lista
@@ -74,11 +126,24 @@ def trilhas_para_cargo_destino(nome_cargo: str) -> list[dict]:
 
 
 def trilhas_a_partir_do_membro(membro: discord.Member) -> list[dict]:
-    """Trilhas cujo cargo de origem o membro possui agora (botão Seguir trilha)."""
+    """
+    Trilhas que partem do cargo mais alto do membro.
+
+    Se o membro é Paramédico (e não tem área), só saem trilhas
+    ``de_cargo`` = Paramédico. Não mistura com Enfermeiro→Paramédico.
+    """
+    cargo_alto = cargo_mais_alto_do_membro(membro)
+    if not cargo_alto:
+        return []
+
     disponiveis: list[dict] = []
     for trilha in TRILHAS_PROMOCAO:
-        if membro_tem_cargo_nome(membro, trilha["de_cargo"]):
-            disponiveis.append(trilha)
+        if not _nomes_cargo_equivalentes(trilha.get("de_cargo") or "", cargo_alto):
+            continue
+        destino = trilha.get("para_cargo") or ""
+        if destino and membro_tem_cargo_nome(membro, destino):
+            continue
+        disponiveis.append(trilha)
     return disponiveis
 
 
@@ -87,16 +152,20 @@ def obter_trilha_por_destino_e_origem(
     membro: discord.Member,
 ) -> dict | None:
     """
-    Escolhe a trilha que leva ao cargo pretendido,
-    preferindo a que combina com o cargo atual do membro.
+    Escolhe a trilha até o cargo pretendido a partir do cargo mais alto.
     """
+    cargo_alto = cargo_mais_alto_do_membro(membro)
     candidatas = trilhas_para_cargo_destino(cargo_para)
     if not candidatas:
         return None
+    if cargo_alto:
+        for trilha in candidatas:
+            if _nomes_cargo_equivalentes(trilha.get("de_cargo") or "", cargo_alto):
+                return trilha
     for trilha in candidatas:
         if membro_tem_cargo_nome(membro, trilha["de_cargo"]):
             return trilha
-    return candidatas[0]
+    return None
 
 
 def id_cargo_por_nome(nome: str) -> int | None:
@@ -309,9 +378,11 @@ def montar_checklist_trilha(
             f"listado{'s' if quantidade_faltando != 1 else ''}"
         )
 
-    # ── Plantão ────────────────────────────────────────────────────
+    # ── Plantão (acumulativo: etapa atual + o que já foi exigido antes) ──
     bloco_plantao: list[str] = ["## ⏱️ Horas de Plantão"]
     segundos_minimos = int(trilha.get("segundos_minimos_plantao") or 0)
+    segundos_etapa = int(trilha.get("segundos_etapa") or 0)
+    segundos_antes = int(trilha.get("segundos_acumulados_origem") or 0)
     total_seg = int(segundos_plantao or 0)
     margem = float(META_PROMOCAO_MARGEM or 1.0)
     if margem <= 0 or margem > 1:
@@ -324,6 +395,12 @@ def montar_checklist_trilha(
             f"(registrado: `{formatar_hms(total_seg)}`)"
         )
     elif segundos_minimos > 0:
+        if segundos_etapa > 0 or segundos_antes > 0:
+            bloco_plantao.append(
+                f"- 📌 **Etapa desta promoção:** `{formatar_hms(segundos_etapa)}` "
+                f"+ já exigido antes `{formatar_hms(segundos_antes)}` "
+                f"= total `{formatar_hms(segundos_minimos)}`"
+            )
         if total_seg >= segundos_minimos:
             bloco_plantao.append(
                 f"- ✅ **Plantão completo:** `{formatar_hms(total_seg)}` "
@@ -340,7 +417,7 @@ def montar_checklist_trilha(
             falta = max(0, minimo_aceitavel - total_seg)
             bloco_plantao.append(
                 f"- ❌ **Plantão incompleto:** `{formatar_hms(total_seg)}` de "
-                f"`{formatar_hms(segundos_minimos)}` exigidas"
+                f"`{formatar_hms(segundos_minimos)}` exigidas no total"
             )
             bloco_plantao.append(
                 f"- ⚠️ Faltam **{_formatar_falta_legivel(falta)}** "
@@ -348,7 +425,7 @@ def montar_checklist_trilha(
             )
             pendencias.append(
                 f"Completar o tempo de plantão (faltam "
-                f"**{_formatar_falta_legivel(falta)}**)"
+                f"**{_formatar_falta_legivel(falta)}** no total acumulado)"
             )
     else:
         bloco_plantao.append(
