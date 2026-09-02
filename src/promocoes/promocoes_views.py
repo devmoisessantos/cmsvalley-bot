@@ -701,6 +701,8 @@ async def processar_escolha_trilha(
                     solicitacao_id=registro.id,
                     url_avatar=membro.display_avatar.url,
                 )
+                # Garante que Aprovar/Reprovar sobrevivem a reinício do bot
+                interacao.client.add_view(view_decisao_persistente(registro.id))
                 mensagem = await canal.send(view=view_pedido)
                 await atualizar_mensagem_solicitacao(registro.id, canal.id, mensagem.id)
             except discord.HTTPException as erro:
@@ -939,3 +941,29 @@ def view_persistente_promocao() -> PainelPromocaoLayout:
     instancia nova a cada vez que registra a view persistente.
     """
     return PainelPromocaoLayout()
+
+
+def view_decisao_persistente(solicitacao_id: int) -> ViewDecisaoPromocao:
+    """
+    View dos botões Aprovar/Reprovar de um pedido.
+
+    O custom_id inclui o id da solicitação. Por isso cada pedido pendente
+    precisa de um ``add_view`` próprio — no envio e de novo no startup.
+    """
+    return ViewDecisaoPromocao(int(solicitacao_id))
+
+
+async def registrar_views_persistentes_promocao(bot: discord.Client) -> int:
+    """
+    Registra o painel fixo e todos os botões de pedidos ainda pendentes.
+
+    Devolve quantos pedidos pendentes tiveram view registrada.
+    """
+    from src.promocoes.promocoes_service import listar_ids_solicitacoes_pendentes
+
+    bot.add_view(view_persistente_promocao())
+
+    ids_pendentes = await listar_ids_solicitacoes_pendentes()
+    for solicitacao_id in ids_pendentes:
+        bot.add_view(view_decisao_persistente(solicitacao_id))
+    return len(ids_pendentes)

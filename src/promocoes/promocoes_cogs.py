@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -10,9 +12,11 @@ from sqlalchemy import delete
 from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.promocoes.promocoes_setup import garantir_painel_promocao
-from src.promocoes.promocoes_views import view_persistente_promocao
+from src.promocoes.promocoes_views import registrar_views_persistentes_promocao
 from src.utils.mensagens import responder_sucesso
 from src.utils.permissions import apenas_administrador
+
+registrador = logging.getLogger(__name__)
 
 
 class PromocoesCog(commands.Cog):
@@ -52,5 +56,27 @@ class PromocoesCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    bot.add_view(view_persistente_promocao())
+    """
+    Registra o painel fixo e os botões de cada pedido ainda pendente.
+
+    Os botões Aprovar/Reprovar usam custom_id com o id da solicitação.
+    Se o bot reiniciar sem ``add_view`` de novo, o Discord mostra o botão
+    mas o clique não chega em ninguém — por isso restauramos todos os
+    PENDENTE aqui no startup.
+    """
+    try:
+        quantidade = await registrar_views_persistentes_promocao(bot)
+        registrador.info(
+            "Promoções: painel + %s view(s) de decisão pendente registradas.",
+            quantidade,
+        )
+    except Exception as erro_capturado:
+        # Não derruba o bot se o banco falhar no setup; tenta ao menos o painel
+        registrador.exception(
+            "Falha ao registrar views de promoção pendentes: %s",
+            erro_capturado,
+        )
+        from src.promocoes.promocoes_views import view_persistente_promocao
+
+        bot.add_view(view_persistente_promocao())
     await bot.add_cog(PromocoesCog(bot))

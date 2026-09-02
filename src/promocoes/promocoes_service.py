@@ -726,6 +726,22 @@ async def obter_solicitacao_pendente(
         return resultado.scalar_one_or_none()
 
 
+async def listar_ids_solicitacoes_pendentes() -> list[int]:
+    """
+    IDs de todos os pedidos ainda PENDENTE.
+
+    Usado no startup para registrar de novo os botões Aprovar/Reprovar
+    (custom_id dinâmico). Sem isso, após reinício do bot os botões morrem.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoPromocao.id).where(
+                SolicitacaoPromocao.status == "PENDENTE"
+            )
+        )
+        return [int(linha[0]) for linha in resultado.all()]
+
+
 async def decidir_solicitacao(
     *,
     solicitacao_id: int,
