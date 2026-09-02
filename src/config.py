@@ -1136,189 +1136,447 @@ CURSOS = {
     },
 }
 
-# Trilhas de promoção (MVP — validação de cursos + cargo atual + adv)
-# Horas/produção entram em etapas seguintes com os contadores já existentes.
+# ---------------------------------------------------------------------------
+# Promoção — metas editáveis e trilhas
+#
+# METAS_POR_CARGO: ajuste livre de horas e produção de cada cargo.
+# TRILHAS_PROMOCAO: caminhos formais (opção A) e combinações área → área.
+# O Paramédico pode pedir qualquer área (opção B — primeira área).
+# ---------------------------------------------------------------------------
+
 # Fração mínima da meta para liberar pedido (0.9 = 90% conta como "próximo")
 META_PROMOCAO_MARGEM = 0.9
 
-TRILHAS_PROMOCAO = [
-    {
-        "chave": "enfermeiro_paramedico",
-        "rotulo": "Enfermeiro → Paramédico",
-        "de_cargo": "🔰・Enfermeiro (a)",
-        "para_cargo": "🚑・Paramédico",
-        "cursos_obrigatorios": ["resgate"],
+# Cursos práticos reutilizados nas trilhas (só referência; edite em CURSOS)
+CURSOS_PRATICOS_1 = ["arcanjo", "alpinista", "paraquedista", "mergulhador"]
+CURSOS_PRATICOS_2 = ["arcanjo_2", "alpinista_2", "paraquedista_2", "mergulhador_2"]
+CURSOS_DE_AREA = ["doutor", "psicologo", "recrutador", "instrutor"]
+CURSOS_PARA_SUPERVISOR = (
+    CURSOS_PRATICOS_1 + CURSOS_PRATICOS_2 + CURSOS_DE_AREA + ["diretoria"]
+)
+
+# Nomes oficiais dos cargos de área (iguais a CARGOS / CARGOS_HIERARQUIA)
+CARGO_ENFERMEIRO = "🔰・Enfermeiro (a)"
+CARGO_PARAMEDICO = "🚑・Paramédico"
+CARGO_DOUTOR = "🥼・Doutor"
+CARGO_PSICOLOGO = "🩺・Psicólogo"
+CARGO_RECRUTADOR = "✈️・Recrutador"
+CARGO_INSTRUTOR = "🥼・Instrutor"
+CARGO_INSTRUTOR_RESGATE = "🚑・Instrutor Resgate"
+CARGO_SUPERVISOR = "👑・SUPERVISOR"
+CARGO_VICE_DIRETOR = "👑・VICE DIRETOR"
+CARGO_DIRETOR = "👑・DIRETOR"
+CARGO_RESP_DOUTOR = "👑・Responsável Doutor・🥼"
+CARGO_RESP_PSICOLOGO = "👑・Responsável Psicólogo・🧠"
+CARGO_RESP_RECRUTAMENTO = "👑・Responsável Recrutamento・🎯"
+CARGO_RESP_INSTRUTOR = "👑・Responsável Instrutor・🎓"
+CARGO_COORDENADOR = "🔍・COORDENADOR"
+CARGO_VICE_DIRETOR_GERAL = "👑 |  VICE DIRETOR GERAL"
+CARGO_DIRETOR_GERAL = "👑 |  DIRETOR GERAL"
+CARGO_RESPONSAVEL_GERAL = "👑 | RESPONSÁVEL GERAL"
+
+# Metas por cargo — edite aqui sem mexer na lógica do serviço.
+# Chaves de meta usadas pelo checklist:
+#   segundos_minimos_plantao, meta_laudos, meta_recrutamentos,
+#   meta_chamadas, meta_cursos_aplicados, exige_avaliacao_hp
+METAS_POR_CARGO = {
+    CARGO_ENFERMEIRO: {
         "segundos_minimos_plantao": 2 * 3600,
-        "observacao": "Mínimo 2h de plantão. Boa conduta e sem adv.",
+        "meta_laudos": 0,
+        "meta_recrutamentos": 0,
+        "meta_chamadas": 0,
+        "meta_cursos_aplicados": 0,
+        "exige_avaliacao_hp": False,
     },
-    {
-        "chave": "paramedico_doutor",
-        "rotulo": "Paramédico → Doutor",
-        "de_cargo": "🚑・Paramédico",
-        "para_cargo": "🥼・Doutor",
-        "cursos_obrigatorios": [
-            "arcanjo",
-            "alpinista",
-            "paraquedista",
-            "mergulhador",
-            "doutor",
-        ],
-        "segundos_minimos_plantao": 8 * 3600,
-        "observacao": "Cursos práticos 1.0 + 8h de plantão.",
+    CARGO_PARAMEDICO: {
+        "segundos_minimos_plantao": 6 * 3600,
+        "meta_laudos": 0,
+        "meta_recrutamentos": 0,
+        "meta_chamadas": 0,
+        "meta_cursos_aplicados": 0,
+        "exige_avaliacao_hp": False,
     },
-    {
-        "chave": "doutor_psicologo",
-        "rotulo": "Doutor → Psicólogo",
-        "de_cargo": "🥼・Doutor",
-        "para_cargo": "🩺・Psicólogo",
-        "cursos_obrigatorios": [
-            "arcanjo",
-            "alpinista",
-            "paraquedista",
-            "mergulhador",
-            "doutor",
-            "psicologo",
-        ],
-        "segundos_minimos_plantao": 20 * 3600,
-        "meta_chamadas": 14,
-        "observacao": "Práticos 1.0 + laudos + plantão.",
-    },
-    {
-        "chave": "psicologo_recrutador",
-        "rotulo": "Psicólogo → Recrutador",
-        "de_cargo": "🩺・Psicólogo",
-        "para_cargo": "✈️・Recrutador",
-        "cursos_obrigatorios": [
-            "arcanjo",
-            "alpinista",
-            "paraquedista",
-            "mergulhador",
-            "doutor",
-            "psicologo",
-            "recrutador",
-        ],
-        "segundos_minimos_plantao": 26 * 3600,
-        "meta_laudos": 10,
-        "meta_chamadas": 21,
-        "observacao": "Curso Recrutador + plantão + laudos.",
-    },
-    {
-        "chave": "recrutador_instrutor",
-        "rotulo": "Recrutador → Instrutor",
-        "de_cargo": "✈️・Recrutador",
-        "para_cargo": "🥼・Instrutor",
-        "cursos_obrigatorios": [
-            "arcanjo",
-            "alpinista",
-            "paraquedista",
-            "mergulhador",
-            "doutor",
-            "arcanjo_2",
-            "alpinista_2",
-            "paraquedista_2",
-            "mergulhador_2",
-            "instrutor",
-            "psicologo",
-            "recrutador",
-        ],
-        "segundos_minimos_plantao": 32 * 3600,
-        "meta_laudos": 16,
-        "meta_recrutamentos": 15,
-        "meta_chamadas": 28,
-        "observacao": "Libera área de Instrutores.",
-    },
-    {
-        "chave": "instrutor_supervisor",
-        "rotulo": "Instrutor → Supervisor",
-        "de_cargo": "🥼・Instrutor",
-        "para_cargo": "👑・SUPERVISOR",
-        "cursos_obrigatorios": ["Curso Diretoria"],
-        "segundos_minimos_plantao": 40 * 3600,
-        "meta_laudos": 31,
-        "meta_recrutamentos": 20,
-        "meta_chamadas": 10,
-        "meta_cursos_aplicados": 10,
-        "observacao": "Metas de liderança.",
-    },
-    {
-        "chave": "supervisor_vice_diretor",
-        "rotulo": "Supervisor → Vice Diretor",
-        "de_cargo": "👑・SUPERVISOR",
-        "para_cargo": "👑・VICE DIRETOR",
-        "cursos_obrigatorios": [],
-        "segundos_minimos_plantao": 50 * 3600,
-        "meta_laudos": 36,
-        "meta_recrutamentos": 24,
+    CARGO_DOUTOR: {
+        "segundos_minimos_plantao": 12 * 3600,
+        "meta_laudos": 0,
+        "meta_recrutamentos": 0,
         "meta_chamadas": 18,
+        "meta_cursos_aplicados": 0,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_PSICOLOGO: {
+        "segundos_minimos_plantao": 16 * 3600,
+        "meta_laudos": 12,
+        "meta_recrutamentos": 0,
+        "meta_chamadas": 10,
+        "meta_cursos_aplicados": 0,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_RECRUTADOR: {
+        "segundos_minimos_plantao": 14 * 3600,
+        "meta_laudos": 0,
+        "meta_recrutamentos": 12,
+        "meta_chamadas": 8,
+        "meta_cursos_aplicados": 0,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_INSTRUTOR: {
+        "segundos_minimos_plantao": 20 * 3600,
+        "meta_laudos": 0,
+        "meta_recrutamentos": 0,
+        "meta_chamadas": 8,
+        "meta_cursos_aplicados": 10,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_INSTRUTOR_RESGATE: {
+        "segundos_minimos_plantao": 20 * 3600,
+        "meta_laudos": 0,
+        "meta_recrutamentos": 0,
+        "meta_chamadas": 8,
+        "meta_cursos_aplicados": 10,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_SUPERVISOR: {
+        "segundos_minimos_plantao": 40 * 3600,
+        "meta_laudos": 20,
+        "meta_recrutamentos": 15,
+        "meta_chamadas": 20,
+        "meta_cursos_aplicados": 12,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_VICE_DIRETOR: {
+        "segundos_minimos_plantao": 50 * 3600,
+        "meta_laudos": 28,
+        "meta_recrutamentos": 20,
+        "meta_chamadas": 26,
         "meta_cursos_aplicados": 16,
-        "observacao": "Meta principalmente de plantão e conduta.",
+        "exige_avaliacao_hp": False,
     },
-    {
-        "chave": "vice_diretor_diretor",
-        "rotulo": "Vice Diretor → Diretor",
-        "de_cargo": "👑・VICE DIRETOR",
-        "para_cargo": "👑・DIRETOR",
-        "cursos_obrigatorios": [],
+    CARGO_DIRETOR: {
         "segundos_minimos_plantao": 60 * 3600,
-        "meta_laudos": 41,
-        "meta_recrutamentos": 28,
-        "meta_chamadas": 21,
+        "meta_laudos": 36,
+        "meta_recrutamentos": 26,
+        "meta_chamadas": 32,
         "meta_cursos_aplicados": 22,
-        "observacao": "Meta de plantão. Diretoria avalia o restante.",
+        "exige_avaliacao_hp": False,
     },
-    {
-        "chave": "diretor_coordenador",
-        "rotulo": "Diretor → Coordenador",
-        "de_cargo": "👑・DIRETOR",
-        "para_cargo": "🔍・COORDENADOR",
-        "cursos_obrigatorios": [],
+    CARGO_RESP_DOUTOR: {
+        "segundos_minimos_plantao": 55 * 3600,
+        "meta_laudos": 10,
+        "meta_recrutamentos": 5,
+        "meta_chamadas": 30,
+        "meta_cursos_aplicados": 8,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_RESP_PSICOLOGO: {
+        "segundos_minimos_plantao": 55 * 3600,
+        "meta_laudos": 30,
+        "meta_recrutamentos": 5,
+        "meta_chamadas": 12,
+        "meta_cursos_aplicados": 8,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_RESP_RECRUTAMENTO: {
+        "segundos_minimos_plantao": 55 * 3600,
+        "meta_laudos": 8,
+        "meta_recrutamentos": 30,
+        "meta_chamadas": 12,
+        "meta_cursos_aplicados": 8,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_RESP_INSTRUTOR: {
+        "segundos_minimos_plantao": 55 * 3600,
+        "meta_laudos": 8,
+        "meta_recrutamentos": 8,
+        "meta_chamadas": 12,
+        "meta_cursos_aplicados": 28,
+        "exige_avaliacao_hp": False,
+    },
+    CARGO_COORDENADOR: {
         "segundos_minimos_plantao": 70 * 3600,
-        "meta_laudos": 46,
-        "meta_recrutamentos": 34,
-        "meta_chamadas": 27,
+        "meta_laudos": 40,
+        "meta_recrutamentos": 30,
+        "meta_chamadas": 36,
         "meta_cursos_aplicados": 26,
-        "observacao": "Cargo de coordenação.",
+        "exige_avaliacao_hp": False,
     },
-    {
-        "chave": "coordenador_vice_geral",
-        "rotulo": "Coordenador → Vice Diretor Geral",
-        "de_cargo": "🔍・COORDENADOR",
-        "para_cargo": "👑 |  VICE DIRETOR GERAL",
-        "cursos_obrigatorios": [],
+    CARGO_VICE_DIRETOR_GERAL: {
         "segundos_minimos_plantao": 80 * 3600,
-        "meta_laudos": 51,
-        "meta_recrutamentos": 38,
-        "meta_chamadas": 31,
-        "meta_cursos_aplicados": 30,
-        "observacao": "Alta liderança.",
-    },
-    {
-        "chave": "vice_geral_diretor_geral",
-        "rotulo": "Vice Diretor Geral → Diretor Geral",
-        "de_cargo": "👑 |  VICE DIRETOR GERAL",
-        "para_cargo": "👑 |  DIRETOR GERAL",
-        "cursos_obrigatorios": [],
-        "segundos_minimos_plantao": 90 * 3600,
-        "meta_laudos": 55,
-        "meta_recrutamentos": 46,
-        "meta_chamadas": 35,
-        "meta_cursos_aplicados": 38,
-        "observacao": "Alta liderança.",
-    },
-    {
-        "chave": "diretor_geral_resp_geral",
-        "rotulo": "Diretor Geral → Responsável Geral",
-        "de_cargo": "👑 |  DIRETOR GERAL",
-        "para_cargo": "👑 | RESPONSÁVEL GERAL",
-        "cursos_obrigatorios": [],
-        "segundos_minimos_plantao": 100 * 3600,
-        "meta_laudos": 60,
-        "meta_recrutamentos": 50,
+        "meta_laudos": 45,
+        "meta_recrutamentos": 35,
         "meta_chamadas": 40,
-        "meta_cursos_aplicados": 45,
-        "observacao": "Topo da hierarquia solicitável.",
+        "meta_cursos_aplicados": 30,
+        "exige_avaliacao_hp": True,
     },
+    CARGO_DIRETOR_GERAL: {
+        "segundos_minimos_plantao": 90 * 3600,
+        "meta_laudos": 50,
+        "meta_recrutamentos": 40,
+        "meta_chamadas": 45,
+        "meta_cursos_aplicados": 35,
+        "exige_avaliacao_hp": True,
+    },
+    CARGO_RESPONSAVEL_GERAL: {
+        "segundos_minimos_plantao": 100 * 3600,
+        "meta_laudos": 55,
+        "meta_recrutamentos": 45,
+        "meta_chamadas": 50,
+        "meta_cursos_aplicados": 40,
+        "exige_avaliacao_hp": True,
+    },
+}
+
+# Horas de plantão só para a PRIMEIRA área do Paramédico (antes das metas de cargo)
+HORAS_PRIMEIRA_AREA = {
+    CARGO_DOUTOR: 8 * 3600,
+    CARGO_PSICOLOGO: 10 * 3600,
+    CARGO_RECRUTADOR: 10 * 3600,
+    CARGO_INSTRUTOR: 12 * 3600,
+}
+
+
+def _metas_do_cargo(nome_cargo: str) -> dict:
+    """Copia as metas do cargo; devolve zeros se o cargo não estiver cadastrado."""
+    base = METAS_POR_CARGO.get(nome_cargo) or {}
+    return {
+        "segundos_minimos_plantao": int(base.get("segundos_minimos_plantao") or 0),
+        "meta_laudos": int(base.get("meta_laudos") or 0),
+        "meta_recrutamentos": int(base.get("meta_recrutamentos") or 0),
+        "meta_chamadas": int(base.get("meta_chamadas") or 0),
+        "meta_cursos_aplicados": int(base.get("meta_cursos_aplicados") or 0),
+        "exige_avaliacao_hp": bool(base.get("exige_avaliacao_hp") or False),
+    }
+
+
+def _montar_trilha(
+    chave: str,
+    rotulo: str,
+    de_cargo: str,
+    para_cargo: str,
+    cursos: list[str],
+    *,
+    usar_metas_do_destino: bool = True,
+    segundos_override: int | None = None,
+    observacao: str = "",
+    primeira_area: bool = False,
+    exige_avaliacao_hp: bool | None = None,
+) -> dict:
+    """Monta um dicionário de trilha com metas vindas de METAS_POR_CARGO."""
+    metas = (
+        _metas_do_cargo(para_cargo)
+        if usar_metas_do_destino
+        else {
+            "segundos_minimos_plantao": 0,
+            "meta_laudos": 0,
+            "meta_recrutamentos": 0,
+            "meta_chamadas": 0,
+            "meta_cursos_aplicados": 0,
+            "exige_avaliacao_hp": False,
+        }
+    )
+    if segundos_override is not None:
+        metas["segundos_minimos_plantao"] = int(segundos_override)
+    if exige_avaliacao_hp is not None:
+        metas["exige_avaliacao_hp"] = bool(exige_avaliacao_hp)
+    return {
+        "chave": chave,
+        "rotulo": rotulo,
+        "de_cargo": de_cargo,
+        "para_cargo": para_cargo,
+        "cursos_obrigatorios": list(cursos),
+        "primeira_area": primeira_area,
+        "observacao": observacao,
+        **metas,
+    }
+
+
+# Áreas médicas (ordem de referência da trilha formal)
+AREAS_MEDICAS = [
+    (CARGO_DOUTOR, "doutor", ["doutor"]),
+    (CARGO_PSICOLOGO, "psicologo", ["psicologo"]),
+    (CARGO_RECRUTADOR, "recrutador", ["recrutador"]),
+    (CARGO_INSTRUTOR, "instrutor", ["instrutor"]),
 ]
+
+TRILHAS_PROMOCAO: list[dict] = []
+
+# 1) Enfermeiro → Paramédico
+TRILHAS_PROMOCAO.append(
+    _montar_trilha(
+        "enfermeiro_paramedico",
+        "Enfermeiro → Paramédico",
+        CARGO_ENFERMEIRO,
+        CARGO_PARAMEDICO,
+        ["resgate"],
+        segundos_override=2 * 3600,
+        observacao="Mínimo 2h de plantão. Boa conduta e sem adv.",
+    )
+)
+
+# 2) Paramédico → cada área (primeira área — opção B)
+for cargo_area, chave_area, cursos_area in AREAS_MEDICAS:
+    TRILHAS_PROMOCAO.append(
+        _montar_trilha(
+            f"paramedico_{chave_area}",
+            f"Paramédico → {cargo_area}",
+            CARGO_PARAMEDICO,
+            cargo_area,
+            CURSOS_PRATICOS_1 + cursos_area,
+            usar_metas_do_destino=False,
+            segundos_override=HORAS_PRIMEIRA_AREA.get(cargo_area, 8 * 3600),
+            primeira_area=True,
+            observacao=(
+                "Primeira área: práticos 1.0 + curso da área + horas de plantão "
+                "da área. Metas de produção só depois da primeira promoção."
+            ),
+        )
+    )
+
+# 3) Área → área (todas as combinações, exceto a mesma)
+# Metas e horas do CARGO ATUAL (origem). Só pede outra área quem já bateu
+# a produção do cargo que ocupa agora.
+for cargo_de, chave_de, _cursos_de in AREAS_MEDICAS:
+    for cargo_para, chave_para, cursos_para in AREAS_MEDICAS:
+        if cargo_de == cargo_para:
+            continue
+        metas_origem = _metas_do_cargo(cargo_de)
+        TRILHAS_PROMOCAO.append(
+            {
+                "chave": f"{chave_de}_{chave_para}",
+                "rotulo": f"{cargo_de} → {cargo_para}",
+                "de_cargo": cargo_de,
+                "para_cargo": cargo_para,
+                "cursos_obrigatorios": list(CURSOS_PRATICOS_1 + cursos_para),
+                "primeira_area": False,
+                "observacao": (
+                    "Precisa ter batido a meta e as horas do cargo atual "
+                    "antes de pedir outra área."
+                ),
+                **metas_origem,
+            }
+        )
+
+# 4) Qualquer área → Supervisor (exige todas as quatro áreas na prática
+#    via cursos; o serviço ainda confere cargos de área quando necessário)
+for cargo_de, chave_de, _ in AREAS_MEDICAS:
+    TRILHAS_PROMOCAO.append(
+        _montar_trilha(
+            f"{chave_de}_supervisor",
+            f"{cargo_de} → Supervisor",
+            cargo_de,
+            CARGO_SUPERVISOR,
+            list(CURSOS_PARA_SUPERVISOR),
+            usar_metas_do_destino=True,
+            observacao=(
+                "Primeiro cargo da diretoria. Exige práticos 1.0 e 2.0, "
+                "os quatro cursos de área, Curso Diretoria, horas e metas."
+            ),
+        )
+    )
+
+# 5) Diretoria interna
+TRILHAS_PROMOCAO.append(
+    _montar_trilha(
+        "supervisor_vice_diretor",
+        "Supervisor → Vice Diretor",
+        CARGO_SUPERVISOR,
+        CARGO_VICE_DIRETOR,
+        [],
+        observacao="Metas e horas do cargo. Sem curso novo.",
+    )
+)
+TRILHAS_PROMOCAO.append(
+    _montar_trilha(
+        "vice_diretor_diretor",
+        "Vice Diretor → Diretor",
+        CARGO_VICE_DIRETOR,
+        CARGO_DIRETOR,
+        [],
+        observacao="Metas e horas do cargo. Sem curso novo.",
+    )
+)
+
+# 6) Diretoria → Responsável de área (destaque de produção)
+for cargo_resp, chave_resp in (
+    (CARGO_RESP_DOUTOR, "resp_doutor"),
+    (CARGO_RESP_PSICOLOGO, "resp_psicologo"),
+    (CARGO_RESP_RECRUTAMENTO, "resp_recrutamento"),
+    (CARGO_RESP_INSTRUTOR, "resp_instrutor"),
+):
+    for cargo_de, chave_de in (
+        (CARGO_SUPERVISOR, "supervisor"),
+        (CARGO_VICE_DIRETOR, "vice_diretor"),
+        (CARGO_DIRETOR, "diretor"),
+    ):
+        TRILHAS_PROMOCAO.append(
+            _montar_trilha(
+                f"{chave_de}_{chave_resp}",
+                f"{cargo_de} → {cargo_resp}",
+                cargo_de,
+                cargo_resp,
+                [],
+                observacao=(
+                    "Indicacao de destaque na área. Metas somadas da diretoria "
+                    "e conferência do Responsável HP."
+                ),
+            )
+        )
+
+# 7) Responsável de área / Diretor → Coordenador
+for cargo_de, chave_de in (
+    (CARGO_DIRETOR, "diretor"),
+    (CARGO_RESP_DOUTOR, "resp_doutor"),
+    (CARGO_RESP_PSICOLOGO, "resp_psicologo"),
+    (CARGO_RESP_RECRUTAMENTO, "resp_recrutamento"),
+    (CARGO_RESP_INSTRUTOR, "resp_instrutor"),
+):
+    TRILHAS_PROMOCAO.append(
+        _montar_trilha(
+            f"{chave_de}_coordenador",
+            f"{cargo_de} → Coordenador",
+            cargo_de,
+            CARGO_COORDENADOR,
+            [],
+            observacao="Metas e horas do cargo de Coordenador.",
+        )
+    )
+
+# 8) Gerais (avaliacao do Responsavel HP)
+TRILHAS_PROMOCAO.append(
+    _montar_trilha(
+        "coordenador_vice_geral",
+        "Coordenador → Vice Diretor Geral",
+        CARGO_COORDENADOR,
+        CARGO_VICE_DIRETOR_GERAL,
+        ["diretoria_geral"],
+        exige_avaliacao_hp=True,
+        observacao=(
+            "Curso Diretoria Geral + horas + metas + avaliação do Responsável HP."
+        ),
+    )
+)
+TRILHAS_PROMOCAO.append(
+    _montar_trilha(
+        "vice_geral_diretor_geral",
+        "Vice Diretor Geral → Diretor Geral",
+        CARGO_VICE_DIRETOR_GERAL,
+        CARGO_DIRETOR_GERAL,
+        [],
+        exige_avaliacao_hp=True,
+        observacao="Metas + horas + avaliação do Responsável HP.",
+    )
+)
+TRILHAS_PROMOCAO.append(
+    _montar_trilha(
+        "diretor_geral_resp_geral",
+        "Diretor Geral → Responsável Geral",
+        CARGO_DIRETOR_GERAL,
+        CARGO_RESPONSAVEL_GERAL,
+        [],
+        exige_avaliacao_hp=True,
+        observacao="Metas + horas + avaliação do Responsável HP.",
+    )
+)
 
 
 # ---------------------------------------------------------------------------

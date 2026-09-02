@@ -186,6 +186,7 @@ CAMINHOS_DOS_COGS = [
     "src.financas.financas_cogs",
     "src.cursos.cursos_cogs",
     "src.promocoes.promocoes_cogs",
+    "src.promocoes.avaliacao_hp.avaliacao_hp_cogs",
     "src.demissao.demissao_cogs",
     "src.ausencia.ausencia_cogs",
     "src.tickets.tickets_cogs",
