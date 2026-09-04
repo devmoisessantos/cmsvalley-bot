@@ -71,6 +71,31 @@ MIGRACOES: list[Migracao] = [
             "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS saudado BOOLEAN DEFAULT FALSE"
         ),
     ),
+    Migracao(
+        numero=4,
+        descricao=(
+            "Tabela de solicitacoes de troca de moedas: guarda o Discord ID do "
+            "beneficiario e o id da mensagem no canal de financas, para a DM "
+            "com comprovante continuar funcionando apos restart do bot."
+        ),
+        comando_sql="""
+CREATE TABLE IF NOT EXISTS solicitacoes_troca_moedas (
+    id SERIAL PRIMARY KEY,
+    discord_id_beneficiario BIGINT NOT NULL,
+    id_fivem VARCHAR(20),
+    quantidade_moedas INTEGER NOT NULL,
+    valor_ingame INTEGER NOT NULL,
+    canal_id BIGINT NOT NULL,
+    mensagem_id BIGINT NOT NULL UNIQUE,
+    titulo VARCHAR(200) NOT NULL,
+    corpo TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pendente',
+    pago_por_id BIGINT,
+    pago_em TIMESTAMPTZ,
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+""",
+    ),
 ]
 
 

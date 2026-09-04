@@ -743,3 +743,118 @@ async def notificar_dm_controle_financeiro(
         texto,
         guilda=guilda,
     )
+
+
+async def notificar_dm_pagamento_com_comprovante(
+    destino: discord.abc.User | discord.Member | None,
+    *,
+    titulo_solicitacao: str,
+    corpo_solicitacao: str,
+    bytes_do_comprovante: bytes,
+    nome_arquivo: str,
+    pago_por_mencao: str,
+    guilda: discord.Guild | None = None,
+) -> bool:
+    """
+    Avisa o membro que o pagamento foi feito e anexa uma cópia do comprovante.
+
+    O arquivo é reenviado a partir dos bytes (cópia local), para o membro
+    guardar na própria DM sem depender do link original da CDN.
+    Card formatado + comprovante na mesma mensagem (anexo fora do card).
+    """
+    from datetime import datetime, timezone
+    from io import BytesIO
+
+    if destino is None:
+        await _registrar_log_notificacao_dm(
+            destino=None,
+            titulo="Pagamento realizado — comprovante",
+            linhas_resumo=["destino None"],
+            enviou=False,
+            motivo_falha="destino None",
+            guilda=guilda,
+        )
+        return False
+
+    momento = int(datetime.now(timezone.utc).timestamp())
+    linhas_card = [
+        "Seu pagamento de **troca de moedas** foi confirmado.",
+        f"Confirmado por: {pago_por_mencao}",
+        f"Quando: <t:{momento}:f>",
+        "",
+        "O comprovante segue **abaixo** desta mensagem, em anexo.",
+    ]
+
+    view_dm = discord.ui.LayoutView(timeout=None)
+    nome_guilda = guilda.name if guilda is not None else "CENTRO MÉDICO SUL VALLEY"
+    view_dm.add_item(
+        discord.ui.Container(
+            discord.ui.TextDisplay("# ✅ Pagamento realizado"),
+            discord.ui.TextDisplay("\n".join(linhas_card)),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(
+                f"**Solicitação**\n{titulo_solicitacao}\n\n{corpo_solicitacao}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(f"-# {nome_guilda} • <t:{momento}:f>"),
+            accent_color=COR_SUCESSO,
+        )
+    )
+
+    enviou = False
+    motivo_falha: str | None = None
+    try:
+        arquivo_copia = discord.File(
+            BytesIO(bytes_do_comprovante),
+            filename=nome_arquivo or "comprovante.png",
+        )
+        await destino.send(view=view_dm, file=arquivo_copia)
+        enviou = True
+        logger.info(
+            "DM pagamento+comprovante enviada para %s",
+            getattr(destino, "id", "?"),
+        )
+    except discord.Forbidden:
+        motivo_falha = "DM bloqueada"
+        logger.warning(
+            "DM bloqueada ao enviar comprovante para %s",
+            getattr(destino, "id", "?"),
+        )
+    except discord.HTTPException as erro_http:
+        motivo_falha = f"HTTP {erro_http}"
+        logger.warning(
+            "Falha HTTP DM comprovante para %s: %s",
+            getattr(destino, "id", "?"),
+            erro_http,
+        )
+        # Fallback: card e arquivo em mensagens separadas
+        try:
+            arquivo_copia_nova = discord.File(
+                BytesIO(bytes_do_comprovante),
+                filename=nome_arquivo or "comprovante.png",
+            )
+            await destino.send(view=view_dm)
+            await destino.send(file=arquivo_copia_nova)
+            enviou = True
+            motivo_falha = None
+            logger.info(
+                "DM pagamento enviada em duas mensagens para %s",
+                getattr(destino, "id", "?"),
+            )
+        except (discord.Forbidden, discord.HTTPException) as erro_segunda:
+            motivo_falha = f"HTTP retry {erro_segunda}"
+            logger.warning(
+                "Retry DM comprovante falhou para %s: %s",
+                getattr(destino, "id", "?"),
+                erro_segunda,
+            )
+
+    await _registrar_log_notificacao_dm(
+        destino=destino,
+        titulo="Pagamento realizado — comprovante",
+        linhas_resumo=linhas_card,
+        enviou=enviou,
+        motivo_falha=motivo_falha,
+        guilda=guilda,
+    )
+    return enviou

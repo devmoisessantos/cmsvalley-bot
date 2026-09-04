@@ -800,6 +800,37 @@ class PedidoDepositoMoeda(Base):
     )
 
 
+class SolicitacaoTrocaMoedas(Base):
+    """
+    Pedido de troca de moedas de plantão por dinheiro in-game.
+
+    Guarda o Discord ID do beneficiário e o id da mensagem no canal de
+    finanças. Assim, depois de um restart o bot ainda sabe para quem enviar
+    a DM com o comprovante.
+    """
+
+    __tablename__ = "solicitacoes_troca_moedas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id_beneficiario: Mapped[int] = mapped_column(BigInteger, index=True)
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    quantidade_moedas: Mapped[int] = mapped_column(Integer)
+    valor_ingame: Mapped[int] = mapped_column(Integer)
+    canal_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    mensagem_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    titulo: Mapped[str] = mapped_column(String(200))
+    corpo: Mapped[str] = mapped_column(Text)
+    # pendente | pago
+    status: Mapped[str] = mapped_column(String(20), default="pendente", index=True)
+    pago_por_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    pago_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    criado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora, index=True
+    )
+
+
 class RegistroWipe(Base):
     """Últimos wipes de temporada executados (auditoria leve)."""
 

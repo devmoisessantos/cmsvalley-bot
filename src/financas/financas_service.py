@@ -10,6 +10,8 @@ from datetime import (
 )
 
 import discord
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.config import (
     AREAS_FINANCEIRAS,
@@ -17,6 +19,8 @@ from src.config import (
     DIRETOR_CONTROLE_FINANCEIRO_IDS,
     VALOR_UNITARIO_RANKING,
 )
+from src.database.conexao import async_session
+from src.database.models import SolicitacaoTrocaMoedas
 from src.financas.financas_views import (
     ViewBotaoPagamentoFinancas,
     ViewSolicitacaoFinancasCard,
@@ -323,6 +327,101 @@ async def _processar_fechamento_ranking_interno(
             logger.warning("DM controle financeiro %s não enviada", diretor_id)
 
 
+async def gravar_solicitacao_troca_moedas(
+    *,
+    discord_id_beneficiario: int,
+    id_fivem: str | None,
+    quantidade_moedas: int,
+    valor_ingame: int,
+    canal_id: int,
+    mensagem_id: int,
+    titulo: str,
+    corpo: str,
+) -> SolicitacaoTrocaMoedas | None:
+    """
+    Persiste a solicitação ligada à mensagem do canal de finanças.
+
+    Assim o bot recupera o beneficiário depois de um restart, só com o
+    message_id da interação do botão.
+    """
+    try:
+        async with async_session() as sessao:
+            registro = SolicitacaoTrocaMoedas(
+                discord_id_beneficiario=discord_id_beneficiario,
+                id_fivem=id_fivem,
+                quantidade_moedas=quantidade_moedas,
+                valor_ingame=valor_ingame,
+                canal_id=canal_id,
+                mensagem_id=mensagem_id,
+                titulo=titulo,
+                corpo=corpo,
+                status="pendente",
+            )
+            sessao.add(registro)
+            await sessao.commit()
+            await sessao.refresh(registro)
+            return registro
+    except SQLAlchemyError as erro_do_banco:
+        logger.exception(
+            "Falha ao gravar solicitação de troca de moedas (msg=%s): %s",
+            mensagem_id,
+            erro_do_banco,
+        )
+        return None
+
+
+async def buscar_solicitacao_por_mensagem(
+    mensagem_id: int,
+) -> SolicitacaoTrocaMoedas | None:
+    """Localiza a solicitação pelo id da mensagem no canal de finanças."""
+    try:
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(SolicitacaoTrocaMoedas).where(
+                    SolicitacaoTrocaMoedas.mensagem_id == mensagem_id
+                )
+            )
+            return resultado.scalar_one_or_none()
+    except SQLAlchemyError as erro_do_banco:
+        logger.exception(
+            "Falha ao buscar solicitação de troca (msg=%s): %s",
+            mensagem_id,
+            erro_do_banco,
+        )
+        return None
+
+
+async def marcar_solicitacao_como_paga(
+    mensagem_id: int,
+    *,
+    pago_por_id: int,
+) -> SolicitacaoTrocaMoedas | None:
+    """Atualiza status para pago e grava quem confirmou."""
+    try:
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(SolicitacaoTrocaMoedas).where(
+                    SolicitacaoTrocaMoedas.mensagem_id == mensagem_id
+                )
+            )
+            registro = resultado.scalar_one_or_none()
+            if registro is None:
+                return None
+            registro.status = "pago"
+            registro.pago_por_id = pago_por_id
+            registro.pago_em = datetime.now(timezone.utc)
+            await sessao.commit()
+            await sessao.refresh(registro)
+            return registro
+    except SQLAlchemyError as erro_do_banco:
+        logger.exception(
+            "Falha ao marcar solicitação paga (msg=%s): %s",
+            mensagem_id,
+            erro_do_banco,
+        )
+        return None
+
+
 async def publicar_solicitacao_troca_moedas(
     guild: discord.Guild,
     *,
@@ -331,7 +430,7 @@ async def publicar_solicitacao_troca_moedas(
     quantidade_moedas: int,
     valor_ingame: int,
 ) -> bool:
-    """Publica troca de moedas no canal de finanças (Card V2 + botão)."""
+    """Publica troca de moedas no canal de finanças e grava no banco."""
     from src.plantao.plantao_service import montar_corpo_solicitacao_troca_moedas
 
     canal = _obter_canal_financas(guild)
@@ -360,11 +459,11 @@ async def publicar_solicitacao_troca_moedas(
         guild=guild,
         cor=discord.Color.dark_gold(),
         ja_pago=False,
+        discord_id_beneficiario=membro.id,
     )
 
     try:
-        await canal.send(view=view_card)
-        return True
+        mensagem = await canal.send(view=view_card)
     except Exception as erro:
         logger.exception("Falha ao postar troca de moedas em finanças")
         await enviar_erro_para_log_erros(
@@ -375,3 +474,25 @@ async def publicar_solicitacao_troca_moedas(
             usuario=membro,
         )
         return False
+
+    registro = await gravar_solicitacao_troca_moedas(
+        discord_id_beneficiario=membro.id,
+        id_fivem=str(id_fivem) if id_fivem is not None else None,
+        quantidade_moedas=quantidade_moedas,
+        valor_ingame=valor_ingame,
+        canal_id=mensagem.channel.id,
+        mensagem_id=mensagem.id,
+        titulo=titulo,
+        corpo=corpo,
+    )
+    if registro is None:
+        await enviar_erro_para_log_erros(
+            guild,
+            "Troca de moedas — postou no canal mas falhou ao gravar no banco",
+            RuntimeError(f"mensagem_id={mensagem.id} sem registro persistido"),
+            contexto="publicar_solicitacao_troca_moedas.gravar",
+            usuario=membro,
+        )
+        # O post no canal já saiu; ainda assim devolve True para o membro
+        # não achar que as moedas foram estornadas. A staff vê o log de erros.
+    return True
