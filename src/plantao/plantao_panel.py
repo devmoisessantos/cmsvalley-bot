@@ -69,6 +69,82 @@ MENSAGEM_SEM_PERMISSAO = (
 )
 
 
+async def _adiar_interacao_efemera(interacao: discord.Interaction) -> bool:
+    """
+    Confirma a interação no Discord o mais cedo possível.
+
+    O Discord cancela a interação se ninguém responder em cerca de 3 segundos
+    (erro 10062 Unknown interaction). Qualquer consulta ao banco ou FiveM
+    precisa acontecer DEPOIS deste defer.
+
+    Devolve False quando a interação já expirou ou já foi respondida de um
+    jeito que impede continuar — nesse caso o callback deve só sair.
+    """
+    if interacao.response.is_done():
+        return True
+    try:
+        await interacao.response.defer(ephemeral=True)
+        return True
+    except discord.NotFound:
+        # Token já inválido (lentidão, clique duplicado, reinício no meio).
+        logger.warning(
+            "Interação expirada antes do defer (usuário %s).",
+            getattr(interacao.user, "id", "?"),
+        )
+        return False
+    except discord.HTTPException as erro_http:
+        logger.warning(
+            "Falha ao adiar interação de plantão: %s",
+            erro_http,
+        )
+        return False
+
+
+class _ViewPedirIdFivem(LoggingViewMixin, discord.ui.LayoutView):
+    """
+    Botão que abre o modal de ID FiveM.
+
+    Usado depois de um defer: não dá para abrir modal na mesma interação
+    já adiada, então mandamos este card e o membro clica de novo.
+    """
+
+    def __init__(self, origem: str):
+        super().__init__(timeout=120)
+        self.origem = origem
+        linha = discord.ui.ActionRow()
+        botao = discord.ui.Button(
+            label="Informar ID FiveM",
+            style=discord.ButtonStyle.primary,
+            emoji="🆔",
+        )
+        botao.callback = self._ao_abrir_modal
+        linha.add_item(botao)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# ID FiveM necessário\n"
+                    "Ainda não temos o seu identificador no banco.\n"
+                    "Clique no botão abaixo e informe o ID para entrar em serviço."
+                ),
+                linha,
+                accent_color=discord.Color.orange(),
+            )
+        )
+
+    async def _ao_abrir_modal(self, interacao: discord.Interaction):
+        membro = interacao.user
+        if not isinstance(membro, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Só no servidor",
+                linhas=["Use este botão dentro do Discord do hospital."],
+            )
+            return
+        await interacao.response.send_modal(
+            ModalInformarIDFivem(membro, origem=self.origem)
+        )
+
+
 class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
     id_fivem_input = discord.ui.TextInput(
         label="Seu Identificador (ID FiveM)",
@@ -139,9 +215,7 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
                 self.membro.id,
                 novo_estado,
             )
-            tempo_total = await calcular_segundos_historico_fechado(
-                self.membro.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(self.membro.id)
             nova_view = InformacoesPlantaoView(
                 self.membro,
                 novo_estado,
@@ -277,11 +351,15 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
+        # Responde ao Discord antes de qualquer consulta ao banco/FiveM.
+        # Sem isso, em lentidão aparece erro 10062 (Unknown interaction).
+        if not await _adiar_interacao_efemera(interaction):
+            return
+
         estado_antes = await _buscar_estado(interaction.user.id)
         ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
 
         if ja_ligado:
-            await interaction.response.defer(ephemeral=True)
             resultado_texto = await desligar_servico(interaction.user)
 
             if resultado_texto.startswith("✅"):
@@ -309,8 +387,11 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         if id_fivem is None:
             if membro_pode_informar_id_manualmente(interaction.user):
-                await interaction.response.send_modal(
-                    ModalInformarIDFivem(interaction.user, origem="painel")
+                # Depois do defer não dá para abrir modal na mesma interação.
+                await responder_view(
+                    interaction,
+                    _ViewPedirIdFivem(origem="painel"),
+                    ephemeral=True,
                 )
                 return
             await responder_erro(
@@ -322,7 +403,6 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
         resultado_texto = await ligar_servico(interaction.user, id_fivem)
 
         if resultado_texto.startswith("✅"):
@@ -359,6 +439,8 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         return botao
 
     async def _ao_ver_informacoes(self, interaction: discord.Interaction):
+        if not await _adiar_interacao_efemera(interaction):
+            return
         estado = await _buscar_estado(interaction.user.id)
         tempo_ciclo = await calcular_segundos_plantao_atual(
             interaction.user.id,
@@ -434,13 +516,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         if online and estado.em_call_valida:
             cronometro_rodando = estado.segmento_iniciado_em is not None
             if cronometro_rodando:
-                status_texto = (
-                    "🟢 Em Serviço (cronômetro rodando nesta call)"
-                )
+                status_texto = "🟢 Em Serviço (cronômetro rodando nesta call)"
             else:
-                status_texto = (
-                    "🟡 Em Serviço (cronômetro pausado — surdo / AFK)"
-                )
+                status_texto = "🟡 Em Serviço (cronômetro pausado — surdo / AFK)"
             nome_call = NOMES_CANAIS_PLANTAO.get(
                 estado.canal_atual_id,
                 "Desconhecida",
@@ -451,8 +529,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             linha_call = "`📍` Nenhuma call conectada — selecione uma abaixo"
         else:
             status_texto = (
-                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o '
-                "cronômetro)"
+                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
             )
 
         linhas = (
@@ -546,9 +623,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         self._parar_atualizacao = False
         if self._tarefa_ao_vivo is not None and not self._tarefa_ao_vivo.done():
             self._tarefa_ao_vivo.cancel()
-        self._tarefa_ao_vivo = asyncio.create_task(
-            self._loop_atualizacao_ao_vivo()
-        )
+        self._tarefa_ao_vivo = asyncio.create_task(self._loop_atualizacao_ao_vivo())
 
     def _parar_loop_ao_vivo(self) -> None:
         self._parar_atualizacao = True
@@ -598,9 +673,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                     estado,
                 )
                 # Histórico só com segmentos fechados (não cresce no segundo)
-                tempo_total = await calcular_segundos_historico_fechado(
-                    self.membro.id
-                )
+                tempo_total = await calcular_segundos_historico_fechado(self.membro.id)
                 nova_view = InformacoesPlantaoView(
                     self.membro,
                     estado,
@@ -642,17 +715,18 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         self._parar_loop_ao_vivo()
 
     async def _ao_toggle(self, interaction: discord.Interaction):
+        # Adia na hora — evita 10062 se o banco demorar.
+        if not await _adiar_interacao_efemera(interaction):
+            return
+
         estado_antes = await _buscar_estado(interaction.user.id)
         ja_ligado = estado_antes is not None and estado_antes.toggle_ligado
 
         if ja_ligado:
             self._parar_loop_ao_vivo()
-            await interaction.response.defer(ephemeral=True)
             await desligar_servico(interaction.user)
             novo_estado = await _buscar_estado(interaction.user.id)
-            tempo_total = await calcular_segundos_historico_fechado(
-                interaction.user.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
             nova_view = InformacoesPlantaoView(
                 interaction.user,
                 novo_estado,
@@ -669,8 +743,10 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
 
         if id_fivem is None:
             if membro_pode_informar_id_manualmente(interaction.user):
-                await interaction.response.send_modal(
-                    ModalInformarIDFivem(interaction.user, origem="info")
+                await responder_view(
+                    interaction,
+                    _ViewPedirIdFivem(origem="info"),
+                    ephemeral=True,
                 )
                 return
             await responder_erro(
@@ -683,7 +759,6 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         self._parar_loop_ao_vivo()
-        await interaction.response.defer(ephemeral=True)
         await ligar_servico(interaction.user, id_fivem)
         novo_estado = await _buscar_estado(interaction.user.id)
         tempo_ciclo = await calcular_segundos_plantao_atual(
@@ -864,9 +939,7 @@ class ModalTrocarMoedasPlantao(
                 interaction.user.id,
                 novo_estado,
             )
-            tempo_total = await calcular_segundos_historico_fechado(
-                interaction.user.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
             nova_view = InformacoesPlantaoView(
                 interaction.user,
                 novo_estado,
