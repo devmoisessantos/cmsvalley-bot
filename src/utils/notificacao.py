@@ -756,14 +756,21 @@ async def notificar_dm_pagamento_com_comprovante(
     guilda: discord.Guild | None = None,
 ) -> bool:
     """
-    Avisa o membro que o pagamento foi feito e anexa uma cópia do comprovante.
+    Avisa o membro que o pagamento foi feito e envia cópia do comprovante.
 
-    O arquivo é reenviado a partir dos bytes (cópia local), para o membro
-    guardar na própria DM sem depender do link original da CDN.
-    Card formatado + comprovante na mesma mensagem (anexo fora do card).
+    Components V2 (LayoutView) **não mostra anexo solto**: o arquivo precisa
+    de `ui.File` / `MediaGallery` ou de uma mensagem clássica à parte.
+    Por isso o envio é em duas mensagens:
+
+    1) card formatado (LayoutView)
+    2) comprovante em mensagem clássica com `file=` (sempre visível)
+
+    Os bytes são reenviados (cópia local), para o membro guardar na DM sem
+    depender do link original da CDN.
     """
     from datetime import datetime, timezone
     from io import BytesIO
+    from pathlib import Path
 
     if destino is None:
         await _registrar_log_notificacao_dm(
@@ -782,7 +789,7 @@ async def notificar_dm_pagamento_com_comprovante(
         f"Confirmado por: {pago_por_mencao}",
         f"Quando: <t:{momento}:f>",
         "",
-        "O comprovante segue **abaixo** desta mensagem, em anexo.",
+        "O comprovante segue **na mensagem abaixo**.",
     ]
 
     view_dm = discord.ui.LayoutView(timeout=None)
@@ -801,17 +808,28 @@ async def notificar_dm_pagamento_com_comprovante(
         )
     )
 
+    nome_seguro = nome_arquivo or "comprovante.png"
+    # Discord rejeita nomes estranhos; mantém só a parte final do caminho.
+    nome_seguro = Path(nome_seguro).name or "comprovante.png"
+
     enviou = False
     motivo_falha: str | None = None
     try:
+        # 1) Card V2 — sem file= (anexo solto some no Components V2)
+        await destino.send(view=view_dm)
+
+        # 2) Comprovante em mensagem clássica (file= funciona de verdade)
         arquivo_copia = discord.File(
             BytesIO(bytes_do_comprovante),
-            filename=nome_arquivo or "comprovante.png",
+            filename=nome_seguro,
         )
-        await destino.send(view=view_dm, file=arquivo_copia)
+        await destino.send(
+            content="📎 **Comprovante do pagamento**",
+            file=arquivo_copia,
+        )
         enviou = True
         logger.info(
-            "DM pagamento+comprovante enviada para %s",
+            "DM pagamento (card + comprovante) enviada para %s",
             getattr(destino, "id", "?"),
         )
     except discord.Forbidden:
@@ -827,18 +845,20 @@ async def notificar_dm_pagamento_com_comprovante(
             getattr(destino, "id", "?"),
             erro_http,
         )
-        # Fallback: card e arquivo em mensagens separadas
+        # Se o card já foi e só o arquivo falhou, tenta o arquivo de novo.
         try:
             arquivo_copia_nova = discord.File(
                 BytesIO(bytes_do_comprovante),
-                filename=nome_arquivo or "comprovante.png",
+                filename=nome_seguro,
             )
-            await destino.send(view=view_dm)
-            await destino.send(file=arquivo_copia_nova)
+            await destino.send(
+                content="📎 **Comprovante do pagamento**",
+                file=arquivo_copia_nova,
+            )
             enviou = True
             motivo_falha = None
             logger.info(
-                "DM pagamento enviada em duas mensagens para %s",
+                "DM comprovante reenviado após falha parcial para %s",
                 getattr(destino, "id", "?"),
             )
         except (discord.Forbidden, discord.HTTPException) as erro_segunda:
