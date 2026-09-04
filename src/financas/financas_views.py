@@ -11,10 +11,12 @@ Fluxo do clique em Pagamento realizado (troca de moedas):
 5. Baixa os bytes do anexo (cópia local — não depende da CDN)
 6. Marca a solicitação como paga no card e no banco
 7. Envia DM ao beneficiário: card formatado + comprovante em anexo
+8. Apaga a mensagem do comprovante no canal de finanças após 10 segundos
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import (
@@ -32,6 +34,7 @@ from src.utils.error_handling import (
 )
 from src.utils.mensagens import (
     editar_mensagem_original,
+    excluir_mensagem,
     responder_aviso,
     responder_erro,
     responder_info,
@@ -44,6 +47,9 @@ CUSTOM_ID_PAGAMENTO_REALIZADO = "financas:pagamento_realizado"
 
 # Tempo máximo para a diretoria enviar o comprovante após clicar no botão.
 PRAZO_COMPROVANTE_SEGUNDOS = 5 * 60
+
+# Depois da DM, apaga o comprovante do canal de finanças (já foi copiado).
+SEGUNDOS_ATE_APAGAR_COMPROVANTE_NO_CANAL = 10
 
 # Tipos aceitos no comprovante (extensão e content-type).
 EXTENSOES_COMPROVANTE_OK = {
@@ -259,11 +265,15 @@ async def processar_pagamento_realizado(
         )
         return False
 
-    titulo = (registro.titulo if registro else None) or titulo_fallback or (
-        "🏥 PAGAMENTO — TROCA DE MOEDAS"
+    titulo = (
+        (registro.titulo if registro else None)
+        or titulo_fallback
+        or ("🏥 PAGAMENTO — TROCA DE MOEDAS")
     )
-    corpo = (registro.corpo if registro else None) or corpo_fallback or (
-        "_Solicitação de troca de moedas._"
+    corpo = (
+        (registro.corpo if registro else None)
+        or corpo_fallback
+        or ("_Solicitação de troca de moedas._")
     )
     id_beneficiario = (
         registro.discord_id_beneficiario
@@ -412,9 +422,17 @@ async def processar_pagamento_realizado(
         )
     elif id_beneficiario is None:
         logger.warning(
-            "Pagamento realizado sem discord_id do beneficiário "
-            "(mensagem_id=%s)",
+            "Pagamento realizado sem discord_id do beneficiário (mensagem_id=%s)",
             mensagem_id,
+        )
+
+    # Comprovante no canal já foi copiado para a DM: remove depois de 10s.
+    if enviou_dm:
+        asyncio.create_task(
+            excluir_mensagem(
+                mensagem_comprovante,
+                delay=SEGUNDOS_ATE_APAGAR_COMPROVANTE_NO_CANAL,
+            )
         )
 
     if enviou_dm:
@@ -424,6 +442,8 @@ async def processar_pagamento_realizado(
             linhas=[
                 "Solicitação marcada como **pagamento realizado**.",
                 "Comprovante enviado na **DM** do membro.",
+                "A mensagem do comprovante neste canal some em "
+                f"**{SEGUNDOS_ATE_APAGAR_COMPROVANTE_NO_CANAL} segundos**.",
             ],
             delay=12,
         )
