@@ -1,10 +1,8 @@
 """
-Reset do banco operacional na virada de temporada.
+Reset do banco na virada de temporada.
 
-Apaga os dados da temporada. Mantém:
-- migracoes_aplicadas (controle de schema)
-- perguntas (gabarito do recrutamento)
-- registros_wipe / diretoria_pendente_wipe (este domínio)
+Apaga os dados de todas as tabelas do bot depois do backup do banco.
+Mantém apenas migracoes_aplicadas (controle de schema do PostgreSQL).
 """
 
 from __future__ import annotations
@@ -17,7 +15,8 @@ from src.database.conexao import async_session
 
 registrador = logging.getLogger(__name__)
 
-# Ordem importa quando há FKs: filhos antes dos pais.
+# Ordem: filhos antes dos pais quando há FK.
+# Inclui perguntas e registros de wipe — temporada nova começa zerada.
 TABELAS_PARA_ESVAZIAR: list[str] = [
     "respostas_prova",
     "recrutamentos",
@@ -42,6 +41,7 @@ TABELAS_PARA_ESVAZIAR: list[str] = [
     "historico_promocoes",
     "movimentacoes_moedas",
     "pedidos_deposito_moedas",
+    "solicitacoes_troca_moedas",
     "solicitacoes_demissao",
     "solicitacoes_ausencia",
     "tickets",
@@ -49,12 +49,18 @@ TABELAS_PARA_ESVAZIAR: list[str] = [
     "mensagens_hierarquia",
     "historico_cargos",
     "usuarios",
+    "perguntas",
+    "diretoria_pendente_wipe",
+    "registros_wipe",
 ]
+
+# Nunca truncar: o bot usa para saber quais migrações já rodaram.
+TABELAS_PRESERVADAS = ("migracoes_aplicadas",)
 
 
 async def esvaziar_banco_da_temporada() -> list[str]:
     """
-    TRUNCATE das tabelas operacionais da temporada.
+    TRUNCATE de todas as tabelas operacionais.
 
     Devolve linhas descritivas para o relatório do wipe.
     """
@@ -63,13 +69,18 @@ async def esvaziar_banco_da_temporada() -> list[str]:
         for nome_tabela in TABELAS_PARA_ESVAZIAR:
             try:
                 await sessao.execute(
-                    text(f"TRUNCATE TABLE {nome_tabela} RESTART IDENTITY CASCADE")
+                    text(
+                        f"TRUNCATE TABLE {nome_tabela} RESTART IDENTITY CASCADE"
+                    )
                 )
                 linhas.append(f"Tabela esvaziada: {nome_tabela}")
             except Exception as erro:
-                # Tabela pode não existir ainda em instalações parciais
                 mensagem = f"Tabela ignorada ({nome_tabela}): {erro}"
                 linhas.append(mensagem)
                 registrador.warning("[wipe] %s", mensagem)
         await sessao.commit()
+
+    linhas.append(
+        "Preservada: migracoes_aplicadas (controle de schema)"
+    )
     return linhas

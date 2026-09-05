@@ -1,42 +1,33 @@
 """
-Execução do wipe configurado pelo assistente.
+Orquestra as duas operações do wipe:
 
-1. Backup (obrigatório)
-2. Expulsar membros comuns
-3. Recriar canais de texto escolhidos
-4. Relatório + JSON de novos IDs para config.py
-
-Não mexe em cargos, categorias, painéis não marcados nem no banco.
+1. /wipe backup  — snapshot Discord + backup do banco + esvaziar tabelas
+2. /wipe limpar-cargos — remover cargos e prefixos (com exceção da diretoria)
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import (
     datetime,
     timezone,
 )
-from pathlib import Path
 
 from discord import (
     Guild,
     Member,
 )
 
-from src.config import BACKUP_DIR
-from src.database.conexao import async_session
-from src.database.models import RegistroWipe
 from src.wipe.wipe_backup_service import (
-    criar_e_salvar_backup_do_wipe,
+    criar_backup_forcado_do_banco,
+    criar_e_salvar_backup_do_discord,
     montar_nome_da_temporada,
 )
-from src.wipe.wipe_estrutura_service import recriar_canais_escolhidos
+from src.wipe.wipe_banco_service import esvaziar_banco_da_temporada
 from src.wipe.wipe_logger import publicar_relatorio_do_wipe
 from src.wipe.wipe_membros_service import (
-    expulsar_membros_comuns,
-    listar_preservados_e_expulsaveis,
-    nomes_cargos_de_gestao_do_membro,
+    limpar_cargos_e_prefixos,
+    listar_preservados_e_comuns,
 )
 from src.wipe.wipe_state import (
     EstadoDoWipe,
@@ -52,48 +43,27 @@ def _anotar(estado: EstadoDoWipe, linha: str) -> None:
     registrador.info("[wipe] %s", linha)
 
 
-def salvar_json_de_config(
-    guilda_id: int,
-    temporada: str,
-    mapa_config: dict[str, int],
-) -> str:
-    """Grava JSON com chaves do config.py e novos IDs."""
-    pasta = Path(BACKUP_DIR) / str(guilda_id)
-    pasta.mkdir(parents=True, exist_ok=True)
-    caminho = pasta / f"wipe_config_{temporada}.json"
-    payload = {
-        "temporada": temporada,
-        "gerado_em": datetime.now(timezone.utc).isoformat(),
-        "aviso": (
-            "Substitua no config.py os valores pelos IDs abaixo. "
-            "Chaves com CANAIS_PLANTAO. referem-se a esse dicionário."
-        ),
-        "novos_ids": mapa_config,
-    }
-    caminho.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return str(caminho)
-
-
-async def executar_wipe(
+async def executar_backup_e_esvaziar_banco(
     guilda: Guild,
     iniciador: Member,
-    ids_canais_para_recriar: set[int],
-    caminho_backup_ja_feito: str | None = None,
 ) -> EstadoDoWipe:
-    """Roda o wipe com as escolhas do assistente."""
+    """
+    1) Snapshot completo do Discord
+    2) Backup forçado do PostgreSQL
+    3) TRUNCATE de todas as tabelas operacionais
+
+    Só avança para o passo 3 se o backup do banco tiver caminho válido.
+    """
     atual = obter_estado_do_wipe()
     if atual is not None and atual.em_andamento:
-        raise RuntimeError("Já existe um wipe em andamento.")
+        raise RuntimeError("Já existe uma operação de wipe em andamento.")
 
     temporada = montar_nome_da_temporada()
     estado = EstadoDoWipe(
         temporada=temporada,
         iniciador_id=iniciador.id,
         iniciador_nome=str(iniciador),
-        fase="backup",
+        fase="backup_discord",
         iniciado_em=datetime.now(timezone.utc),
         em_andamento=True,
     )
@@ -102,64 +72,45 @@ async def executar_wipe(
     try:
         _anotar(estado, f"Temporada: {temporada}")
         _anotar(estado, f"Iniciado por: {iniciador} ({iniciador.id})")
+        _anotar(estado, "Fase: backup do Discord")
 
-        estado.fase = "backup"
-        if caminho_backup_ja_feito:
-            estado.caminho_backup = caminho_backup_ja_feito
-            _anotar(estado, f"Reutilizando backup: {caminho_backup_ja_feito}")
-        else:
-            _backup, caminho = criar_e_salvar_backup_do_wipe(
-                guilda, str(iniciador), temporada
-            )
-            estado.caminho_backup = caminho
-            _anotar(estado, f"Backup salvo: {caminho}")
-
-        preservados, expulsaveis = listar_preservados_e_expulsaveis(guilda)
-        for membro in preservados:
-            if membro.bot:
-                continue
-            cargos = nomes_cargos_de_gestao_do_membro(membro)
-            _anotar(estado, f"Preservado: {membro} → {cargos}")
-        _anotar(estado, f"A expulsar: {len(expulsaveis)}")
-        _anotar(estado, f"Canais a recriar: {len(ids_canais_para_recriar)}")
-
-        estado.fase = "expulsar_membros"
-        sucessos, falhas, linhas_kick = await expulsar_membros_comuns(
-            guilda, f"Wipe de temporada {temporada}"
+        _backup, caminho_discord = criar_e_salvar_backup_do_discord(
+            guilda, str(iniciador), temporada
         )
-        estado.membros_expulsos = sucessos
-        estado.membros_falha = falhas
-        estado.linhas_do_relatorio.extend(linhas_kick[:40])
-        _anotar(estado, f"Expulsos: {sucessos} | Falhas: {falhas}")
+        estado.caminho_backup_discord = caminho_discord
+        _anotar(estado, f"Backup Discord: {caminho_discord}")
 
-        estado.fase = "recriar_canais"
-        if ids_canais_para_recriar:
-            linhas_ch, mapa_cfg, _mapa_ids = await recriar_canais_escolhidos(
-                guilda, ids_canais_para_recriar
+        estado.fase = "backup_banco"
+        _anotar(estado, "Fase: backup forçado do banco")
+        resultado_banco = await criar_backup_forcado_do_banco()
+        if not resultado_banco.get("fez_backup") or not resultado_banco.get("caminho"):
+            motivo = resultado_banco.get("motivo") or "falha desconhecida"
+            raise RuntimeError(
+                f"Backup do banco falhou — tabelas NÃO foram esvaziadas. Motivo: {motivo}"
             )
-            estado.linhas_do_relatorio.extend(linhas_ch)
-            estado.mapa_config_novos_ids = mapa_cfg
-            estado.canais_recriados = sum(
-                1 for linha in linhas_ch if linha.startswith("Canal recriado:")
-            )
-            if mapa_cfg:
-                caminho_json = salvar_json_de_config(guilda.id, temporada, mapa_cfg)
-                _anotar(estado, f"JSON para config.py: {caminho_json}")
-                _anotar(
-                    estado,
-                    "Novos IDs: " + json.dumps(mapa_cfg, ensure_ascii=False),
-                )
-        else:
-            _anotar(estado, "Nenhum canal marcado para recriar.")
+        estado.caminho_backup_banco = resultado_banco["caminho"]
+        _anotar(
+            estado,
+            f"Backup banco: {resultado_banco['caminho']} "
+            f"(método: {resultado_banco.get('metodo')})",
+        )
+
+        estado.fase = "esvaziar_banco"
+        _anotar(estado, "Fase: esvaziar tabelas do banco")
+        linhas_tabelas = await esvaziar_banco_da_temporada()
+        estado.tabelas_esvaziadas = sum(
+            1 for linha in linhas_tabelas if linha.startswith("Tabela esvaziada:")
+        )
+        estado.linhas_do_relatorio.extend(linhas_tabelas)
+        _anotar(estado, f"Tabelas esvaziadas: {estado.tabelas_esvaziadas}")
 
         estado.fase = "concluido"
         estado.em_andamento = False
-        _anotar(estado, "Wipe concluído (sem banco/cargos/categorias)")
+        _anotar(estado, "Backup + esvaziar banco concluídos")
 
-        await _persistir_registro(estado)
         await publicar_relatorio_do_wipe(
             guilda,
-            titulo=f"Wipe temporada {temporada}",
+            titulo=f"Wipe backup — temporada {temporada}",
             linhas=estado.linhas_do_relatorio,
         )
         return estado
@@ -167,12 +118,11 @@ async def executar_wipe(
     except Exception as erro:
         estado.fase = "erro"
         estado.em_andamento = False
-        _anotar(estado, f"ERRO FATAL: {erro}")
-        registrador.exception("[wipe] falhou: %s", erro)
-        await _persistir_registro(estado)
+        _anotar(estado, f"ERRO: {erro}")
+        registrador.exception("[wipe] backup falhou: %s", erro)
         await publicar_relatorio_do_wipe(
             guilda,
-            titulo=f"Wipe FALHOU — {estado.temporada}",
+            titulo=f"Wipe backup FALHOU — {estado.temporada}",
             linhas=estado.linhas_do_relatorio,
         )
         raise
@@ -182,19 +132,78 @@ async def executar_wipe(
             definir_estado_do_wipe(estado)
 
 
-async def _persistir_registro(estado: EstadoDoWipe) -> None:
-    async with async_session() as sessao:
-        sessao.add(
-            RegistroWipe(
-                temporada=estado.temporada,
-                iniciador_id=estado.iniciador_id,
-                iniciador_nome=estado.iniciador_nome,
-                caminho_backup=estado.caminho_backup or "",
-                fase_final=estado.fase,
-                membros_expulsos=estado.membros_expulsos,
-                membros_falha=estado.membros_falha,
-                finalizado_em=datetime.now(timezone.utc),
-                relatorio="\n".join(estado.linhas_do_relatorio[-200:]),
-            )
+async def executar_limpar_cargos(
+    guilda: Guild,
+    iniciador: Member,
+) -> EstadoDoWipe:
+    """
+    Remove cargos e prefixos de todos os membros.
+
+    Diretoria e responsáveis: mantêm cargos da lista + HP S・Valley.
+    Gate e demais: perdem todos os cargos.
+    """
+    atual = obter_estado_do_wipe()
+    if atual is not None and atual.em_andamento:
+        raise RuntimeError("Já existe uma operação de wipe em andamento.")
+
+    temporada = montar_nome_da_temporada()
+    estado = EstadoDoWipe(
+        temporada=temporada,
+        iniciador_id=iniciador.id,
+        iniciador_nome=str(iniciador),
+        fase="limpar_cargos",
+        iniciado_em=datetime.now(timezone.utc),
+        em_andamento=True,
+    )
+    definir_estado_do_wipe(estado)
+
+    try:
+        _anotar(estado, f"Temporada: {temporada}")
+        _anotar(estado, f"Iniciado por: {iniciador} ({iniciador.id})")
+
+        preservados, comuns = listar_preservados_e_comuns(guilda)
+        _anotar(estado, f"Preservados (diretoria/área): {len(preservados)}")
+        _anotar(estado, f"Comuns a limpar: {len(comuns)}")
+
+        estado.fase = "limpar_cargos"
+        motivo = f"Wipe temporada {temporada} — limpar cargos e prefixos"
+        n_pres, n_limpos, n_falhas, linhas = await limpar_cargos_e_prefixos(
+            guilda, motivo
         )
-        await sessao.commit()
+        estado.membros_preservados = n_pres
+        estado.membros_limpos = n_limpos
+        estado.membros_falha = n_falhas
+        estado.membros_processados = n_pres + n_limpos + n_falhas
+        estado.linhas_do_relatorio.extend(linhas)
+
+        _anotar(
+            estado,
+            f"Resultado: preservados={n_pres} limpos={n_limpos} falhas={n_falhas}",
+        )
+
+        estado.fase = "concluido"
+        estado.em_andamento = False
+        _anotar(estado, "Limpeza de cargos e prefixos concluída")
+
+        await publicar_relatorio_do_wipe(
+            guilda,
+            titulo=f"Wipe limpar-cargos — temporada {temporada}",
+            linhas=estado.linhas_do_relatorio,
+        )
+        return estado
+
+    except Exception as erro:
+        estado.fase = "erro"
+        estado.em_andamento = False
+        _anotar(estado, f"ERRO: {erro}")
+        registrador.exception("[wipe] limpar-cargos falhou: %s", erro)
+        await publicar_relatorio_do_wipe(
+            guilda,
+            titulo=f"Wipe limpar-cargos FALHOU — {estado.temporada}",
+            linhas=estado.linhas_do_relatorio,
+        )
+        raise
+    finally:
+        if estado is not None:
+            estado.em_andamento = False
+            definir_estado_do_wipe(estado)

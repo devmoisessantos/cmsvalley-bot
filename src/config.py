@@ -273,10 +273,11 @@ CARGOS_DIRETORIA = [
 ]
 
 # ---------------------------------------------------------------------------
-# Wipe de temporada (/moderacao wipe)
+# Wipe de temporada (/wipe backup | /wipe limpar-cargos)
 # ---------------------------------------------------------------------------
-# Cargos de gestão que NÃO são kickados e têm restauração automática.
-# Responsáveis de área ficam de fora de propósito (recomeçam a temporada).
+# Quem tem algum destes cargos mantém o cargo + HP S・Valley no limpar-cargos.
+# Prefixo do nick é removido de todo mundo, inclusive da diretoria.
+# Gate e demais cargos saem de todo mundo.
 CARGOS_PRESERVADOS_NO_WIPE = [
     "Responsavel HP",
     "👑 | RESPONSÁVEL GERAL",
@@ -286,7 +287,15 @@ CARGOS_PRESERVADOS_NO_WIPE = [
     "👑・DIRETOR",
     "👑・VICE DIRETOR",
     "👑・SUPERVISOR",
+    "👑・Responsável Instrutor・🎓",
+    "👑・Responsável Recrutamento・🎯",
+    "👑・Responsável Psicólogo・🧠",
+    "👑・Responsável Doutor・🥼",
+    "👑・Responsável Destaque・👑",
 ]
+
+# Cargo base mantido junto com a diretoria no limpar-cargos.
+CARGO_BASE_APOS_WIPE = "HP S・Valley"
 
 # Discord IDs extras sempre preservados (além dos cargos acima).
 # Separados por vírgula no .env, opcional.
@@ -490,8 +499,8 @@ CANAIS = {
     "CANAL_REGISTRAR_AUSENCIA": 1486369010865147924,  # painel fixo Solicitar Ausência
     "CANAL_PEDIDOS_AUSENCIA": 1539021819544211566,  # diretoria aprova / recusa
     "LOG_AUSENCIA": 0,  # opcional: log de ausências aprovadas/negadas (0 = desativado)
-    "CANAL_APROVADOS_CURSOS": 1486369199503708271,
-    "CANAL_REPROVADOS_CURSOS": 1486369201521295370,
+    "CANAL_APROVADOS_CURSOS": 1545848827766898810,
+    "CANAL_REPROVADOS_CURSOS": 1545849048186233052,
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
     # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
     "RANKING_RECRUTADORES": 1486369056574406736,
@@ -559,6 +568,8 @@ CANAIS = {
     "LOG_TICKETS": 1486369268411924684,
     "LOG_GATE": 1533997859790127345,
     "LOG_BACKUP": 1523367341096697996,
+    # Relatórios do /wipe (backup, limpar-cargos, banco)
+    "LOGS_WIPE": 1545839604416913428,
     # Painel fixo: enviar notificação por DM (Diretoria++)
     "CANAL_ENVIAR_NOTIFICACAO": 1512277526498639902,
     # Tickets — painéis de abertura (fixos)

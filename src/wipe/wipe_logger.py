@@ -1,5 +1,5 @@
 """
-Log visual do wipe em canal de auditoria, quando existir.
+Log visual do wipe no canal LOGS_WIPE.
 """
 
 from __future__ import annotations
@@ -19,17 +19,21 @@ async def publicar_relatorio_do_wipe(
     titulo: str,
     linhas: list[str],
 ) -> None:
-    """Publica o relatório do wipe no canal de auditoria admin, se configurado."""
-    id_canal = CANAIS.get("LOG_AUDITORIA_ADMIN")
+    """
+    Publica o relatório do wipe no canal LOGS_WIPE.
+
+    Quebra em várias mensagens se o texto for longo demais para o Discord.
+    """
+    id_canal = CANAIS.get("LOGS_WIPE")
     if not id_canal:
-        registrador.info("[wipe] sem canal LOG_AUDITORIA_ADMIN — só log técnico")
-        return
-    canal = guilda.get_channel(id_canal)
-    if canal is None or not isinstance(canal, discord.TextChannel):
-        registrador.warning("[wipe] canal de auditoria não encontrado: %s", id_canal)
+        registrador.info("[wipe] sem canal LOGS_WIPE — só log técnico")
         return
 
-    # Discord limita tamanho; manda em fatias
+    canal = guilda.get_channel(id_canal)
+    if canal is None or not isinstance(canal, discord.TextChannel):
+        registrador.warning("[wipe] canal LOGS_WIPE não encontrado: %s", id_canal)
+        return
+
     texto_base = "\n".join(linhas) if linhas else "_(sem detalhes)_"
     fatias: list[str] = []
     atual = ""
