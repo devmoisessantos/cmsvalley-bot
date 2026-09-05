@@ -40,9 +40,20 @@ def id_do_cargo_base() -> int | None:
 
 
 def membro_e_preservado(membro: discord.Member) -> bool:
-    """True se o membro tem algum cargo da lista de preservação."""
+    """
+    True se o membro não deve perder cargos de gestão.
+
+    Protege: cargos da lista, permissão Administrator nativa e IDs
+    extras em IDS_PRESERVADOS_NO_WIPE (quando configurados no .env).
+    """
     if membro.bot:
         return False
+    if membro.guild_permissions.administrator:
+        return True
+    from src.config import IDS_PRESERVADOS_NO_WIPE
+
+    if membro.id in IDS_PRESERVADOS_NO_WIPE:
+        return True
     ids_preservados = ids_dos_cargos_preservados()
     return any(cargo.id in ids_preservados for cargo in membro.roles)
 
