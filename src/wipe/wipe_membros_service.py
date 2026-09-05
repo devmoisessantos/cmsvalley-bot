@@ -1,10 +1,10 @@
 """
 Limpeza de cargos e prefixos no wipe de temporada.
 
-Não expulsa ninguém. Remove cargos e prefixo do nick.
-
-Quem tem cargo em CARGOS_PRESERVADOS_NO_WIPE mantém esses cargos
-e o cargo base HP S・Valley. Todo o resto perde todos os cargos.
+Funções usadas pelo painel:
+- limpar cargos da lista de preservação (fluxo clássico)
+- remover cargos escolhidos no select de todos os membros
+- listar quem seria preservado
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from src.config import (
     CARGO_BASE_APOS_WIPE,
     CARGOS,
     CARGOS_PRESERVADOS_NO_WIPE,
+    IDS_PRESERVADOS_NO_WIPE,
 )
 from src.utils.nickname import remover_prefixo_existente
 
@@ -40,19 +41,12 @@ def id_do_cargo_base() -> int | None:
 
 
 def membro_e_preservado(membro: discord.Member) -> bool:
-    """
-    True se o membro não deve perder cargos de gestão.
-
-    Protege: cargos da lista, permissão Administrator nativa e IDs
-    extras em IDS_PRESERVADOS_NO_WIPE (quando configurados no .env).
-    """
+    """True se o membro tem cargo da lista, ID fixo ou Administrator."""
     if membro.bot:
         return False
-    if membro.guild_permissions.administrator:
-        return True
-    from src.config import IDS_PRESERVADOS_NO_WIPE
-
     if membro.id in IDS_PRESERVADOS_NO_WIPE:
+        return True
+    if membro.guild_permissions.administrator:
         return True
     ids_preservados = ids_dos_cargos_preservados()
     return any(cargo.id in ids_preservados for cargo in membro.roles)
@@ -67,11 +61,7 @@ def nomes_cargos_preservados_do_membro(membro: discord.Member) -> list[str]:
 def listar_preservados_e_comuns(
     guilda: discord.Guild,
 ) -> tuple[list[discord.Member], list[discord.Member]]:
-    """
-    Separa membros humanos em (preservados, comuns).
-
-    Bots ficam de fora das duas listas.
-    """
+    """Separa membros humanos em (preservados, comuns). Bots ficam de fora."""
     preservados: list[discord.Member] = []
     comuns: list[discord.Member] = []
     for membro in guilda.members:
@@ -88,11 +78,7 @@ def _cargos_que_podem_ser_removidos(
     membro: discord.Member,
     ids_para_manter: set[int],
 ) -> list[discord.Role]:
-    """
-    Cargos que o bot consegue tirar deste membro.
-
-    Ignora @everyone, cargos gerenciados por integração e o que deve ficar.
-    """
+    """Cargos que o bot consegue tirar deste membro."""
     removiveis: list[discord.Role] = []
     for cargo in membro.roles:
         if cargo.is_default():
@@ -109,13 +95,10 @@ async def _limpar_prefixo_do_membro(
     membro: discord.Member,
     motivo: str,
 ) -> str | None:
-    """
-    Tira o prefixo do nick. Devolve texto de log ou None se não mudou.
-    """
+    """Tira o prefixo do nick. Devolve texto de log ou None se não mudou."""
     nick_atual = membro.nick or membro.display_name
     nick_limpo = remover_prefixo_existente(nick_atual)[:32]
 
-    # Se o nick no servidor já está limpo (ou é o username sem prefixo), pula.
     if membro.nick is None and nick_limpo == membro.name:
         return None
     if membro.nick is not None and membro.nick == nick_limpo:
@@ -135,12 +118,10 @@ async def limpar_cargos_e_prefixos(
     motivo: str,
 ) -> tuple[int, int, int, list[str]]:
     """
-    Remove cargos e prefixos de todos os membros humanos.
+    Remove cargos e prefixos (fluxo clássico da temporada).
 
-    Preservados: mantêm cargos da lista + HP S・Valley.
+    Preservados: mantêm cargos da lista + HP S・Valley + admin.
     Comuns: perdem todos os cargos removíveis.
-
-    Devolve (preservados, limpos, falhas, linhas de log).
     """
     preservados, comuns = listar_preservados_e_comuns(guilda)
     ids_preservados = ids_dos_cargos_preservados()
@@ -152,12 +133,10 @@ async def limpar_cargos_e_prefixos(
     contagem_falhas = 0
     linhas: list[str] = []
 
-    # --- Diretoria / responsáveis ---
     for membro in preservados:
         ids_para_manter = set(ids_preservados)
         if id_base is not None:
             ids_para_manter.add(id_base)
-
         removiveis = _cargos_que_podem_ser_removidos(membro, ids_para_manter)
         try:
             if removiveis:
@@ -167,44 +146,83 @@ async def limpar_cargos_e_prefixos(
             contagem_preservados += 1
             nomes = nomes_cargos_preservados_do_membro(membro)
             linhas.append(
-                f"Preservado: {membro} ({membro.id}) → {nomes or ['(cargos da lista)']}"
+                f"Preservado: {membro} ({membro.id}) → {nomes or ['ok']}"
             )
-        except discord.Forbidden:
-            contagem_falhas += 1
-            linhas.append(f"Sem permissão (preservado): {membro} ({membro.id})")
-            registrador.warning("[wipe] forbidden preservado %s", membro.id)
-        except discord.HTTPException as erro:
+        except (discord.Forbidden, discord.HTTPException) as erro:
             contagem_falhas += 1
             linhas.append(f"Falha preservado {membro.id}: {erro}")
-            registrador.warning("[wipe] http preservado %s: %s", membro.id, erro)
 
         log_nick = await _limpar_prefixo_do_membro(membro, motivo)
         if log_nick:
             linhas.append(log_nick)
-
         await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
 
-    # --- Membros comuns ---
     for membro in comuns:
         removiveis = _cargos_que_podem_ser_removidos(membro, set())
         try:
             if removiveis:
                 await membro.remove_roles(*removiveis, reason=motivo)
             contagem_limpos += 1
-            linhas.append(f"Limpo: {membro} ({membro.id}) — {len(removiveis)} cargos")
-        except discord.Forbidden:
-            contagem_falhas += 1
-            linhas.append(f"Sem permissão (limpo): {membro} ({membro.id})")
-            registrador.warning("[wipe] forbidden limpo %s", membro.id)
-        except discord.HTTPException as erro:
+            linhas.append(
+                f"Limpo: {membro} ({membro.id}) — {len(removiveis)} cargos"
+            )
+        except (discord.Forbidden, discord.HTTPException) as erro:
             contagem_falhas += 1
             linhas.append(f"Falha limpo {membro.id}: {erro}")
-            registrador.warning("[wipe] http limpo %s: %s", membro.id, erro)
 
         log_nick = await _limpar_prefixo_do_membro(membro, motivo)
         if log_nick:
             linhas.append(log_nick)
-
         await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
 
     return contagem_preservados, contagem_limpos, contagem_falhas, linhas
+
+
+async def remover_cargos_escolhidos_de_todos(
+    guilda: discord.Guild,
+    cargos: list[discord.Role],
+    motivo: str,
+    tambem_limpar_prefixo: bool = True,
+) -> tuple[int, int, list[str]]:
+    """
+    Tira os cargos selecionados de todos os membros que os têm.
+
+    Não mexe em bots. Não remove cargo managed.
+    Devolve (membros_afetados, falhas, linhas).
+    """
+    cargos_uteis = [
+        cargo
+        for cargo in cargos
+        if not cargo.is_default() and not cargo.managed
+    ]
+    if not cargos_uteis:
+        return 0, 0, ["Nenhum cargo válido selecionado."]
+
+    afetados = 0
+    falhas = 0
+    linhas: list[str] = []
+    ids_alvo = {cargo.id for cargo in cargos_uteis}
+
+    for membro in guilda.members:
+        if membro.bot:
+            continue
+        para_tirar = [cargo for cargo in membro.roles if cargo.id in ids_alvo]
+        if not para_tirar:
+            continue
+        try:
+            await membro.remove_roles(*para_tirar, reason=motivo)
+            afetados += 1
+            nomes = ", ".join(cargo.name for cargo in para_tirar)
+            linhas.append(f"Removido de {membro} ({membro.id}): {nomes}")
+        except (discord.Forbidden, discord.HTTPException) as erro:
+            falhas += 1
+            linhas.append(f"Falha em {membro.id}: {erro}")
+
+        if tambem_limpar_prefixo:
+            log_nick = await _limpar_prefixo_do_membro(membro, motivo)
+            if log_nick:
+                linhas.append(log_nick)
+
+        await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
+
+    return afetados, falhas, linhas

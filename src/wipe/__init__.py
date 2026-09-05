@@ -1,10 +1,12 @@
 """
 Domínio do wipe de temporada.
 
-Fluxo atual (sem expulsão e sem recriar canais):
+Controle exclusivo pelo painel persistente (botões):
 
-1. /wipe backup        — snapshot Discord + backup do banco + esvaziar tabelas
-2. /wipe limpar-cargos — remove cargos e prefixos (mantém diretoria + HP S・Valley)
+- Backup completo / Discord / banco + zerar tabelas
+- Limpar cargos (clássico ou por select)
+- Recriar canal (responde NOME: ID)
+- Status, preservados, recuperar responsável
 
-Logs visuais vão para o canal LOGS_WIPE.
+Logs em CANAIS['LOGS_WIPE'].
 """

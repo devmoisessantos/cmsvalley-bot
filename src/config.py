@@ -568,8 +568,9 @@ CANAIS = {
     "LOG_TICKETS": 1486369268411924684,
     "LOG_GATE": 1533997859790127345,
     "LOG_BACKUP": 1523367341096697996,
-    # Relatórios do /wipe (backup, limpar-cargos, banco)
+    # Painel + relatórios do wipe (backup, cargos, canais, banco)
     "LOGS_WIPE": 1545839604416913428,
+    "CANAL_PAINEL_WIPE": 1545839604416913428,
     # Painel fixo: enviar notificação por DM (Diretoria++)
     "CANAL_ENVIAR_NOTIFICACAO": 1512277526498639902,
     # Tickets — painéis de abertura (fixos)
