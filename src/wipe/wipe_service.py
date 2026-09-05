@@ -26,6 +26,7 @@ from src.wipe.wipe_estrutura_service import recriar_canais_por_ids
 from src.wipe.wipe_logger import publicar_relatorio_do_wipe
 from src.wipe.wipe_membros_service import (
     limpar_cargos_e_prefixos,
+    limpar_todos_apelidos,
     listar_preservados_e_comuns,
     remover_cargos_escolhidos_de_todos,
 )
@@ -281,6 +282,36 @@ async def executar_recriar_canais(
             guilda,
             estado,
             f"Wipe recriar canais FALHOU — {estado.temporada}",
+            erro,
+        )
+        raise
+    finally:
+        estado.em_andamento = False
+        definir_estado_do_wipe(estado)
+
+
+async def executar_limpar_apelidos(
+    guilda: Guild, iniciador: Member
+) -> EstadoDoWipe:
+    """Remove apelidos do servidor de todos (fica só username)."""
+    estado = _iniciar_estado(iniciador, "limpar_apelidos")
+    try:
+        _anotar(estado, f"Temporada: {estado.temporada}")
+        _anotar(estado, f"Iniciado por: {iniciador} ({iniciador.id})")
+        motivo = f"Wipe temporada {estado.temporada} — limpar apelidos"
+        sucessos, falhas, linhas = await limpar_todos_apelidos(guilda, motivo)
+        estado.membros_limpos = sucessos
+        estado.membros_falha = falhas
+        estado.linhas_do_relatorio.extend(linhas)
+        _anotar(estado, f"Apelidos removidos: {sucessos} | Falhas: {falhas}")
+        return await _finalizar_ok(
+            guilda, estado, f"Wipe limpar apelidos — {estado.temporada}"
+        )
+    except Exception as erro:
+        await _finalizar_erro(
+            guilda,
+            estado,
+            f"Wipe limpar apelidos FALHOU — {estado.temporada}",
             erro,
         )
         raise

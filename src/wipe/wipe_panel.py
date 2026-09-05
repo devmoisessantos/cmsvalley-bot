@@ -32,6 +32,7 @@ from src.wipe.wipe_service import (
     executar_backup_banco_e_esvaziar,
     executar_backup_completo,
     executar_backup_discord,
+    executar_limpar_apelidos,
     executar_limpar_cargos,
     executar_recriar_canais,
     executar_remover_cargos_escolhidos,
@@ -117,6 +118,7 @@ class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         row3 = discord.ui.ActionRow()
         for rotulo, estilo, cid, callback in [
+            ("Limpar apelidos", discord.ButtonStyle.danger, "wipe:e:apelidos", self._ao_limpar_apelidos),
             ("Status", discord.ButtonStyle.primary, "wipe:e:status", self._ao_status),
             ("Ver preservados", discord.ButtonStyle.primary, "wipe:e:pres", self._ao_preservados),
         ]:
@@ -224,6 +226,21 @@ class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
         await responder_view(
             interacao,
             MontarFilaCanaisView(interacao.user.id, []),
+            ephemeral=True,
+        )
+
+
+    async def _ao_limpar_apelidos(self, interacao: discord.Interaction) -> None:
+        if not await _exigir_admin(interacao) or not await _exigir_livre(interacao):
+            return
+        com_nick = sum(
+            1
+            for membro in interacao.guild.members
+            if not membro.bot and membro.nick is not None
+        )
+        await responder_view(
+            interacao,
+            ConfirmarLimparApelidosView(interacao.user.id, com_nick),
             ephemeral=True,
         )
 
@@ -759,4 +776,78 @@ class ConfirmarRecriarCanaisView(LoggingViewMixin, discord.ui.LayoutView):
             registrador.exception("[wipe] recriar canais: %s", erro)
             await responder_erro(
                 interacao, titulo="Recriação falhou", linhas=[str(erro)]
+            )
+
+
+class ConfirmarLimparApelidosView(LoggingViewMixin, discord.ui.LayoutView):
+    """Confirma remoção de todos os apelidos do servidor."""
+
+    def __init__(self, usuario_id: int, quantidade_com_nick: int):
+        super().__init__(timeout=300)
+        self.usuario_id = usuario_id
+        row = discord.ui.ActionRow()
+        b_ok = discord.ui.Button(
+            label="Zerar apelidos",
+            style=discord.ButtonStyle.danger,
+            custom_id="wipe:e:conf_apelidos",
+        )
+        b_ok.callback = self._ao_confirmar
+        row.add_item(b_ok)
+        b_nao = discord.ui.Button(
+            label="Cancelar",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wipe:e:canc_apelidos",
+        )
+        b_nao.callback = self._ao_cancelar
+        row.add_item(b_nao)
+        self.container = discord.ui.Container(
+            discord.ui.TextDisplay("# Limpar apelidos"),
+            discord.ui.TextDisplay(
+                f"Membros com apelido agora: **{quantidade_com_nick}**\n"
+                "O nick do servidor será apagado. Fica só o **username** do Discord.\n"
+                "Nome e ID da whitelist antiga somem da lista de membros."
+            ),
+            row,
+            accent_color=discord.Color.dark_red(),
+        )
+        self.add_item(self.container)
+
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
+        if interacao.user.id != self.usuario_id:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Só quem abriu este card pode confirmar."],
+            )
+            return False
+        return True
+
+    async def _ao_cancelar(self, interacao: discord.Interaction) -> None:
+        self.stop()
+        await responder_aviso(
+            interacao, titulo="Cancelado", linhas=["Nenhum apelido foi alterado."]
+        )
+
+    async def _ao_confirmar(self, interacao: discord.Interaction) -> None:
+        if not await _exigir_livre(interacao):
+            return
+        self.stop()
+        await interacao.response.defer(ephemeral=True)
+        try:
+            estado = await executar_limpar_apelidos(
+                interacao.guild, interacao.user
+            )
+            await responder_sucesso(
+                interacao,
+                titulo="Apelidos zerados",
+                linhas=[
+                    f"Removidos: **{estado.membros_limpos}**",
+                    f"Falhas: **{estado.membros_falha}**",
+                    "Relatório no canal de logs do wipe.",
+                ],
+            )
+        except Exception as erro:
+            registrador.exception("[wipe] limpar apelidos: %s", erro)
+            await responder_erro(
+                interacao, titulo="Falha ao limpar apelidos", linhas=[str(erro)]
             )

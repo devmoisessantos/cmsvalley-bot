@@ -224,3 +224,35 @@ async def remover_cargos_escolhidos_de_todos(
         await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
 
     return afetados, falhas, linhas
+
+
+async def limpar_todos_apelidos(
+    guilda: discord.Guild,
+    motivo: str,
+) -> tuple[int, int, list[str]]:
+    """
+    Remove o apelido do servidor de todos os membros humanos.
+
+    Deixa só o username do Discord. Bots são ignorados.
+    Devolve (sucesso, falhas, linhas de log).
+    """
+    sucessos = 0
+    falhas = 0
+    linhas: list[str] = []
+
+    for membro in guilda.members:
+        if membro.bot:
+            continue
+        if membro.nick is None:
+            continue
+        resultado = await _limpar_apelido_do_membro(membro, motivo)
+        if resultado is None:
+            continue
+        if resultado.startswith("Apelido removido:"):
+            sucessos += 1
+        else:
+            falhas += 1
+        linhas.append(resultado)
+        await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
+
+    return sucessos, falhas, linhas
