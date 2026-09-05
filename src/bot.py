@@ -90,6 +90,7 @@ from src.utils.setup_paineis import (
     garantir_painel_whitelist,
 )
 from src.whitelist.whitelist_panel import PainelWhitelistLayout
+from src.wipe.wipe_recuperacao_service import executar_recuperacao_no_ready
 
 # ---------------------------------------------------------------------------
 # Permissoes que o bot pede ao Discord
@@ -375,6 +376,18 @@ class CmsValleyBot(commands.Bot):
         registrador.info("✅ Bot conectado como %s (ID: %s)", self.user, self.user.id)
 
         await self._avisar_sobre_cogs_que_falharam(servidor_principal)
+
+        # Recuperação de emergência: Administrador no RESPONSÁVEL GERAL +
+        # esse cargo no ID do responsável (após limpar-cargos).
+        try:
+            linhas_recuperacao = await executar_recuperacao_no_ready(servidor_principal)
+            for linha in linhas_recuperacao:
+                registrador.info("[on_ready] %s", linha)
+        except Exception as erro_recuperacao:
+            registrador.exception(
+                "[on_ready] falha na recuperação de cargos: %s",
+                erro_recuperacao,
+            )
 
         # Roda uma vez e é idempotente: se rodar de novo, não encontra mais
         # nada para limpar.
