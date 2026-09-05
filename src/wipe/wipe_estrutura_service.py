@@ -1,7 +1,8 @@
 """
-Apaga e recria canais de texto, devolvendo o novo ID.
+Duplica canais de texto e só então apaga o original.
 
-Usado pelo painel de wipe quando o administrador escolhe um canal.
+Ordem: criar cópia (mesmo nome, permissões, categoria, posição) → apagar antigo.
+Assim, se a criação falhar, o canal original continua existindo.
 """
 
 from __future__ import annotations
@@ -20,10 +21,9 @@ async def recriar_canal_de_texto(
     canal: discord.TextChannel,
 ) -> tuple[discord.TextChannel | None, str]:
     """
-    Apaga o canal e recria com as mesmas propriedades.
+    Duplica o canal e apaga o original depois que a cópia existir.
 
-    Devolve (canal_novo ou None, linha de relatório).
-    Em sucesso a linha vem no formato: NOME: ID
+    Devolve (canal_novo ou None, linha). Sucesso no formato: NOME: ID
     """
     guilda = canal.guild
     nome = canal.name
@@ -36,15 +36,6 @@ async def recriar_canal_de_texto(
     id_antigo = canal.id
 
     try:
-        await canal.delete(reason="Wipe — recriar canal (histórico limpo)")
-    except discord.HTTPException as erro:
-        mensagem = f"Falha ao apagar #{nome} ({id_antigo}): {erro}"
-        registrador.warning("[wipe] %s", mensagem)
-        return None, mensagem
-
-    await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
-
-    try:
         novo = await guilda.create_text_channel(
             name=nome,
             overwrites=overwrites,
@@ -53,12 +44,29 @@ async def recriar_canal_de_texto(
             topic=topico,
             nsfw=nsfw,
             slowmode_delay=slowmode,
-            reason="Wipe — canal recriado (histórico limpo)",
+            reason="Wipe — duplicar canal antes de apagar o original",
         )
     except discord.HTTPException as erro:
-        mensagem = f"Falha ao recriar #{nome} (antigo {id_antigo}): {erro}"
+        mensagem = (
+            f"Falha ao duplicar #{nome} ({id_antigo}): {erro} "
+            "(original mantido)"
+        )
         registrador.warning("[wipe] %s", mensagem)
         return None, mensagem
+
+    await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
+
+    try:
+        await canal.delete(
+            reason="Wipe — original removido após duplicação concluída"
+        )
+    except discord.HTTPException as erro:
+        mensagem = (
+            f"Cópia criada #{novo.name} ({novo.id}), mas falha ao apagar "
+            f"original #{nome} ({id_antigo}): {erro}"
+        )
+        registrador.warning("[wipe] %s", mensagem)
+        return novo, mensagem
 
     linha = f"{novo.name}: {novo.id}"
     registrador.info(
@@ -75,15 +83,29 @@ async def recriar_canais_por_ids(
     ids_canais: list[int],
 ) -> list[str]:
     """
-    Recria cada canal de texto da lista.
+    Recria cada canal da lista (texto ou qualquer canal de texto).
 
-    Devolve linhas de relatório (sucesso no formato NOME: ID).
+    Sem exceção de canal: tenta todos os IDs informados.
+    Devolve linhas (sucesso no formato NOME: ID).
     """
     linhas: list[str] = []
+    vistos: set[int] = set()
     for id_canal in ids_canais:
+        if id_canal in vistos:
+            continue
+        vistos.add(id_canal)
         canal = guilda.get_channel(id_canal)
-        if canal is None or not isinstance(canal, discord.TextChannel):
-            linhas.append(f"Canal não encontrado ou não é texto: {id_canal}")
+        if canal is None:
+            try:
+                canal = await guilda.fetch_channel(id_canal)
+            except (discord.NotFound, discord.HTTPException) as erro:
+                linhas.append(f"Canal não encontrado: {id_canal} ({erro})")
+                continue
+        if not isinstance(canal, discord.TextChannel):
+            linhas.append(
+                f"Canal {id_canal} não é de texto "
+                f"(tipo={type(canal).__name__}) — ignorado"
+            )
             continue
         _novo, linha = await recriar_canal_de_texto(canal)
         linhas.append(linha)

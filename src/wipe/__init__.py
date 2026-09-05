@@ -1,12 +1,10 @@
 """
 Domínio do wipe de temporada.
 
-Controle exclusivo pelo painel persistente (botões):
+Entrada: /wipe (painel efêmero, só administradores).
 
-- Backup completo / Discord / banco + zerar tabelas
-- Limpar cargos (clássico ou por select)
-- Recriar canal (responde NOME: ID)
-- Status, preservados, recuperar responsável
+Ações no painel: backups, limpar cargos, recriar canais por ID (fila),
+status e lista de preservados.
 
 Logs em CANAIS['LOGS_WIPE'].
 """

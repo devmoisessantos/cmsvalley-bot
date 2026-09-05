@@ -90,9 +90,6 @@ from src.utils.setup_paineis import (
     garantir_painel_whitelist,
 )
 from src.whitelist.whitelist_panel import PainelWhitelistLayout
-from src.wipe.wipe_panel import PainelWipeLayout
-from src.wipe.wipe_recuperacao_service import executar_recuperacao_no_ready
-from src.wipe.wipe_setup import garantir_painel_wipe
 
 # ---------------------------------------------------------------------------
 # Permissoes que o bot pede ao Discord
@@ -237,7 +234,6 @@ class CmsValleyBot(commands.Bot):
         self.painel_ticket_denuncias_view = None
         self.botoes_ticket_view = None
         self.painel_ausencia_view = None
-        self.painel_wipe_view = None
 
     # -----------------------------------------------------------------------
     # Subida do bot
@@ -380,18 +376,6 @@ class CmsValleyBot(commands.Bot):
 
         await self._avisar_sobre_cogs_que_falharam(servidor_principal)
 
-        # Recuperação de emergência: Administrador no RESPONSÁVEL GERAL +
-        # esse cargo no ID do responsável (após limpar-cargos).
-        try:
-            linhas_recuperacao = await executar_recuperacao_no_ready(servidor_principal)
-            for linha in linhas_recuperacao:
-                registrador.info("[on_ready] %s", linha)
-        except Exception as erro_recuperacao:
-            registrador.exception(
-                "[on_ready] falha na recuperação de cargos: %s",
-                erro_recuperacao,
-            )
-
         # Roda uma vez e é idempotente: se rodar de novo, não encontra mais
         # nada para limpar.
         await executar_housekeeping_plantao(self)
@@ -478,7 +462,6 @@ class CmsValleyBot(commands.Bot):
         self.painel_ticket_denuncias_view = PainelTicketDenunciasLayout(guilda=servidor)
         self.botoes_ticket_view = CardBotoesStaffView()
         self.painel_ausencia_view = PainelAusenciaLayout(guilda=servidor)
-        self.painel_wipe_view = PainelWipeLayout(guild=servidor)
 
     def _registrar_views_dos_paineis(self):
         """
@@ -508,7 +491,6 @@ class CmsValleyBot(commands.Bot):
             ("painel_ticket_denuncias", self.painel_ticket_denuncias_view),
             ("botoes_ticket", self.botoes_ticket_view),
             ("painel_ausencia", self.painel_ausencia_view),
-            ("painel_wipe", self.painel_wipe_view),
         ]
 
         for nome_do_painel, view_do_painel in views_para_registrar:
@@ -567,7 +549,6 @@ class CmsValleyBot(commands.Bot):
             garantir_painel_promocao,
             garantir_painel_demissao,
             garantir_painel_ausencia,
-            garantir_painel_wipe,
             garantir_painel_notificacao,
             garantir_painel_ticket_suporte,
             garantir_painel_ticket_denuncias,

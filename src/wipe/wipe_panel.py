@@ -1,18 +1,21 @@
 """
-Painel persistente de wipe — Components V2.
+Painel efêmero de wipe — Components V2.
 
-Todas as ações de temporada ficam em botões neste painel.
-Não há comandos de barra: o controle é só por aqui.
+Aberto por /wipe (só administradores). Não é mensagem fixa no canal.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 
 import discord
 
 from src.config import CARGO_BASE_APOS_WIPE
-from src.utils.error_handling import LoggingViewMixin
+from src.utils.error_handling import (
+    LoggingModalMixin,
+    LoggingViewMixin,
+)
 from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
@@ -20,24 +23,23 @@ from src.utils.mensagens import (
     responder_sucesso,
     responder_view,
 )
+from src.wipe.wipe_backup_service import montar_nome_da_temporada
 from src.wipe.wipe_membros_service import (
     listar_preservados_e_comuns,
     nomes_cargos_preservados_do_membro,
 )
-from src.wipe.wipe_recuperacao_service import executar_recuperacao_no_ready
 from src.wipe.wipe_service import (
     executar_backup_banco_e_esvaziar,
     executar_backup_completo,
     executar_backup_discord,
     executar_limpar_cargos,
-    executar_recriar_canal,
+    executar_recriar_canais,
     executar_remover_cargos_escolhidos,
 )
 from src.wipe.wipe_state import (
     obter_estado_do_wipe,
     wipe_esta_em_andamento,
 )
-from src.wipe.wipe_backup_service import montar_nome_da_temporada
 
 registrador = logging.getLogger(__name__)
 
@@ -75,119 +77,59 @@ async def _exigir_livre(interacao: discord.Interaction) -> bool:
     return True
 
 
+def _texto_fila_canais(ids_canais: list[int]) -> str:
+    if not ids_canais:
+        return "_Nenhum canal na fila._"
+    return "\n".join(f"`•` `{id_canal}`" for id_canal in ids_canais)
+
+
 # ---------------------------------------------------------------------------
-# Painel principal (persistente)
+# Painel principal (efêmero)
 # ---------------------------------------------------------------------------
 
 
 class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
-    """Painel fixo com todas as ações de wipe."""
+    """Painel de controle do wipe (só na resposta efêmera do /wipe)."""
 
     def __init__(self, guild: discord.Guild):
-        super().__init__(timeout=None)
+        super().__init__(timeout=600)
         self.guild = guild
 
-        icone = guild.icon.url if guild.icon else None
-
         row1 = discord.ui.ActionRow()
-        b_backup = discord.ui.Button(
-            label="Backup completo",
-            style=discord.ButtonStyle.danger,
-            custom_id="wipe:backup_completo",
-        )
-        b_backup.callback = self._ao_backup_completo
-        row1.add_item(b_backup)
-
-        b_discord = discord.ui.Button(
-            label="Backup Discord",
-            style=discord.ButtonStyle.primary,
-            custom_id="wipe:backup_discord",
-        )
-        b_discord.callback = self._ao_backup_discord
-        row1.add_item(b_discord)
-
-        b_banco = discord.ui.Button(
-            label="Backup banco + zerar",
-            style=discord.ButtonStyle.danger,
-            custom_id="wipe:backup_banco",
-        )
-        b_banco.callback = self._ao_backup_banco
-        row1.add_item(b_banco)
+        for rotulo, estilo, cid, callback in [
+            ("Backup completo", discord.ButtonStyle.danger, "wipe:e:backup_c", self._ao_backup_completo),
+            ("Backup Discord", discord.ButtonStyle.primary, "wipe:e:backup_d", self._ao_backup_discord),
+            ("Backup banco + zerar", discord.ButtonStyle.danger, "wipe:e:backup_b", self._ao_backup_banco),
+        ]:
+            botao = discord.ui.Button(label=rotulo, style=estilo, custom_id=cid)
+            botao.callback = callback
+            row1.add_item(botao)
 
         row2 = discord.ui.ActionRow()
-        b_limpar = discord.ui.Button(
-            label="Limpar cargos (clássico)",
-            style=discord.ButtonStyle.danger,
-            custom_id="wipe:limpar_classico",
-        )
-        b_limpar.callback = self._ao_limpar_classico
-        row2.add_item(b_limpar)
-
-        b_selecionar = discord.ui.Button(
-            label="Selecionar cargos p/ limpar",
-            style=discord.ButtonStyle.secondary,
-            custom_id="wipe:selecionar_cargos",
-        )
-        b_selecionar.callback = self._ao_selecionar_cargos
-        row2.add_item(b_selecionar)
-
-        b_canal = discord.ui.Button(
-            label="Recriar canal",
-            style=discord.ButtonStyle.secondary,
-            custom_id="wipe:recriar_canal",
-        )
-        b_canal.callback = self._ao_recriar_canal
-        row2.add_item(b_canal)
+        for rotulo, estilo, cid, callback in [
+            ("Limpar cargos (clássico)", discord.ButtonStyle.danger, "wipe:e:limpar", self._ao_limpar_classico),
+            ("Selecionar cargos", discord.ButtonStyle.secondary, "wipe:e:sel_cargos", self._ao_selecionar_cargos),
+            ("Recriar canais", discord.ButtonStyle.secondary, "wipe:e:canais", self._ao_recriar_canais),
+        ]:
+            botao = discord.ui.Button(label=rotulo, style=estilo, custom_id=cid)
+            botao.callback = callback
+            row2.add_item(botao)
 
         row3 = discord.ui.ActionRow()
-        b_status = discord.ui.Button(
-            label="Status",
-            style=discord.ButtonStyle.primary,
-            custom_id="wipe:status",
-        )
-        b_status.callback = self._ao_status
-        row3.add_item(b_status)
-
-        b_diretoria = discord.ui.Button(
-            label="Ver preservados",
-            style=discord.ButtonStyle.primary,
-            custom_id="wipe:preservados",
-        )
-        b_diretoria.callback = self._ao_preservados
-        row3.add_item(b_diretoria)
-
-        b_recupera = discord.ui.Button(
-            label="Recuperar responsável",
-            style=discord.ButtonStyle.success,
-            custom_id="wipe:recuperar",
-        )
-        b_recupera.callback = self._ao_recuperar
-        row3.add_item(b_recupera)
-
-        secao = discord.ui.Section(
-            "# Painel de Wipe",
-            (
-                "-# Controle total da virada de temporada.\n"
-                "-# Backup, banco, cargos, canais e recuperação.\n"
-                "-# Só administradores. Tudo é registrado em LOGS_WIPE."
-            ),
-            accessory=discord.ui.Thumbnail(icone) if icone else None,
-        )
+        for rotulo, estilo, cid, callback in [
+            ("Status", discord.ButtonStyle.primary, "wipe:e:status", self._ao_status),
+            ("Ver preservados", discord.ButtonStyle.primary, "wipe:e:pres", self._ao_preservados),
+        ]:
+            botao = discord.ui.Button(label=rotulo, style=estilo, custom_id=cid)
+            botao.callback = callback
+            row3.add_item(botao)
 
         self.container = discord.ui.Container(
-            secao,
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay("# Painel de Wipe"),
             discord.ui.TextDisplay(
-                "## Ações disponíveis\n"
-                "### Backup\n"
-                "`•` Completo = Discord + banco + esvaziar tabelas\n"
-                "`•` Discord = só snapshot de cargos/canais/membros\n"
-                "`•` Banco + zerar = dump e TRUNCATE das tabelas\n"
-                "### Cargos e canais\n"
-                "`•` Clássico = preserva diretoria/área + "
-                f"`{CARGO_BASE_APOS_WIPE}`\n"
-                "`•` Selecionar = escolhe quais cargos tirar de todo mundo\n"
-                "`•` Recriar canal = apaga e cria de novo (responde NOME: ID)"
+                "-# Efêmero — some quando fechar. Só administradores.\n"
+                "-# Apelidos do servidor são apagados (fica só o username).\n"
+                f"-# Clássico preserva diretoria/área + `{CARGO_BASE_APOS_WIPE}`."
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             row1,
@@ -198,64 +140,43 @@ class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(self.container)
 
     async def _ao_backup_completo(self, interacao: discord.Interaction) -> None:
-        if not await _exigir_admin(interacao):
-            return
-        if not await _exigir_livre(interacao):
+        if not await _exigir_admin(interacao) or not await _exigir_livre(interacao):
             return
         await interacao.response.defer(ephemeral=True)
         try:
-            estado = await executar_backup_completo(
-                interacao.guild, interacao.user
-            )
+            estado = await executar_backup_completo(interacao.guild, interacao.user)
             await responder_sucesso(
                 interacao,
                 titulo="Backup completo",
                 linhas=[
-                    f"Temporada: `{estado.temporada}`",
                     f"Discord: `{estado.caminho_backup_discord or '—'}`",
                     f"Banco: `{estado.caminho_backup_banco or '—'}`",
                     f"Tabelas: **{estado.tabelas_esvaziadas}**",
-                    "Relatório no canal de logs do wipe.",
                 ],
             )
         except Exception as erro:
             registrador.exception("[wipe] backup completo: %s", erro)
-            await responder_erro(
-                interacao,
-                titulo="Backup falhou",
-                linhas=[str(erro)],
-            )
+            await responder_erro(interacao, titulo="Backup falhou", linhas=[str(erro)])
 
     async def _ao_backup_discord(self, interacao: discord.Interaction) -> None:
-        if not await _exigir_admin(interacao):
-            return
-        if not await _exigir_livre(interacao):
+        if not await _exigir_admin(interacao) or not await _exigir_livre(interacao):
             return
         await interacao.response.defer(ephemeral=True)
         try:
-            estado = await executar_backup_discord(
-                interacao.guild, interacao.user
-            )
+            estado = await executar_backup_discord(interacao.guild, interacao.user)
             await responder_sucesso(
                 interacao,
                 titulo="Backup Discord",
-                linhas=[
-                    f"Arquivo: `{estado.caminho_backup_discord or '—'}`",
-                    "Relatório no canal de logs do wipe.",
-                ],
+                linhas=[f"Arquivo: `{estado.caminho_backup_discord or '—'}`"],
             )
         except Exception as erro:
             registrador.exception("[wipe] backup discord: %s", erro)
             await responder_erro(
-                interacao,
-                titulo="Backup Discord falhou",
-                linhas=[str(erro)],
+                interacao, titulo="Backup Discord falhou", linhas=[str(erro)]
             )
 
     async def _ao_backup_banco(self, interacao: discord.Interaction) -> None:
-        if not await _exigir_admin(interacao):
-            return
-        if not await _exigir_livre(interacao):
+        if not await _exigir_admin(interacao) or not await _exigir_livre(interacao):
             return
         await interacao.response.defer(ephemeral=True)
         try:
@@ -268,37 +189,28 @@ class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=[
                     f"Arquivo: `{estado.caminho_backup_banco or '—'}`",
                     f"Tabelas: **{estado.tabelas_esvaziadas}**",
-                    "Relatório no canal de logs do wipe.",
                 ],
             )
         except Exception as erro:
             registrador.exception("[wipe] backup banco: %s", erro)
             await responder_erro(
-                interacao,
-                titulo="Backup banco falhou",
-                linhas=[str(erro)],
+                interacao, titulo="Backup banco falhou", linhas=[str(erro)]
             )
 
     async def _ao_limpar_classico(self, interacao: discord.Interaction) -> None:
-        if not await _exigir_admin(interacao):
-            return
-        if not await _exigir_livre(interacao):
+        if not await _exigir_admin(interacao) or not await _exigir_livre(interacao):
             return
         preservados, comuns = listar_preservados_e_comuns(interacao.guild)
         await responder_view(
             interacao,
             ConfirmarLimpezaClassicaView(
-                interacao.user.id,
-                len(preservados),
-                len(comuns),
+                interacao.user.id, len(preservados), len(comuns)
             ),
             ephemeral=True,
         )
 
     async def _ao_selecionar_cargos(self, interacao: discord.Interaction) -> None:
-        if not await _exigir_admin(interacao):
-            return
-        if not await _exigir_livre(interacao):
+        if not await _exigir_admin(interacao) or not await _exigir_livre(interacao):
             return
         await responder_view(
             interacao,
@@ -306,14 +218,12 @@ class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
             ephemeral=True,
         )
 
-    async def _ao_recriar_canal(self, interacao: discord.Interaction) -> None:
-        if not await _exigir_admin(interacao):
-            return
-        if not await _exigir_livre(interacao):
+    async def _ao_recriar_canais(self, interacao: discord.Interaction) -> None:
+        if not await _exigir_admin(interacao) or not await _exigir_livre(interacao):
             return
         await responder_view(
             interacao,
-            SelecionarCanalParaRecriarView(interacao.user.id),
+            MontarFilaCanaisView(interacao.user.id, []),
             ephemeral=True,
         )
 
@@ -326,7 +236,7 @@ class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Status do wipe",
                 linhas=[
-                    "Nenhuma operação neste processo do bot.",
+                    "Nenhuma operação neste processo.",
                     f"Temporada sugerida: `{montar_nome_da_temporada()}`",
                 ],
             )
@@ -340,12 +250,8 @@ class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
                 f"Em andamento: **{andamento}**",
                 f"Fase: `{estado.fase}`",
                 f"Iniciador: {estado.iniciador_nome}",
-                f"Preservados: {estado.membros_preservados}",
-                f"Limpos: {estado.membros_limpos}",
-                f"Falhas: {estado.membros_falha}",
+                f"Limpos: {estado.membros_limpos} | Falhas: {estado.membros_falha}",
                 f"Tabelas: {estado.tabelas_esvaziadas}",
-                f"Discord: `{estado.caminho_backup_discord or '—'}`",
-                f"Banco: `{estado.caminho_backup_banco or '—'}`",
             ],
         )
 
@@ -370,34 +276,29 @@ class PainelWipeLayout(LoggingViewMixin, discord.ui.LayoutView):
             ],
         )
 
-    async def _ao_recuperar(self, interacao: discord.Interaction) -> None:
-        if not await _exigir_admin(interacao):
-            return
-        await interacao.response.defer(ephemeral=True)
-        try:
-            linhas = await executar_recuperacao_no_ready(interacao.guild)
-            await responder_sucesso(
-                interacao,
-                titulo="Recuperação do responsável",
-                linhas=linhas or ["Nada a fazer."],
-            )
-        except Exception as erro:
-            registrador.exception("[wipe] recuperar: %s", erro)
-            await responder_erro(
-                interacao,
-                titulo="Recuperação falhou",
-                linhas=[str(erro)],
-            )
+
+async def abrir_painel_wipe(interacao: discord.Interaction) -> None:
+    """Envia o painel efêmero (resposta só para quem rodou /wipe)."""
+    if interacao.guild is None:
+        await responder_erro(
+            interacao,
+            titulo="Servidor necessário",
+            linhas=["Use /wipe dentro do servidor."],
+        )
+        return
+    await responder_view(
+        interacao,
+        PainelWipeLayout(guild=interacao.guild),
+        ephemeral=True,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Confirmação limpeza clássica
+# Limpeza clássica
 # ---------------------------------------------------------------------------
 
 
 class ConfirmarLimpezaClassicaView(LoggingViewMixin, discord.ui.LayoutView):
-    """Confirma antes do limpar clássico."""
-
     def __init__(
         self,
         usuario_id: int,
@@ -406,29 +307,27 @@ class ConfirmarLimpezaClassicaView(LoggingViewMixin, discord.ui.LayoutView):
     ):
         super().__init__(timeout=300)
         self.usuario_id = usuario_id
-
         row = discord.ui.ActionRow()
         b_ok = discord.ui.Button(
-            label="Confirmar limpeza",
+            label="Confirmar",
             style=discord.ButtonStyle.danger,
-            custom_id="wipe:confirmar_classico",
+            custom_id="wipe:e:conf_limpar",
         )
         b_ok.callback = self._ao_confirmar
         row.add_item(b_ok)
         b_nao = discord.ui.Button(
             label="Cancelar",
             style=discord.ButtonStyle.secondary,
-            custom_id="wipe:cancelar_classico",
+            custom_id="wipe:e:canc_limpar",
         )
         b_nao.callback = self._ao_cancelar
         row.add_item(b_nao)
-
         self.container = discord.ui.Container(
             discord.ui.TextDisplay("# Confirmar limpeza clássica"),
             discord.ui.TextDisplay(
                 f"Preservados: **{quantidade_preservados}**\n"
-                f"Comuns (perdem cargos): **{quantidade_comuns}**\n"
-                "Prefixo removido de todo mundo."
+                f"Comuns: **{quantidade_comuns}**\n"
+                "Apelido do servidor removido (fica só o username)."
             ),
             row,
             accent_color=discord.Color.dark_red(),
@@ -448,9 +347,7 @@ class ConfirmarLimpezaClassicaView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_cancelar(self, interacao: discord.Interaction) -> None:
         self.stop()
         await responder_aviso(
-            interacao,
-            titulo="Cancelado",
-            linhas=["Nenhum cargo foi alterado."],
+            interacao, titulo="Cancelado", linhas=["Nada foi alterado."]
         )
 
     async def _ao_confirmar(self, interacao: discord.Interaction) -> None:
@@ -459,12 +356,10 @@ class ConfirmarLimpezaClassicaView(LoggingViewMixin, discord.ui.LayoutView):
         self.stop()
         await interacao.response.defer(ephemeral=True)
         try:
-            estado = await executar_limpar_cargos(
-                interacao.guild, interacao.user
-            )
+            estado = await executar_limpar_cargos(interacao.guild, interacao.user)
             await responder_sucesso(
                 interacao,
-                titulo="Limpeza clássica concluída",
+                titulo="Limpeza concluída",
                 linhas=[
                     f"Preservados: **{estado.membros_preservados}**",
                     f"Limpos: **{estado.membros_limpos}**",
@@ -472,11 +367,9 @@ class ConfirmarLimpezaClassicaView(LoggingViewMixin, discord.ui.LayoutView):
                 ],
             )
         except Exception as erro:
-            registrador.exception("[wipe] limpar classico: %s", erro)
+            registrador.exception("[wipe] limpar: %s", erro)
             await responder_erro(
-                interacao,
-                titulo="Limpeza falhou",
-                linhas=[str(erro)],
+                interacao, titulo="Limpeza falhou", linhas=[str(erro)]
             )
 
 
@@ -486,29 +379,23 @@ class ConfirmarLimpezaClassicaView(LoggingViewMixin, discord.ui.LayoutView):
 
 
 class SelecionarCargosParaLimparView(LoggingViewMixin, discord.ui.LayoutView):
-    """Escolhe quais cargos tirar de todos os membros."""
-
     def __init__(self, usuario_id: int):
         super().__init__(timeout=300)
         self.usuario_id = usuario_id
-
         self.select_cargos = discord.ui.RoleSelect(
-            placeholder="Selecione os cargos para remover de todos",
+            placeholder="Cargos para remover de todos",
             min_values=1,
             max_values=25,
-            custom_id="wipe:select_cargos",
+            custom_id="wipe:e:rsel",
         )
         self.select_cargos.callback = self._ao_selecionar
-        row = discord.ui.ActionRow(self.select_cargos)
-
         self.container = discord.ui.Container(
-            discord.ui.TextDisplay("# Selecionar cargos para limpar"),
+            discord.ui.TextDisplay("# Selecionar cargos"),
             discord.ui.TextDisplay(
-                "Os cargos escolhidos serão removidos de **todos** os "
-                "membros que os tiverem. Prefixo do nick também é limpo.\n"
-                "Cargos managed (bots) são ignorados."
+                "Remove os cargos escolhidos de **todos** os membros. "
+                "Também apaga o apelido do servidor."
             ),
-            row,
+            discord.ui.ActionRow(self.select_cargos),
             accent_color=discord.Color.orange(),
         )
         self.add_item(self.container)
@@ -518,7 +405,7 @@ class SelecionarCargosParaLimparView(LoggingViewMixin, discord.ui.LayoutView):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
-                linhas=["Só quem abriu este card pode usar o select."],
+                linhas=["Só quem abriu este card pode usar."],
             )
             return False
         return True
@@ -526,72 +413,48 @@ class SelecionarCargosParaLimparView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_selecionar(self, interacao: discord.Interaction) -> None:
         if not await _exigir_livre(interacao):
             return
-        roles_selecionados: list[discord.Role] = list(
-            self.select_cargos.values or []
-        )
-        if not roles_selecionados and interacao.guild is not None:
-            dados = interacao.data or {}
-            ids = dados.get("values") or []
-            for id_texto in ids:
+        roles = list(self.select_cargos.values or [])
+        if not roles and interacao.guild is not None:
+            for id_texto in (interacao.data or {}).get("values") or []:
                 cargo = interacao.guild.get_role(int(id_texto))
                 if cargo is not None:
-                    roles_selecionados.append(cargo)
-
-        if not roles_selecionados:
+                    roles.append(cargo)
+        if not roles:
             await responder_erro(
-                interacao,
-                titulo="Nenhum cargo",
-                linhas=["Selecione ao menos um cargo."],
+                interacao, titulo="Nenhum cargo", linhas=["Selecione ao menos um."]
             )
             return
-
-        nomes = ", ".join(cargo.name for cargo in roles_selecionados)
+        nomes = ", ".join(cargo.name for cargo in roles)
         await responder_view(
             interacao,
-            ConfirmarRemocaoCargosView(
-                interacao.user.id,
-                roles_selecionados,
-                nomes,
-            ),
+            ConfirmarRemocaoCargosView(interacao.user.id, roles, nomes),
             ephemeral=True,
         )
 
 
 class ConfirmarRemocaoCargosView(LoggingViewMixin, discord.ui.LayoutView):
-    """Confirma remoção dos cargos selecionados."""
-
-    def __init__(
-        self,
-        usuario_id: int,
-        cargos: list[discord.Role],
-        nomes: str,
-    ):
+    def __init__(self, usuario_id: int, cargos: list[discord.Role], nomes: str):
         super().__init__(timeout=300)
         self.usuario_id = usuario_id
         self.cargos = cargos
-
         row = discord.ui.ActionRow()
         b_ok = discord.ui.Button(
             label="Confirmar remoção",
             style=discord.ButtonStyle.danger,
-            custom_id="wipe:confirmar_cargos_select",
+            custom_id="wipe:e:conf_rc",
         )
         b_ok.callback = self._ao_confirmar
         row.add_item(b_ok)
         b_nao = discord.ui.Button(
             label="Cancelar",
             style=discord.ButtonStyle.secondary,
-            custom_id="wipe:cancelar_cargos_select",
+            custom_id="wipe:e:canc_rc",
         )
         b_nao.callback = self._ao_cancelar
         row.add_item(b_nao)
-
         self.container = discord.ui.Container(
-            discord.ui.TextDisplay("# Confirmar remoção de cargos"),
-            discord.ui.TextDisplay(
-                f"Cargos: **{nomes}**\n"
-                "Serão removidos de todos os membros que os tiverem."
-            ),
+            discord.ui.TextDisplay("# Confirmar remoção"),
+            discord.ui.TextDisplay(f"Cargos: **{nomes}**"),
             row,
             accent_color=discord.Color.dark_red(),
         )
@@ -610,9 +473,7 @@ class ConfirmarRemocaoCargosView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_cancelar(self, interacao: discord.Interaction) -> None:
         self.stop()
         await responder_aviso(
-            interacao,
-            titulo="Cancelado",
-            linhas=["Nenhum cargo foi alterado."],
+            interacao, titulo="Cancelado", linhas=["Nada foi alterado."]
         )
 
     async def _ao_confirmar(self, interacao: discord.Interaction) -> None:
@@ -622,56 +483,111 @@ class ConfirmarRemocaoCargosView(LoggingViewMixin, discord.ui.LayoutView):
         await interacao.response.defer(ephemeral=True)
         try:
             estado = await executar_remover_cargos_escolhidos(
-                interacao.guild,
-                interacao.user,
-                self.cargos,
+                interacao.guild, interacao.user, self.cargos
             )
             await responder_sucesso(
                 interacao,
                 titulo="Cargos removidos",
                 linhas=[
-                    f"Membros afetados: **{estado.membros_limpos}**",
+                    f"Afetados: **{estado.membros_limpos}**",
                     f"Falhas: **{estado.membros_falha}**",
-                    "Relatório no canal de logs do wipe.",
                 ],
             )
         except Exception as erro:
-            registrador.exception("[wipe] remover cargos select: %s", erro)
+            registrador.exception("[wipe] remover cargos: %s", erro)
             await responder_erro(
-                interacao,
-                titulo="Remoção falhou",
-                linhas=[str(erro)],
+                interacao, titulo="Remoção falhou", linhas=[str(erro)]
             )
 
 
 # ---------------------------------------------------------------------------
-# Select de canal
+# Fila de canais por ID (adicionar / continuar)
 # ---------------------------------------------------------------------------
 
 
-class SelecionarCanalParaRecriarView(LoggingViewMixin, discord.ui.LayoutView):
-    """Escolhe um canal de texto para apagar e recriar."""
+class ModalIdCanal(LoggingModalMixin, discord.ui.Modal):
+    """Pede um ou mais IDs de canal (separados por espaço, vírgula ou linha)."""
 
-    def __init__(self, usuario_id: int):
-        super().__init__(timeout=300)
+    def __init__(self, usuario_id: int, ids_atuais: list[int]):
+        super().__init__(title="IDs dos canais")
         self.usuario_id = usuario_id
-
-        self.select_canal = discord.ui.ChannelSelect(
-            placeholder="Selecione o canal de texto",
-            channel_types=[discord.ChannelType.text],
-            min_values=1,
-            max_values=1,
-            custom_id="wipe:select_canal",
+        self.ids_atuais = list(ids_atuais)
+        self.campo_ids = discord.ui.TextInput(
+            label="IDs (um ou vários)",
+            placeholder="123456789012345678 987654321098765432",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000,
         )
-        self.select_canal.callback = self._ao_selecionar
-        row = discord.ui.ActionRow(self.select_canal)
+        self.add_item(self.campo_ids)
+
+    async def on_submit(self, interacao: discord.Interaction) -> None:
+        texto = str(self.campo_ids.value or "")
+        encontrados = [int(parte) for parte in re.findall(r"\d{15,20}", texto)]
+        if not encontrados:
+            await responder_erro(
+                interacao,
+                titulo="ID inválido",
+                linhas=["Cole um ou mais IDs numéricos de canal."],
+            )
+            return
+        unidos = list(self.ids_atuais)
+        for id_canal in encontrados:
+            if id_canal not in unidos:
+                unidos.append(id_canal)
+        await responder_view(
+            interacao,
+            MontarFilaCanaisView(self.usuario_id, unidos),
+            ephemeral=True,
+        )
+
+
+class MontarFilaCanaisView(LoggingViewMixin, discord.ui.LayoutView):
+    """Monta a lista de canais a recriar: adicionar mais ou executar."""
+
+    def __init__(self, usuario_id: int, ids_canais: list[int]):
+        super().__init__(timeout=600)
+        self.usuario_id = usuario_id
+        self.ids_canais = list(ids_canais)
+
+        row = discord.ui.ActionRow()
+        b_add = discord.ui.Button(
+            label="Adicionar ID",
+            style=discord.ButtonStyle.primary,
+            custom_id="wipe:e:add_id",
+        )
+        b_add.callback = self._ao_adicionar
+        row.add_item(b_add)
+        b_sel = discord.ui.Button(
+            label="Escolher no select",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wipe:e:sel_ch",
+        )
+        b_sel.callback = self._ao_select
+        row.add_item(b_sel)
+        b_ok = discord.ui.Button(
+            label="Continuar / confirmar",
+            style=discord.ButtonStyle.danger,
+            custom_id="wipe:e:go_ch",
+            disabled=not bool(self.ids_canais),
+        )
+        b_ok.callback = self._ao_continuar
+        row.add_item(b_ok)
+        b_limpar = discord.ui.Button(
+            label="Limpar fila",
+            style=discord.ButtonStyle.secondary,
+            custom_id="wipe:e:clr_ch",
+        )
+        b_limpar.callback = self._ao_limpar
+        row.add_item(b_limpar)
 
         self.container = discord.ui.Container(
-            discord.ui.TextDisplay("# Recriar canal"),
+            discord.ui.TextDisplay("# Recriar canais"),
             discord.ui.TextDisplay(
-                "O canal será **apagado e recriado** com as mesmas "
-                "permissões, categoria e posição.\n"
-                "O histórico some. A resposta traz **NOME: ID** do canal novo."
+                "Duplica cada canal (mesmo nome e permissões) e **só então** "
+                "apaga o original. Sem exceção de canal.\n\n"
+                f"**Fila ({len(self.ids_canais)}):**\n"
+                f"{_texto_fila_canais(self.ids_canais)}"
             ),
             row,
             accent_color=discord.Color.orange(),
@@ -683,68 +599,119 @@ class SelecionarCanalParaRecriarView(LoggingViewMixin, discord.ui.LayoutView):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
-                linhas=["Só quem abriu este card pode usar o select."],
+                linhas=["Só quem abriu este card pode usar."],
+            )
+            return False
+        return True
+
+    async def _ao_adicionar(self, interacao: discord.Interaction) -> None:
+        await interacao.response.send_modal(
+            ModalIdCanal(self.usuario_id, self.ids_canais)
+        )
+
+    async def _ao_select(self, interacao: discord.Interaction) -> None:
+        await responder_view(
+            interacao,
+            SelectCanaisExtrasView(self.usuario_id, self.ids_canais),
+            ephemeral=True,
+        )
+
+    async def _ao_limpar(self, interacao: discord.Interaction) -> None:
+        await responder_view(
+            interacao,
+            MontarFilaCanaisView(self.usuario_id, []),
+            ephemeral=True,
+        )
+
+    async def _ao_continuar(self, interacao: discord.Interaction) -> None:
+        if not self.ids_canais:
+            await responder_erro(
+                interacao,
+                titulo="Fila vazia",
+                linhas=["Adicione ao menos um ID de canal."],
+            )
+            return
+        await responder_view(
+            interacao,
+            ConfirmarRecriarCanaisView(self.usuario_id, self.ids_canais),
+            ephemeral=True,
+        )
+
+
+class SelectCanaisExtrasView(LoggingViewMixin, discord.ui.LayoutView):
+    def __init__(self, usuario_id: int, ids_atuais: list[int]):
+        super().__init__(timeout=300)
+        self.usuario_id = usuario_id
+        self.ids_atuais = list(ids_atuais)
+        self.select_canal = discord.ui.ChannelSelect(
+            placeholder="Canais de texto (até 25)",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=25,
+            custom_id="wipe:e:chsel",
+        )
+        self.select_canal.callback = self._ao_selecionar
+        self.container = discord.ui.Container(
+            discord.ui.TextDisplay("# Escolher canais"),
+            discord.ui.TextDisplay("Os escolhidos entram na fila."),
+            discord.ui.ActionRow(self.select_canal),
+            accent_color=discord.Color.orange(),
+        )
+        self.add_item(self.container)
+
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
+        if interacao.user.id != self.usuario_id:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Só quem abriu este card pode usar."],
             )
             return False
         return True
 
     async def _ao_selecionar(self, interacao: discord.Interaction) -> None:
-        if not await _exigir_livre(interacao):
-            return
-        canal = None
-        if self.select_canal.values:
-            canal = self.select_canal.values[0]
-        if canal is None and interacao.guild is not None:
-            dados = interacao.data or {}
-            ids = dados.get("values") or []
-            if ids:
-                canal = interacao.guild.get_channel(int(ids[0]))
-
-        if canal is None or not isinstance(canal, discord.TextChannel):
-            await responder_erro(
-                interacao,
-                titulo="Canal inválido",
-                linhas=["Escolha um canal de texto válido."],
-            )
-            return
-
+        unidos = list(self.ids_atuais)
+        for canal in self.select_canal.values or []:
+            if canal.id not in unidos:
+                unidos.append(canal.id)
+        if not self.select_canal.values and interacao.guild is not None:
+            for id_texto in (interacao.data or {}).get("values") or []:
+                id_canal = int(id_texto)
+                if id_canal not in unidos:
+                    unidos.append(id_canal)
         await responder_view(
             interacao,
-            ConfirmarRecriarCanalView(interacao.user.id, canal),
+            MontarFilaCanaisView(self.usuario_id, unidos),
             ephemeral=True,
         )
 
 
-class ConfirmarRecriarCanalView(LoggingViewMixin, discord.ui.LayoutView):
-    """Confirma recriação do canal."""
-
-    def __init__(self, usuario_id: int, canal: discord.TextChannel):
+class ConfirmarRecriarCanaisView(LoggingViewMixin, discord.ui.LayoutView):
+    def __init__(self, usuario_id: int, ids_canais: list[int]):
         super().__init__(timeout=300)
         self.usuario_id = usuario_id
-        self.canal_id = canal.id
-        self.canal_nome = canal.name
-
+        self.ids_canais = list(ids_canais)
         row = discord.ui.ActionRow()
         b_ok = discord.ui.Button(
             label="Confirmar recriação",
             style=discord.ButtonStyle.danger,
-            custom_id="wipe:confirmar_canal",
+            custom_id="wipe:e:conf_ch",
         )
         b_ok.callback = self._ao_confirmar
         row.add_item(b_ok)
-        b_nao = discord.ui.Button(
-            label="Cancelar",
+        b_voltar = discord.ui.Button(
+            label="Voltar à fila",
             style=discord.ButtonStyle.secondary,
-            custom_id="wipe:cancelar_canal",
+            custom_id="wipe:e:back_ch",
         )
-        b_nao.callback = self._ao_cancelar
-        row.add_item(b_nao)
-
+        b_voltar.callback = self._ao_voltar
+        row.add_item(b_voltar)
         self.container = discord.ui.Container(
-            discord.ui.TextDisplay("# Confirmar recriação de canal"),
+            discord.ui.TextDisplay("# Confirmar recriação"),
             discord.ui.TextDisplay(
-                f"Canal: **#{self.canal_nome}** (`{self.canal_id}`)\n"
-                "O histórico será apagado. O ID novo será informado."
+                f"**{len(self.ids_canais)} canal(is)**\n"
+                f"{_texto_fila_canais(self.ids_canais)}\n\n"
+                "Cada um: duplicar → apagar original → relatório `NOME: ID`."
             ),
             row,
             accent_color=discord.Color.dark_red(),
@@ -761,51 +728,35 @@ class ConfirmarRecriarCanalView(LoggingViewMixin, discord.ui.LayoutView):
             return False
         return True
 
-    async def _ao_cancelar(self, interacao: discord.Interaction) -> None:
-        self.stop()
-        await responder_aviso(
+    async def _ao_voltar(self, interacao: discord.Interaction) -> None:
+        await responder_view(
             interacao,
-            titulo="Cancelado",
-            linhas=["O canal não foi alterado."],
+            MontarFilaCanaisView(self.usuario_id, self.ids_canais),
+            ephemeral=True,
         )
 
     async def _ao_confirmar(self, interacao: discord.Interaction) -> None:
         if not await _exigir_livre(interacao):
             return
-        if interacao.guild is None:
-            await responder_erro(
-                interacao,
-                titulo="Servidor necessário",
-                linhas=["Use dentro do servidor."],
-            )
-            return
         self.stop()
         await interacao.response.defer(ephemeral=True)
-        canal = interacao.guild.get_channel(self.canal_id)
-        if canal is None or not isinstance(canal, discord.TextChannel):
-            await responder_erro(
-                interacao,
-                titulo="Canal sumiu",
-                linhas=[f"Não encontrei o canal `{self.canal_id}`."],
-            )
-            return
         try:
-            linha, _estado = await executar_recriar_canal(
-                interacao.guild, interacao.user, canal
+            estado = await executar_recriar_canais(
+                interacao.guild, interacao.user, self.ids_canais
             )
+            # Últimas linhas do relatório = resultados NOME: ID
+            resultados = [
+                linha
+                for linha in estado.linhas_do_relatorio
+                if ": " in linha and not linha.startswith("Temporada")
+            ][-40:]
             await responder_sucesso(
                 interacao,
-                titulo="Canal recriado",
-                linhas=[
-                    f"**{linha}**",
-                    "Formato: NOME: ID",
-                    "Relatório no canal de logs do wipe.",
-                ],
+                titulo="Canais recriados",
+                linhas=resultados or ["Sem linhas de resultado."],
             )
         except Exception as erro:
-            registrador.exception("[wipe] recriar canal: %s", erro)
+            registrador.exception("[wipe] recriar canais: %s", erro)
             await responder_erro(
-                interacao,
-                titulo="Recriação falhou",
-                linhas=[str(erro)],
+                interacao, titulo="Recriação falhou", linhas=[str(erro)]
             )

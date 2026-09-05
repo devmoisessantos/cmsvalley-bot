@@ -21,7 +21,6 @@ from src.config import (
     CARGOS_PRESERVADOS_NO_WIPE,
     IDS_PRESERVADOS_NO_WIPE,
 )
-from src.utils.nickname import remover_prefixo_existente
 
 registrador = logging.getLogger(__name__)
 
@@ -91,22 +90,21 @@ def _cargos_que_podem_ser_removidos(
     return removiveis
 
 
-async def _limpar_prefixo_do_membro(
+async def _limpar_apelido_do_membro(
     membro: discord.Member,
     motivo: str,
 ) -> str | None:
-    """Tira o prefixo do nick. Devolve texto de log ou None se não mudou."""
-    nick_atual = membro.nick or membro.display_name
-    nick_limpo = remover_prefixo_existente(nick_atual)[:32]
+    """
+    Remove o apelido do servidor (volta só o username).
 
-    if membro.nick is None and nick_limpo == membro.name:
-        return None
-    if membro.nick is not None and membro.nick == nick_limpo:
+    Na virada de temporada o membro refaz whitelist com nome e ID novos.
+    """
+    if membro.nick is None:
         return None
 
     try:
-        await membro.edit(nick=nick_limpo if nick_limpo else None, reason=motivo)
-        return f"Prefixo removido: {membro} → `{nick_limpo or membro.name}`"
+        await membro.edit(nick=None, reason=motivo)
+        return f"Apelido removido: {membro} ({membro.id}) → username `{membro.name}`"
     except discord.Forbidden:
         return f"Sem permissão para nick de {membro} ({membro.id})"
     except discord.HTTPException as erro:
@@ -152,7 +150,7 @@ async def limpar_cargos_e_prefixos(
             contagem_falhas += 1
             linhas.append(f"Falha preservado {membro.id}: {erro}")
 
-        log_nick = await _limpar_prefixo_do_membro(membro, motivo)
+        log_nick = await _limpar_apelido_do_membro(membro, motivo)
         if log_nick:
             linhas.append(log_nick)
         await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
@@ -170,7 +168,7 @@ async def limpar_cargos_e_prefixos(
             contagem_falhas += 1
             linhas.append(f"Falha limpo {membro.id}: {erro}")
 
-        log_nick = await _limpar_prefixo_do_membro(membro, motivo)
+        log_nick = await _limpar_apelido_do_membro(membro, motivo)
         if log_nick:
             linhas.append(log_nick)
         await asyncio.sleep(ATRASO_WIPE_SEGUNDOS)
@@ -219,7 +217,7 @@ async def remover_cargos_escolhidos_de_todos(
             linhas.append(f"Falha em {membro.id}: {erro}")
 
         if tambem_limpar_prefixo:
-            log_nick = await _limpar_prefixo_do_membro(membro, motivo)
+            log_nick = await _limpar_apelido_do_membro(membro, motivo)
             if log_nick:
                 linhas.append(log_nick)
 

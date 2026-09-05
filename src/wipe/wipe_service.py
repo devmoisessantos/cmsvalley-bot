@@ -1,5 +1,5 @@
 """
-Orquestra as ações do painel de wipe.
+Orquestra as ações do painel efêmero de wipe.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from discord import (
     Guild,
     Member,
     Role,
-    TextChannel,
 )
 
 from src.wipe.wipe_backup_service import (
@@ -23,7 +22,7 @@ from src.wipe.wipe_backup_service import (
     montar_nome_da_temporada,
 )
 from src.wipe.wipe_banco_service import esvaziar_banco_da_temporada
-from src.wipe.wipe_estrutura_service import recriar_canal_de_texto
+from src.wipe.wipe_estrutura_service import recriar_canais_por_ids
 from src.wipe.wipe_logger import publicar_relatorio_do_wipe
 from src.wipe.wipe_membros_service import (
     limpar_cargos_e_prefixos,
@@ -33,7 +32,6 @@ from src.wipe.wipe_membros_service import (
 from src.wipe.wipe_state import (
     EstadoDoWipe,
     definir_estado_do_wipe,
-    obter_estado_do_wipe,
     wipe_esta_em_andamento,
 )
 
@@ -60,11 +58,38 @@ def _iniciar_estado(iniciador: Member, fase: str) -> EstadoDoWipe:
     return estado
 
 
-async def executar_backup_discord(
+async def _finalizar_ok(
     guilda: Guild,
-    iniciador: Member,
+    estado: EstadoDoWipe,
+    titulo: str,
 ) -> EstadoDoWipe:
-    """Só snapshot estrutural do Discord."""
+    estado.fase = "concluido"
+    estado.em_andamento = False
+    definir_estado_do_wipe(estado)
+    await publicar_relatorio_do_wipe(
+        guilda, titulo=titulo, linhas=estado.linhas_do_relatorio
+    )
+    return estado
+
+
+async def _finalizar_erro(
+    guilda: Guild,
+    estado: EstadoDoWipe,
+    titulo: str,
+    erro: Exception,
+) -> None:
+    estado.fase = "erro"
+    estado.em_andamento = False
+    _anotar(estado, f"ERRO: {erro}")
+    definir_estado_do_wipe(estado)
+    await publicar_relatorio_do_wipe(
+        guilda, titulo=titulo, linhas=estado.linhas_do_relatorio
+    )
+
+
+async def executar_backup_discord(
+    guilda: Guild, iniciador: Member
+) -> EstadoDoWipe:
     estado = _iniciar_estado(iniciador, "backup_discord")
     try:
         _anotar(estado, f"Temporada: {estado.temporada}")
@@ -74,22 +99,12 @@ async def executar_backup_discord(
         )
         estado.caminho_backup_discord = caminho
         _anotar(estado, f"Backup Discord: {caminho}")
-        estado.fase = "concluido"
-        estado.em_andamento = False
-        await publicar_relatorio_do_wipe(
-            guilda,
-            titulo=f"Wipe — backup Discord {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+        return await _finalizar_ok(
+            guilda, estado, f"Wipe — backup Discord {estado.temporada}"
         )
-        return estado
     except Exception as erro:
-        estado.fase = "erro"
-        estado.em_andamento = False
-        _anotar(estado, f"ERRO: {erro}")
-        await publicar_relatorio_do_wipe(
-            guilda,
-            titulo=f"Wipe backup Discord FALHOU — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+        await _finalizar_erro(
+            guilda, estado, f"Wipe backup Discord FALHOU — {estado.temporada}", erro
         )
         raise
     finally:
@@ -98,10 +113,8 @@ async def executar_backup_discord(
 
 
 async def executar_backup_banco_e_esvaziar(
-    guilda: Guild,
-    iniciador: Member,
+    guilda: Guild, iniciador: Member
 ) -> EstadoDoWipe:
-    """Backup forçado do banco e TRUNCATE das tabelas."""
     estado = _iniciar_estado(iniciador, "backup_banco")
     try:
         _anotar(estado, f"Temporada: {estado.temporada}")
@@ -122,22 +135,14 @@ async def executar_backup_banco_e_esvaziar(
             1 for linha in linhas_tabelas if linha.startswith("Tabela esvaziada:")
         )
         estado.linhas_do_relatorio.extend(linhas_tabelas)
-        estado.fase = "concluido"
-        estado.em_andamento = False
-        await publicar_relatorio_do_wipe(
+        return await _finalizar_ok(
             guilda,
-            titulo=f"Wipe — backup banco + esvaziar {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+            estado,
+            f"Wipe — backup banco + esvaziar {estado.temporada}",
         )
-        return estado
     except Exception as erro:
-        estado.fase = "erro"
-        estado.em_andamento = False
-        _anotar(estado, f"ERRO: {erro}")
-        await publicar_relatorio_do_wipe(
-            guilda,
-            titulo=f"Wipe banco FALHOU — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+        await _finalizar_erro(
+            guilda, estado, f"Wipe banco FALHOU — {estado.temporada}", erro
         )
         raise
     finally:
@@ -146,10 +151,8 @@ async def executar_backup_banco_e_esvaziar(
 
 
 async def executar_backup_completo(
-    guilda: Guild,
-    iniciador: Member,
+    guilda: Guild, iniciador: Member
 ) -> EstadoDoWipe:
-    """Discord + banco + esvaziar tabelas."""
     estado = _iniciar_estado(iniciador, "backup_discord")
     try:
         _anotar(estado, f"Temporada: {estado.temporada}")
@@ -176,22 +179,12 @@ async def executar_backup_completo(
             1 for linha in linhas_tabelas if linha.startswith("Tabela esvaziada:")
         )
         estado.linhas_do_relatorio.extend(linhas_tabelas)
-        estado.fase = "concluido"
-        estado.em_andamento = False
-        await publicar_relatorio_do_wipe(
-            guilda,
-            titulo=f"Wipe backup completo — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+        return await _finalizar_ok(
+            guilda, estado, f"Wipe backup completo — {estado.temporada}"
         )
-        return estado
     except Exception as erro:
-        estado.fase = "erro"
-        estado.em_andamento = False
-        _anotar(estado, f"ERRO: {erro}")
-        await publicar_relatorio_do_wipe(
-            guilda,
-            titulo=f"Wipe backup FALHOU — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+        await _finalizar_erro(
+            guilda, estado, f"Wipe backup FALHOU — {estado.temporada}", erro
         )
         raise
     finally:
@@ -200,10 +193,8 @@ async def executar_backup_completo(
 
 
 async def executar_limpar_cargos(
-    guilda: Guild,
-    iniciador: Member,
+    guilda: Guild, iniciador: Member
 ) -> EstadoDoWipe:
-    """Fluxo clássico: preservados vs comuns + prefixos."""
     estado = _iniciar_estado(iniciador, "limpar_cargos")
     try:
         _anotar(estado, f"Temporada: {estado.temporada}")
@@ -211,7 +202,7 @@ async def executar_limpar_cargos(
         preservados, comuns = listar_preservados_e_comuns(guilda)
         _anotar(estado, f"Preservados: {len(preservados)}")
         _anotar(estado, f"Comuns: {len(comuns)}")
-        motivo = f"Wipe temporada {estado.temporada} — limpar cargos"
+        motivo = f"Wipe temporada {estado.temporada} — limpar cargos e apelidos"
         n_pres, n_limpos, n_falhas, linhas = await limpar_cargos_e_prefixos(
             guilda, motivo
         )
@@ -219,22 +210,15 @@ async def executar_limpar_cargos(
         estado.membros_limpos = n_limpos
         estado.membros_falha = n_falhas
         estado.linhas_do_relatorio.extend(linhas)
-        estado.fase = "concluido"
-        estado.em_andamento = False
-        await publicar_relatorio_do_wipe(
-            guilda,
-            titulo=f"Wipe limpar-cargos — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+        return await _finalizar_ok(
+            guilda, estado, f"Wipe limpar-cargos — {estado.temporada}"
         )
-        return estado
     except Exception as erro:
-        estado.fase = "erro"
-        estado.em_andamento = False
-        _anotar(estado, f"ERRO: {erro}")
-        await publicar_relatorio_do_wipe(
+        await _finalizar_erro(
             guilda,
-            titulo=f"Wipe limpar-cargos FALHOU — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+            estado,
+            f"Wipe limpar-cargos FALHOU — {estado.temporada}",
+            erro,
         )
         raise
     finally:
@@ -247,7 +231,6 @@ async def executar_remover_cargos_escolhidos(
     iniciador: Member,
     cargos: list[Role],
 ) -> EstadoDoWipe:
-    """Remove só os cargos selecionados de todos os membros."""
     estado = _iniciar_estado(iniciador, "remover_cargos_escolhidos")
     try:
         nomes = ", ".join(cargo.name for cargo in cargos)
@@ -261,22 +244,15 @@ async def executar_remover_cargos_escolhidos(
         estado.membros_limpos = afetados
         estado.membros_falha = falhas
         estado.linhas_do_relatorio.extend(linhas)
-        estado.fase = "concluido"
-        estado.em_andamento = False
-        await publicar_relatorio_do_wipe(
-            guilda,
-            titulo=f"Wipe remover cargos — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+        return await _finalizar_ok(
+            guilda, estado, f"Wipe remover cargos — {estado.temporada}"
         )
-        return estado
     except Exception as erro:
-        estado.fase = "erro"
-        estado.em_andamento = False
-        _anotar(estado, f"ERRO: {erro}")
-        await publicar_relatorio_do_wipe(
+        await _finalizar_erro(
             guilda,
-            titulo=f"Wipe remover cargos FALHOU — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+            estado,
+            f"Wipe remover cargos FALHOU — {estado.temporada}",
+            erro,
         )
         raise
     finally:
@@ -284,39 +260,28 @@ async def executar_remover_cargos_escolhidos(
         definir_estado_do_wipe(estado)
 
 
-async def executar_recriar_canal(
+async def executar_recriar_canais(
     guilda: Guild,
     iniciador: Member,
-    canal: TextChannel,
-) -> tuple[str, EstadoDoWipe]:
-    """
-    Apaga e recria um canal.
-
-    Devolve (linha NOME: ID ou erro, estado).
-    """
-    estado = _iniciar_estado(iniciador, "recriar_canal")
+    ids_canais: list[int],
+) -> EstadoDoWipe:
+    """Duplica e apaga cada canal da lista. Relatório com NOME: ID."""
+    estado = _iniciar_estado(iniciador, "recriar_canais")
     try:
         _anotar(estado, f"Temporada: {estado.temporada}")
         _anotar(estado, f"Iniciado por: {iniciador} ({iniciador.id})")
-        _anotar(estado, f"Recriando canal: #{canal.name} ({canal.id})")
-        _novo, linha = await recriar_canal_de_texto(canal)
-        _anotar(estado, linha)
-        estado.fase = "concluido"
-        estado.em_andamento = False
-        await publicar_relatorio_do_wipe(
-            guilda,
-            titulo=f"Wipe recriar canal — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+        _anotar(estado, f"Canais na fila: {len(ids_canais)}")
+        linhas = await recriar_canais_por_ids(guilda, ids_canais)
+        estado.linhas_do_relatorio.extend(linhas)
+        return await _finalizar_ok(
+            guilda, estado, f"Wipe recriar canais — {estado.temporada}"
         )
-        return linha, estado
     except Exception as erro:
-        estado.fase = "erro"
-        estado.em_andamento = False
-        _anotar(estado, f"ERRO: {erro}")
-        await publicar_relatorio_do_wipe(
+        await _finalizar_erro(
             guilda,
-            titulo=f"Wipe recriar canal FALHOU — {estado.temporada}",
-            linhas=estado.linhas_do_relatorio,
+            estado,
+            f"Wipe recriar canais FALHOU — {estado.temporada}",
+            erro,
         )
         raise
     finally:
