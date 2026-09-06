@@ -328,6 +328,25 @@ CARGOS_CRIACAO_EVENTO_GATE = [
     "👑・【 GATE 】SUBCOMANDANTE・TÁTICO",
 ]
 
+# Quem pode aprovar ingresso e gerenciar membros GATE
+CARGOS_GESTAO_GATE = [
+    "👑・【 GATE 】COMANDANTE・TÁTICO",
+    "👑・【 GATE 】SUBCOMANDANTE・TÁTICO",
+]
+
+# Cursos obrigatórios para solicitar ingresso na GATE
+# (Práticos 1.0 + Resgate, conforme regulamento da unidade)
+CURSOS_OBRIGATORIOS_INGRESSO_GATE = [
+    "resgate",
+    "arcanjo",
+    "alpinista",
+    "paraquedista",
+    "mergulhador",
+]
+
+CARGO_INGRESSO_GATE = "⚔️・【 GATE 】GUARDIÃO"
+CARGO_BASE_GATE = "🛡️・【 GATE 】CMS  ·  Valley"
+
 CARGOS_EXCLUIR_HIERARQUIA = [
     "🛡️・【 GATE 】CMS  ·  Valley",
 ]
@@ -540,8 +559,16 @@ CANAIS = {
     # Pedidos de depósito $ → moedas (padrão: canal de finanças)
     "CANAL_DEPOSITO_MOEDAS": 1537382938176655410,
     "CRIAR_EVENTO_GATE": 1533993716635799643,
+    "CANAL_PAINEL_INGRESSAR_GATE": 1546283534983888916,
+    "APROVAR_GATE_REPROVAR": 1546284222552219748,
+    "CANAL_PROMOVIDOS_GATE": 1515636378812022814,
+    "CANAL_REBAIXADOS_GATE": 1515904467147690054,
+    # Painel de gestão de membros GATE (promover / rebaixar / expulsar).
+    # Preencha o ID do canal quando existir; 0 = ainda não postar.
+    "CANAL_PAINEL_GERENCIAR_GATE": 1546297270306218056,
     "WHITELIST_CANAL_ID": 1528299364970266657,
     "HIERARQUIA_SUL": 1487250788391583745,
+    "HIERARQUIA_GATE": 1546267168050774136,
     "MATERIAL_ESTUDO": 1486369061507043348,
     # Guia do Estagiário — painel de boas-vindas (categoria 1)
     "PAINEL_BOAS_VINDAS": 1486369046357082163,  # ← canal onde o painel fica fixo

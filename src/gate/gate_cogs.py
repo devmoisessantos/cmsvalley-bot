@@ -145,6 +145,41 @@ class GateCog(commands.Cog):
         interacao: discord.Interaction,
         custom_id: str,
     ):
+        # Ingresso / gestão de membros (subdomínio gate/membros)
+        if custom_id == "gate:ingresso:solicitar":
+            from src.gate.membros.membros_gate_panel import PainelIngressarGateLayout
+
+            view_temporaria = PainelIngressarGateLayout(interacao.guild)
+            await view_temporaria._ao_solicitar(interacao)
+            return
+
+        if custom_id.startswith("gate:ingresso:aprovar:"):
+            from src.gate.membros.membros_gate_panel import (
+                processar_aprovacao_ingresso,
+            )
+
+            solicitacao_id = int(custom_id.rsplit(":", 1)[-1])
+            await processar_aprovacao_ingresso(interacao, solicitacao_id)
+            return
+
+        if custom_id.startswith("gate:ingresso:reprovar:"):
+            from src.gate.membros.membros_gate_panel import (
+                processar_reprovacao_ingresso,
+            )
+
+            solicitacao_id = int(custom_id.rsplit(":", 1)[-1])
+            await processar_reprovacao_ingresso(interacao, solicitacao_id)
+            return
+
+        if custom_id == "gate:membros:abrir":
+            from src.gate.membros.membros_gate_panel import (
+                PainelGerenciarGateLayout,
+            )
+
+            view_temporaria = PainelGerenciarGateLayout(interacao.guild)
+            await view_temporaria._ao_abrir(interacao)
+            return
+
         if not tem_permissao_criar_evento(interacao.user):
             await responder_erro(
                 interacao,

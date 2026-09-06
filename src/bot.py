@@ -33,6 +33,14 @@ from src.demissao.demissao_setup import garantir_painel_demissao
 from src.gate.gate_panel import PainelEventosGate
 from src.gate.gate_presenca_service import montar_container_presenca
 from src.gate.gate_service import listar_eventos_abertos
+from src.gate.membros.membros_gate_panel import (
+    PainelGerenciarGateLayout,
+    PainelIngressarGateLayout,
+)
+from src.gate.membros.membros_gate_setup import (
+    garantir_painel_gerenciar_gate,
+    garantir_painel_ingressar_gate,
+)
 from src.guia.boas_vindas_panel import PainelBoasVindasLayout
 from src.guia.guia_setup import (
     garantir_painel_boas_vindas,
@@ -224,6 +232,8 @@ class CmsValleyBot(commands.Bot):
         self.painel_bau_view = None
         self.painel_screenshare_view = None
         self.painel_eventos_gate_view = None
+        self.painel_ingressar_gate_view = None
+        self.painel_gerenciar_gate_view = None
         self.painel_boas_vindas_view = None
         self.painel_tutoriais_view = None
         self.painel_fazer_chamada_view = None
@@ -447,6 +457,8 @@ class CmsValleyBot(commands.Bot):
         self.painel_gerenciar_cargos_view = PainelGerenciarCargoLayout(guild=servidor)
         self.painel_plantao_view = PainelPlantaoLayout(servidor)
         self.painel_eventos_gate_view = PainelEventosGate(guild=servidor)
+        self.painel_ingressar_gate_view = PainelIngressarGateLayout(guild=servidor)
+        self.painel_gerenciar_gate_view = PainelGerenciarGateLayout(guild=servidor)
         self.painel_boas_vindas_view = PainelBoasVindasLayout(servidor)
         self.painel_tutoriais_view = PainelTutoriaisLayout(servidor)
         self.painel_fazer_chamada_view = PainelFazerChamadaLayout(guild=servidor)
@@ -481,6 +493,8 @@ class CmsValleyBot(commands.Bot):
             ("painel_bau", self.painel_bau_view),
             ("painel_screenshare", self.painel_screenshare_view),
             ("painel_eventos_gate", self.painel_eventos_gate_view),
+            ("painel_ingressar_gate", self.painel_ingressar_gate_view),
+            ("painel_gerenciar_gate", self.painel_gerenciar_gate_view),
             ("painel_boas_vindas", self.painel_boas_vindas_view),
             ("painel_tutoriais", self.painel_tutoriais_view),
             ("painel_fazer_chamada", self.painel_fazer_chamada_view),
@@ -537,6 +551,8 @@ class CmsValleyBot(commands.Bot):
             garantir_painel_gerenciar_cargos,
             garantir_painel_plantao,
             garantir_painel_eventos_gate,
+            garantir_painel_ingressar_gate,
+            garantir_painel_gerenciar_gate,
             garantir_painel_boas_vindas,
             garantir_painel_tutoriais,
             garantir_painel_fazer_chamada,

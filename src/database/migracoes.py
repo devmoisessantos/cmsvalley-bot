@@ -96,6 +96,26 @@ CREATE TABLE IF NOT EXISTS solicitacoes_troca_moedas (
 )
 """,
     ),
+    Migracao(
+        numero=5,
+        descricao=(
+            "Tabela de solicitacoes de ingresso na GATE: candidato Paramédico "
+            "pede entrada; Comandante/Subcomandante aprova ou reprova."
+        ),
+        comando_sql="""
+CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
+    id SERIAL PRIMARY KEY,
+    discord_id_candidato BIGINT NOT NULL,
+    discord_id_recrutador BIGINT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pendente',
+    canal_id BIGINT,
+    mensagem_id BIGINT,
+    motivo_reprovacao VARCHAR(500),
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    decidido_em TIMESTAMPTZ
+)
+""",
+    ),
 ]
 
 

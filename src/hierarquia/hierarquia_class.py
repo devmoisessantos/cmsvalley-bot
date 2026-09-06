@@ -18,7 +18,9 @@ from discord.ext import commands
 
 from src.hierarquia.hierarquia_service import (
     atualizar_hierarquia,
+    atualizar_hierarquia_gate,
     obter_cargo_mais_alto,
+    obter_cargo_mais_alto_gate,
 )
 
 registrador = logging.getLogger(__name__)
@@ -54,19 +56,31 @@ class HierarquiaListener(commands.Cog):
         if before_role_ids == after_role_ids:
             return
 
-        # Calcula o cargo-mais-alto antes e depois
+        # Hierarquia hospitalar
         cargo_antes = obter_cargo_mais_alto(after.guild, before.roles)
         cargo_depois = obter_cargo_mais_alto(after.guild, after.roles)
 
-        # Se o cargo-mais-alto não mudou, a hierarquia visível não é afetada — ignora
-        if cargo_antes == cargo_depois:
+        # Hierarquia GATE (independente da hospitalar)
+        cargo_gate_antes = obter_cargo_mais_alto_gate(
+            after.guild, before.roles
+        )
+        cargo_gate_depois = obter_cargo_mais_alto_gate(
+            after.guild, after.roles
+        )
+
+        hospital_mudou = cargo_antes != cargo_depois
+        gate_mudou = cargo_gate_antes != cargo_gate_depois
+        if not hospital_mudou and not gate_mudou:
             return
 
-        # Acumula os cargos afetados (no máximo 2: o antigo e o novo)
         if cargo_antes is not None:
             self._cargos_pendentes.add(cargo_antes.id)
         if cargo_depois is not None:
             self._cargos_pendentes.add(cargo_depois.id)
+        if cargo_gate_antes is not None:
+            self._cargos_pendentes.add(cargo_gate_antes.id)
+        if cargo_gate_depois is not None:
+            self._cargos_pendentes.add(cargo_gate_depois.id)
 
         if self._task and not self._task.done():
             self._task.cancel()
@@ -78,9 +92,15 @@ class HierarquiaListener(commands.Cog):
             await asyncio.sleep(self.DELAY_SEGUNDOS)
             cargos_para_atualizar = self._cargos_pendentes.copy()
             self._cargos_pendentes.clear()
-            await atualizar_hierarquia(guild, somente_cargos=cargos_para_atualizar)
+            await atualizar_hierarquia(
+                guild, somente_cargos=cargos_para_atualizar
+            )
+            await atualizar_hierarquia_gate(
+                guild, somente_cargos=cargos_para_atualizar
+            )
             registrador.info(
-                f"✅ Hierarquia atualizada (cargos: {cargos_para_atualizar})"
+                "✅ Hierarquia atualizada (cargos: %s)",
+                cargos_para_atualizar,
             )
         except asyncio.CancelledError:
             registrador.info(

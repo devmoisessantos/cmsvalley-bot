@@ -367,6 +367,25 @@ class Presenca(Base):
     evento: Mapped[EventosGate] = relationship(back_populates="presencas")
 
 
+class SolicitacaoIngressoGate(Base):
+    """Pedido de ingresso na GATE (Paramédico → Guardião)."""
+
+    __tablename__ = "solicitacoes_ingresso_gate"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id_candidato: Mapped[int] = mapped_column(BigInteger, index=True)
+    discord_id_recrutador: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # pendente | aprovado | reprovado | cancelado
+    status: Mapped[str] = mapped_column(String(20), default="pendente", index=True)
+    canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    mensagem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    motivo_reprovacao: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    decidido_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 # ---------------------------------------------------------------------------
 # Ranking
 # ---------------------------------------------------------------------------

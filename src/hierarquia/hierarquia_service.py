@@ -7,11 +7,13 @@ Como funciona
 do seu cargo mais alto — nunca em dois cargos ao mesmo tempo, senao a soma do
 quadro daria mais gente do que existe.
 
-`atualizar_hierarquia` pega esse resultado, pede os cards para
-hierarquia_builder.py e edita as mensagens que ja estao no canal, ao inves de
-apagar e mandar de novo. Os ids dessas mensagens ficam na tabela
+`atualizar_hierarquia` atualiza o quadro hospitalar e o quadro GATE. Pede os
+cards para hierarquia_builder.py e edita as mensagens que ja estao no canal,
+ao inves de apagar e mandar de novo. Os ids dessas mensagens ficam na tabela
 MensagemHierarquia, para o bot reencontra-las depois de reiniciar.
 """
+
+from __future__ import annotations
 
 import logging
 
@@ -23,6 +25,7 @@ from src.config import (
     CARGOS,
     CARGOS_EXCLUIR_HIERARQUIA,
     CARGOS_HIERARQUIA,
+    HIERARQUIA_GATE,
 )
 from src.database.conexao import async_session
 from src.database.models import MensagemHierarquia
@@ -32,67 +35,93 @@ from src.utils.error_handling import ignorar_falha_cosmetica
 registrador = logging.getLogger(__name__)
 
 
+def _resolver_cargos_ordenados(
+    guild: discord.Guild,
+    nomes_da_hierarquia: list[str],
+) -> list[discord.Role]:
+    """Converte nomes de cargo em roles existentes no servidor, na ordem dada."""
+    cargos_ordenados: list[discord.Role] = []
+    for nome in nomes_da_hierarquia:
+        cargo = guild.get_role(CARGOS.get(nome, 0) or 0)
+        if cargo is not None:
+            cargos_ordenados.append(cargo)
+    return cargos_ordenados
+
+
 def obter_cargo_mais_alto(
     guild: discord.Guild, roles: list[discord.Role]
 ) -> discord.Role | None:
-    """Dado um conjunto de cargos de um membro, retorna o cargo-mais-alto da hierarquia
-    (ou None se o membro estiver excluído ou não tiver nenhum cargo da hierarquia)."""
-    cargos_ordenados = [guild.get_role(CARGOS[nome]) for nome in CARGOS_HIERARQUIA]
-    cargos_ordenados = [
-        cargo_avaliado
-        for cargo_avaliado in cargos_ordenados
-        if cargo_avaliado is not None
-    ]
+    """
+    Cargo mais alto da hierarquia hospitalar.
 
-    cargos_excluidos = [
-        guild.get_role(CARGOS[nome]) for nome in CARGOS_EXCLUIR_HIERARQUIA
-    ]
-    cargos_excluidos = [
-        cargo_avaliado
-        for cargo_avaliado in cargos_excluidos
-        if cargo_avaliado is not None
-    ]
-
+    Quem tem cargo em CARGOS_EXCLUIR_HIERARQUIA (GATE CMS Valley) nao entra
+    neste quadro — comportamento legado do painel hospitalar.
+    """
+    cargos_ordenados = _resolver_cargos_ordenados(guild, CARGOS_HIERARQUIA)
+    cargos_excluidos = _resolver_cargos_ordenados(
+        guild, CARGOS_EXCLUIR_HIERARQUIA
+    )
     if any(cargo in roles for cargo in cargos_excluidos):
         return None
 
     cargos_que_possui = [
-        cargo_avaliado for cargo_avaliado in cargos_ordenados if cargo_avaliado in roles
+        cargo for cargo in cargos_ordenados if cargo in roles
     ]
     if not cargos_que_possui:
         return None
 
     return min(
         cargos_que_possui,
-        key=lambda cargo_avaliado: cargos_ordenados.index(cargo_avaliado),
+        key=lambda cargo: cargos_ordenados.index(cargo),
     )
 
 
-def calcular_membros_por_cargo(guild: discord.Guild) -> dict[int, list[discord.Member]]:
+def obter_cargo_mais_alto_gate(
+    guild: discord.Guild, roles: list[discord.Role]
+) -> discord.Role | None:
+    """
+    Cargo mais alto da hierarquia GATE.
+
+    So cargos de HIERARQUIA_GATE contam. Membro sem cargo GATE nao aparece.
+    """
+    cargos_ordenados = _resolver_cargos_ordenados(guild, HIERARQUIA_GATE)
+    cargos_que_possui = [
+        cargo for cargo in cargos_ordenados if cargo in roles
+    ]
+    if not cargos_que_possui:
+        return None
+
+    return min(
+        cargos_que_possui,
+        key=lambda cargo: cargos_ordenados.index(cargo),
+    )
+
+
+def calcular_membros_por_cargo(
+    guild: discord.Guild,
+    nomes_da_hierarquia: list[str] | None = None,
+    *,
+    usar_gate: bool = False,
+) -> dict[int, list[discord.Member]]:
     """
     Descobre quem aparece embaixo de cada cargo no quadro.
 
-    Devolve um dicionario que liga o id do cargo a lista de membros dele. Cada
-    membro entra em UM cargo so, o mais alto que possui. Sem essa regra, quem tem
-    tres cargos apareceria tres vezes e a soma do quadro daria mais gente do que o
-    servidor tem.
-
-    Cargos que estao em CARGOS_HIERARQUIA mas nao existem mais no servidor sao
-    descartados, em vez de quebrar a montagem do quadro.
+    Cada membro entra em UM cargo so, o mais alto que possui na lista.
     """
-    cargos_ordenados = [guild.get_role(CARGOS[nome]) for nome in CARGOS_HIERARQUIA]
-    cargos_ordenados = [
-        cargo_avaliado
-        for cargo_avaliado in cargos_ordenados
-        if cargo_avaliado is not None
-    ]
+    if usar_gate:
+        nomes = list(HIERARQUIA_GATE)
+        resolver = obter_cargo_mais_alto_gate
+    else:
+        nomes = list(nomes_da_hierarquia or CARGOS_HIERARQUIA)
+        resolver = obter_cargo_mais_alto
 
+    cargos_ordenados = _resolver_cargos_ordenados(guild, nomes)
     resultado: dict[int, list[discord.Member]] = {
         cargo.id: [] for cargo in cargos_ordenados
     }
 
     for membro in guild.members:
-        cargo_mais_alto = obter_cargo_mais_alto(guild, membro.roles)
+        cargo_mais_alto = resolver(guild, membro.roles)
         if cargo_mais_alto is not None:
             resultado[cargo_mais_alto.id].append(membro)
 
@@ -103,33 +132,68 @@ async def atualizar_hierarquia(
     guild: discord.Guild, somente_cargos: set[int] | None = None
 ):
     """
-    Monta e publica o quadro de hierarquia no canal do Discord.
+    Atualiza o quadro hospitalar (HIERARQUIA_SUL).
 
-    Edita as mensagens que ja estao no canal em vez de apagar e postar de novo, para
-    o canal nao encher de mensagem velha e o historico nao piscar para quem esta
-    olhando.
-
-    O parametro `somente_cargos` permite atualizar apenas os cargos que mudaram.
-    Quem chama de dentro do ouvinte usa esse filtro, porque reescrever o quadro
-    inteiro a cada troca de cargo gastaria o limite de chamadas do Discord sem
-    necessidade.
-
-    Se o canal de hierarquia nao for encontrado, registra o erro no log e desiste em
-    silencio, sem derrubar o bot.
-
-    Falha em um cargo nao interrompe os demais: cada cargo e tratado isoladamente.
+    Usado pelo listener automatico e pelo subcomando hospital.
+    `somente_cargos` limita a atualizacao aos cargos que mudaram.
     """
-    canal = guild.get_channel(CANAIS["HIERARQUIA_SUL"])
-    if canal is None:
+    await _atualizar_quadro(
+        guild=guild,
+        nomes_da_hierarquia=CARGOS_HIERARQUIA,
+        chave_canal="HIERARQUIA_SUL",
+        usar_gate=False,
+        somente_cargos=somente_cargos,
+    )
+
+
+async def atualizar_hierarquia_gate(
+    guild: discord.Guild, somente_cargos: set[int] | None = None
+):
+    """
+    Atualiza o quadro GATE (HIERARQUIA_GATE).
+
+    So membros com cargo GATE entram. Usado pelo listener e pelo
+    subcomando `/atualizar-hierarquia gate`.
+    """
+    await _atualizar_quadro(
+        guild=guild,
+        nomes_da_hierarquia=HIERARQUIA_GATE,
+        chave_canal="HIERARQUIA_GATE",
+        usar_gate=True,
+        somente_cargos=somente_cargos,
+    )
+
+
+async def _atualizar_quadro(
+    guild: discord.Guild,
+    nomes_da_hierarquia: list[str],
+    chave_canal: str,
+    usar_gate: bool,
+    somente_cargos: set[int] | None,
+) -> None:
+    """Atualiza um quadro (hospital ou GATE) no canal configurado."""
+    id_do_canal = CANAIS.get(chave_canal)
+    if not id_do_canal:
         registrador.error(
-            "Canal de hierarquia não encontrado. Confira CANAIS['HIERARQUIA_SUL']."
+            "Canal de hierarquia não configurado: CANAIS['%s'].",
+            chave_canal,
         )
         return
 
-    membros_por_cargo = calcular_membros_por_cargo(guild)
+    canal = guild.get_channel(id_do_canal)
+    if canal is None:
+        registrador.error(
+            "Canal de hierarquia não encontrado. Confira CANAIS['%s'].",
+            chave_canal,
+        )
+        return
 
-    for nome_cargo in CARGOS_HIERARQUIA:
-        cargo = guild.get_role(CARGOS[nome_cargo])
+    membros_por_cargo = calcular_membros_por_cargo(
+        guild, nomes_da_hierarquia, usar_gate=usar_gate
+    )
+
+    for nome_cargo in nomes_da_hierarquia:
+        cargo = guild.get_role(CARGOS.get(nome_cargo, 0) or 0)
         if cargo is None:
             continue
 
@@ -143,9 +207,10 @@ async def atualizar_hierarquia(
             await _publicar_cards_do_cargo(canal, cargo, cards)
         except Exception as erro:
             registrador.exception(
-                "Falha ao atualizar hierarquia do cargo %s (%s): %s",
+                "Falha ao atualizar hierarquia do cargo %s (%s) em %s: %s",
                 nome_cargo,
                 cargo.id,
+                chave_canal,
                 erro,
             )
 
@@ -177,9 +242,10 @@ async def _publicar_cards_do_cargo(
 
                 try:
                     mensagem = await canal.fetch_message(registro.message_id)
-                    await mensagem.edit(view=_embrulhar_em_view(cards[posicao_do_card]))
+                    await mensagem.edit(
+                        view=_embrulhar_em_view(cards[posicao_do_card])
+                    )
                 except discord.NotFound:
-                    # Mensagem foi apagada no canal: cria de novo e atualiza o registro
                     nova_mensagem = await canal.send(
                         view=_embrulhar_em_view(cards[posicao_do_card])
                     )
@@ -187,8 +253,8 @@ async def _publicar_cards_do_cargo(
                     registro.canal_id = canal.id
                 except discord.Forbidden:
                     registrador.warning(
-                        "Sem permissão para editar a mensagem %s da hierarquia "
-                        "no canal %s.",
+                        "Sem permissão para editar a mensagem %s da "
+                        "hierarquia no canal %s.",
                         registro.message_id,
                         getattr(canal, "id", "?"),
                     )
@@ -199,7 +265,6 @@ async def _publicar_cards_do_cargo(
                         falha_do_discord,
                     )
 
-            # Cria páginas extras se o cargo cresceu
             for posicao_do_card in range(len(registros), len(cards)):
                 nova_mensagem = await canal.send(
                     view=_embrulhar_em_view(cards[posicao_do_card])
@@ -216,7 +281,6 @@ async def _publicar_cards_do_cargo(
             await session.commit()
             return
 
-        # Sem registros: cria tudo do zero
         for posicao_do_card, card in enumerate(cards):
             nova_mensagem = await canal.send(view=_embrulhar_em_view(card))
             session.add(
@@ -240,30 +304,20 @@ async def _apagar_mensagem_em_excesso(
         mensagem_em_excesso = await canal.fetch_message(registro.message_id)
         await mensagem_em_excesso.delete()
     except discord.NotFound as erro_em_atualizar_hierarquia:
-        # Já não existe no canal; o registro some no session.delete de qualquer forma.
         ignorar_falha_cosmetica(
             erro_em_atualizar_hierarquia,
             o_que_falhou="atualizar hierarquia",
         )
     except discord.Forbidden:
         registrador.warning(
-            "Sem permissão para apagar a mensagem %s da hierarquia no canal %s.",
+            "Sem permissão para apagar mensagem em excesso da hierarquia "
+            "(message_id=%s).",
             registro.message_id,
-            getattr(canal, "id", "?"),
-        )
-    except discord.HTTPException as falha_do_discord:
-        registrador.warning(
-            "Falha ao apagar a mensagem %s da hierarquia: %s",
-            registro.message_id,
-            falha_do_discord,
         )
 
 
-def _embrulhar_em_view(container: discord.ui.Container) -> discord.ui.LayoutView:
-    """
-    Container sozinho não pode ser enviado direto — precisa estar dentro de uma
-    LayoutView.
-    """
+def _embrulhar_em_view(card: discord.ui.Container) -> discord.ui.LayoutView:
+    """Coloca o container do card dentro de uma LayoutView pronta para enviar."""
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(container)
+    view.add_item(card)
     return view
