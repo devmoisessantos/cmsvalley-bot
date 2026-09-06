@@ -21,7 +21,12 @@ from datetime import datetime, timezone
 import discord
 from sqlalchemy import select
 
-from src.config import CANAIS, NOTA_MINIMA_APROVACAO, TOTAL_PERGUNTAS_PROVA
+from src.config import (
+    CANAIS,
+    NOTA_MINIMA_APROVACAO,
+    TOTAL_PERGUNTAS_PROVA,
+    prova_esta_suspensa,
+)
 from src.database.conexao import async_session
 from src.database.models import Pergunta, Recrutamento, RespostaProva
 from src.recrutamento.aprovacao_panel import AprovacaoView
@@ -51,6 +56,19 @@ async def iniciar_avaliacao(interaction: discord.Interaction):
     guild = interaction.guild
 
     await interaction.response.defer(ephemeral=True)
+
+    if prova_esta_suspensa():
+        await responder_erro(
+            interaction,
+            titulo="Prova temporariamente suspensa",
+            linhas=[
+                "A prova de recrutamento está **suspensa até 20/09/2026** "
+                "(reabertura da cidade).",
+                "Seu recrutador libera a entrada **sem prova** pelo painel "
+                "de recrutamento (botão Liberar Avaliação).",
+            ],
+        )
+        return
 
     async with async_session() as session:
         resultado = await session.execute(

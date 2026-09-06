@@ -20,6 +20,7 @@ from sqlalchemy import select
 from src.config import (
     CANAIS,
     CARGOS,
+    CURSOS,
 )
 from src.database.conexao import async_session
 from src.database.models import (
@@ -34,12 +35,14 @@ from src.recrutamento.recrutamento_service import (
     cancelar_recrutamento_ativo,
 )
 from src.utils.formatacao import formatar_data_hora_local
+from src.utils.logger import log_mudanca_cargo
 from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
     responder_info,
     responder_sucesso,
 )
+from src.utils.nickname import aplicar_prefixo
 from src.utils.permissions import apenas_administrador
 
 # mapeia o value do Choice pro nome real da chave em CARGOS
@@ -279,18 +282,32 @@ class RecrutamentoCog(commands.Cog):
         """
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
+        agora_utc = datetime.now(timezone.utc)
+        chave_cargo = CARGOS_FINAIS[cargo.value]
+        motivo = f"Recrutamento manual por {interaction.user}"
 
-        cargo_role = guild.get_role(CARGOS[CARGOS_FINAIS[cargo.value]])
-        if cargo_role is None:
+        cargo_final = guild.get_role(CARGOS[chave_cargo])
+        if cargo_final is None:
             await responder_erro(
                 interaction,
                 titulo="Não encontrado",
                 linhas=[
-                    "Cargo final não encontrado no servidor. Confira o CARGOS no "
-                    "config.py.",
+                    "Cargo final não encontrado no servidor. Confira o CARGOS "
+                    "no config.py.",
                 ],
             )
             return
+
+        cargo_hp = guild.get_role(CARGOS["HP S・Valley"])
+        cargo_aprovado = guild.get_role(CARGOS["Aprovado"])
+        cargo_visitante = guild.get_role(CARGOS["Visitantes"])
+        cargo_estudante = guild.get_role(CARGOS.get("ESTUDANTE", 0) or 0)
+        cargo_prova = guild.get_role(CARGOS.get("PROVA", 0) or 0)
+        cargo_enfermeiro = guild.get_role(CARGOS.get("🔰・Enfermeiro (a)", 0) or 0)
+        id_curso_resgate = CURSOS.get("resgate", {}).get("cargo_id", 0)
+        cargo_curso_resgate = (
+            guild.get_role(id_curso_resgate) if id_curso_resgate else None
+        )
 
         async with async_session() as session:
             resultado_duplicidade = await session.execute(
@@ -310,10 +327,22 @@ class RecrutamentoCog(commands.Cog):
                     linhas=[
                         f"O ID FiveM `{id_fivem}` já está associado a "
                         f"<@{conflito.discord_id_candidato}>. "
-                        f"Confira antes de continuar.",
+                        "Confira antes de continuar.",
                     ],
                 )
                 return
+
+            # Cancela processo ativo do mesmo membro, se houver
+            resultado_ativos = await session.execute(
+                select(Recrutamento).where(
+                    Recrutamento.discord_id_candidato == membro.id,
+                    Recrutamento.status.in_(list(STATUS_RECRUTAMENTO_ATIVOS)),
+                )
+            )
+            for antigo in resultado_ativos.scalars().all():
+                antigo.status = "CANCELADO"
+                if not antigo.cargo_final:
+                    antigo.cargo_final = "CANCEL:manual"
 
             resultado = await session.execute(
                 select(Usuario).where(Usuario.discord_id == membro.id)
@@ -340,26 +369,58 @@ class RecrutamentoCog(commands.Cog):
                 id_fivem=id_fivem,
                 status="APROVADO",
                 cargo_final=cargo.value,
-                data_fim=datetime.now(timezone.utc),
+                data_inicio=agora_utc,
+                data_fim=agora_utc,
             )
             session.add(novo_recrutamento)
             await session.commit()
 
-        cargos_manual = [cargo_role]
+        # Remove visitante / estudo / prova residual
+        cargos_remover = []
+        for cargo_candidato in (
+            cargo_visitante,
+            cargo_estudante,
+            cargo_prova,
+        ):
+            if cargo_candidato is not None and cargo_candidato in membro.roles:
+                cargos_remover.append(cargo_candidato)
+
+        if cargos_remover:
+            await membro.remove_roles(*cargos_remover, reason=motivo)
+
+        # Cargos finais conforme a escolha
+        cargos_adicionar = [cargo_final, cargo_hp, cargo_aprovado]
         if cargo.value == "PARAMEDICO":
-            cargo_enfermeiro = guild.get_role(CARGOS.get("🔰・Enfermeiro (a)", 0) or 0)
             if cargo_enfermeiro is not None:
-                cargos_manual.append(cargo_enfermeiro)
-        await membro.add_roles(
-            *cargos_manual,
-            reason=f"Recrutamento manual registrado por {interaction.user}",
+                cargos_adicionar.append(cargo_enfermeiro)
+            if cargo_curso_resgate is not None:
+                cargos_adicionar.append(cargo_curso_resgate)
+
+        cargos_adicionar = [item for item in cargos_adicionar if item is not None]
+        if cargos_adicionar:
+            await membro.add_roles(*cargos_adicionar, reason=motivo)
+
+        await log_mudanca_cargo(
+            guild,
+            candidato=membro,
+            executor=interaction.user,
+            cargos_removidos=[c.mention for c in cargos_remover],
+            cargos_adicionados=[c.mention for c in cargos_adicionar],
         )
+
+        novo_nickname = aplicar_prefixo(membro.display_name, chave_cargo)
+        try:
+            await membro.edit(nick=novo_nickname)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
         await responder_sucesso(
             interaction,
             titulo="Recrutamento registrado",
             linhas=[
-                f"Recrutamento manual registrado para {membro.mention} ({cargo.name}).",
+                f"Recrutamento manual de {membro.mention} como "
+                f"**{cargo.name}** registrado.",
+                f"Recrutador: {recrutador.mention} · ID FiveM: `{id_fivem}`",
             ],
         )
 
@@ -370,7 +431,7 @@ class RecrutamentoCog(commands.Cog):
                     view=NovoRecrutamento(
                         candidato=membro,
                         recrutador=recrutador,
-                        cargo_role=cargo_role,
+                        cargo_role=cargo_final,
                         id_fivem=id_fivem,
                         guild=guild,
                     )
@@ -383,7 +444,7 @@ class RecrutamentoCog(commands.Cog):
                         candidato=membro,
                         recrutador=recrutador,
                         executor=interaction.user,
-                        cargo_role=cargo_role,
+                        cargo_role=cargo_final,
                         id_fivem=id_fivem,
                         guild=guild,
                     )

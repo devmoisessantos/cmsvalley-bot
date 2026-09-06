@@ -14,10 +14,16 @@ from __future__ import annotations
 import discord
 from sqlalchemy import select
 
-from src.config import CARGOS
+from src.config import (
+    CARGOS,
+    prova_esta_suspensa,
+)
 from src.database.conexao import async_session
 from src.database.models import Recrutamento
-from src.recrutamento.aprovacao_panel import possui_cargo_recrutador_ou_superior
+from src.recrutamento.aprovacao_panel import (
+    EscolherCargoView,
+    possui_cargo_recrutador_ou_superior,
+)
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.logger import log_mudanca_cargo
 from src.utils.mensagens import (
@@ -94,6 +100,23 @@ async def _liberar_para_recrutamento(
             linhas=[
                 "Candidato não encontrado no servidor.",
             ],
+        )
+        return
+
+    # Período de reabertura: sem prova — recrutador escolhe o cargo direto.
+    if prova_esta_suspensa():
+        nome_do_candidato = candidato.display_name
+        view_cargo = EscolherCargoView(
+            candidato_id=candidato.id,
+            recrutamento_id=recrutamento.id,
+            aprovador=interaction.user,
+            mensagem_original=interaction.message,
+            nome_do_candidato=nome_do_candidato,
+        )
+        await responder_view(
+            interaction,
+            view_cargo,
+            ephemeral=True,
         )
         return
 

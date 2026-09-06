@@ -380,6 +380,32 @@ COOLDOWN_REPROVACAO_HORAS = 24
 TEMPO_LIMITE_PROVA_MINUTOS = 60
 NOTA_MINIMA_APROVACAO = 70
 
+# Suspensão temporária da prova (reabertura da cidade).
+# Inclusive nas duas datas. Depois de DATA_FIM o fluxo normal volta sozinho.
+# Semana 1: 07–13/09/2026 · Semana 2: 14–20/09/2026
+DATA_INICIO_SUSPENSAO_PROVA = (2026, 9, 7)
+DATA_FIM_SUSPENSAO_PROVA = (2026, 9, 20)
+
+
+def prova_esta_suspensa() -> bool:
+    """
+    True enquanto a prova de recrutamento estiver suspensa.
+
+    Usa a data de hoje em America/Sao_Paulo para não depender do fuso
+    do servidor. Fora do intervalo, o fluxo com prova volta ao normal.
+    """
+    from datetime import (
+        date,
+        datetime,
+    )
+    from zoneinfo import ZoneInfo
+
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+    data_inicio = date(*DATA_INICIO_SUSPENSAO_PROVA)
+    data_fim = date(*DATA_FIM_SUSPENSAO_PROVA)
+    return data_inicio <= hoje <= data_fim
+
+
 # Rankings que geram pagamento (mesmo valor unitário)
 VALOR_UNITARIO_RANKING = 100_000  # laudo, recrutamento, chamada
 VALOR_POR_RECRUTAMENTO = VALOR_UNITARIO_RANKING  # alias legado
