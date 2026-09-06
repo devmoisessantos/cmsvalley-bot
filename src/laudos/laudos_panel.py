@@ -27,18 +27,6 @@ from src.utils.mensagens import (
 
 registrador = logging.getLogger(__name__)
 
-TEXTO_PAINEL = (
-    "# 🧠 Painel de Avaliação Psicológica\n\n"
-    "Área exclusiva da **equipe de Psicologia** do CMS Valley.\n\n"
-    "Aqui você registra a **consulta** e emite o **laudo psicológico** "
-    "exigido para análise de **porte de arma de fogo**.\n\n"
-    "**Fluxo obrigatório**\n"
-    "1. Clique em **Iniciar Consulta** e selecione o paciente\n"
-    "2. Realize a avaliação com base no perfil e estabilidade emocional\n"
-    "3. Clique em **Gerar Laudo** e informe o parecer (aprovado ou reprovado)\n\n"
-    "-# Somente psicólogos autorizados. Uma consulta aberta por vez."
-)
-
 
 class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
     """Painel fixo no canal CANAL_PAINEL_LAUDOS."""
@@ -46,16 +34,63 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, guild: discord.Guild | None = None):
         super().__init__(timeout=None)
         self.guild = guild
-        icon_url = guild.icon.url if guild and guild.icon else None
 
-        if icon_url:
-            cabecalho = discord.ui.Section(
-                TEXTO_PAINEL,
-                accessory=discord.ui.Thumbnail(icon_url),
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
+
+        componentes: list = []
+
+        # Bloco 1: cabeçalho com ícone do servidor (quando existir)
+        texto_cabecalho = (
+            "# 🧠 **Painel de Avaliação Psicológica**\n"
+            "### 🔒 Área restrita – **Equipe de Psicólogos** do CMS Valley\n"
+            "-# Somente psicólogos autorizados. Uma consulta aberta por vez."
+        )
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_cabecalho,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
             )
         else:
-            cabecalho = discord.ui.TextDisplay(TEXTO_PAINEL)
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
+        # Bloco 2: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3: sobre o sistema
+        componentes.append(
+            discord.ui.TextDisplay(
+                "## 📋 Sobre o sistema\n"
+                "Este painel é destinado exclusivamente à **equipe de Psicologia** "
+                "para registro de consultas e emissão de laudos psicológicos "
+                "obrigatórios para **porte de arma de fogo**.\n\n"
+                "> ⚠️ **Acesso autorizado apenas a psicólogos credenciados.**\n"
+                "> 🔄 **Apenas uma consulta pode estar aberta por vez.**"
+            )
+        )
+
+        # Bloco 4: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        # Bloco 5: fluxo de trabalho
+        componentes.append(
+            discord.ui.TextDisplay(
+                "## 📌 Fluxo de trabalho\n"
+                "- 1️⃣ Clique em **Iniciar Consulta** e selecione o paciente\n"
+                "- 2️⃣ Realize a avaliação com base no **perfil emocional** e "
+                "**estabilidade psicológica**\n"
+                "- 3️⃣ Clique em **Gerar Laudo** e informe o parecer final: "
+                "**Aprovado** ou **Reprovado**"
+            )
+        )
+
+        # Bloco 6: separador antes dos botões
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Botões (inalterados)
         linha_botoes = discord.ui.ActionRow()
         botao_iniciar = discord.ui.Button(
             label="Iniciar Consulta",
@@ -84,11 +119,11 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         botao_cancelar.callback = self._ao_cancelar_consulta
         linha_botoes.add_item(botao_cancelar)
 
+        componentes.append(linha_botoes)
+
         self.add_item(
             discord.ui.Container(
-                cabecalho,
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-                linha_botoes,
+                *componentes,
                 accent_color=discord.Color.blurple(),
             )
         )
