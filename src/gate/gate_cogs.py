@@ -145,14 +145,10 @@ class GateCog(commands.Cog):
         interacao: discord.Interaction,
         custom_id: str,
     ):
-        # Ingresso / gestão de membros (subdomínio gate/membros)
-        if custom_id == "gate:ingresso:solicitar":
-            from src.gate.membros.membros_gate_panel import PainelIngressarGateLayout
-
-            view_temporaria = PainelIngressarGateLayout(interacao.guild)
-            await view_temporaria._ao_solicitar(interacao)
-            return
-
+        # Cards de aprovação de ingresso (custom_id dinâmico).
+        # Os painéis fixos (solicitar / gerenciar) usam só o callback da
+        # LayoutView registrada no add_view — não repetir aqui, senão a
+        # resposta ephemeral sai em duplicata.
         if custom_id.startswith("gate:ingresso:aprovar:"):
             from src.gate.membros.membros_gate_panel import (
                 processar_aprovacao_ingresso,
@@ -169,15 +165,6 @@ class GateCog(commands.Cog):
 
             solicitacao_id = int(custom_id.rsplit(":", 1)[-1])
             await processar_reprovacao_ingresso(interacao, solicitacao_id)
-            return
-
-        if custom_id == "gate:membros:abrir":
-            from src.gate.membros.membros_gate_panel import (
-                PainelGerenciarGateLayout,
-            )
-
-            view_temporaria = PainelGerenciarGateLayout(interacao.guild)
-            await view_temporaria._ao_abrir(interacao)
             return
 
         if not tem_permissao_criar_evento(interacao.user):
