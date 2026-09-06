@@ -11,10 +11,7 @@ from __future__ import annotations
 import discord
 
 from src.config import CARGOS, GUIA_DE_TUTORIAIS
-from src.guia.guia_helpers import (
-    montar_linha_de_botoes_link,
-    montar_thumbnail_do_servidor,
-)
+from src.guia.guia_helpers import montar_linha_de_botoes_link
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.formatacao import mencionar_cargo, mencionar_cargo_do_curso
 from src.utils.mensagens import (
@@ -367,7 +364,9 @@ class PainelTutoriaisLayout(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guild = guild
 
-        thumbnail_do_servidor = montar_thumbnail_do_servidor(guild)
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
 
         opcoes_do_select = [
             discord.SelectOption(
@@ -389,34 +388,64 @@ class PainelTutoriaisLayout(LoggingViewMixin, discord.ui.LayoutView):
         linha_do_select = discord.ui.ActionRow()
         linha_do_select.add_item(select_dos_tutoriais)
 
-        componentes: list = [
-            discord.ui.Section(
-                "# 📖 Centro Médico Sul | Tutoriais",
-                "> 📚 Guia prático — procedimentos, binds, cobrança e progressão.",
-                accessory=thumbnail_do_servidor,
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(
-                "Aqui você encontra os **tutoriais essenciais** do dia a dia "
-                "no CMS Valley.\n\n"
-                "Escolha um tópico no menu abaixo. O card abre **só para você** "
-                "(mensagem privada no canal) e permanece até você fechar.\n\n"
-                "Use sempre que precisar relembrar um procedimento."
-            ),
-        ]
+        componentes: list = []
 
-        urls_da_galeria = [url for url in GUIA_DE_TUTORIAIS if url]
-        galeria_tem_imagens = len(urls_da_galeria) > 0
-        if galeria_tem_imagens:
+        # Bloco 1: cabeçalho com ícone do servidor (quando existir)
+        texto_cabecalho = (
+            "# 📖 Centro Médico Sul | Tutoriais\n"
+            "> 📚 Guia prático — procedimentos, binds, cobrança e progressão\n"
+            "Aqui você encontra os **tutoriais essenciais** do dia a dia "
+            "no **CMS Valley**."
+        )
+        if url_icone:
             componentes.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+                discord.ui.Section(
+                    texto_cabecalho,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
             )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
+
+        # Bloco 2: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3: como o painel funciona
+        componentes.append(
+            discord.ui.TextDisplay(
+                "> ℹ️ Cada tutorial é aberto **individualmente** em uma "
+                "mensagem privada.\n"
+                "> 🔒 O card permanece disponível **até você fechá-lo**.\n"
+                "> 🔄 Use sempre que precisar relembrar um procedimento."
+            )
+        )
+
+        # Bloco 4: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        # Bloco 5: dicas
+        componentes.append(
+            discord.ui.TextDisplay(
+                "## 📌 Dicas\n\n"
+                "- ✅ Utilize os tutoriais sempre que tiver dúvidas\n"
+                "- ✅ Mantenha os cards abertos para consulta rápida\n"
+                "- ❌ Não utilize informações desatualizadas — sempre "
+                "consulte a versão mais recente\n\n"
+                "Em caso de dúvidas não contempladas nos tutoriais, entre "
+                "em contato com seu **supervisor imediato**."
+            )
+        )
+
+        # Bloco 6: galeria (só se houver URL configurada)
+        urls_da_galeria = [url for url in GUIA_DE_TUTORIAIS if url]
+        if urls_da_galeria:
             componentes.append(
                 discord.ui.MediaGallery(
                     *[discord.MediaGalleryItem(url) for url in urls_da_galeria[:10]]
                 )
             )
 
+        # Bloco 7: separador e select (inalterados)
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(discord.ui.TextDisplay("**👉 Selecione um tutorial: ↓**"))
         componentes.append(linha_do_select)

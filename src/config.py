@@ -645,11 +645,11 @@ TICKETS_CATEGORIAS = {
 
 # URLs de imagens da MediaGallery dos painéis (até 10 por lista).
 # Deixe vazio [] se ainda não tiver as imagens; o painel funciona sem galeria.
-GUIA_BOAS_VINDAS_GALLERY: list[str] = [
-    "https://cdn.discordapp.com/attachments/1443642763470962759/1534719249845715196/CENTRO_MEDICO_SUL.gif?ex=6a75262e&is=6a73d4ae&hm=eaf00b8359cf6cbb18569926dde0a7a85f0d253ffee9701ec080206d4ec96f26&",
+GUIA_ESTAGIARIO: list[str] = [
+    "https://cdn.discordapp.com/attachments/1535352666375462932/1546210276267786260/CENTRO_MEDICO_SUL_guia-estagiario.gif?ex=6a9ef409&is=6a9da289&hm=2f6dd22bd78ea5222ef598a04444efcd90ad17e8c85d96a8b4852f94f44266b4&",
 ]
 GUIA_DE_TUTORIAIS: list[str] = [
-    "https://cdn.discordapp.com/attachments/1535352666375462932/1535353764343447632/GUIA_DE_TUTORIAIS.gif?ex=6a77751e&is=6a76239e&hm=685fb1733a1818eb8db3d6e0ad4446f41f35da9055e0949493567b228fce4b9a&"
+    "https://cdn.discordapp.com/attachments/1535352666375462932/1546204304988315759/CENTRO_MEDICO_SUL_guia_tutoriais.gif?ex=6a9eee79&is=6a9d9cf9&hm=c2427842f1a6a6180bd3acf0ea57526de8ba7752746b32dbbd2dd5c09fe5618e&",
 ]
 WHITELIST_GALLERY: list[str] = [
     "https://cdn.discordapp.com/attachments/1535352666375462932/1546204334210027530/CENTRO_MEDICO_SUL_whitelist.gif?ex=6a9eee80&is=6a9d9d00&hm=cfc824768fc46a0ef63d53f4b5835d587ae0ae477296432e137b5575c4ac3350&",

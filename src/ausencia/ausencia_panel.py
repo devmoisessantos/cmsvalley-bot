@@ -100,36 +100,48 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
 
     def __init__(self, guilda: discord.Guild | None = None):
         """
-        Monta o painel com estrutura FIXA.
+        Monta o painel fixo de ausência.
 
-        A árvore de componentes precisa ser a mesma no envio e no add_view
-        após o restart. Por isso o título é sempre TextDisplay.
+        Cabeçalho com thumbnail do servidor quando o ícone existir; caso
+        contrário, só o texto. Botões e fluxo permanecem iguais.
         """
         super().__init__(timeout=None)
         self.guild_ref = guilda
 
+        url_icone = None
+        if guilda is not None and guilda.icon is not None:
+            url_icone = guilda.icon.url
+
         componentes: list = []
-        titulo = (
-            "# :beach: CMS Valley — Painel de Ausência\n"
+
+        texto_cabecalho = (
+            "# 🏖️ CMS Valley — Painel de Ausência\n"
             "> Use a opção abaixo para solicitar seu afastamento do servidor.\n"
             "Cada solicitação é registrada em nosso sistema para aprovação da "
             "Diretoria.\n"
             "Caso tenha dúvidas, entre em contato com os Gerais!"
         )
-        # Sempre TextDisplay — estrutura idêntica em todo restart
-        componentes.append(discord.ui.TextDisplay(titulo))
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_cabecalho,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(
             discord.ui.TextDisplay(
-                "## :gear: Regras Gerais:\n"
-                ":white_check_mark: Solicitações devem ser feitas com antecedência "
+                "## ⚙️ Regras Gerais:\n"
+                "✅ Solicitações devem ser feitas com antecedência "
                 "mínima de 12h.\n"
-                ":white_check_mark: Ausências superiores a **30 dias** exigem "
+                "✅ Ausências superiores a **30 dias** exigem "
                 "aprovação da Diretoria.\n"
-                ":white_check_mark: Para emergências, contate um Superior no "
+                "✅ Para emergências, contate um Superior no "
                 "privado.\n\n"
-                "### **:pushpin: Como Funciona:**\n"
+                "### **📌 Como Funciona:**\n"
                 "→ Após escolher o tipo e o período, o pedido será enviado para o "
                 "canal da Diretoria.\n"
                 "→ Você receberá uma notificação quando for aprovado ou negado.\n"

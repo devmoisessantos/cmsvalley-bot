@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import discord
 
-from src.config import GUIA_BOAS_VINDAS_GALLERY
+from src.config import GUIA_ESTAGIARIO
 from src.guia.guia_helpers import (
     buscar_id_do_canal,
     montar_botao_link,
-    montar_thumbnail_do_servidor,
 )
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.mensagens import (
@@ -153,7 +152,9 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guild = guild
 
-        thumbnail_do_servidor = montar_thumbnail_do_servidor(guild)
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
 
         opcoes_do_select = [
             discord.SelectOption(
@@ -175,35 +176,80 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
         linha_do_select = discord.ui.ActionRow()
         linha_do_select.add_item(select_do_guia)
 
-        componentes: list = [
-            discord.ui.Section(
-                "# 🏥 Centro Médico Sul | CMS Valley",
-                "> 📚 Guia do Estagiário – **primeiros passos** Enfermeiro(a).",
-                accessory=thumbnail_do_servidor,
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(
-                "Obrigado por querer se juntar ao **CMS Valley**.\n\n"
-                "Para que você se sinta seguro(a) e preparado(a) desde o "
-                "primeiro minuto, criamos este painel com tudo o que você "
-                "precisa saber antes de colocar o uniforme.\n"
-                "Não pule as etapas! Cada item aqui foi pensado para garantir "
-                "a sua melhor experiência em sua integração.\n\n"
-            ),
-        ]
+        componentes: list = []
 
-        urls_da_galeria = [url for url in GUIA_BOAS_VINDAS_GALLERY if url]
-        galeria_tem_imagens = len(urls_da_galeria) > 0
-        if galeria_tem_imagens:
+        # Bloco 1: cabeçalho com ícone do servidor (quando existir)
+        texto_cabecalho = (
+            "# 🏥 Centro Médico Sul | CMS Valley\n"
+            "> 📚 Guia do Estagiário – Primeiros Passos\n"
+            "Obrigado por querer se juntar ao **CMS Valley**! 🎉"
+        )
+        if url_icone:
             componentes.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+                discord.ui.Section(
+                    texto_cabecalho,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
             )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
+
+        # Bloco 2: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3: introdução
+        componentes.append(
+            discord.ui.TextDisplay(
+                "Para que você se sinta **seguro(a)** e **preparado(a)** "
+                "desde o primeiro minuto, criamos este painel com tudo o "
+                "que você precisa saber antes de colocar o uniforme.\n\n"
+                "> ⚠️ **Não pule as etapas!** Cada item aqui foi pensado "
+                "para garantir a sua melhor experiência em sua integração."
+            )
+        )
+
+        # Bloco 4: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        # Bloco 5: dicas importantes
+        componentes.append(
+            discord.ui.TextDisplay(
+                "## 📌 Dicas importantes\n\n"
+                "- ✅ Tire todas as suas dúvidas com seu recrutador\n"
+                "- ✅ Pratique os comandos em área segura\n"
+                "- ✅ Participe ativamente dos plantões como observador\n"
+                "- ❌ Não execute procedimentos avançados sem supervisão\n"
+                "- ❌ Não ignore nenhum dos tópicos"
+            )
+        )
+
+        # Bloco 6: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        # Bloco 7: suporte
+        componentes.append(
+            discord.ui.TextDisplay(
+                "## 📞 Suporte ao Estagiário\n\n"
+                "Em caso de dúvidas, entre em contato com:\n"
+                "- 👤 **Seu recrutador designado**\n"
+                "- 👤 **Supervisores dentro do Hospital**\n"
+                "- 👤 **Abra um ticket para maior suporte**\n\n"
+                "-# Após completar todos os tópicos, você será avaliado "
+                "para **liberação oficial** como Enfermeiro(a) do CMS Valley.\n"
+                "Boa sorte e bem-vindo(a) à família! 💙"
+            )
+        )
+
+        # Bloco 8: galeria (só se houver URL configurada)
+        urls_da_galeria = [url for url in GUIA_ESTAGIARIO if url]
+        if urls_da_galeria:
             componentes.append(
                 discord.ui.MediaGallery(
                     *[discord.MediaGalleryItem(url) for url in urls_da_galeria[:10]]
                 )
             )
 
+        # Bloco 9: separador e select (inalterados)
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(
             discord.ui.TextDisplay("**👉 Comece sua jornada pelos tópicos abaixo: ↓**")

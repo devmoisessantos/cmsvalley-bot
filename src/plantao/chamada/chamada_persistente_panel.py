@@ -23,8 +23,53 @@ class PainelFazerChamadaLayout(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guild = guild
 
-        icon_url = guild.icon.url if guild.icon else None
-        row = discord.ui.ActionRow()
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
+
+        componentes: list = []
+
+        # Bloco 1: cabeçalho com ícone do servidor (quando existir)
+        texto_cabecalho = (
+            "# 🩺 Central de Chamadas\n"
+            "> 📋 Controle de Presença – Plantão Médico\n"
+            "Esta é a área exclusiva dos **Doutores** para controle de "
+            "presença durante o plantão."
+        )
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_cabecalho,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
+
+        # Bloco 2: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3: acesso, comprovação e passo a passo
+        componentes.append(
+            discord.ui.TextDisplay(
+                "> 🔒 **Acesso restrito:** Apenas **Doutor ou superior** "
+                "pode iniciar uma chamada.\n"
+                "> 📸 **Comprovação obrigatória:** Envie o print do `/ems` "
+                "no chat deste canal.\n\n"
+                "## ✏️ Como funciona\n\n"
+                "1. Digite `/ems` no jogo\n"
+                "2. Tire um **print do ems** (Win+Shift+S ou Print Screen)\n"
+                "3. Clique em **Realizar Chamada**\n"
+                "4. Cole a imagem neste canal\n"
+                "5. Aguarde a confirmação do sistema"
+            )
+        )
+
+        # Bloco 4: separador antes do botão
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Botão (inalterado)
+        linha_botoes = discord.ui.ActionRow()
         botao = discord.ui.Button(
             label="🩺 Realizar Chamada",
             style=discord.ButtonStyle.success,
@@ -32,25 +77,15 @@ class PainelFazerChamadaLayout(LoggingViewMixin, discord.ui.LayoutView):
             emoji="📋",
         )
         botao.callback = self._ao_iniciar
-        row.add_item(botao)
+        linha_botoes.add_item(botao)
+        componentes.append(linha_botoes)
 
-        self.container = discord.ui.Container(
-            discord.ui.Section(
-                "# 🩺 Central de Chamadas",
-                ("> Área dos **Doutores** — controle de presença do plantão."),
-                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(
-                "Apenas **Doutor ou acima** pode iniciar uma chamada.\n\n"
-                "Ao iniciar, envie o print do `/ems` no chat deste canal "
-                "e o sistema cruzará com quem está de plantão."
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            row,
-            accent_color=discord.Color.blue(),
+        self.add_item(
+            discord.ui.Container(
+                *componentes,
+                accent_color=discord.Color.blue(),
+            )
         )
-        self.add_item(self.container)
 
     async def _ao_iniciar(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member):

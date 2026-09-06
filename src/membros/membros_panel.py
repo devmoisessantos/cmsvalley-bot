@@ -460,27 +460,61 @@ async def _cabecalho(membro, estado):
 class PainelGerenciarMembrosLayout(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, guild: discord.Guild):
         super().__init__(timeout=None)
-        icon = guild.icon.url if guild.icon else None
-        row = discord.ui.ActionRow()
-        btn = discord.ui.Button(
+
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
+
+        componentes: list = []
+
+        # Bloco 1: cabeçalho com ícone do servidor (quando existir)
+        texto_cabecalho = (
+            "# 🛡️ Gerenciar Membros\n"
+            "> 🔒 Painel Administrativo – Diretoria++\n"
+            "Este painel permite consultar a **ficha completa** de qualquer "
+            "membro no banco de dados e executar ações administrativas."
+        )
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_cabecalho,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
+
+        # Bloco 2: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3: aviso de acesso e auditoria
+        componentes.append(
+            discord.ui.TextDisplay(
+                "### ⚠️ **Acesso restrito à Diretoria++**\n"
+                "✏️ Todas as ações são registradas em **auditoria** para fins "
+                "de conformidade.\n\n"
+                "-# Utilize o botão abaixo para buscar um membro pelo nome ou ID."
+            )
+        )
+
+        # Bloco 4: separador antes do botão
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Botão (inalterado)
+        linha_botoes = discord.ui.ActionRow()
+        botao = discord.ui.Button(
             label="Gerenciar Membros",
             style=discord.ButtonStyle.primary,
             custom_id="admin:gerenciar_membros",
             emoji="🛡️",
         )
-        btn.callback = self._ao_abrir
-        row.add_item(btn)
+        botao.callback = self._ao_abrir
+        linha_botoes.add_item(botao)
+        componentes.append(linha_botoes)
+
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# Gerenciar Membros"),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-                discord.ui.Section(
-                    "> **Somente Diretoria++**",
-                    "Ficha completa e acoes admin.\n-# Auditoria em todas as acoes.",
-                    accessory=discord.ui.Thumbnail(icon) if icon else None,
-                ),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-                row,
+                *componentes,
                 accent_color=discord.Color.dark_gold(),
             )
         )

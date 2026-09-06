@@ -215,9 +215,7 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
                 self.membro.id,
                 novo_estado,
             )
-            tempo_total = await calcular_segundos_historico_fechado(
-                self.membro.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(self.membro.id)
             nova_view = InformacoesPlantaoView(
                 self.membro,
                 novo_estado,
@@ -307,31 +305,76 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.guild = guild
 
-        row_botoes = discord.ui.ActionRow()
-        row_botoes.add_item(self._botao_toggle())
-        row_botoes.add_item(self._botao_informacoes())
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
 
-        icon_url = guild.icon.url if guild.icon else None
+        componentes: list = []
 
-        container = discord.ui.Container(
-            discord.ui.Section(
-                "# 🛡️ Central de Plantão\n",
-                ("> **Gerencie seu status de serviço e acumule recompensas.**"),
-                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(
-                "## Sistema de Recompensas\n\n"
-                "Utilize os botões abaixo para iniciar ou encerrar seu plantão.\n"
-                "**Lembre-se:** você deve estar em uma call de voz para acumular "
-                "tempo!\n\n\n"
-                "💰 **Recompensa:** 1 Moeda (Valor: $100.000) a cada **30 min**.\n"
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            row_botoes,
-            accent_color=discord.Color.green(),
+        # Bloco 1: cabeçalho com ícone do servidor (quando existir)
+        texto_cabecalho = (
+            "# 🛡️ Central de Plantão\n"
+            "> ⏱️ Sistema de Recompensas por Serviço\n"
+            "Gerencie seu status de serviço e acumule recompensas enquanto "
+            "estiver ativo no plantão."
         )
-        self.add_item(container)
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_cabecalho,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
+
+        # Bloco 2: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3: regras do plantão
+        componentes.append(
+            discord.ui.TextDisplay(
+                "### 📌 Regras do Plantão\n"
+                "> ⚠️ **Regra obrigatória:** Você deve estar em uma "
+                "**call de voz** para acumular tempo de serviço!\n"
+                "- ✅ Permaneça na **call de voz** durante todo o período\n"
+                "- ✅ Acumule tempo continuamente para receber recompensas\n"
+                "- ❌ Não saia da call sem encerrar o plantão\n"
+                "- ❌ Tempo ocioso sem interação pode ser desconsiderado"
+            )
+        )
+
+        # Bloco 4: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 5: sistema de recompensas
+        componentes.append(
+            discord.ui.TextDisplay(
+                "## 💰 Sistema de Recompensas\n"
+                "- | ⏱️ 30 minutos · 🪙 **1 Moeda** (Valor: $100.000)\n"
+                "- | ⏱️ 1 hora · 🪙 **2 Moedas** (Valor: $200.000)\n"
+                "- | ⏱️ 2 horas · 🪙 **4 Moedas** (Valor: $400.000)\n\n"
+                "> 📈 **Bônus acumulativo:** Quanto mais tempo, maior sua "
+                "recompensa!\n"
+                "-# Utilize os botões abaixo para gerenciar seu serviço."
+            )
+        )
+
+        # Bloco 6: separador antes dos botões
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Botões (inalterados)
+        linha_botoes = discord.ui.ActionRow()
+        linha_botoes.add_item(self._botao_toggle())
+        linha_botoes.add_item(self._botao_informacoes())
+        componentes.append(linha_botoes)
+
+        self.add_item(
+            discord.ui.Container(
+                *componentes,
+                accent_color=discord.Color.green(),
+            )
+        )
 
     def _botao_toggle(self) -> discord.ui.Button:
         botao = discord.ui.Button(
@@ -527,13 +570,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         if online and estado.em_call_valida:
             cronometro_rodando = estado.segmento_iniciado_em is not None
             if cronometro_rodando:
-                status_texto = (
-                    "🟢 Em Serviço (cronômetro rodando nesta call)"
-                )
+                status_texto = "🟢 Em Serviço (cronômetro rodando nesta call)"
             else:
-                status_texto = (
-                    "🟡 Em Serviço (cronômetro pausado — surdo / AFK)"
-                )
+                status_texto = "🟡 Em Serviço (cronômetro pausado — surdo / AFK)"
             nome_call = NOMES_CANAIS_PLANTAO.get(
                 estado.canal_atual_id,
                 "Desconhecida",
@@ -544,8 +583,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             linha_call = "`📍` Nenhuma call conectada — selecione uma abaixo"
         else:
             status_texto = (
-                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o '
-                "cronômetro)"
+                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
             )
 
         linhas = (
@@ -643,9 +681,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         self._parar_atualizacao = False
         if self._tarefa_ao_vivo is not None and not self._tarefa_ao_vivo.done():
             self._tarefa_ao_vivo.cancel()
-        self._tarefa_ao_vivo = asyncio.create_task(
-            self._loop_atualizacao_ao_vivo()
-        )
+        self._tarefa_ao_vivo = asyncio.create_task(self._loop_atualizacao_ao_vivo())
 
     def _parar_loop_ao_vivo(self) -> None:
         self._parar_atualizacao = True
@@ -720,9 +756,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                     estado,
                 )
                 # Histórico só com segmentos fechados (não cresce no segundo)
-                tempo_total = await calcular_segundos_historico_fechado(
-                    self.membro.id
-                )
+                tempo_total = await calcular_segundos_historico_fechado(self.membro.id)
                 nova_view = InformacoesPlantaoView(
                     self.membro,
                     estado,
@@ -763,9 +797,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             self._parar_loop_ao_vivo()
             await desligar_servico(interaction.user)
             novo_estado = await _buscar_estado(interaction.user.id)
-            tempo_total = await calcular_segundos_historico_fechado(
-                interaction.user.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
             nova_view = InformacoesPlantaoView(
                 interaction.user,
                 novo_estado,
@@ -981,9 +1013,7 @@ class ModalTrocarMoedasPlantao(
                 interaction.user.id,
                 novo_estado,
             )
-            tempo_total = await calcular_segundos_historico_fechado(
-                interaction.user.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
             nova_view = InformacoesPlantaoView(
                 interaction.user,
                 novo_estado,

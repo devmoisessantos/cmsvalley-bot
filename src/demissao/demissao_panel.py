@@ -80,31 +80,52 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             url_icone = guilda.icon.url
 
         componentes: list = []
-        titulo = (
+
+        # Bloco 1: cabeçalho com ícone do servidor (quando existir)
+        texto_cabecalho = (
             "# 🏥 CMS Valley — Solicitar Demissão\n"
-            "> **Gerencie seu desligamento da organização de forma rápida e formal.**"
+            "> 📤 Sistema de Desligamento Voluntário\n"
+            "### Este canal é destinado à solicitação formal de desligamento "
+            "do **CMS Valley**."
         )
         if url_icone:
             componentes.append(
                 discord.ui.Section(
-                    titulo,
+                    texto_cabecalho,
                     accessory=discord.ui.Thumbnail(url_icone),
                 )
             )
         else:
-            componentes.append(discord.ui.TextDisplay(titulo))
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
+        # Bloco 2: separador
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3: antes de solicitar
         componentes.append(
             discord.ui.TextDisplay(
-                "## Sistema de Demissão\n\n"
-                "Utilize o botão abaixo para solicitar o seu desligamento do CMS "
-                "Valley.\n"
-                "**Lembre-se:** ao confirmar, seu pedido será enviado para análise da "
-                "diretoria."
+                "## 📌 Antes de solicitar\n\n"
+                "- Certifique-se de que deseja **realmente** se desligar da "
+                "organização\n"
+                "- Verifique suas **pendências** ativas\n"
+                "- O processo é **irreversível** após aprovação da diretoria"
             )
         )
 
+        # Bloco 4: orientação do botão
+        componentes.append(
+            discord.ui.TextDisplay(
+                "> ### Clique no botão abaixo, informe o motivo e confirme "
+                "seu pedido.\n"
+                "-# ⚠️ Ao confirmar seu pedido, ele será encaminhado "
+                "automaticamente para **análise da diretoria**."
+            )
+        )
+
+        # Bloco 5: separador antes do botão
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Botão (inalterado)
         linha = discord.ui.ActionRow()
         botao = discord.ui.Button(
             label="Solicitar Demissão",
@@ -115,13 +136,6 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         botao.callback = self._ao_solicitar
         linha.add_item(botao)
         componentes.append(linha)
-
-        componentes.append(
-            discord.ui.TextDisplay(
-                "-# 📤 **Solicitar Demissão:** clique no botão, informe o motivo e "
-                "confirme."
-            )
-        )
 
         self.add_item(
             discord.ui.Container(
