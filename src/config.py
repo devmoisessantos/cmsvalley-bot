@@ -643,13 +643,16 @@ TICKETS_CATEGORIAS = {
     },
 }
 
-# URLs de imagens da MediaGallery do painel de boas-vindas (até 10).
+# URLs de imagens da MediaGallery dos painéis (até 10 por lista).
 # Deixe vazio [] se ainda não tiver as imagens; o painel funciona sem galeria.
 GUIA_BOAS_VINDAS_GALLERY: list[str] = [
     "https://cdn.discordapp.com/attachments/1443642763470962759/1534719249845715196/CENTRO_MEDICO_SUL.gif?ex=6a75262e&is=6a73d4ae&hm=eaf00b8359cf6cbb18569926dde0a7a85f0d253ffee9701ec080206d4ec96f26&",
 ]
 GUIA_DE_TUTORIAIS: list[str] = [
     "https://cdn.discordapp.com/attachments/1535352666375462932/1535353764343447632/GUIA_DE_TUTORIAIS.gif?ex=6a77751e&is=6a76239e&hm=685fb1733a1818eb8db3d6e0ad4446f41f35da9055e0949493567b228fce4b9a&"
+]
+WHITELIST_GALLERY: list[str] = [
+    "https://cdn.discordapp.com/attachments/1535352666375462932/1546204334210027530/CENTRO_MEDICO_SUL_whitelist.gif?ex=6a9eee80&is=6a9d9d00&hm=cfc824768fc46a0ef63d53f4b5835d587ae0ae477296432e137b5575c4ac3350&",
 ]
 
 PREFIXOS_NICKNAME = {
