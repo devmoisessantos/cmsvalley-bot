@@ -30,7 +30,7 @@ def _montar_rodape(guilda: discord.Guild | None) -> str:
     """
     partes: list[str] = []
     if guilda is not None:
-        partes.append(guilda.name)
+        partes.append(f"**{guilda.name}**")
     partes.append(f"`{formatar_data_hora_rodape()}`")
     return "-# " + " • ".join(partes)
 
@@ -48,11 +48,15 @@ def montar_card_boas_vindas(
     nome_base = membro.name
 
     texto_titulo = (
-        "# Seja bem-vindo(a), fique à vontade!\n"
+        "# 👋 Bem-vindo(a) ao Centro Médico Sul Valley!\n"
         f"➜ **Usuário:** {mencao} (`{id_do_membro}`)\n"
-        f"➜ **Nome base (USERNAME):** `@{nome_base}`"
+        f"➜ **Nome de usuário:** `@{nome_base}`"
     )
-    texto_corpo = "- Espero que você se divirta no meu servidor!"
+    texto_corpo = (
+        "✨ Ficamos muito felizes com a sua chegada!\n"
+        "Aproveite tudo o que nosso servidor tem a oferecer."
+        "Qualquer dúvida, estamos à disposição."
+    )
     texto_rodape = _montar_rodape(membro.guild)
 
     url_avatar = _url_do_avatar(membro)
@@ -69,16 +73,14 @@ def montar_card_boas_vindas(
         componentes.append(discord.ui.TextDisplay(texto_titulo))
 
     componentes.append(discord.ui.TextDisplay(texto_corpo))
-    componentes.append(
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-    )
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(texto_rodape))
 
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(
         discord.ui.Container(
             *componentes,
-            accent_color=discord.Color.blurple(),
+            accent_color=discord.Color.green(),
         )
     )
     return view
@@ -99,11 +101,11 @@ def montar_card_adeus(
     mencao = f"<@{id_do_membro}>"
 
     texto_titulo = (
-        "# Até logo — alguém saiu do servidor\n"
+        "# 👋 Até logo! — alguém saiu do servidor\n"
         f"➜ **Usuário:** {mencao} (`{id_do_membro}`)\n"
-        f"➜ **Nome base (USERNAME):** `@{nome_base}`"
+        f"➜ **Nome de usuário:** `@{nome_base}`"
     )
-    texto_corpo = "- Esperamos vê-lo(a) de volta em breve."
+    texto_corpo = "😢 Sentiremos sua falta por aqui.\nEsperamos vê-lo(a) novamente em breve. Boa sorte em sua jornada!"
     texto_rodape = _montar_rodape(guilda)
 
     url_avatar = _url_do_avatar(membro)
@@ -120,9 +122,7 @@ def montar_card_adeus(
         componentes.append(discord.ui.TextDisplay(texto_titulo))
 
     componentes.append(discord.ui.TextDisplay(texto_corpo))
-    componentes.append(
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-    )
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(texto_rodape))
 
     view = discord.ui.LayoutView(timeout=None)
