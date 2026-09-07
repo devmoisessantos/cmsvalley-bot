@@ -70,7 +70,8 @@ class PainelIngressarGateLayout(LoggingViewMixin, discord.ui.LayoutView):
             url_icone = guild.icon.url
 
         lista_cursos = "\n".join(
-            f"- {rotulo_curso(chave)}" for chave in CURSOS_OBRIGATORIOS_INGRESSO_GATE
+            f"- {rotulo_curso(chave)}"
+            for chave in CURSOS_OBRIGATORIOS_INGRESSO_GATE
         )
 
         componentes: list = []
@@ -89,7 +90,9 @@ class PainelIngressarGateLayout(LoggingViewMixin, discord.ui.LayoutView):
         else:
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
         componentes.append(
             discord.ui.TextDisplay(
                 "## 📋 Requisitos\n"
@@ -102,7 +105,9 @@ class PainelIngressarGateLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "imediata."
             )
         )
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+        )
         componentes.append(
             discord.ui.TextDisplay(
                 "### 🛡️ Formação — Guardião\n"
@@ -112,7 +117,9 @@ class PainelIngressarGateLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "-# *Disciplina, Comprometimento e Excelência Operacional.*"
             )
         )
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         linha = discord.ui.ActionRow()
         botao = discord.ui.Button(
@@ -174,7 +181,9 @@ class PainelIngressarGateLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
-        canal_aprovacao = guild.get_channel(CANAIS.get("APROVAR_GATE_REPROVAR") or 0)
+        canal_aprovacao = guild.get_channel(
+            CANAIS.get("APROVAR_GATE_REPROVAR") or 0
+        )
         if canal_aprovacao is None:
             await responder_erro(
                 interacao,
@@ -190,7 +199,9 @@ class PainelIngressarGateLayout(LoggingViewMixin, discord.ui.LayoutView):
             candidato=membro,
         )
         mensagem = await canal_aprovacao.send(view=card)
-        await marcar_mensagem_solicitacao(registro.id, canal_aprovacao.id, mensagem.id)
+        await marcar_mensagem_solicitacao(
+            registro.id, canal_aprovacao.id, mensagem.id
+        )
 
         await responder_sucesso(
             interacao,
@@ -280,16 +291,22 @@ async def processar_aprovacao_ingresso(
         )
         return
 
-    ok, mensagem = await aprovar_ingresso(interacao.guild, solicitacao, interacao.user)
+    ok, mensagem = await aprovar_ingresso(
+        interacao.guild, solicitacao, interacao.user
+    )
     if not ok:
         await responder_aviso(interacao, titulo="Não foi possível", linhas=[mensagem])
         return
 
     candidato = interacao.guild.get_member(solicitacao.discord_id_candidato)
     if candidato is not None:
-        await log_ingresso_aprovado(interacao.guild, candidato, interacao.user)
+        await log_ingresso_aprovado(
+            interacao.guild, candidato, interacao.user
+        )
 
-    await responder_sucesso(interacao, titulo="Aprovado", linhas=[mensagem])
+    await responder_sucesso(
+        interacao, titulo="Aprovado", linhas=[mensagem]
+    )
     try:
         await interacao.message.edit(view=_card_decidido("aprovado"))
     except Exception:
@@ -355,7 +372,9 @@ class ModalMotivoReprovacaoGate(
             )
             return
 
-        candidato = interacao.guild.get_member(solicitacao.discord_id_candidato)
+        candidato = interacao.guild.get_member(
+            solicitacao.discord_id_candidato
+        )
         if candidato is not None:
             await log_ingresso_reprovado(
                 interacao.guild,
@@ -364,7 +383,9 @@ class ModalMotivoReprovacaoGate(
                 self.motivo.value.strip(),
             )
 
-        await responder_sucesso(interacao, titulo="Reprovado", linhas=[mensagem])
+        await responder_sucesso(
+            interacao, titulo="Reprovado", linhas=[mensagem]
+        )
         try:
             if interacao.message:
                 await interacao.message.edit(view=_card_decidido("reprovado"))
@@ -384,7 +405,9 @@ def _card_decidido(status: str) -> discord.ui.LayoutView:
             discord.ui.TextDisplay(titulo),
             discord.ui.TextDisplay("-# Decisão registrada."),
             accent_color=(
-                discord.Color.green() if status == "aprovado" else discord.Color.red()
+                discord.Color.green()
+                if status == "aprovado"
+                else discord.Color.red()
             ),
         )
     )
@@ -422,7 +445,9 @@ class PainelGerenciarGateLayout(LoggingViewMixin, discord.ui.LayoutView):
         else:
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
         componentes.append(
             discord.ui.TextDisplay(
                 "### Ações disponíveis\n"
@@ -433,7 +458,9 @@ class PainelGerenciarGateLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "-# Busque o membro por menção, Discord ID ou ID FiveM."
             )
         )
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         linha = discord.ui.ActionRow()
         botao = discord.ui.Button(
@@ -629,8 +656,12 @@ class ViewAcoesMembroGate(LoggingViewMixin, discord.ui.LayoutView):
                 interacao, titulo="Não foi possível", linhas=[detalhe]
             )
             return
-        await log_promocao_gate(interacao.guild, self.alvo, interacao.user, detalhe)
-        await responder_sucesso(interacao, titulo="Promovido", linhas=[detalhe])
+        await log_promocao_gate(
+            interacao.guild, self.alvo, interacao.user, detalhe
+        )
+        await responder_sucesso(
+            interacao, titulo="Promovido", linhas=[detalhe]
+        )
 
     async def _ao_rebaixar(self, interacao: discord.Interaction):
         if not e_gestor_gate(interacao.user):
@@ -649,8 +680,12 @@ class ViewAcoesMembroGate(LoggingViewMixin, discord.ui.LayoutView):
                 interacao, titulo="Não foi possível", linhas=[detalhe]
             )
             return
-        await log_rebaixamento_gate(interacao.guild, self.alvo, interacao.user, detalhe)
-        await responder_sucesso(interacao, titulo="Rebaixado", linhas=[detalhe])
+        await log_rebaixamento_gate(
+            interacao.guild, self.alvo, interacao.user, detalhe
+        )
+        await responder_sucesso(
+            interacao, titulo="Rebaixado", linhas=[detalhe]
+        )
 
     async def _ao_expulsar(self, interacao: discord.Interaction):
         if not e_gestor_gate(interacao.user):
@@ -669,8 +704,12 @@ class ViewAcoesMembroGate(LoggingViewMixin, discord.ui.LayoutView):
                 interacao, titulo="Não foi possível", linhas=[detalhe]
             )
             return
-        await log_expulsao_gate(interacao.guild, self.alvo, interacao.user, detalhe)
-        await responder_sucesso(interacao, titulo="Expulso da GATE", linhas=[detalhe])
+        await log_expulsao_gate(
+            interacao.guild, self.alvo, interacao.user, detalhe
+        )
+        await responder_sucesso(
+            interacao, titulo="Expulso da GATE", linhas=[detalhe]
+        )
 
     async def _ao_advertencia(self, interacao: discord.Interaction):
         if not e_gestor_gate(interacao.user):
@@ -714,8 +753,12 @@ class ViewAdvertenciaRapidaGate(LoggingViewMixin, discord.ui.LayoutView):
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(f"## ⚠️ Advertência — {alvo.display_name}"),
-                discord.ui.TextDisplay("Escolha o tipo. Em seguida informe o motivo."),
+                discord.ui.TextDisplay(
+                    f"## ⚠️ Advertência — {alvo.display_name}"
+                ),
+                discord.ui.TextDisplay(
+                    "Escolha o tipo. Em seguida informe o motivo."
+                ),
                 linha,
                 accent_color=discord.Color.orange(),
             )
@@ -733,7 +776,9 @@ class ViewAdvertenciaRapidaGate(LoggingViewMixin, discord.ui.LayoutView):
             return
         cargo_id = int(partes[0])
         cargo_nome = partes[1]
-        modal = ModalMotivoAdvertenciaGate(self.alvo, cargo_id, cargo_nome)
+        modal = ModalMotivoAdvertenciaGate(
+            self.alvo, cargo_id, cargo_nome
+        )
         await interacao.response.send_modal(modal)
 
 

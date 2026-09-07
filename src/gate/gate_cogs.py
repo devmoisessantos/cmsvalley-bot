@@ -146,9 +146,8 @@ class GateCog(commands.Cog):
         custom_id: str,
     ):
         # Cards de aprovação de ingresso (custom_id dinâmico).
-        # Os painéis fixos (solicitar / gerenciar) usam só o callback da
-        # LayoutView registrada no add_view — não repetir aqui, senão a
-        # resposta ephemeral sai em duplicata.
+        # O listener cuida deles porque o card pode ter sido publicado antes
+        # de um restart e a LayoutView original não está mais em memória.
         if custom_id.startswith("gate:ingresso:aprovar:"):
             from src.gate.membros.membros_gate_panel import (
                 processar_aprovacao_ingresso,
@@ -167,6 +166,17 @@ class GateCog(commands.Cog):
             await processar_reprovacao_ingresso(interacao, solicitacao_id)
             return
 
+        # Painéis fixos de membros (solicitar ingresso / gerenciar).
+        # Eles têm callback na LayoutView registrada com add_view.
+        # Se responder aqui, a interação já fica acknowledged e o
+        # callback quebra com "Interaction has already been acknowledged".
+        if custom_id in (
+            "gate:ingresso:solicitar",
+            "gate:membros:abrir",
+        ):
+            return
+
+        # Daqui para baixo: só botões de eventos (treino, facxfac, etc.).
         if not tem_permissao_criar_evento(interacao.user):
             await responder_erro(
                 interacao,
