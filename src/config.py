@@ -1221,7 +1221,7 @@ CURSOS = {
         "emoji": "👑",
         "cargo_id": 1496189276365258873,
         "nivel": "diretoria",
-        "valor_ingame": 0,
+        "valor_ingame": 5_000_000,
         "pratico": False,
     },
 }
