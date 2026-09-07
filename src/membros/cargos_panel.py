@@ -69,13 +69,9 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         Chamado sempre que o executor seleciona um membro ou cargo,
         para atualizar o resumo exibido.
         """
-        # Select para escolher o membro
-        select_membro = discord.ui.UserSelect(placeholder="1. Selecione o membro")
-        select_membro.callback = self._ao_selecionar_membro
-
-        # Select para escolher o cargo (apenas os permitidos)
+        # Select de cargo (apenas os permitidos ao executor)
         select_cargo = discord.ui.Select(
-            placeholder="2. Selecione o cargo",
+            placeholder="Selecione o cargo",
             options=[
                 discord.SelectOption(label=nome_do_cargo, value=nome_do_cargo)
                 for nome_do_cargo in self.nomes_dos_cargos_permitidos
@@ -83,21 +79,15 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         )
         select_cargo.callback = self._ao_selecionar_cargo
 
-        # Botão de adicionar
         botao_adicionar = discord.ui.Button(
             label="Adicionar Cargo", style=discord.ButtonStyle.success
         )
         botao_adicionar.callback = self._ao_clicar_adicionar
 
-        # Botão de remover
         botao_remover = discord.ui.Button(
             label="Remover Cargo", style=discord.ButtonStyle.danger
         )
         botao_remover.callback = self._ao_clicar_remover
-
-        # Monta as linhas de componentes
-        linha_do_membro = discord.ui.ActionRow()
-        linha_do_membro.add_item(select_membro)
 
         linha_do_cargo = discord.ui.ActionRow()
         linha_do_cargo.add_item(select_cargo)
@@ -106,7 +96,6 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         linha_dos_botoes.add_item(botao_adicionar)
         linha_dos_botoes.add_item(botao_remover)
 
-        # Texto do resumo (mostra o que está selecionado no momento)
         resumo_membro = (
             self.candidato_selecionado.mention
             if self.candidato_selecionado
@@ -114,21 +103,38 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         )
         resumo_cargo = self.cargo_selecionado if self.cargo_selecionado else "*nenhum*"
 
-        # Container que agrupa tudo visualmente
-        container = discord.ui.Container(
+        # Quando o membro já veio da ficha admin, não pede UserSelect de novo.
+        componentes: list = [
             discord.ui.TextDisplay("# 🛠️ Gerenciamento de Cargos"),
             discord.ui.TextDisplay(
                 f"- **Membro selecionado:** {resumo_membro}\n"
                 f"- **Cargo selecionado:** {resumo_cargo}"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-            linha_do_membro,
-            linha_do_cargo,
-            linha_dos_botoes,
+        ]
+
+        if self.candidato_selecionado is None:
+            select_membro = discord.ui.UserSelect(placeholder="1. Selecione o membro")
+            select_membro.callback = self._ao_selecionar_membro
+            linha_do_membro = discord.ui.ActionRow()
+            linha_do_membro.add_item(select_membro)
+            componentes.append(linha_do_membro)
+        else:
+            componentes.append(
+                discord.ui.TextDisplay(
+                    f"-# Gerenciando {self.candidato_selecionado.mention} "
+                    f"— escolha só o cargo."
+                )
+            )
+
+        componentes.append(linha_do_cargo)
+        componentes.append(linha_dos_botoes)
+
+        container = discord.ui.Container(
+            *componentes,
             accent_color=discord.Color.blurple(),
         )
 
-        # Remove o container antigo se já existir, para evitar duplicação
         if hasattr(self, "container"):
             self.remove_item(self.container)
 
@@ -210,53 +216,82 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
     """
 
     def __init__(self, guild: discord.Guild):
-        super().__init__(timeout=None)  # timeout=None = painel permanente
+        super().__init__(timeout=None)
 
-        # Linha de ação com o botão de abrir o gerenciador
-        self.linha_do_botao = discord.ui.ActionRow()
+        url_icone = None
+        if guild is not None and guild.icon is not None:
+            url_icone = guild.icon.url
 
-        self.botao_abrir_gerenciador = discord.ui.Button(
+        componentes: list = []
+
+        # Bloco 1: cabeçalho com ícone do servidor (quando existir)
+        texto_cabecalho = (
+            "# ⚙️ Painel de Gerenciamento de Cargos\n"
+            "> 🔐 Sistema Administrativo – Diretoria & GATE\n"
+            "Este painel é dedicado ao gerenciamento de cargos dentro do "
+            "servidor, sendo de **uso exclusivo da Diretoria e GATE**."
+        )
+        if url_icone:
+            componentes.append(
+                discord.ui.Section(
+                    texto_cabecalho,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_cabecalho))
+
+        # Bloco 2: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 3: ações disponíveis
+        componentes.append(
+            discord.ui.TextDisplay(
+                "- 🧩 **Adicionar** — atribuir novos cargos a membros\n"
+                "- 🧩 **Remover** — revogar cargos existentes\n"
+                "✏️ **Registro** — todas as ações são auditadas"
+            )
+        )
+
+        # Bloco 4: separador
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        # Bloco 5: avisos importantes
+        componentes.append(
+            discord.ui.TextDisplay(
+                "## ⚠️ Avisos importantes\n\n"
+                "> 🛑 **Uso abusivo** deste sistema pode resultar em "
+                "**punições ao executor**.\n"
+                "> 📋 **Toda atividade é registrada** para fins de "
+                "conformidade e auditoria.\n"
+                "> 🔄 O sistema ajustará os cargos **automaticamente** "
+                "após a confirmação.\n\n"
+                "-# Clique no botão abaixo para iniciar um novo "
+                "gerenciamento de cargos."
+            )
+        )
+
+        # Bloco 6: separador antes do botão
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        # Botão (inalterado)
+        linha_do_botao = discord.ui.ActionRow()
+        botao_abrir_gerenciador = discord.ui.Button(
             label="Gerenciar Cargos",
-            style=discord.ButtonStyle.primary,  # CORRIGIDO: azul combina com blurple
+            style=discord.ButtonStyle.primary,
             emoji="⚙️",
             custom_id="painel:gerenciar_cargos",
         )
+        botao_abrir_gerenciador.callback = self._ao_clicar_gerenciar
+        linha_do_botao.add_item(botao_abrir_gerenciador)
+        componentes.append(linha_do_botao)
 
-        # Conecta o callback (método que será chamado ao clicar)
-        self.botao_abrir_gerenciador.callback = self._ao_clicar_gerenciar
-        self.linha_do_botao.add_item(self.botao_abrir_gerenciador)
-
-        # Ícone do servidor para o Thumbnail
-        url_do_icone = guild.icon.url if guild.icon else None
-
-        self.container = discord.ui.Container(
-            # Título
-            discord.ui.TextDisplay("# ⚙️ Painel de Gerenciamento de Cargos"),
-            # Separador
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            # Seção com descrição e thumbnail
-            discord.ui.Section(
-                "> **Sistema para Gerenciar Cargos do Servidor**\n",
-                (
-                    "- Esse painel é dedicado e de uso exclusivo da Diretoria e GATE.\n"
-                    "- Utilizado para **Adicionar** e **Remover** cargos de membros.\n"
-                    "- Todo e qualquer uso abusivo desse Sistema pode gerar punições "
-                    "ao executor.\n"
-                    "- Toda atividade é registrada, o sistema liberará seu acesso e "
-                    "ajustará os cargos automaticamente.\n"
-                    "- Clique no botão abaixo para iniciar um novo gerenciamento.\n"
-                ),
-                accessory=discord.ui.Thumbnail(url_do_icone) if url_do_icone else None,
-            ),
-            # Separador
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            # Botão — CORRIGIDO: nome da variável
-            self.linha_do_botao,
-            accent_color=discord.Color.blurple(),
+        self.add_item(
+            discord.ui.Container(
+                *componentes,
+                accent_color=discord.Color.blurple(),
+            )
         )
-
-        # Adiciona o container à view (obrigatório para exibir)
-        self.add_item(self.container)
 
     async def _ao_clicar_gerenciar(self, interaction: discord.Interaction):
         """

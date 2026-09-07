@@ -135,7 +135,7 @@ AUTO_BACKUP_DB_INTERVAL_MINUTES = _ler_numero_do_ambiente(
 
 ADMIN_ROLE_NAMES = _ler_lista_de_textos_do_ambiente(
     "ADMIN_ROLE_NAMES",
-    "Admin,Fundador",
+    "Responsavel HP,[ CMS ]",
 )
 CONFIRMATION_TIMEOUT = _ler_numero_do_ambiente("CONFIRMATION_TIMEOUT", 30)
 
@@ -189,6 +189,7 @@ CARGOS = {
     "👑 |  VICE DIRETOR GERAL": 1486368745252192256,
     "👑 |  DIRETOR GERAL": 1486368744195227780,
     "👑 | RESPONSÁVEL GERAL": 1425163342611349574,
+    "[ CMS ]": 1545886154681884712,
     "Responsavel HP": 1325206480541978643,
     "Supervisor NW": 1325206480558882829,
 }

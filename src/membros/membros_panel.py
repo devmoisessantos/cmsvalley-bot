@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import discord
 
 from src.bau.bau_service import formatar_bloco_itens_yaml, ler_itens_do_caso
-from src.config import NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME
+from src.config import CARGOS, NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME
 from src.membros.cargos_panel import GerenciarCargosView
 from src.membros.membros_service import (
     STATUS_USUARIO_CANONICOS,
@@ -66,6 +66,10 @@ from src.utils.mensagens import (
     responder_view,
 )
 
+# Cargos de equipe de diretoria (IDs fixos do servidor).
+ID_EQUIPE_DIRETORIA_GERAL = 1491000030138732656
+ID_EQUIPE_DIRETORIA = 1486368755670843545
+
 BLOCO_RESUMO = "resumo"
 BLOCO_IDENTIDADE = "identidade"
 BLOCO_RECRUTAMENTO = "recrutamento"
@@ -85,25 +89,26 @@ BLOCO_TICKETS = "tickets"
 BLOCO_CURSOS = "cursos"
 BLOCO_SNAPSHOT = "snapshot"
 
+# value, rotulo, emoji do select
 OPCOES_BLOCOS = [
-    (BLOCO_RESUMO, "Resumo"),
-    (BLOCO_IDENTIDADE, "Identidade"),
-    (BLOCO_AUSENCIA, "Ausencia/Demissao"),
-    (BLOCO_PROMOCOES, "Promocoes"),
-    (BLOCO_RECRUTAMENTO, "Recrutamento"),
-    (BLOCO_RECRUTADOR, "Como recrutador"),
-    (BLOCO_PLANTAO, "Plantao"),
-    (BLOCO_MOEDAS, "Extrato moedas"),
-    (BLOCO_CHAMADAS, "Chamadas"),
-    (BLOCO_HIST_PLANTAO, "Hist. plantao"),
-    (BLOCO_PUNICOES, "Punicoes"),
-    (BLOCO_BAU, "Bau"),
-    (BLOCO_CARGOS_HIST, "Hist. cargos"),
-    (BLOCO_LAUDOS, "Laudos"),
-    (BLOCO_GATE, "GATE"),
-    (BLOCO_TICKETS, "Tickets"),
-    (BLOCO_CURSOS, "Cursos"),
-    (BLOCO_SNAPSHOT, "Snapshot"),
+    (BLOCO_RESUMO, "Resumo", "📋"),
+    (BLOCO_IDENTIDADE, "Identidade", "🪪"),
+    (BLOCO_AUSENCIA, "Ausencia/Demissao", "🚫"),
+    (BLOCO_PROMOCOES, "Promocoes", "⬆️"),
+    (BLOCO_RECRUTAMENTO, "Recrutamento", "✈️"),
+    (BLOCO_RECRUTADOR, "Como recrutador", "🎯"),
+    (BLOCO_PLANTAO, "Plantao", "🩺"),
+    (BLOCO_MOEDAS, "Extrato moedas", "💰"),
+    (BLOCO_CHAMADAS, "Chamadas", "📞"),
+    (BLOCO_HIST_PLANTAO, "Hist. plantao", "📜"),
+    (BLOCO_PUNICOES, "Punicoes", "⚠️"),
+    (BLOCO_BAU, "Bau", "📦"),
+    (BLOCO_CARGOS_HIST, "Hist. cargos", "🏷️"),
+    (BLOCO_LAUDOS, "Laudos", "📝"),
+    (BLOCO_GATE, "GATE", "🛡️"),
+    (BLOCO_TICKETS, "Tickets", "🎫"),
+    (BLOCO_CURSOS, "Cursos", "🎓"),
+    (BLOCO_SNAPSHOT, "Snapshot", "📷"),
 ]
 TIMEOUT_FICHA = 900
 
@@ -431,13 +436,85 @@ async def _t_snap(membro):
     )
 
 
+def _prefixo_emoji_do_cargo(nome_do_cargo: str) -> str:
+    """
+    Pega o emoji (ou trecho inicial) do nome do cargo.
+
+    No CMS os cargos usam emoji no começo do nome (ex.: 👑・DIRETOR).
+    """
+    nome = (nome_do_cargo or "").strip()
+    if not nome or nome == "@everyone":
+        return ""
+    # unicode_emoji da role às vezes não vem no nome; o prefixo do nome basta
+    primeiro_pedaco = nome.replace("|", "・").split("・")[0].strip()
+    if not primeiro_pedaco:
+        return ""
+    # Limita para não estourar o cabeçalho com nomes longos sem emoji
+    if len(primeiro_pedaco) > 8 and primeiro_pedaco.isalnum():
+        return ""
+    return primeiro_pedaco
+
+
+def _texto_emblemas(membro) -> str:
+    """Monta a linha de emblemas a partir dos cargos do membro."""
+    if not membro_esta_no_servidor(membro):
+        return "fora do servidor"
+    cargos = [
+        cargo
+        for cargo in sorted(
+            getattr(membro, "roles", []),
+            key=lambda cargo_item: cargo_item.position,
+            reverse=True,
+        )
+        if cargo.name != "@everyone"
+    ]
+    if not cargos:
+        return "nenhum"
+    vistos: set[str] = set()
+    emblemas: list[str] = []
+    for cargo in cargos:
+        emoji_role = getattr(cargo, "unicode_emoji", None)
+        if emoji_role:
+            marca = str(emoji_role)
+        else:
+            marca = _prefixo_emoji_do_cargo(cargo.name)
+        if not marca or marca in vistos:
+            continue
+        vistos.add(marca)
+        emblemas.append(marca)
+        if len(emblemas) >= 10:
+            break
+    return " ".join(emblemas) if emblemas else "nenhum"
+
+
+def e_admin_ou_responsavel_hp(membro: discord.Member) -> bool:
+    """Ações pesadas da ficha: admin Discord ou cargo Responsavel HP."""
+    if membro.guild_permissions.administrator:
+        return True
+    id_responsavel_hp = CARGOS.get("Responsavel HP") or 0
+    return any(cargo.id == id_responsavel_hp for cargo in membro.roles)
+
+
+def e_equipe_diretoria(membro: discord.Member) -> bool:
+    """
+    Linha de diretoria da ficha.
+
+    Aceita os cargos de equipe configurados por ID e, por compatibilidade,
+    quem já passa em e_diretoria (CARGOS_DIRETORIA).
+    """
+    if e_diretoria(membro):
+        return True
+    ids_equipe = {ID_EQUIPE_DIRETORIA_GERAL, ID_EQUIPE_DIRETORIA}
+    return any(cargo.id in ids_equipe for cargo in membro.roles)
+
+
 async def _cabecalho(membro, estado):
     fid = await resolver_id_fivem_do_membro(membro.id)
     u = await buscar_usuario(membro.id)
     st = u.status if u else "—"
     online = bool(estado and estado.toggle_ligado)
     c = await contagens_resumo_ficha(membro.id, fid)
-    badges = []
+    alertas = []
     for k, lab in [
         ("punicoes_ativas", "pun"),
         ("ausencias_abertas", "aus"),
@@ -446,14 +523,16 @@ async def _cabecalho(membro, estado):
         ("tickets_abertos", "tk"),
     ]:
         if c.get(k):
-            badges.append(f"{lab}:{c[k]}")
-    if not membro_esta_no_servidor(membro):
-        badges.append("fora-server")
-    b = " · ".join(badges) if badges else "ok"
+            alertas.append(f"{lab}:{c[k]}")
+    linha_alertas = ""
+    if alertas:
+        linha_alertas = f"\n**Alertas:** {' · '.join(alertas)}"
+    emblemas = _texto_emblemas(membro)
     return (
         f"# {membro.display_name}\n{membro.mention} · `{membro.id}`\n"
         f"**FiveM:** `{fid or '—'}` · **Status:** `{st}` · **Plantao:** "
-        f"{'em servico' if online else 'fora'}\n**Badges:** {b}"
+        f"{'em servico' if online else 'fora'}\n"
+        f"**Emblemas:** {emblemas}{linha_alertas}"
     )
 
 
@@ -666,7 +745,11 @@ class ModalBuscarFivemId(LoggingModalMixin, discord.ui.Modal, title="ID FiveM"):
 async def _abrir_ficha(i, membro, bloco=BLOCO_RESUMO, status=None):
     estado = await buscar_estado_plantao(membro.id)
     view = FichaMembroAdminView(
-        membro, estado, bloco_ativo=bloco, mensagem_status=status
+        membro,
+        estado,
+        bloco_ativo=bloco,
+        mensagem_status=status,
+        executor=i.user if isinstance(i.user, discord.Member) else None,
     )
     await view.preparar()
     await editar_mensagem_original(i, view=view)
@@ -680,6 +763,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         bloco_ativo=BLOCO_RESUMO,
         mensagem_status=None,
         confirmar_desligar=False,
+        executor: discord.Member | None = None,
     ):
         super().__init__(timeout=TIMEOUT_FICHA)
         self.alvo = alvo
@@ -687,6 +771,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         self.bloco_ativo = bloco_ativo
         self.mensagem_status = mensagem_status
         self.confirmar_desligar = confirmar_desligar
+        self.executor = executor
         self._txt = ""
         self._cab = ""
 
@@ -718,9 +803,12 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             placeholder="Expandir bloco…",
             options=[
                 discord.SelectOption(
-                    label=r[:100], value=v, default=(v == self.bloco_ativo)
+                    label=rotulo[:100],
+                    value=valor,
+                    emoji=emoji,
+                    default=(valor == self.bloco_ativo),
                 )
-                for v, r in OPCOES_BLOCOS[:25]
+                for valor, rotulo, emoji in OPCOES_BLOCOS[:25]
             ],
             min_values=1,
             max_values=1,
@@ -744,41 +832,100 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             rc.add_item(bn)
             comps.append(rc)
         else:
-            r1 = discord.ui.ActionRow()
-            for label, style, emoji, cb, dis in [
-                (
-                    "Forcar desligar",
-                    discord.ButtonStyle.danger,
-                    "🔴",
-                    self._pedir_desligar,
-                    not no,
-                ),
-                ("Zerar ciclo", discord.ButtonStyle.secondary, "⏱️", self._zerar, False),
-                ("Moedas", discord.ButtonStyle.primary, "💰", self._moedas, False),
-                ("FiveM", discord.ButtonStyle.primary, "🪪", self._fivem, False),
-            ]:
-                b = discord.ui.Button(
-                    label=label, style=style, emoji=emoji, disabled=dis
-                )
-                b.callback = cb
-                r1.add_item(b)
-            comps.append(r1)
-            r2 = discord.ui.ActionRow()
-            for label, style, emoji, cb, dis in [
-                ("Status DB", discord.ButtonStyle.secondary, "📝", self._status, False),
-                ("Cargos", discord.ButtonStyle.primary, "🏷️", self._cargos, not no),
-                ("Advertencia", discord.ButtonStyle.danger, "⚠️", self._adv, not no),
-                ("Exonerar", discord.ButtonStyle.danger, "⛔", self._exon, not no),
-            ]:
-                b = discord.ui.Button(
-                    label=label, style=style, emoji=emoji, disabled=dis
-                )
-                b.callback = cb
-                r2.add_item(b)
-            comps.append(r2)
+            executor = self.executor
+            mostra_admin = executor is not None and e_admin_ou_responsavel_hp(executor)
+            mostra_diretoria = executor is None or e_equipe_diretoria(executor)
+
+            # Linha 1 — só admin Discord ou Responsavel HP
+            if mostra_admin:
+                r1 = discord.ui.ActionRow()
+                for label, style, emoji, cb, dis in [
+                    (
+                        "Forcar desligar",
+                        discord.ButtonStyle.danger,
+                        "🔴",
+                        self._pedir_desligar,
+                        not no,
+                    ),
+                    (
+                        "Zerar ciclo",
+                        discord.ButtonStyle.secondary,
+                        "⏱️",
+                        self._zerar,
+                        False,
+                    ),
+                    (
+                        "Moedas",
+                        discord.ButtonStyle.primary,
+                        "💰",
+                        self._moedas,
+                        False,
+                    ),
+                    (
+                        "FiveM",
+                        discord.ButtonStyle.primary,
+                        "🪪",
+                        self._fivem,
+                        False,
+                    ),
+                ]:
+                    b = discord.ui.Button(
+                        label=label, style=style, emoji=emoji, disabled=dis
+                    )
+                    b.callback = cb
+                    r1.add_item(b)
+                comps.append(r1)
+
+            # Linha 2 — diretoria / equipe diretoria
+            if mostra_diretoria:
+                r2 = discord.ui.ActionRow()
+                for label, style, emoji, cb, dis in [
+                    (
+                        "Ver punicoes",
+                        discord.ButtonStyle.secondary,
+                        "📋",
+                        self._ver_pun,
+                        False,
+                    ),
+                    (
+                        "Ajustar cargos",
+                        discord.ButtonStyle.primary,
+                        "🏷️",
+                        self._cargos,
+                        not no,
+                    ),
+                    (
+                        "Advertencia",
+                        discord.ButtonStyle.danger,
+                        "⚠️",
+                        self._adv,
+                        not no,
+                    ),
+                    (
+                        "Status DB",
+                        discord.ButtonStyle.secondary,
+                        "📝",
+                        self._status,
+                        False,
+                    ),
+                    (
+                        "Exonerar",
+                        discord.ButtonStyle.danger,
+                        "⛔",
+                        self._exon,
+                        not no,
+                    ),
+                ]:
+                    b = discord.ui.Button(
+                        label=label, style=style, emoji=emoji, disabled=dis
+                    )
+                    b.callback = cb
+                    r2.add_item(b)
+                comps.append(r2)
+
+            # Linha 3 — navegação
             r3 = discord.ui.ActionRow()
             for label, emoji, cb in [
-                ("Ver punicoes", "📋", self._ver_pun),
                 ("Atualizar", "🔄", self._att),
                 ("Nova busca", "↩️", self._voltar),
             ]:
@@ -791,23 +938,41 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             if not no:
                 comps.append(
                     discord.ui.TextDisplay(
-                        "-# Fora do server: desligar/cargos/advertencia/exonerar bloqueados."
+                        "-# Fora do server: desligar/cargos/advertencia/exonerar "
+                        "bloqueados."
                     )
                 )
         self.add_item(
             discord.ui.Container(*comps, accent_color=discord.Color.dark_gold())
         )
 
-    async def _perm(self, i):
-        if not e_diretoria(i.user):
+    async def _perm_diretoria(self, i):
+        if not isinstance(i.user, discord.Member) or not e_equipe_diretoria(i.user):
             await responder_erro(
-                i, titulo="Sem permissao", linhas=[mensagem_sem_permissao("acoes")]
+                i,
+                titulo="Sem permissao",
+                linhas=[mensagem_sem_permissao("acoes de diretoria")],
+            )
+            return False
+        return True
+
+    async def _perm_admin(self, i):
+        if not isinstance(i.user, discord.Member) or not e_admin_ou_responsavel_hp(
+            i.user
+        ):
+            await responder_erro(
+                i,
+                titulo="Sem permissao",
+                linhas=[
+                    "Apenas **Administrador** ou **Responsavel HP** "
+                    "podem usar esta ação."
+                ],
             )
             return False
         return True
 
     async def _trocar(self, i):
-        if not await self._perm(i):
+        if not await self._perm_diretoria(i):
             return
         v = (i.data.get("values") or [BLOCO_RESUMO])[0]
         await i.response.defer(ephemeral=True)
@@ -815,36 +980,38 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _refresh(self, i, status=None, conf=False):
         estado = await buscar_estado_plantao(self.alvo.id)
+        executor = i.user if isinstance(i.user, discord.Member) else self.executor
         view = FichaMembroAdminView(
             self.alvo,
             estado,
             bloco_ativo=self.bloco_ativo,
             mensagem_status=status,
             confirmar_desligar=conf,
+            executor=executor,
         )
         await view.preparar()
         await editar_mensagem_original(i, view=view)
 
     async def _att(self, i):
-        if not await self._perm(i):
+        if not await self._perm_diretoria(i):
             return
         await i.response.defer(ephemeral=True)
         await self._refresh(i, "Ficha atualizada.")
 
     async def _pedir_desligar(self, i):
-        if not await self._perm(i):
+        if not await self._perm_admin(i):
             return
         await i.response.defer(ephemeral=True)
         await self._refresh(i, conf=True)
 
     async def _canc_desligar(self, i):
-        if not await self._perm(i):
+        if not await self._perm_admin(i):
             return
         await i.response.defer(ephemeral=True)
         await self._refresh(i, "Desligar cancelado.")
 
     async def _conf_desligar(self, i):
-        if not await self._perm(i):
+        if not await self._perm_admin(i):
             return
         if not isinstance(self.alvo, discord.Member):
             await responder_erro(i, titulo="Alvo", linhas=["Precisa estar no server."])
@@ -862,7 +1029,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         await self._refresh(i, f"Desligado. {res}")
 
     async def _zerar(self, i):
-        if not await self._perm(i):
+        if not await self._perm_admin(i):
             return
         await i.response.defer(ephemeral=True)
         ok = await zerar_ciclo_plantao(self.alvo.id)
@@ -876,12 +1043,12 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         await self._refresh(i, "Ciclo zerado." if ok else "Sem estado de plantao.")
 
     async def _moedas(self, i):
-        if not await self._perm(i):
+        if not await self._perm_admin(i):
             return
         await i.response.send_modal(ModalAjustarMoedas(self.alvo, self.bloco_ativo))
 
     async def _fivem(self, i):
-        if not await self._perm(i):
+        if not await self._perm_admin(i):
             return
         atual = await resolver_id_fivem_do_membro(self.alvo.id)
         await i.response.send_modal(
@@ -889,12 +1056,12 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         )
 
     async def _status(self, i):
-        if not await self._perm(i):
+        if not await self._perm_diretoria(i):
             return
         await i.response.send_modal(ModalEditarStatus(self.alvo, self.bloco_ativo))
 
     async def _cargos(self, i):
-        if not await self._perm(i):
+        if not await self._perm_diretoria(i):
             return
         if not isinstance(i.user, discord.Member) or not isinstance(
             self.alvo, discord.Member
@@ -908,7 +1075,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         )
 
     async def _adv(self, i):
-        if not await self._perm(i):
+        if not await self._perm_diretoria(i):
             return
         if not isinstance(self.alvo, discord.Member):
             await responder_erro(i, titulo="Alvo", linhas=["Precisa estar no server."])
@@ -923,12 +1090,12 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         await responder_view(i, FluxoAplicarAdvertenciaView(i.user.id), ephemeral=True)
 
     async def _ver_pun(self, i):
-        if not await self._perm(i):
+        if not await self._perm_diretoria(i):
             return
         await responder_view(i, FluxoConsultarPunicaoView(), ephemeral=True)
 
     async def _exon(self, i):
-        if not await self._perm(i):
+        if not await self._perm_diretoria(i):
             return
         if not isinstance(self.alvo, discord.Member):
             await responder_erro(i, titulo="Alvo", linhas=["Precisa estar no server."])
@@ -936,7 +1103,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         await i.response.send_modal(ModalExonerarMembro(self.alvo, self.bloco_ativo))
 
     async def _voltar(self, i):
-        if not await self._perm(i):
+        if not await self._perm_diretoria(i):
             return
         await editar_mensagem_original(i, view=SeletorMembroAdminView())
 
@@ -954,9 +1121,16 @@ class ModalAjustarMoedas(LoggingModalMixin, discord.ui.Modal, title="Ajustar moe
         self.bloco = bloco
 
     async def on_submit(self, i: discord.Interaction):
-        if not e_diretoria(i.user):
+        if not isinstance(i.user, discord.Member) or not e_admin_ou_responsavel_hp(
+            i.user
+        ):
             await responder_erro(
-                i, titulo="Sem permissao", linhas=[mensagem_sem_permissao("moedas")]
+                i,
+                titulo="Sem permissao",
+                linhas=[
+                    "Apenas **Administrador** ou **Responsavel HP** "
+                    "podem ajustar moedas."
+                ],
             )
             return
         raw = (self.valor.value or "").strip()
@@ -1010,9 +1184,16 @@ class ModalEditarFivem(LoggingModalMixin, discord.ui.Modal, title="Editar FiveM"
             self.id_fivem.default = str(valor_atual)[:20]
 
     async def on_submit(self, i: discord.Interaction):
-        if not e_diretoria(i.user):
+        if not isinstance(i.user, discord.Member) or not e_admin_ou_responsavel_hp(
+            i.user
+        ):
             await responder_erro(
-                i, titulo="Sem permissao", linhas=[mensagem_sem_permissao("fivem")]
+                i,
+                titulo="Sem permissao",
+                linhas=[
+                    "Apenas **Administrador** ou **Responsavel HP** "
+                    "podem editar o FiveM."
+                ],
             )
             return
         v = (self.id_fivem.value or "").strip()
@@ -1056,7 +1237,7 @@ class ModalEditarStatus(LoggingModalMixin, discord.ui.Modal, title="Status DB"):
         self.bloco = bloco
 
     async def on_submit(self, i: discord.Interaction):
-        if not e_diretoria(i.user):
+        if not isinstance(i.user, discord.Member) or not e_equipe_diretoria(i.user):
             await responder_erro(
                 i, titulo="Sem permissao", linhas=[mensagem_sem_permissao("status")]
             )
@@ -1112,7 +1293,7 @@ class ModalExonerarMembro(LoggingModalMixin, discord.ui.Modal, title="Exonerar")
         self.bloco = bloco
 
     async def on_submit(self, i: discord.Interaction):
-        if not e_diretoria(i.user):
+        if not isinstance(i.user, discord.Member) or not e_equipe_diretoria(i.user):
             await responder_erro(
                 i, titulo="Sem permissao", linhas=[mensagem_sem_permissao("exonerar")]
             )
