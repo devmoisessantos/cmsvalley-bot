@@ -440,16 +440,16 @@ RANKING_DIA_POST_MENSAL = 1
 # Top 1 → 10: 10M, 6M, 5M, 4M, 3M, 2M, 1M, 1M, 1M, 1M  (total 34M)
 # Texto de vitrine usa ~33–34 milhões conforme configuração.
 PREMIOS_RANKING_HORAS = [
-    10_000_000,  # 1º
-    6_000_000,  # 2º
-    5_000_000,  # 3º
-    4_000_000,  # 4º
-    3_000_000,  # 5º
-    2_000_000,  # 6º
-    1_000_000,  # 7º
-    1_000_000,  # 8º
-    1_000_000,  # 9º
-    1_000_000,  # 10º
+    1_000_000,  # 1º
+    600_000,  # 2º
+    500_000,  # 3º
+    400_000,  # 4º
+    300_000,  # 5º
+    200_000,  # 6º
+    100_000,  # 7º
+    100_000,  # 8º
+    100_000,  # 9º
+    100_000,  # 10º
 ]
 NOME_PAINEL_RANKING_HORAS_TEMPO_REAL = "ranking_horas_tempo_real"
 
@@ -1110,7 +1110,7 @@ CURSOS = {
         "emoji": "🚑",
         "cargo_id": 1522578759037747361,
         "nivel": "1.0",
-        "valor_ingame": 120_000,
+        "valor_ingame": 200_000,
         "pratico": True,
     },
     "arcanjo": {
@@ -1118,7 +1118,7 @@ CURSOS = {
         "emoji": "🚁",
         "cargo_id": 1486368775543590994,
         "nivel": "1.0",
-        "valor_ingame": 180_000,
+        "valor_ingame": 300_000,
         "pratico": True,
     },
     "mergulhador": {
@@ -1126,7 +1126,7 @@ CURSOS = {
         "emoji": "🤿",
         "cargo_id": 1522578825513275482,
         "nivel": "1.0",
-        "valor_ingame": 150_000,
+        "valor_ingame": 250_000,
         "pratico": True,
     },
     "alpinista": {
@@ -1134,7 +1134,7 @@ CURSOS = {
         "emoji": "🌄",
         "cargo_id": 1486368777728823468,
         "nivel": "1.0",
-        "valor_ingame": 150_000,
+        "valor_ingame": 250_000,
         "pratico": True,
     },
     "paraquedista": {
@@ -1142,7 +1142,7 @@ CURSOS = {
         "emoji": "🪂",
         "cargo_id": 1522578874234568814,
         "nivel": "1.0",
-        "valor_ingame": 180_000,
+        "valor_ingame": 300_000,
         "pratico": True,
     },
     "arcanjo_2": {
@@ -1150,7 +1150,7 @@ CURSOS = {
         "emoji": "🚁",
         "cargo_id": 1486368774582964394,
         "nivel": "2.0",
-        "valor_ingame": 270_000,
+        "valor_ingame": 450_000,
         "pratico": True,
     },
     "mergulhador_2": {
@@ -1158,7 +1158,7 @@ CURSOS = {
         "emoji": "🤿",
         "cargo_id": 1522578950323175424,
         "nivel": "2.0",
-        "valor_ingame": 210_000,
+        "valor_ingame": 350_000,
         "pratico": True,
     },
     "alpinista_2": {
@@ -1166,7 +1166,7 @@ CURSOS = {
         "emoji": "🌄",
         "cargo_id": 1486368776646561834,
         "nivel": "2.0",
-        "valor_ingame": 180_000,
+        "valor_ingame": 300_000,
         "pratico": True,
     },
     "paraquedista_2": {
@@ -1174,7 +1174,7 @@ CURSOS = {
         "emoji": "🪂",
         "cargo_id": 1522578990743683203,
         "nivel": "2.0",
-        "valor_ingame": 240_000,
+        "valor_ingame": 400_000,
         "pratico": True,
     },
     "doutor": {
