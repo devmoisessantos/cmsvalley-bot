@@ -11,6 +11,8 @@ import logging
 
 import discord
 
+registrador = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Cores padrão do projeto
 # ---------------------------------------------------------------------------
@@ -19,6 +21,23 @@ COR_SUCESSO = discord.Color.green()
 COR_ERRO = discord.Color.red()
 COR_AVISO = discord.Color.orange()
 COR_INFO = discord.Color.blurple()
+
+
+def interacao_nao_pode_mais_ser_respondida(erro: BaseException) -> bool:
+    """
+    True quando o Discord já descartou o token da interação.
+
+    Código 10062 (Unknown interaction): passou o prazo de 3 segundos
+    ou a interação já foi consumida. Não adianta followup nem aviso.
+    """
+    if isinstance(erro, discord.NotFound):
+        codigo = getattr(erro, "code", None)
+        if codigo == 10062:
+            return True
+        texto = str(erro).lower()
+        if "unknown interaction" in texto:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +178,7 @@ async def enviar_card(
     delay: int | None = 10,
     ephemeral: bool = True,
     com_marcador: bool = True,
-) -> discord.Message:
+) -> discord.Message | None:
     """
     Envia um CardView para a interação.
 
@@ -169,7 +188,8 @@ async def enviar_card(
     A mensagem some sozinha depois de `delay` segundos.
     Se delay for None, a mensagem fica até ser apagada manualmente.
 
-    Retorna a mensagem enviada.
+    Retorna a mensagem enviada, ou None se a interação já tiver expirado
+    no Discord (código 10062).
     """
     view_do_card = CardView(
         titulo=titulo,
@@ -182,19 +202,49 @@ async def enviar_card(
 
     interacao_ja_foi_respondida = interacao.response.is_done()
 
-    if interacao_ja_foi_respondida:
-        mensagem_enviada = await interacao.followup.send(
-            view=view_do_card,
-            ephemeral=ephemeral,
+    try:
+        if interacao_ja_foi_respondida:
+            mensagem_enviada = await interacao.followup.send(
+                view=view_do_card,
+                ephemeral=ephemeral,
+            )
+        else:
+            await interacao.response.send_message(
+                view=view_do_card,
+                ephemeral=ephemeral,
+            )
+            mensagem_enviada = await interacao.original_response()
+    except discord.NotFound as erro_interacao:
+        if interacao_nao_pode_mais_ser_respondida(erro_interacao):
+            registrador.warning(
+                "Interação expirada ao enviar card (%s). "
+                "O Discord descartou o token antes da resposta.",
+                titulo,
+            )
+            return None
+        raise
+    except discord.HTTPException as erro_http:
+        ja_reconhecida = (
+            getattr(erro_http, "code", None) == 40060
+            or "already been acknowledged" in str(erro_http).lower()
         )
-    else:
-        await interacao.response.send_message(
-            view=view_do_card,
-            ephemeral=ephemeral,
-        )
-        mensagem_enviada = await interacao.original_response()
+        if not ja_reconhecida:
+            raise
+        try:
+            mensagem_enviada = await interacao.followup.send(
+                view=view_do_card,
+                ephemeral=ephemeral,
+            )
+        except discord.NotFound as erro_followup:
+            if interacao_nao_pode_mais_ser_respondida(erro_followup):
+                registrador.warning(
+                    "Interação expirada no followup do card (%s).",
+                    titulo,
+                )
+                return None
+            raise
 
-    if delay is not None:
+    if delay is not None and mensagem_enviada is not None:
         asyncio.create_task(excluir_mensagem(mensagem_enviada, delay=delay))
 
     return mensagem_enviada
@@ -355,7 +405,7 @@ async def responder_view(
     *,
     ephemeral: bool = True,
     texto: str | None = None,
-) -> discord.Message:
+) -> discord.Message | None:
     """
     Responde a interação com uma View, com ou sem texto acima dela.
 
@@ -373,12 +423,17 @@ async def responder_view(
     interacao_ja_foi_respondida = interacao.response.is_done()
 
     if interacao_ja_foi_respondida:
-        mensagem_enviada = await interacao.followup.send(
-            content=texto,
-            view=view,
-            ephemeral=ephemeral,
-        )
-        return mensagem_enviada
+        try:
+            return await interacao.followup.send(
+                content=texto,
+                view=view,
+                ephemeral=ephemeral,
+            )
+        except discord.NotFound as erro_interacao:
+            if interacao_nao_pode_mais_ser_respondida(erro_interacao):
+                registrador.warning("Interação expirada no followup de responder_view.")
+                return None
+            raise
 
     try:
         await interacao.response.send_message(
@@ -387,6 +442,15 @@ async def responder_view(
             ephemeral=ephemeral,
         )
         return await interacao.original_response()
+    except discord.NotFound as erro_interacao:
+        # 10062 = Unknown interaction (prazo de 3s ou token já usado)
+        if interacao_nao_pode_mais_ser_respondida(erro_interacao):
+            registrador.warning(
+                "Interação expirada em responder_view. "
+                "O Discord descartou o token antes da resposta."
+            )
+            return None
+        raise
     except discord.HTTPException as erro_http:
         # 40060 = Interaction has already been acknowledged
         ja_reconhecida = (
@@ -395,12 +459,17 @@ async def responder_view(
         )
         if not ja_reconhecida:
             raise
-        mensagem_enviada = await interacao.followup.send(
-            content=texto,
-            view=view,
-            ephemeral=ephemeral,
-        )
-        return mensagem_enviada
+        try:
+            return await interacao.followup.send(
+                content=texto,
+                view=view,
+                ephemeral=ephemeral,
+            )
+        except discord.NotFound as erro_followup:
+            if interacao_nao_pode_mais_ser_respondida(erro_followup):
+                registrador.warning("Interação expirada no followup após 40060.")
+                return None
+            raise
 
 
 # ---------------------------------------------------------------------------

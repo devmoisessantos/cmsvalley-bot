@@ -95,6 +95,29 @@ async def _avisar_membro_sobre_erro(interacao: discord.Interaction):
         )
 
 
+def _erro_e_transitorio_de_rede_ou_interacao(erro: BaseException) -> bool:
+    """
+    True para falhas em que o Discord ou a rede falhou sem culpa do código.
+
+    - 10062 Unknown interaction: token da interação já expirou
+    - falha de SSL / conexão com discord.com: instabilidade de rede
+    """
+    from src.utils.mensagens import interacao_nao_pode_mais_ser_respondida
+
+    if interacao_nao_pode_mais_ser_respondida(erro):
+        return True
+
+    nome_do_erro = type(erro).__name__
+    texto = str(erro).lower()
+    if "ClientConnectorSSLError" in nome_do_erro:
+        return True
+    if "ssl" in texto and "handshake" in texto:
+        return True
+    if "cannot connect to host discord.com" in texto:
+        return True
+    return False
+
+
 class LoggingViewMixin:
     """
     Coloque este mixin nas Views para capturar erros de botões e selects.
@@ -116,8 +139,21 @@ class LoggingViewMixin:
         Este mixin é reutilizado por todos os domínios: envia o erro ao canal de
         auditoria e responde no Discord, impedindo que uma exceção de botão ou select
         termine como uma falha silenciosa para o membro.
+
+        Interação expirada e falha de SSL/rede não vão para LOG_ERROS nem
+        tentam avisar o membro (o token já morreu ou a API está inacessível).
         """
         nome_do_componente = item.__class__.__name__
+
+        if _erro_e_transitorio_de_rede_ou_interacao(erro):
+            logging.warning(
+                "Falha transitória em componente %s (usuário %s): %s",
+                nome_do_componente,
+                getattr(interacao.user, "id", "?"),
+                erro,
+            )
+            return
+
         await _enviar_erro_para_canal_de_logs(
             interacao,
             titulo="Erro em componente",
@@ -149,6 +185,16 @@ class LoggingModalMixin:
         no envio não revela detalhes técnicos nem deixa a pessoa sem retorno.
         """
         nome_do_modal = self.__class__.__name__
+
+        if _erro_e_transitorio_de_rede_ou_interacao(erro):
+            logging.warning(
+                "Falha transitória em modal %s (usuário %s): %s",
+                nome_do_modal,
+                getattr(interacao.user, "id", "?"),
+                erro,
+            )
+            return
+
         await _enviar_erro_para_canal_de_logs(
             interacao,
             titulo="Erro em Modal",
