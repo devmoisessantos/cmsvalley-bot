@@ -189,6 +189,12 @@ async def restaurar_faltantes_no_banco(snapshot: dict[str, Any]) -> dict[str, in
     """
     Insere no Postgres local apenas linhas que ainda não existem (por PK).
     Nunca apaga nem atualiza registro já presente.
+
+    Cada insert e cada ajuste de sequence rodam dentro de um savepoint
+    (begin_nested). Assim, se uma linha falhar, a transação principal
+    continua viva e as tabelas seguintes ainda são processadas.
+    Sem isso o Postgres aborta a transação inteira e o próximo SELECT
+    explode com InFailedSQLTransactionError.
     """
     estatisticas = {
         "tabelas_tocadas": 0,
@@ -249,7 +255,10 @@ async def restaurar_faltantes_no_banco(snapshot: dict[str, Any]) -> dict[str, in
                 if not valores:
                     continue
                 try:
-                    await sessao.execute(tabela.insert().values(**valores))
+                    # Savepoint: se o insert falhar, só este bloco regride.
+                    # A transação principal segue limpa para as próximas tabelas.
+                    async with sessao.begin_nested():
+                        await sessao.execute(tabela.insert().values(**valores))
                     pks_locais.add(chave)
                     estatisticas["linhas_inseridas"] += 1
                 except Exception as erro:
@@ -270,14 +279,17 @@ async def restaurar_faltantes_no_banco(snapshot: dict[str, Any]) -> dict[str, in
                     or "SERIAL" in str(coluna.type).upper()
                 ):
                     try:
-                        await sessao.execute(
-                            text(
-                                f"SELECT setval(pg_get_serial_sequence(:tab, :col), "
-                                f"COALESCE((SELECT MAX({coluna.name}) FROM "
-                                f"{nome_tabela}), 1))"
-                            ),
-                            {"tab": nome_tabela, "col": coluna.name},
-                        )
+                        # Savepoint também no setval: nem toda PK tem sequence.
+                        async with sessao.begin_nested():
+                            await sessao.execute(
+                                text(
+                                    f"SELECT setval("
+                                    f"pg_get_serial_sequence(:tab, :col), "
+                                    f"COALESCE((SELECT MAX({coluna.name}) "
+                                    f"FROM {nome_tabela}), 1))"
+                                ),
+                                {"tab": nome_tabela, "col": coluna.name},
+                            )
                     except Exception as erro_ao_ajustar_sequencia:
                         # Nem toda chave primaria e "serial" (contador
                         # automatico). Quando nao e, o setval acima falha e
