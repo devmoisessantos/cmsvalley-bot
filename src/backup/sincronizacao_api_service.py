@@ -311,13 +311,31 @@ async def restaurar_faltantes_no_banco(snapshot: dict[str, Any]) -> dict[str, in
                     pks_locais.add(chave)
                     estatisticas["linhas_inseridas"] += 1
                 except Exception as erro:
-                    estatisticas["erros"] += 1
-                    logger.warning(
-                        "[api-db] insert em %s falhou (%s): %s",
-                        nome_tabela,
-                        chave,
-                        erro,
+                    # Unique em coluna secundária (ex.: paineis_postados.nome_painel):
+                    # o id do snapshot é outro, mas o dado lógico já está no banco.
+                    # Em restore aditivo isso conta como "já existia", não como erro.
+                    mensagem_do_erro = str(erro).lower()
+                    eh_unique = (
+                        "uniqueviolation" in mensagem_do_erro
+                        or "unique constraint" in mensagem_do_erro
+                        or "duplicate key" in mensagem_do_erro
                     )
+                    if eh_unique:
+                        estatisticas["linhas_ja_existiam"] += 1
+                        logger.debug(
+                            "[api-db] %s chave %s já existia por unique: %s",
+                            nome_tabela,
+                            chave,
+                            erro,
+                        )
+                    else:
+                        estatisticas["erros"] += 1
+                        logger.warning(
+                            "[api-db] insert em %s falhou (%s): %s",
+                            nome_tabela,
+                            chave,
+                            erro,
+                        )
 
             # Ajusta sequence de colunas serial/identity quando houver id numérico
             for coluna in tabela.primary_key.columns:
