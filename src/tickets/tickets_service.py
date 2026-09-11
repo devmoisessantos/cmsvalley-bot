@@ -51,6 +51,76 @@ def membro_eh_staff_ticket(membro: discord.Member) -> bool:
     return bool(nomes_dos_cargos.intersection(set(CARGOS_TICKET_STAFF)))
 
 
+def membro_eh_equipe_ticket(membro: discord.Member) -> bool:
+    """
+    True se o membro tem o cargo ⚠️ EQUIPE • TICKET.
+
+    Usado na transferência de atendimento: só quem tem esse cargo
+    pode receber o ticket.
+    """
+    id_equipe = CARGOS.get("⚠️ EQUIPE • TICKET")
+    if not id_equipe:
+        return False
+    for cargo_do_membro in membro.roles:
+        if cargo_do_membro.id == int(id_equipe):
+            return True
+    return False
+
+
+def membro_pode_gerenciar_ticket(
+    membro: discord.Member,
+    ticket: Ticket | None = None,
+) -> bool:
+    """
+    Diz se o membro pode usar os comandos de gerenciamento do ticket.
+
+    Libera para:
+    - administrador do Discord ou cargo de administração
+    - Responsavel HP
+    - Responsável Geral
+    - quem assumiu o ticket (quando o ticket é informado)
+    """
+    from src.utils.permissions import membro_e_administrador
+
+    if membro_e_administrador(membro):
+        return True
+
+    nomes_liberados = {
+        "Responsavel HP",
+        "👑 | RESPONSÁVEL GERAL",
+    }
+    nomes_dos_cargos = {cargo.name for cargo in membro.roles}
+    if nomes_dos_cargos.intersection(nomes_liberados):
+        return True
+
+    if ticket is not None and ticket.staff_assumiu_id is not None:
+        if int(ticket.staff_assumiu_id) == int(membro.id):
+            return True
+
+    return False
+
+
+async def listar_tickets_do_autor(
+    autor_discord_id: int,
+    limite: int = 25,
+) -> list[Ticket]:
+    """
+    Lista os tickets do autor, do mais recente para o mais antigo.
+
+    Usado pelo comando ver-transcript para o staff escolher qual
+    atendimento consultar.
+    """
+    async with async_session() as sessao:
+        consulta = (
+            select(Ticket)
+            .where(Ticket.autor_discord_id == autor_discord_id)
+            .order_by(Ticket.aberto_em.desc())
+            .limit(limite)
+        )
+        resultado = await sessao.execute(consulta)
+        return list(resultado.scalars().all())
+
+
 def gerar_senha_transcript() -> str:
     """Gera senha curta para visualização do transcript."""
     return secrets.token_hex(3)

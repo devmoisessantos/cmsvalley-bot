@@ -23,7 +23,9 @@ from src.tickets.tickets_service import (
     listar_categorias_ticket_na_guilda,
     listar_membros_com_acesso_extra,
     marcar_ticket_saudado,
+    membro_eh_equipe_ticket,
     membro_eh_staff_ticket,
+    membro_pode_gerenciar_ticket,
     montar_html_transcript,
     mover_canal_ticket,
     nome_usuario_discord,
@@ -622,13 +624,13 @@ async def _executar_acao_membro(
         return
 
     if acao == "transferir":
-        if not membro_eh_staff_ticket(membro_alvo):
+        if not membro_eh_equipe_ticket(membro_alvo):
             await responder_erro(
                 interacao,
                 titulo="Destino inválido",
                 linhas=[
-                    "Só é possível transferir para quem tem cargo de "
-                    "equipe de tickets ou diretoria.",
+                    "Só é possível transferir para quem tem o cargo "
+                    "⚠️ EQUIPE • TICKET.",
                 ],
             )
             return
@@ -772,11 +774,11 @@ class ModalTrocarNome(discord.ui.Modal, title="Trocar nome do canal"):
         feitas fora do contexto de um ticket válido.
         """
         staff = interacao.user
-        if not isinstance(staff, discord.Member) or not membro_eh_staff_ticket(staff):
+        if not isinstance(staff, discord.Member):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
-                linhas=["Apenas a equipe de tickets pode renomear o canal."],
+                linhas=["Ação disponível apenas no servidor."],
             )
             return
 
@@ -797,6 +799,20 @@ class ModalTrocarNome(discord.ui.Modal, title="Trocar nome do canal"):
                 linhas=["O canal do ticket não foi encontrado."],
             )
             return
+
+        ticket_do_canal = await buscar_ticket_por_canal(canal.id)
+        if not membro_pode_gerenciar_ticket(staff, ticket_do_canal):
+            if not membro_eh_staff_ticket(staff):
+                await responder_erro(
+                    interacao,
+                    titulo="Sem permissão",
+                    linhas=[
+                        "Apenas a equipe de tickets, administrador, "
+                        "Responsavel HP, Responsável Geral ou quem "
+                        "assumiu pode renomear o canal.",
+                    ],
+                )
+                return
 
         nome_aplicado = await trocar_nome_do_canal(
             canal,
@@ -983,16 +999,7 @@ async def processar_clique_botao_ticket(
         return
 
     if custom_id == "ticket:chamar_membro":
-        await responder_view(
-            interacao,
-            view=ViewSelecionarMembro(
-                acao="chamar",
-                canal_id=canal.id,
-                ticket_id=ticket.id,
-                autor_discord_id=ticket.autor_discord_id,
-            ),
-            ephemeral=True,
-        )
+        await _tratar_chamar_autor(interacao, ticket, membro, canal)
         return
 
     if custom_id == "ticket:transferir":
@@ -1144,6 +1151,116 @@ async def _tratar_encerrar_call(
         titulo="📞 Call Encerrada",
         linhas=[f"Call de atendimento encerrada por {membro.mention}."],
         cor=COR_INFO,
+    )
+
+
+async def _tratar_chamar_autor(
+    interacao: discord.Interaction,
+    ticket,
+    membro: discord.Member,
+    canal: discord.TextChannel,
+) -> None:
+    """
+    Notifica por DM apenas o autor do ticket.
+
+    Não permite escolher outro membro: o chamado é sempre para
+    quem abriu o atendimento.
+    """
+    guilda = interacao.guild
+    if guilda is None:
+        await responder_erro(
+            interacao,
+            titulo="Servidor não encontrado",
+            linhas=["Esta ação só funciona dentro do servidor."],
+        )
+        return
+
+    if not interacao.response.is_done():
+        await interacao.response.defer(ephemeral=True)
+
+    autor = guilda.get_member(int(ticket.autor_discord_id))
+    if autor is None:
+        try:
+            autor = await guilda.fetch_member(int(ticket.autor_discord_id))
+        except (discord.NotFound, discord.HTTPException):
+            autor = None
+
+    if autor is None:
+        await responder_erro(
+            interacao,
+            titulo="Autor não encontrado",
+            linhas=[
+                "Não encontrei o autor deste ticket no servidor.",
+                "Ele pode ter saído ou o ID está incorreto.",
+            ],
+        )
+        return
+
+    link_canal = canal.jump_url
+    nome_ticket = canal.name
+    username_alvo = nome_usuario_discord(autor)
+
+    enviou = await enviar_dm_card(
+        destino=autor,
+        titulo="📨 Membro Chamado",
+        linhas=[
+            "> Você está sendo chamado no ticket, clique abaixo para "
+            "retomar o atendimento.",
+            f"**👤 Membro:** `{username_alvo}`",
+            f"**📋 Ticket:** [ `{nome_ticket}` ]",
+            "**💬 Mensagem:**",
+            "> Por favor, compareça ao ticket acima para tratarmos "
+            "de um assunto importante.",
+        ],
+        cor=COR_DM_INFO,
+        botoes_link=[("Abrir ticket", link_canal)],
+        guilda=guilda,
+        registrar_log=False,
+    )
+
+    if enviou:
+        await enviar_card_no_canal_ticket(
+            canal,
+            titulo="📨 Membro Chamado",
+            linhas=[
+                f"{autor.mention} foi notificado por DM por {membro.mention}.",
+            ],
+            cor=COR_SUCESSO,
+        )
+        await responder_card(
+            interacao,
+            titulo="Membro chamado",
+            linhas=[f"O autor {autor.mention} foi notificado por DM."],
+            cor=COR_SUCESSO,
+            delay=10,
+        )
+        return
+
+    await enviar_card_no_canal_ticket(
+        canal,
+        titulo="🔒 DMs Bloqueadas",
+        linhas=[
+            "> ⚠️ **Não foi possível notificar este membro.**",
+            f"**👤 Membro:** {autor.mention}",
+            "**❌ Motivo:** As mensagens diretas deste membro "
+            "estão **fechadas/bloqueadas**.",
+            "### 💡 O que fazer?",
+            "- Tente contatá-lo por outro meio disponível",
+            "- Solicite que ele habilite as DMs temporariamente",
+            "- Utilize um canal alternativo de comunicação do servidor",
+            "🔁 *Tente novamente após a liberação das DMs.*",
+        ],
+        cor=COR_INFO,
+    )
+    await responder_card(
+        interacao,
+        titulo="DMs bloqueadas",
+        linhas=[
+            f"Não consegui enviar DM para {autor.mention}.",
+            "As mensagens diretas dele estão fechadas.",
+        ],
+        cor=COR_INFO,
+        delay=12,
     )
 
 
@@ -1377,14 +1494,6 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             )
             return
 
-        if not membro_eh_staff_ticket(membro):
-            await responder_erro(
-                interacao,
-                titulo="Sem permissão",
-                linhas=["Apenas a equipe de tickets pode finalizar."],
-            )
-            return
-
         canal = interacao.channel
         if not isinstance(canal, discord.TextChannel):
             await responder_erro(
@@ -1402,6 +1511,19 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
                 linhas=["Não foi possível localizar este ticket."],
             )
             return
+
+        if not membro_pode_gerenciar_ticket(membro, ticket):
+            if not membro_eh_staff_ticket(membro):
+                await responder_erro(
+                    interacao,
+                    titulo="Sem permissão",
+                    linhas=[
+                        "Apenas a equipe de tickets, administrador, "
+                        "Responsavel HP, Responsável Geral ou quem "
+                        "assumiu pode finalizar.",
+                    ],
+                )
+                return
 
         if ticket.status == "finalizado":
             await responder_erro(
