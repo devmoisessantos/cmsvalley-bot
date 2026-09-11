@@ -78,6 +78,50 @@ def _serializar_valor(valor: Any) -> Any:
         return str(valor)
 
 
+def _deserializar_valor(valor: Any, tipo_da_coluna: Any) -> Any:
+    """
+    Converte o valor que veio do JSON de volta para o tipo que o Postgres espera.
+
+    O export grava datetime/date como string ISO. No import, o asyncpg rejeita
+    string em coluna TIMESTAMP/DATE — precisa de datetime.datetime de verdade.
+    """
+    if valor is None:
+        return None
+
+    nome_do_tipo = type(tipo_da_coluna).__name__.upper()
+    texto_do_tipo = str(tipo_da_coluna).upper()
+
+    eh_datetime = (
+        "DATETIME" in nome_do_tipo
+        or "TIMESTAMP" in texto_do_tipo
+        or nome_do_tipo == "DATETIME"
+    )
+    eh_date = nome_do_tipo == "DATE" or (
+        texto_do_tipo == "DATE" and "TIMESTAMP" not in texto_do_tipo
+    )
+
+    if eh_datetime and isinstance(valor, str):
+        texto = valor.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(texto)
+        except ValueError:
+            return valor
+
+    if eh_date and isinstance(valor, str):
+        try:
+            # ISO completo às vezes vem em coluna Date; pega só a parte da data
+            if "T" in valor:
+                return date.fromisoformat(valor.split("T", 1)[0])
+            return date.fromisoformat(valor)
+        except ValueError:
+            return valor
+
+    if isinstance(valor, datetime) or isinstance(valor, date):
+        return valor
+
+    return valor
+
+
 def _hash_tabelas(tabelas: dict) -> str:
     serializado = json.dumps(tabelas, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(serializado.encode("utf-8")).hexdigest()
@@ -246,12 +290,17 @@ async def restaurar_faltantes_no_banco(snapshot: dict[str, Any]) -> dict[str, in
                     estatisticas["linhas_ja_existiam"] += 1
                     continue
 
-                # Só colunas que existem na tabela atual
-                valores = {
-                    coluna.name: linha.get(coluna.name)
-                    for coluna in tabela.columns
-                    if coluna.name in linha
-                }
+                # Só colunas que existem na tabela atual.
+                # Converte strings ISO de volta para datetime/date antes do insert.
+                valores = {}
+                for coluna in tabela.columns:
+                    if coluna.name not in linha:
+                        continue
+                    valor_bruto = linha.get(coluna.name)
+                    valores[coluna.name] = _deserializar_valor(
+                        valor_bruto,
+                        coluna.type,
+                    )
                 if not valores:
                     continue
                 try:
