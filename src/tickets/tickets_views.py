@@ -624,7 +624,31 @@ async def _executar_acao_membro(
         return
 
     if acao == "transferir":
-        if not membro_eh_equipe_ticket(membro_alvo):
+        ticket = await buscar_ticket_por_canal(canal.id)
+        if ticket is None:
+            await responder_erro(
+                interacao,
+                titulo="Ticket não encontrado",
+                linhas=["Não foi possível localizar este ticket."],
+            )
+            return
+
+        if ticket.categoria_chave == "revogar_exo":
+            destino_ok = membro_eh_staff_ticket(
+                membro_alvo,
+                "revogar_exo",
+            )
+            if not destino_ok:
+                await responder_erro(
+                    interacao,
+                    titulo="Destino inválido",
+                    linhas=[
+                        "Neste ticket só é possível transferir para quem "
+                        "tem o cargo de Equipe de Diretoria Geral.",
+                    ],
+                )
+                return
+        elif not membro_eh_equipe_ticket(membro_alvo):
             await responder_erro(
                 interacao,
                 titulo="Destino inválido",
@@ -632,15 +656,6 @@ async def _executar_acao_membro(
                     "Só é possível transferir para quem tem o cargo "
                     "⚠️ EQUIPE • TICKET.",
                 ],
-            )
-            return
-
-        ticket = await buscar_ticket_por_canal(canal.id)
-        if ticket is None:
-            await responder_erro(
-                interacao,
-                titulo="Ticket não encontrado",
-                linhas=["Não foi possível localizar este ticket."],
             )
             return
 
@@ -924,14 +939,6 @@ async def processar_clique_botao_ticket(
         )
         return
 
-    if not membro_eh_staff_ticket(membro):
-        await responder_erro(
-            interacao,
-            titulo="Sem permissão",
-            linhas=["Apenas a equipe de tickets pode usar estes botões."],
-        )
-        return
-
     canal = interacao.channel
     if not isinstance(canal, discord.TextChannel):
         await responder_erro(
@@ -947,6 +954,31 @@ async def processar_clique_botao_ticket(
             interacao,
             titulo="Ticket não encontrado",
             linhas=["Este canal não está registrado como ticket ativo."],
+        )
+        return
+
+    from src.utils.permissions import membro_e_administrador
+
+    pode_atuar = membro_e_administrador(membro) or membro_eh_staff_ticket(
+        membro,
+        ticket.categoria_chave,
+    )
+    if not pode_atuar:
+        if ticket.categoria_chave == "revogar_exo":
+            mensagem_permissao = (
+                "Neste ticket de Revogar Exoneração só a "
+                "Equipe de Diretoria Geral e administradores "
+                "podem atuar."
+            )
+        else:
+            mensagem_permissao = (
+                "Apenas a equipe de tickets, supervisor, "
+                "coordenador e cargos acima podem usar estes botões."
+            )
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=[mensagem_permissao],
         )
         return
 

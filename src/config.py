@@ -182,6 +182,9 @@ CARGOS = {
     "👑・【 GATE 】SUBCOMANDANTE・TÁTICO": 1515669807293403217,
     "👑・【 GATE 】COMANDANTE・TÁTICO": 1515669491038818415,
     "⚠️ EQUIPE • TICKET": 1486368753754308689,
+    "EQUIPE_DIRETORIA": 1486368755670843545,
+    "EQUIPE_DIRETORIA_GERAL": 1491000030138732656,
+    "EQUIPE_FISCAL": 1486368754886639677,
     "👑・SUPERVISOR": 1522581678072004649,
     "👑・VICE DIRETOR": 1522581475118289036,
     "👑・DIRETOR": 1486368748502781983,
@@ -309,10 +312,21 @@ IDS_PRESERVADOS_NO_WIPE = [
 # Segundos de espera entre kicks / create_role / create_channel (rate limit).
 ATRASO_WIPE_SEGUNDOS = 1.2
 
-# Staff que pode assumir e finalizar tickets
+# Quem vê e interage nos tickets comuns (canal + botões).
+# Inclui equipe de ticket, equipes de diretoria/fiscal e hierarquia
+# a partir de Supervisor (coordenador, vice, diretor e acima).
 CARGOS_TICKET_STAFF = [
     "⚠️ EQUIPE • TICKET",
+    "EQUIPE_DIRETORIA",
+    "EQUIPE_DIRETORIA_GERAL",
+    "EQUIPE_FISCAL",
+    "👑・SUPERVISOR",
 ] + CARGOS_DIRETORIA
+
+# Só estes cargos (além de administrador) tratam "Revogar Exoneração".
+CARGOS_TICKET_REVOGAR_EXO = [
+    "EQUIPE_DIRETORIA_GERAL",
+]
 
 HIERARQUIA_GATE = [
     "👑・【 GATE 】COMANDANTE・TÁTICO",

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from src.config import (
     CANAIS,
     CARGOS,
+    CARGOS_TICKET_REVOGAR_EXO,
     CARGOS_TICKET_STAFF,
     TICKETS_CATEGORIAS,
 )
@@ -27,14 +28,63 @@ from src.utils.error_handling import ignorar_falha_cosmetica
 registrador = logging.getLogger(__name__)
 
 
-def _ids_cargos_staff(guilda: discord.Guild) -> list[discord.Object]:
-    """Resolve os IDs dos cargos de staff de ticket presentes na guilda."""
+def _nomes_cargos_staff_da_categoria(categoria_chave: str | None) -> list[str]:
+    """
+    Quais cargos entram no canal e nas ações de staff desta categoria.
+
+    Revogar Exoneração é restrito à equipe de diretoria geral.
+    As demais categorias usam a lista completa de staff de ticket.
+    """
+    if categoria_chave == "revogar_exo":
+        return list(CARGOS_TICKET_REVOGAR_EXO)
+    return list(CARGOS_TICKET_STAFF)
+
+
+def _ids_cargos_staff(
+    guilda: discord.Guild,
+    categoria_chave: str | None = None,
+) -> list[discord.Object]:
+    """
+    Resolve os IDs dos cargos de staff do ticket presentes na guilda.
+
+    Usa a lista da categoria quando informada (ex.: revogar_exo).
+    """
     objetos: list[discord.Object] = []
-    for nome_cargo in CARGOS_TICKET_STAFF:
+    ids_ja_incluidos: set[int] = set()
+    for nome_cargo in _nomes_cargos_staff_da_categoria(categoria_chave):
         cargo_id = CARGOS.get(nome_cargo)
-        if cargo_id:
-            objetos.append(discord.Object(id=int(cargo_id)))
+        if not cargo_id:
+            continue
+        id_numerico = int(cargo_id)
+        if id_numerico in ids_ja_incluidos:
+            continue
+        ids_ja_incluidos.add(id_numerico)
+        objetos.append(discord.Object(id=id_numerico))
     return objetos
+
+
+def _membro_tem_algum_cargo_por_chave(
+    membro: discord.Member,
+    chaves_dos_cargos: list[str] | set[str] | tuple[str, ...],
+) -> bool:
+    """
+    True se o membro tem algum cargo da lista, batendo por ID do config
+    ou pelo nome do cargo no Discord.
+    """
+    ids_permitidos: set[int] = set()
+    nomes_permitidos: set[str] = set()
+    for chave in chaves_dos_cargos:
+        nomes_permitidos.add(chave)
+        cargo_id = CARGOS.get(chave)
+        if cargo_id:
+            ids_permitidos.add(int(cargo_id))
+
+    for cargo_do_membro in membro.roles:
+        if cargo_do_membro.id in ids_permitidos:
+            return True
+        if cargo_do_membro.name in nomes_permitidos:
+            return True
+    return False
 
 
 def _eh_no_separador(objeto) -> bool:
@@ -45,10 +95,19 @@ def _eh_no_separador(objeto) -> bool:
     return tipo is not None and getattr(tipo, "value", tipo) == 14
 
 
-def membro_eh_staff_ticket(membro: discord.Member) -> bool:
-    """True se o membro tem cargo de equipe de ticket ou diretoria."""
-    nomes_dos_cargos = {cargo.name for cargo in membro.roles}
-    return bool(nomes_dos_cargos.intersection(set(CARGOS_TICKET_STAFF)))
+def membro_eh_staff_ticket(
+    membro: discord.Member,
+    categoria_chave: str | None = None,
+) -> bool:
+    """
+    True se o membro pode atuar como staff neste ticket.
+
+    Com categoria_chave=None usa a lista geral. Em revogar_exo
+    só passa quem está em CARGOS_TICKET_REVOGAR_EXO (ou admin,
+    tratado em quem chama quando necessário).
+    """
+    nomes = _nomes_cargos_staff_da_categoria(categoria_chave)
+    return _membro_tem_algum_cargo_por_chave(membro, nomes)
 
 
 def membro_eh_equipe_ticket(membro: discord.Member) -> bool:
@@ -76,8 +135,8 @@ def membro_pode_gerenciar_ticket(
 
     Libera para:
     - administrador do Discord ou cargo de administração
-    - Responsavel HP
-    - Responsável Geral
+    - staff da categoria do ticket (quando o ticket é informado)
+    - Responsavel HP / Responsável Geral
     - quem assumiu o ticket (quando o ticket é informado)
     """
     from src.utils.permissions import membro_e_administrador
@@ -85,12 +144,18 @@ def membro_pode_gerenciar_ticket(
     if membro_e_administrador(membro):
         return True
 
+    categoria_chave = None
+    if ticket is not None:
+        categoria_chave = ticket.categoria_chave
+
+    if membro_eh_staff_ticket(membro, categoria_chave):
+        return True
+
     nomes_liberados = {
         "Responsavel HP",
         "👑 | RESPONSÁVEL GERAL",
     }
-    nomes_dos_cargos = {cargo.name for cargo in membro.roles}
-    if nomes_dos_cargos.intersection(nomes_liberados):
+    if _membro_tem_algum_cargo_por_chave(membro, nomes_liberados):
         return True
 
     if ticket is not None and ticket.staff_assumiu_id is not None:
@@ -255,7 +320,7 @@ async def criar_ticket(
         ),
     }
 
-    for objeto_cargo in _ids_cargos_staff(guilda):
+    for objeto_cargo in _ids_cargos_staff(guilda, categoria_chave):
         overwrites[objeto_cargo] = discord.PermissionOverwrite(
             view_channel=True,
             send_messages=True,
@@ -289,6 +354,83 @@ async def criar_ticket(
     return ticket, canal
 
 
+async def sincronizar_permissoes_do_canal_ticket(
+    canal: discord.TextChannel,
+    ticket: Ticket,
+) -> None:
+    """
+    Garante que os cargos corretos veem e falam no canal do ticket.
+
+    Usado na criação e ao assumir, para tickets antigos herdarem a
+    regra nova (equipe ticket, supervisor++, ou só diretoria geral
+    em revogar_exo).
+    """
+    guilda = canal.guild
+    if guilda is None:
+        return
+
+    autor = guilda.get_member(int(ticket.autor_discord_id))
+    if autor is not None:
+        try:
+            await canal.set_permissions(
+                autor,
+                view_channel=True,
+                send_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True,
+                reason="Sincronizar autor do ticket",
+            )
+        except discord.HTTPException as erro:
+            registrador.warning(
+                "Falha ao sincronizar permissão do autor no ticket #%s: %s",
+                ticket.id,
+                erro,
+            )
+
+    if guilda.me is not None:
+        try:
+            await canal.set_permissions(
+                guilda.me,
+                view_channel=True,
+                send_messages=True,
+                manage_channels=True,
+                manage_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True,
+                reason="Sincronizar bot no ticket",
+            )
+        except discord.HTTPException as erro:
+            registrador.warning(
+                "Falha ao sincronizar permissão do bot no ticket #%s: %s",
+                ticket.id,
+                erro,
+            )
+
+    for objeto_cargo in _ids_cargos_staff(guilda, ticket.categoria_chave):
+        try:
+            await canal.set_permissions(
+                objeto_cargo,
+                view_channel=True,
+                send_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True,
+                reason=(
+                    f"Sincronizar staff do ticket "
+                    f"(categoria={ticket.categoria_chave})"
+                ),
+            )
+        except discord.HTTPException as erro:
+            registrador.warning(
+                "Falha ao sincronizar cargo %s no ticket #%s: %s",
+                getattr(objeto_cargo, "id", objeto_cargo),
+                ticket.id,
+                erro,
+            )
+
+
 async def assumir_ticket(
     ticket: Ticket,
     staff: discord.Member,
@@ -315,6 +457,15 @@ async def assumir_ticket(
         nome_aplicado = canal_editado.name
     except discord.HTTPException as erro:
         registrador.warning(f"⚠️ Falha ao renomear canal do ticket: {erro}")
+
+    try:
+        await sincronizar_permissoes_do_canal_ticket(canal, ticket)
+    except Exception as erro_sync:
+        registrador.warning(
+            "Falha ao sincronizar permissões ao assumir ticket #%s: %s",
+            ticket.id,
+            erro_sync,
+        )
 
     async with async_session() as sessao:
         ticket_db = await sessao.get(Ticket, ticket.id)
@@ -596,7 +747,7 @@ async def criar_call_atendimento(
             speak=True,
         )
 
-    for objeto_cargo in _ids_cargos_staff(guilda):
+    for objeto_cargo in _ids_cargos_staff(guilda, ticket.categoria_chave):
         overwrites[objeto_cargo] = discord.PermissionOverwrite(
             view_channel=True,
             connect=True,
