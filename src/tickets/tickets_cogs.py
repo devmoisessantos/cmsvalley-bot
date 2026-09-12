@@ -20,19 +20,21 @@ from src.tickets.tickets_panel import (
 )
 from src.tickets.tickets_service import (
     buscar_ticket_por_canal,
+    listar_tickets_abertos,
     listar_tickets_do_autor,
     membro_pode_gerenciar_ticket,
     nome_usuario_discord,
+    sincronizar_permissoes_do_canal_ticket,
 )
 from src.tickets.tickets_views import (
     CUSTOM_IDS_STAFF,
     CardBotoesStaffView,
     ModalFinalizarTicket,
     ModalTrocarNome,
-    processar_clique_botao_ticket,
     _tratar_assumir,
     _tratar_chamar_autor,
     _tratar_saudar,
+    processar_clique_botao_ticket,
 )
 from src.utils.formatacao import para_horario_brasilia
 from src.utils.mensagens import (
@@ -43,6 +45,7 @@ from src.utils.mensagens import (
     responder_erro,
     responder_view,
 )
+from src.utils.permissions import membro_e_administrador
 
 registrador = logging.getLogger(__name__)
 
@@ -75,8 +78,7 @@ class ViewEscolherTranscript(discord.ui.LayoutView):
             status = ticket.status or "—"
             rotulo = f"#{ticket.id} · {status}"[:100]
             descricao = (
-                f"{ticket.categoria_rotulo or ticket.categoria_chave} · "
-                f"{texto_data}"
+                f"{ticket.categoria_rotulo or ticket.categoria_chave} · {texto_data}"
             )[:100]
             opcoes.append(
                 discord.SelectOption(
@@ -165,8 +167,7 @@ class ViewEscolherTranscript(discord.ui.LayoutView):
             linhas.append(f"**Link:** {url}")
         else:
             linhas.append(
-                "**Link:** _ainda não publicado "
-                "(ticket pode não ter sido finalizado)._"
+                "**Link:** _ainda não publicado (ticket pode não ter sido finalizado)._"
             )
 
         extra_row = None
@@ -313,9 +314,7 @@ class TicketsCog(commands.Cog):
             )
             return
 
-        await interacao.response.send_modal(
-            ModalFinalizarTicket(ticket_id=ticket.id)
-        )
+        await interacao.response.send_modal(ModalFinalizarTicket(ticket_id=ticket.id))
 
     @grupo_ticket.command(
         name="atual-chamar-membro",
@@ -452,9 +451,7 @@ class TicketsCog(commands.Cog):
         if guilda is not None:
             membro_autor = guilda.get_member(autor_id)
             if membro_autor is not None:
-                autor_rotulo = (
-                    f"{nome_usuario_discord(membro_autor)} (`{autor_id}`)"
-                )
+                autor_rotulo = f"{nome_usuario_discord(membro_autor)} (`{autor_id}`)"
 
         view = ViewEscolherTranscript(
             tickets=tickets,
@@ -462,6 +459,153 @@ class TicketsCog(commands.Cog):
             solicitante_id=membro.id,
         )
         await responder_view(interacao, view, ephemeral=True)
+
+    @grupo_ticket.command(
+        name="sincronizar-permissoes",
+        description=(
+            "Aplica nos canais os cargos de staff (ticket atual ou todos abertos)"
+        ),
+    )
+    @app_commands.describe(
+        todos_abertos=(
+            "Se verdadeiro, corrige todos os tickets abertos/assumidos do servidor"
+        ),
+    )
+    async def ticket_sincronizar_permissoes(
+        self,
+        interacao: discord.Interaction,
+        todos_abertos: bool = False,
+    ) -> None:
+        """
+        Reaplica overwrites de staff nos canais de ticket.
+
+        Use no canal do ticket para corrigir só ele, ou marque
+        todos_abertos para varrer os tickets ainda ativos.
+        """
+        membro = interacao.user
+        if not isinstance(membro, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Comando indisponível aqui",
+                linhas=["Esta ação só funciona dentro do servidor."],
+            )
+            return
+
+        guilda = interacao.guild
+        if guilda is None:
+            await responder_erro(
+                interacao,
+                titulo="Servidor não encontrado",
+                linhas=["Guilda não encontrada."],
+            )
+            return
+
+        if not membro_e_administrador(membro):
+            if not membro_pode_gerenciar_ticket(membro, ticket=None):
+                from src.tickets.tickets_service import membro_eh_staff_ticket
+
+                if not membro_eh_staff_ticket(membro):
+                    await responder_erro(
+                        interacao,
+                        titulo="Sem permissão",
+                        linhas=[
+                            "Apenas administrador ou staff de tickets "
+                            "pode sincronizar permissões.",
+                        ],
+                    )
+                    return
+
+        await interacao.response.defer(ephemeral=True)
+
+        if not todos_abertos:
+            canal = interacao.channel
+            if not isinstance(canal, discord.TextChannel):
+                await responder_erro(
+                    interacao,
+                    titulo="Canal inválido",
+                    linhas=[
+                        "Use dentro do canal do ticket, ou marque `todos_abertos`.",
+                    ],
+                )
+                return
+
+            ticket = await buscar_ticket_por_canal(canal.id)
+            if ticket is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Ticket não encontrado",
+                    linhas=["Este canal não é um ticket ativo."],
+                )
+                return
+
+            resultado = await sincronizar_permissoes_do_canal_ticket(
+                canal,
+                ticket,
+            )
+            nomes_ok = resultado.get("nomes_ok") or []
+            nomes_falha = resultado.get("nomes_falha") or []
+            linhas = [
+                f"**Ticket:** `#{ticket.id}` · `{ticket.categoria_chave}`",
+                f"**Cargos aplicados:** `{resultado.get('cargos_ok', 0)}`",
+                f"**Falhas:** `{resultado.get('cargos_falha', 0)}`",
+            ]
+            if nomes_ok:
+                trecho = ", ".join(str(nome) for nome in nomes_ok[:12])
+                linhas.append(f"**OK:** {trecho}")
+            if nomes_falha:
+                trecho_falha = ", ".join(str(nome) for nome in nomes_falha[:8])
+                linhas.append(f"**Falha:** {trecho_falha}")
+
+            await responder_card(
+                interacao,
+                titulo="Permissões sincronizadas",
+                linhas=linhas,
+                cor=COR_SUCESSO,
+                delay=30,
+            )
+            return
+
+        tickets = await listar_tickets_abertos(limite=100)
+        if not tickets:
+            await responder_erro(
+                interacao,
+                titulo="Nenhum ticket aberto",
+                linhas=["Não há tickets com status aberto ou assumido."],
+            )
+            return
+
+        total_ok = 0
+        total_falha = 0
+        canais_ok = 0
+        canais_sem_canal = 0
+
+        for ticket in tickets:
+            canal = guilda.get_channel(int(ticket.canal_id))
+            if not isinstance(canal, discord.TextChannel):
+                canais_sem_canal += 1
+                continue
+            resultado = await sincronizar_permissoes_do_canal_ticket(
+                canal,
+                ticket,
+            )
+            total_ok += int(resultado.get("cargos_ok") or 0)
+            total_falha += int(resultado.get("cargos_falha") or 0)
+            canais_ok += 1
+
+        await responder_card(
+            interacao,
+            titulo="Sincronização em lote concluída",
+            linhas=[
+                f"**Tickets processados:** `{canais_ok}`",
+                f"**Canais não encontrados:** `{canais_sem_canal}`",
+                f"**Cargos aplicados (soma):** `{total_ok}`",
+                f"**Falhas (soma):** `{total_falha}`",
+                "Confira um canal de ticket: equipe ticket e "
+                "diretoria devem aparecer nas permissões.",
+            ],
+            cor=COR_SUCESSO,
+            delay=45,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:

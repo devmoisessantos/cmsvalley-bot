@@ -40,27 +40,63 @@ def _nomes_cargos_staff_da_categoria(categoria_chave: str | None) -> list[str]:
     return list(CARGOS_TICKET_STAFF)
 
 
-def _ids_cargos_staff(
+def _cargos_staff_na_guilda(
     guilda: discord.Guild,
     categoria_chave: str | None = None,
-) -> list[discord.Object]:
+) -> list[discord.Role]:
     """
-    Resolve os IDs dos cargos de staff do ticket presentes na guilda.
+    Resolve os cargos de staff do ticket que existem na guilda.
 
-    Usa a lista da categoria quando informada (ex.: revogar_exo).
+    Usa Role real (não discord.Object): overwrite com Object sem
+    tipo de alvo pode ser ignorada pela API e o canal fica só com
+    autor, bot e quem tem Administrator.
     """
-    objetos: list[discord.Object] = []
+    cargos: list[discord.Role] = []
     ids_ja_incluidos: set[int] = set()
     for nome_cargo in _nomes_cargos_staff_da_categoria(categoria_chave):
         cargo_id = CARGOS.get(nome_cargo)
         if not cargo_id:
+            registrador.warning(
+                "Cargo de ticket '%s' não está no CARGOS do config.",
+                nome_cargo,
+            )
             continue
         id_numerico = int(cargo_id)
         if id_numerico in ids_ja_incluidos:
             continue
         ids_ja_incluidos.add(id_numerico)
-        objetos.append(discord.Object(id=id_numerico))
-    return objetos
+
+        cargo = guilda.get_role(id_numerico)
+        if cargo is None:
+            registrador.warning(
+                "Cargo de ticket '%s' (id=%s) não existe nesta guilda.",
+                nome_cargo,
+                id_numerico,
+            )
+            continue
+        cargos.append(cargo)
+
+    return cargos
+
+
+def _overwrite_staff_texto() -> discord.PermissionOverwrite:
+    """Permissão padrão de staff em canal de texto do ticket."""
+    return discord.PermissionOverwrite(
+        view_channel=True,
+        send_messages=True,
+        attach_files=True,
+        embed_links=True,
+        read_message_history=True,
+    )
+
+
+def _overwrite_staff_voz() -> discord.PermissionOverwrite:
+    """Permissão padrão de staff em call de atendimento."""
+    return discord.PermissionOverwrite(
+        view_channel=True,
+        connect=True,
+        speak=True,
+    )
 
 
 def _membro_tem_algum_cargo_por_chave(
@@ -186,6 +222,19 @@ async def listar_tickets_do_autor(
         return list(resultado.scalars().all())
 
 
+async def listar_tickets_abertos(limite: int = 100) -> list[Ticket]:
+    """Lista tickets ainda abertos ou assumidos (canal ainda ativo)."""
+    async with async_session() as sessao:
+        consulta = (
+            select(Ticket)
+            .where(Ticket.status.in_(["aberto", "assumido"]))
+            .order_by(Ticket.aberto_em.desc())
+            .limit(limite)
+        )
+        resultado = await sessao.execute(consulta)
+        return list(resultado.scalars().all())
+
+
 def gerar_senha_transcript() -> str:
     """Gera senha curta para visualização do transcript."""
     return secrets.token_hex(3)
@@ -296,9 +345,11 @@ async def criar_ticket(
 
     username = nome_usuario_discord(autor)
     nome_canal = sanitizar_nome_canal(f"{definicao['prefixo_canal']}-{username}")
+    cargos_staff = _cargos_staff_na_guilda(guilda, categoria_chave)
+    overwrite_staff = _overwrite_staff_texto()
 
     overwrites: dict[
-        discord.Role | discord.Member | discord.Object,
+        discord.Role | discord.Member,
         discord.PermissionOverwrite,
     ] = {
         guilda.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -320,14 +371,15 @@ async def criar_ticket(
         ),
     }
 
-    for objeto_cargo in _ids_cargos_staff(guilda, categoria_chave):
-        overwrites[objeto_cargo] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            attach_files=True,
-            embed_links=True,
-            read_message_history=True,
-        )
+    for cargo_staff in cargos_staff:
+        overwrites[cargo_staff] = overwrite_staff
+
+    registrador.info(
+        "Criando ticket categoria=%s com %s cargos de staff: %s",
+        categoria_chave,
+        len(cargos_staff),
+        ", ".join(f"{cargo.name}({cargo.id})" for cargo in cargos_staff) or "(nenhum)",
+    )
 
     canal = await guilda.create_text_channel(
         name=nome_canal,
@@ -336,6 +388,24 @@ async def criar_ticket(
         topic=f"Ticket criado para o usuário: {username}",
         reason=f"Ticket aberto por {username} — {definicao['rotulo']}",
     )
+
+    # Reforço: aplica de novo cada cargo. Garante que a API gravou
+    # mesmo se a categoria tentar sincronizar permissões herdadas.
+    for cargo_staff in cargos_staff:
+        try:
+            await canal.set_permissions(
+                cargo_staff,
+                overwrite=overwrite_staff,
+                reason="Reforço de staff após criar ticket",
+            )
+        except discord.HTTPException as erro:
+            registrador.warning(
+                "Falha ao reforçar cargo %s (%s) no canal %s: %s",
+                cargo_staff.name,
+                cargo_staff.id,
+                canal.id,
+                erro,
+            )
 
     async with async_session() as sessao:
         ticket = Ticket(
@@ -357,17 +427,22 @@ async def criar_ticket(
 async def sincronizar_permissoes_do_canal_ticket(
     canal: discord.TextChannel,
     ticket: Ticket,
-) -> None:
+) -> dict[str, int | list[str]]:
     """
     Garante que os cargos corretos veem e falam no canal do ticket.
 
-    Usado na criação e ao assumir, para tickets antigos herdarem a
-    regra nova (equipe ticket, supervisor++, ou só diretoria geral
-    em revogar_exo).
+    Usado na criação, ao assumir e no comando manual de sincronizar.
+    Retorna contagem e nomes aplicados para feedback ao staff.
     """
     guilda = canal.guild
+    resultado: dict[str, int | list[str]] = {
+        "cargos_ok": 0,
+        "cargos_falha": 0,
+        "nomes_ok": [],
+        "nomes_falha": [],
+    }
     if guilda is None:
-        return
+        return resultado
 
     autor = guilda.get_member(int(ticket.autor_discord_id))
     if autor is not None:
@@ -408,27 +483,56 @@ async def sincronizar_permissoes_do_canal_ticket(
                 erro,
             )
 
-    for objeto_cargo in _ids_cargos_staff(guilda, ticket.categoria_chave):
+    try:
+        await canal.set_permissions(
+            guilda.default_role,
+            view_channel=False,
+            reason="Sincronizar @everyone oculto no ticket",
+        )
+    except discord.HTTPException as erro:
+        registrador.warning(
+            "Falha ao ocultar @everyone no ticket #%s: %s",
+            ticket.id,
+            erro,
+        )
+
+    overwrite_staff = _overwrite_staff_texto()
+    cargos_staff = _cargos_staff_na_guilda(guilda, ticket.categoria_chave)
+    nomes_ok: list[str] = []
+    nomes_falha: list[str] = []
+
+    for cargo_staff in cargos_staff:
         try:
             await canal.set_permissions(
-                objeto_cargo,
-                view_channel=True,
-                send_messages=True,
-                attach_files=True,
-                embed_links=True,
-                read_message_history=True,
+                cargo_staff,
+                overwrite=overwrite_staff,
                 reason=(
-                    f"Sincronizar staff do ticket "
-                    f"(categoria={ticket.categoria_chave})"
+                    f"Sincronizar staff do ticket (categoria={ticket.categoria_chave})"
                 ),
             )
+            nomes_ok.append(f"{cargo_staff.name} ({cargo_staff.id})")
         except discord.HTTPException as erro:
+            nomes_falha.append(f"{cargo_staff.name} ({cargo_staff.id})")
             registrador.warning(
                 "Falha ao sincronizar cargo %s no ticket #%s: %s",
-                getattr(objeto_cargo, "id", objeto_cargo),
+                cargo_staff.id,
                 ticket.id,
                 erro,
             )
+
+    resultado["cargos_ok"] = len(nomes_ok)
+    resultado["cargos_falha"] = len(nomes_falha)
+    resultado["nomes_ok"] = nomes_ok
+    resultado["nomes_falha"] = nomes_falha
+
+    registrador.info(
+        "Permissões sincronizadas no ticket #%s canal=%s ok=%s falha=%s",
+        ticket.id,
+        canal.id,
+        len(nomes_ok),
+        len(nomes_falha),
+    )
+    return resultado
 
 
 async def assumir_ticket(
@@ -720,8 +824,9 @@ async def criar_call_atendimento(
     username_autor = ticket.autor_nome or "usuario"
     nome_call = sanitizar_nome_canal(f"📞・atendimento-{username_autor}")
 
+    overwrite_voz = _overwrite_staff_voz()
     overwrites: dict[
-        discord.Role | discord.Member | discord.Object,
+        discord.Role | discord.Member,
         discord.PermissionOverwrite,
     ] = {
         guilda.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -747,12 +852,8 @@ async def criar_call_atendimento(
             speak=True,
         )
 
-    for objeto_cargo in _ids_cargos_staff(guilda, ticket.categoria_chave):
-        overwrites[objeto_cargo] = discord.PermissionOverwrite(
-            view_channel=True,
-            connect=True,
-            speak=True,
-        )
+    for cargo_staff in _cargos_staff_na_guilda(guilda, ticket.categoria_chave):
+        overwrites[cargo_staff] = overwrite_voz
 
     canal_voz = await guilda.create_voice_channel(
         name=nome_call,

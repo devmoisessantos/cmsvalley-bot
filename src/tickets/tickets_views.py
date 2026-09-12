@@ -653,8 +653,7 @@ async def _executar_acao_membro(
                 interacao,
                 titulo="Destino inválido",
                 linhas=[
-                    "Só é possível transferir para quem tem o cargo "
-                    "⚠️ EQUIPE • TICKET.",
+                    "Só é possível transferir para quem tem o cargo ⚠️ EQUIPE • TICKET.",
                 ],
             )
             return
