@@ -1,33 +1,18 @@
 """
 Painel visual do status do servidor FiveM (Components V2).
 
-Layout do card:
-
-- Título com nome do servidor (e thumbnail, se configurado)
-- Status ONLINE / OFFLINE com indicador
-- Jogadores no formato [ atual/máximo ]
-- IP / connect
-- Próximo restart
-- Rodapé "Atualizado em tempo real"
-- Botão Conectar (link CFX)
+Mostra se o servidor está online ou offline, quantos jogadores estão
+conectados, quanto falta para o próximo restart e um botão de conectar.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
 import discord
 
-from src.config import (
-    FUSO_HORARIO_LOCAL,
-    STATUS_SERVIDOR,
-)
+from src.config import STATUS_SERVIDOR
 from src.status_servidor.status_servidor_service import (
     calcular_proximo_restart,
 )
-
-FUSO = ZoneInfo(FUSO_HORARIO_LOCAL)
 
 
 def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
@@ -44,65 +29,38 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
     )
     nome = dados.get("nome") or STATUS_SERVIDOR["NOME_SERVIDOR"]
     texto_restart = calcular_proximo_restart()
-    agora = datetime.now(FUSO).strftime("%H:%M:%S")
 
     if online:
-        texto_status = "🟢 ONLINE"
+        texto_status = "ONLINE"
         cor = discord.Color.green()
     else:
-        texto_status = "🔴 OFFLINE"
+        texto_status = "OFFLINE"
         cor = discord.Color.red()
 
-    texto_jogadores = f"[ {jogadores}/{max_jogadores} ]"
-    connect = STATUS_SERVIDOR["CONNECT"]
-
-    linhas_corpo = [
-        f"**Status**\n{texto_status}",
-        f"**Jogadores**\n`{texto_jogadores}`",
-        f"**IP FiveM**\n`{connect}`",
-        f"**Próximo Restart**\n{texto_restart}",
+    linhas = [
+        f"**Servidor:** {nome}",
+        f"**Status:** {texto_status}",
+        f"**Jogadores:** {jogadores} / {max_jogadores}",
+        f"**Próximo restart:** {texto_restart}",
+        f"**Connect:** `{STATUS_SERVIDOR['CONNECT']}`",
     ]
 
     if dados.get("erro") and not online:
-        linhas_corpo.append(f"_{dados['erro']}_")
+        linhas.append(f"\n_{dados['erro']}_")
 
-    texto_corpo = "\n\n".join(linhas_corpo)
-    texto_rodape = f"-# Atualizado em tempo real · {agora}"
-
-    componentes: list = []
-
-    # Título + thumbnail opcional (ícone do servidor / hospital)
-    url_thumbnail = STATUS_SERVIDOR.get("URL_THUMBNAIL")
-    texto_titulo = f"# {nome}"
-
-    if url_thumbnail:
-        componentes.append(
-            discord.ui.Section(
-                texto_titulo,
-                accessory=discord.ui.Thumbnail(url=url_thumbnail),
-            )
-        )
-    else:
-        componentes.append(discord.ui.TextDisplay(texto_titulo))
-
-    componentes.append(
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
-    )
-    componentes.append(discord.ui.TextDisplay(texto_corpo))
-    componentes.append(
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
-    )
-    componentes.append(discord.ui.TextDisplay(texto_rodape))
+    texto_corpo = "\n".join(linhas)
 
     botao_conectar = discord.ui.Button(
         label="Conectar",
         style=discord.ButtonStyle.link,
         url=STATUS_SERVIDOR["LINK_CFX"],
     )
-    componentes.append(discord.ui.ActionRow(botao_conectar))
+    linha_botao = discord.ui.ActionRow(botao_conectar)
 
     container = discord.ui.Container(
-        *componentes,
+        discord.ui.TextDisplay("# Status do servidor"),
+        discord.ui.TextDisplay(texto_corpo),
+        linha_botao,
         accent_color=cor,
     )
 
