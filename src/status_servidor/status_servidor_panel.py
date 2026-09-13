@@ -1,18 +1,44 @@
 """
 Painel visual do status do servidor FiveM (Components V2).
 
-Mostra se o servidor está online ou offline, quantos jogadores estão
-conectados, quanto falta para o próximo restart e um botão de conectar.
+Layout do card:
+
+# Status do servidor
+{nome} (+ thumbnail, se configurado)
+> _Status_:
+```
+🟢 ONLINE / 🔴 OFFLINE
+```
+> _Jogadores_:
+```yaml
+ [ X/2048 ]
+```
+> _IP FiveM_:
+```
+connect valleyfivem.com
+```
+_Próximo restart_:
+em Xhrs Ym
+Atualizado em tempo real · horário
+[ Conectar ]
 """
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import discord
 
-from src.config import STATUS_SERVIDOR
+from src.config import (
+    FUSO_HORARIO_LOCAL,
+    STATUS_SERVIDOR,
+)
 from src.status_servidor.status_servidor_service import (
     calcular_proximo_restart,
 )
+
+FUSO = ZoneInfo(FUSO_HORARIO_LOCAL)
 
 
 def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
@@ -24,43 +50,68 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
     """
     online = bool(dados.get("online"))
     jogadores = int(dados.get("jogadores") or 0)
-    max_jogadores = int(
-        dados.get("max_jogadores") or STATUS_SERVIDOR["MAX_JOGADORES"]
-    )
-    nome = dados.get("nome") or STATUS_SERVIDOR["NOME_SERVIDOR"]
+    max_jogadores = int(dados.get("max_jogadores") or STATUS_SERVIDOR["MAX_JOGADORES"])
+    nome = STATUS_SERVIDOR["NOME_SERVIDOR"]
     texto_restart = calcular_proximo_restart()
+    agora = datetime.now(FUSO).strftime("%H:%M:%S")
 
     if online:
-        texto_status = "ONLINE"
+        texto_status = "🟢 ONLINE"
         cor = discord.Color.green()
     else:
-        texto_status = "OFFLINE"
+        texto_status = "🔴 OFFLINE"
         cor = discord.Color.red()
 
-    linhas = [
-        f"**Servidor:** {nome}",
-        f"**Status:** {texto_status}",
-        f"**Jogadores:** {jogadores} / {max_jogadores}",
-        f"**Próximo restart:** {texto_restart}",
-        f"**Connect:** `{STATUS_SERVIDOR['CONNECT']}`",
-    ]
+    connect = STATUS_SERVIDOR["CONNECT"]
+
+    texto_corpo = (
+        f"**{nome}**\n\n"
+        f"> _Status_:\n"
+        f"```\n{texto_status}\n```\n"
+        f"> _Jogadores_:\n"
+        f"```yaml\n [ {jogadores}/{max_jogadores} ]\n```\n"
+        f"> _IP FiveM_:\n"
+        f"```\n{connect}\n```\n"
+        f"_Próximo restart_:\n"
+        f"{texto_restart}"
+    )
 
     if dados.get("erro") and not online:
-        linhas.append(f"\n_{dados['erro']}_")
+        texto_corpo = f"{texto_corpo}\n\n_{dados['erro']}_"
 
-    texto_corpo = "\n".join(linhas)
+    texto_rodape = f"-# Atualizado em tempo real · {agora}"
+
+    componentes: list = []
+
+    url_thumbnail = STATUS_SERVIDOR.get("URL_THUMBNAIL") or ""
+    texto_titulo = "# Status do servidor"
+
+    if url_thumbnail:
+        componentes.append(
+            discord.ui.Section(
+                discord.ui.TextDisplay(texto_titulo),
+                accessory=discord.ui.Thumbnail(url=url_thumbnail),
+            )
+        )
+    else:
+        componentes.append(discord.ui.TextDisplay(texto_titulo))
+
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    componentes.append(discord.ui.TextDisplay(texto_corpo))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    componentes.append(discord.ui.TextDisplay(texto_rodape))
 
     botao_conectar = discord.ui.Button(
         label="Conectar",
         style=discord.ButtonStyle.link,
         url=STATUS_SERVIDOR["LINK_CFX"],
     )
-    linha_botao = discord.ui.ActionRow(botao_conectar)
+    linha_botao = discord.ui.ActionRow()
+    linha_botao.add_item(botao_conectar)
+    componentes.append(linha_botao)
 
     container = discord.ui.Container(
-        discord.ui.TextDisplay("# Status do servidor"),
-        discord.ui.TextDisplay(texto_corpo),
-        linha_botao,
+        *componentes,
         accent_color=cor,
     )
 
