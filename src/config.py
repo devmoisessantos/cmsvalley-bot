@@ -1046,9 +1046,13 @@ STATUS_SERVIDOR = {
     "LINK_CFX": "https://cfx.re/join/8rye45",
     "NOME_SERVIDOR": "Valley Roleplay",
     "MAX_JOGADORES": 2048,
-    "INTERVALO_ATUALIZACAO_SEGUNDOS": 60,
-    # Fallback quando a API do CFX não responde
+    "INTERVALO_ATUALIZACAO_SEGUNDOS": 120,
+    # Caminho principal: dynamic.json no IP real. A API pública do CFX
+    # não lista este servidor (404). O IP vem do cabeçalho
+    # x-citizenfx-url em https://cfx.re/join/8rye45.
+    # Se o IP mudar, o service tenta descobrir de novo pelo join.
     "URLS_DYNAMIC": [
+        "http://131.196.198.120:30120/dynamic.json",
         "http://valleyfivem.com:30120/dynamic.json",
     ],
 }
