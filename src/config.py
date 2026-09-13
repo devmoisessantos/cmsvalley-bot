@@ -1047,6 +1047,9 @@ STATUS_SERVIDOR = {
     "NOME_SERVIDOR": "Valley Roleplay",
     "MAX_JOGADORES": 2048,
     "INTERVALO_ATUALIZACAO_SEGUNDOS": 120,
+    # URL pública de imagem para o thumbnail do card (opcional).
+    # Deixe None se não quiser ícone no painel.
+    "URL_THUMBNAIL": "https://cdn.discordapp.com/icons/1035704096608493608/a_b76a123d1c96a755197f256097401b2d.gif?size=512",
     # Caminho principal: dynamic.json no IP real. A API pública do CFX
     # não lista este servidor (404). O IP vem do cabeçalho
     # x-citizenfx-url em https://cfx.re/join/8rye45.
