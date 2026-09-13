@@ -202,6 +202,8 @@ CAMINHOS_DOS_COGS = [
     "src.wipe.wipe_cogs",
     "src.wipe.wipe_listener",
     "src.banco.banco_cogs",
+    "src.status_servidor.status_servidor_cogs",
+    "src.status_servidor.status_servidor_tasks",
 ]
 
 

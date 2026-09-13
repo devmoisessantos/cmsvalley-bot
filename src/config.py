@@ -653,6 +653,8 @@ CANAIS = {
     # Entrada e saída de membros no servidor (cards automáticos)
     "CANAL_BOAS_VINDAS": 1546181958118146148,
     "CANAL_ADEUS_SERVIDOR": 1546181970193809429,
+    # Painel de status do servidor FiveM da cidade (preencher o ID real)
+    "CANAL_STATUS_SERVIDOR": 1548437112678907954,
 }
 
 # ---------------------------------------------------------------------------
@@ -1032,6 +1034,24 @@ NOMES_CANAIS_PLANTAO = _gerar_nomes_amigaveis()
 TIMEZONE_LOCAL = "America/Sao_Paulo"  # ajuste se o fuso do servidor/cidade for outro
 RR_HORARIOS = ["11:00", "17:00"]  # horários diários de RR (restart) da cidade
 INTERVALO_CHAMADA_MINUTOS = 120
+
+# ---------------------------------------------------------------------------
+# Status do servidor FiveM (painel no Discord do hospital)
+# ---------------------------------------------------------------------------
+# CANAL_STATUS_SERVIDOR deve ser preenchido com o ID do canal onde o card
+# fica fixo. Enquanto for 0, a task não publica nada.
+STATUS_SERVIDOR = {
+    "CFX_CODIGO": "8rye45",
+    "CONNECT": "connect valleyfivem.com",
+    "LINK_CFX": "https://cfx.re/join/8rye45",
+    "NOME_SERVIDOR": "Valley Roleplay",
+    "MAX_JOGADORES": 2048,
+    "INTERVALO_ATUALIZACAO_SEGUNDOS": 60,
+    # Fallback quando a API do CFX não responde
+    "URLS_DYNAMIC": [
+        "http://valleyfivem.com:30120/dynamic.json",
+    ],
+}
 # Cooldown de 2h só após chamada CONCLUÍDA com sucesso.
 # Timeouts de cancelamento (não aplicam cooldown):
 TIMEOUT_PRINT_EMS_SEGUNDOS = 600  # 10 min sem enviar print do /ems
