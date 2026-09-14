@@ -86,11 +86,13 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
     url_thumbnail = STATUS_SERVIDOR.get("URL_THUMBNAIL") or ""
     texto_titulo = "# Status do servidor"
 
+    # Mesmo padrão do plantao: Thumbnail recebe a URL por posição,
+    # e Section recebe o texto do título (str), não TextDisplay.
     if url_thumbnail:
         componentes.append(
             discord.ui.Section(
-                discord.ui.TextDisplay(texto_titulo),
-                accessory=discord.ui.Thumbnail(url=url_thumbnail),
+                texto_titulo,
+                accessory=discord.ui.Thumbnail(url_thumbnail),
             )
         )
     else:

@@ -170,7 +170,8 @@ class StatusServidorCogs(commands.Cog):
                 titulo="Falha ao publicar",
                 linhas=[
                     "Não consegui publicar o painel de status agora.",
-                    f"Detalhe técnico: `{type(erro_capturado).__name__}`",
+                    f"Detalhe técnico: `{type(erro_capturado).__name__}: "
+                    f"{erro_capturado}`",
                 ],
             )
 
