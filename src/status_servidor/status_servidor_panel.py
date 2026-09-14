@@ -103,7 +103,7 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
 
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
     componentes.append(discord.ui.TextDisplay(texto_corpo))
-    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(texto_rodape))
 
     botao_conectar = discord.ui.Button(
