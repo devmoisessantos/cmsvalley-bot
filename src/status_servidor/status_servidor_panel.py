@@ -71,7 +71,7 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
         f"```yaml\n [ {jogadores}/{max_jogadores} ]\n```\n"
         f"> __IP FiveM__:\n"
         f"```yaml\n{connect}\n```\n"
-        f"__Próximo restart__:\n"
+        f"> __Próximo restart__:\n"
         f"```yaml\n{texto_restart}```"
     )
 
@@ -83,7 +83,11 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
     componentes: list = []
 
     url_thumbnail = STATUS_SERVIDOR.get("URL_THUMBNAIL") or ""
-    texto_titulo = f"# Status do servidor\n> ### **{nome}**\nConfira abaixo o status geral do servidor."
+    texto_titulo = (
+        f"# 📡 Status do Servidor\n"
+        f"> ### 🏷️ **{nome}**\n"
+        f"> 🔎 Confira abaixo o status geral do servidor."
+    )
 
     # Mesmo padrão do plantao: Thumbnail recebe a URL por posição,
     # e Section recebe o texto do título (str), não TextDisplay.
