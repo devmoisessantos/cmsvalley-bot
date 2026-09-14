@@ -71,7 +71,7 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
         f"> __Jogadores__:\n"
         f"```yaml\n [ {jogadores}/{max_jogadores} ]\n```\n"
         f"> __IP FiveM__:\n"
-        f"```\n{connect}\n```\n"
+        f"```yaml\n{connect}\n```\n"
         f"__Próximo restart__:\n"
         f"```yaml\n{texto_restart}```"
     )
