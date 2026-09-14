@@ -51,7 +51,7 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
     online = bool(dados.get("online"))
     jogadores = int(dados.get("jogadores") or 0)
     max_jogadores = int(dados.get("max_jogadores") or STATUS_SERVIDOR["MAX_JOGADORES"])
-    nome = STATUS_SERVIDOR["NOME_SERVIDOR"]
+    nome = dados.get("nome") or STATUS_SERVIDOR["NOME_SERVIDOR"]
     texto_restart = calcular_proximo_restart()
     agora = datetime.now(FUSO).strftime("%H:%M:%S")
 
