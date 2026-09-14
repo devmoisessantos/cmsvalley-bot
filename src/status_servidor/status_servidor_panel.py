@@ -66,14 +66,14 @@ def montar_painel_status(dados: dict) -> discord.ui.LayoutView:
 
     texto_corpo = (
         f"**{nome}**\n\n"
-        f"> _Status_:\n"
-        f"```\n{texto_status}\n```\n"
-        f"> _Jogadores_:\n"
+        f"> __Status__:\n"
+        f"```yaml\n{texto_status}\n```\n"
+        f"> __Jogadores__:\n"
         f"```yaml\n [ {jogadores}/{max_jogadores} ]\n```\n"
-        f"> _IP FiveM_:\n"
+        f"> __IP FiveM__:\n"
         f"```\n{connect}\n```\n"
-        f"_Próximo restart_:\n"
-        f"{texto_restart}"
+        f"__Próximo restart__:\n"
+        f"```yaml\n{texto_restart}```"
     )
 
     if dados.get("erro") and not online:
