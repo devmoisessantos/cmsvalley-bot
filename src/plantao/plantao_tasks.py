@@ -53,6 +53,7 @@ from src.plantao.plantao_service import (
     _finalizar_periodo_em_call,
     _membro_conta_tempo_moeda,
     _membro_surdo,
+    fechar_segmento_parcial_do_ciclo,
     garantir_aware,
     pausar_cronometro_moeda,
     retomar_cronometro_moeda,
@@ -79,9 +80,11 @@ class PlantaoTasks(commands.Cog):
         self.bot = bot
         self.verificar_ociosos.start()
         self.verificar_afk.start()
+        self.acumular_tempo_do_ciclo.start()
         logger.info(
             "PlantaoTasks inicializado — ociosidade checada a cada 1 minuto "
-            "(avisos %s/%s/%s min, desliga em %s min)",
+            "(avisos %s/%s/%s min, desliga em %s min); "
+            "tempo do ciclo gravado a cada 1 minuto em serviço",
             LEMBRETE_1_MINUTOS,
             LEMBRETE_2_MINUTOS,
             LEMBRETE_3_MINUTOS,
@@ -92,6 +95,70 @@ class PlantaoTasks(commands.Cog):
         """Cancela os loops para impedir tarefas duplicadas ao descarregar o cog."""
         self.verificar_ociosos.cancel()
         self.verificar_afk.cancel()
+        self.acumular_tempo_do_ciclo.cancel()
+
+    # ------------------------------------------------------------------
+    # Tempo do ciclo a cada 1 minuto (ainda em serviço)
+    # ------------------------------------------------------------------
+
+    @tasks.loop(minutes=1)
+    async def acumular_tempo_do_ciclo(self):
+        """
+        Grava no log o tempo de quem está em serviço e em call válida.
+
+        Assim o total de horas do ciclo sobe a cada minuto, sem exigir
+        sair de serviço. Surdo ou fora de call não entra neste fechamento
+        parcial (mesma regra do cronômetro de moeda).
+        """
+        guild = self.bot.get_guild(int(GUILD_ID))
+        if guild is None:
+            return
+
+        try:
+            async with async_session() as sessao:
+                resultado = await sessao.execute(
+                    select(EstadoPlantao).where(
+                        EstadoPlantao.toggle_ligado.is_(True),
+                        EstadoPlantao.em_call_valida.is_(True),
+                        EstadoPlantao.segmento_iniciado_em.is_not(None),
+                    )
+                )
+                estados = list(resultado.scalars().all())
+        except (DBAPIError, OperationalError) as erro_banco:
+            logger.warning(
+                "Falha ao listar plantões para ciclo minuto: %s",
+                erro_banco,
+            )
+            await reiniciar_pool_se_preciso(erro_banco)
+            return
+
+        for estado in estados:
+            membro = guild.get_member(estado.discord_id)
+            if membro is None:
+                continue
+            if not _membro_conta_tempo_moeda(membro):
+                continue
+            try:
+                segundos, moedas = await fechar_segmento_parcial_do_ciclo(
+                    estado.discord_id
+                )
+                if segundos > 0:
+                    logger.debug(
+                        "Ciclo minuto: membro %s +%ss (moedas=%s)",
+                        estado.discord_id,
+                        segundos,
+                        moedas,
+                    )
+            except Exception as erro_ciclo:
+                logger.exception(
+                    "Falha no ciclo minuto do membro %s: %s",
+                    estado.discord_id,
+                    erro_ciclo,
+                )
+
+    @acumular_tempo_do_ciclo.before_loop
+    async def _esperar_pronto_ciclo(self):
+        await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------
     # Ociosidade (fora de call)

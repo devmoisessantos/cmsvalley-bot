@@ -380,6 +380,85 @@ def retomar_cronometro_moeda(estado: EstadoPlantao) -> None:
         estado.segmento_iniciado_em = datetime.now(timezone.utc)
 
 
+async def fechar_segmento_parcial_do_ciclo(
+    discord_id: int,
+) -> tuple[int, int]:
+    """
+    Fecha o trecho aberto em log sem tirar o membro de serviço.
+
+    Usado a cada 1 minuto pela task de plantão: o tempo do ciclo (horas
+    em log_plantao) sobe enquanto a pessoa continua em call. Sem isso,
+    só entrava no total ao sair de serviço / sair da call.
+
+    - Grava LogPlantao com a duração do trecho (sem postar no canal de log)
+    - Soma em segundos_acumulados e credita moedas se completou fração
+    - Reinicia segmento_iniciado_em para continuar contando
+
+    Devolve (segundos_fechados, moedas_ganhas).
+    """
+    from src.database.models import LogPlantao
+
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado.scalar_one_or_none()
+        if estado is None:
+            return 0, 0
+        if not estado.toggle_ligado:
+            return 0, 0
+        if estado.segmento_iniciado_em is None:
+            return 0, 0
+
+        agora = datetime.now(timezone.utc)
+        inicio = garantir_aware(estado.segmento_iniciado_em)
+        decorrido = int((agora - inicio).total_seconds())
+
+        if decorrido < 1:
+            return 0, 0
+
+        estado.segundos_acumulados = int(estado.segundos_acumulados or 0) + decorrido
+        moedas_ganhas = _creditar_moedas_de_acumulado(estado)
+        estado.segmento_iniciado_em = agora
+        estado.ultima_atualizacao = agora
+
+        sessao.add(
+            LogPlantao(
+                id_fivem=estado.id_fivem,
+                discord_id=estado.discord_id,
+                evento="CICLO_MINUTO",
+                canal_id=None,
+                duracao_segundos=decorrido,
+                detalhes="Fechamento parcial a cada minuto (ainda em serviço)",
+            )
+        )
+        await sessao.commit()
+
+        saldo_apos = int(estado.saldo_moedas or 0)
+
+    if moedas_ganhas > 0:
+        try:
+            from src.plantao.carteira_service import registrar_movimentacao
+
+            await registrar_movimentacao(
+                discord_id=discord_id,
+                tipo="GANHO_PLANTAO",
+                valor=moedas_ganhas,
+                saldo_apos=saldo_apos,
+                referencia=f"+{moedas_ganhas} plantão (ciclo minuto)",
+            )
+        except Exception as erro_extrato:
+            await capturar_erro_e_logar(
+                erro_extrato,
+                contexto=(
+                    "registrar no extrato o ganho parcial de plantão de "
+                    f"{moedas_ganhas} moedas do membro {discord_id}"
+                ),
+            )
+
+    return decorrido, moedas_ganhas
+
+
 # ---------------------------------------------------------------------------
 # Administração de estado (comandos /plantao)
 # ---------------------------------------------------------------------------
@@ -410,8 +489,8 @@ async def calcular_segundos_historico_fechado(discord_id: int) -> int:
     """
     Soma só o tempo já gravado em log (segmentos fechados).
 
-    Não inclui o trecho ainda aberto em call. O total sobe quando o membro
-    sai da call ou encerra o serviço — aí o segmento vira log.
+    Não inclui o trecho ainda aberto em call. O total sobe a cada minuto
+    (evento CICLO_MINUTO) e também ao sair da call ou encerrar o serviço.
     """
     from sqlalchemy import func
 
