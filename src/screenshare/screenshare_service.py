@@ -64,9 +64,7 @@ if not _url_bruta:
         "EMS_OCR_API_URL",
         "https://ems-ocr-api.onrender.com",
     )
-SCREENSHARE_API_URL = _origem_da_url(_url_bruta) or (
-    "https://ems-ocr-api.onrender.com"
-)
+SCREENSHARE_API_URL = _origem_da_url(_url_bruta) or ("https://ems-ocr-api.onrender.com")
 
 # Site publico (Vercel). Pode incluir /screenshare.
 _public_bruta = os.getenv("SCREENSHARE_PUBLIC_URL", "").strip()
@@ -95,10 +93,15 @@ def montar_link_convite(codigo: str) -> str:
     """
     Link que o membro compartilha.
 
-    Preferimos a URL publica do site. Formato compativel com o frontend
-    Lisboa/Nexus (hash route /call/CODIGO).
+    Formato unico (igual a API):
+    {SCREENSHARE_PUBLIC_URL}/#/call/ABCD-1234
+
+    Exemplo de SCREENSHARE_PUBLIC_URL:
+    https://cmsvalley-api.vercel.app/screenshare
     """
     base = SCREENSHARE_PUBLIC_URL.rstrip("/")
+    if base.endswith("/#"):
+        base = base[:-2].rstrip("/")
     return f"{base}/#/call/{codigo}"
 
 
@@ -134,9 +137,7 @@ async def checar_saude() -> tuple[bool, dict[str, Any] | str]:
             async with sessao.get(url) as resposta:
                 texto = await resposta.text()
                 if resposta.status >= 400:
-                    return False, _mensagem_http_falha(
-                        resposta.status, texto, url
-                    )
+                    return False, _mensagem_http_falha(resposta.status, texto, url)
                 try:
                     dados = json.loads(texto) if texto else {}
                 except json.JSONDecodeError:
@@ -187,9 +188,7 @@ async def criar_sala(nome_exibicao: str) -> dict[str, Any]:
 
                 codigo = dados.get("code") or ""
                 if not codigo:
-                    raise RuntimeError(
-                        "A API criou a sala mas nao devolveu o codigo."
-                    )
+                    raise RuntimeError("A API criou a sala mas nao devolveu o codigo.")
 
                 dados["invite_url"] = montar_link_convite(codigo)
                 return dados
