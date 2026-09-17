@@ -47,7 +47,9 @@ class PainelFazerChamadaLayout(LoggingViewMixin, discord.ui.LayoutView):
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
         # Bloco 2: separador
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Bloco 3: acesso, comprovação e passo a passo
         componentes.append(
@@ -66,7 +68,9 @@ class PainelFazerChamadaLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 4: separador antes do botão
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Botão (inalterado)
         linha_botoes = discord.ui.ActionRow()

@@ -174,6 +174,7 @@ CAMINHOS_DOS_COGS = [
     "src.plantao.plantao_cogs",
     "src.plantao.chamada.chamada_cogs",
     "src.plantao.plantao_tasks",
+    "src.plantao.plantao_ativos_tasks",
     "src.plantao.plantao_listener",
     "src.plantao.ranking_plantao_tasks",
     "src.ranking.ranking_cogs",

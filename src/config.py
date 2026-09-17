@@ -526,6 +526,8 @@ AREAS_FINANCEIRAS = {
 CANAIS = {
     "CANAL_MARCAR_PRESENCA_GATE": 1533997231475261571,
     "CANAL_PAINEL_PLANTAO_ID": 1531543798293856376,  # #iniciar-plantao
+    # Lista ao vivo de quem está com plantão ligado
+    "PAINEL_FIXO_PLANTAO_ATIVO": 1550216958190821507,
     "CANAL_FAZER_CHAMADA": 1486369151952879848,  # #fazer-chamada
     # registro público das chamadas realizadas
     "CANAL_CHAMADAS_HP_SUL": 1486369153349582990,

@@ -417,7 +417,9 @@ async def fechar_segmento_parcial_do_ciclo(
         if decorrido < 1:
             return 0, 0
 
-        estado.segundos_acumulados = int(estado.segundos_acumulados or 0) + decorrido
+        estado.segundos_acumulados = (
+            int(estado.segundos_acumulados or 0) + decorrido
+        )
         moedas_ganhas = _creditar_moedas_de_acumulado(estado)
         estado.segmento_iniciado_em = agora
         estado.ultima_atualizacao = agora
