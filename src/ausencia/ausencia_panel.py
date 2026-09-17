@@ -131,7 +131,9 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
         else:
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
         componentes.append(
             discord.ui.TextDisplay(
                 "## ⚙️ Regras Gerais:\n"
@@ -149,7 +151,9 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "restaura seus cargos."
             )
         )
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         linha = discord.ui.ActionRow()
         botao = discord.ui.Button(
@@ -196,6 +200,13 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 ],
             )
             return
+
+        # Confirma a interação antes das consultas ao banco (prazo de ~3s).
+        if not interacao.response.is_done():
+            try:
+                await interacao.response.defer(ephemeral=True)
+            except discord.HTTPException:
+                return
 
         ativa = await obter_ausencia_ativa(membro.id)
         if ativa is not None:
@@ -251,6 +262,12 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Use este painel dentro do servidor."],
             )
             return
+
+        if not interacao.response.is_done():
+            try:
+                await interacao.response.defer(ephemeral=True)
+            except discord.HTTPException:
+                return
 
         retorno = await obter_retorno_pendente(membro.id)
         if retorno is not None:
@@ -1005,12 +1022,14 @@ class ViewDecisaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
             emoji="✅",
             custom_id=f"{CUSTOM_ID_APROVAR}{solicitacao_id}",
         )
+        botao_ok.callback = self._ao_aprovar
         botao_no = discord.ui.Button(
             label="Negar",
             style=discord.ButtonStyle.danger,
             emoji="❌",
             custom_id=f"{CUSTOM_ID_REPROVAR}{solicitacao_id}",
         )
+        botao_no.callback = self._ao_reprovar
         linha.add_item(botao_ok)
         linha.add_item(botao_no)
 
@@ -1027,6 +1046,20 @@ class ViewDecisaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
+    async def _ao_aprovar(self, interacao: discord.Interaction) -> None:
+        await processar_decisao_ausencia(
+            interacao,
+            self.solicitacao_id,
+            aprovada=True,
+        )
+
+    async def _ao_reprovar(self, interacao: discord.Interaction) -> None:
+        await processar_decisao_ausencia(
+            interacao,
+            self.solicitacao_id,
+            aprovada=False,
+        )
+
 
 class ViewDecisaoRetorno(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(self, *, solicitacao_id: int, corpo: str, url_thumb: str):
@@ -1040,12 +1073,14 @@ class ViewDecisaoRetorno(LoggingViewMixin, discord.ui.LayoutView):
             emoji="✅",
             custom_id=f"{CUSTOM_ID_APROVAR_RETORNO}{solicitacao_id}",
         )
+        botao_ok.callback = self._ao_aprovar
         botao_no = discord.ui.Button(
             label="Negar retorno",
             style=discord.ButtonStyle.danger,
             emoji="❌",
             custom_id=f"{CUSTOM_ID_REPROVAR_RETORNO}{solicitacao_id}",
         )
+        botao_no.callback = self._ao_reprovar
         linha.add_item(botao_ok)
         linha.add_item(botao_no)
 
@@ -1065,6 +1100,20 @@ class ViewDecisaoRetorno(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
+    async def _ao_aprovar(self, interacao: discord.Interaction) -> None:
+        await processar_decisao_retorno(
+            interacao,
+            self.solicitacao_id,
+            aprovada=True,
+        )
+
+    async def _ao_reprovar(self, interacao: discord.Interaction) -> None:
+        await processar_decisao_retorno(
+            interacao,
+            self.solicitacao_id,
+            aprovada=False,
+        )
+
 
 async def processar_decisao_ausencia(
     interacao: discord.Interaction,
@@ -1077,6 +1126,9 @@ async def processar_decisao_ausencia(
     Garante que somente a primeira decisão persista, salva quem decidiu e, na
     aprovação, registra os cargos atuais antes de aplicar os de ausência. Por
     fim atualiza o cartão no Discord e tenta avisar o membro por mensagem direta.
+
+    O defer vem no começo: banco + troca de cargos passa fácil de 3 segundos
+    e, sem defer, o Discord cancela a interação (botão parece morto).
     """
     if interacao.guild is None or not isinstance(interacao.user, discord.Member):
         await responder_erro(
@@ -1093,6 +1145,12 @@ async def processar_decisao_ausencia(
             linhas=["Apenas a **Diretoria** pode decidir pedidos de ausência."],
         )
         return
+
+    if not interacao.response.is_done():
+        try:
+            await interacao.response.defer()
+        except discord.HTTPException:
+            return
 
     registro, decidido_agora = await decidir_ausencia(
         solicitacao_id=pedido_id,
@@ -1220,6 +1278,8 @@ async def processar_decisao_retorno(
     A operação é idempotente para impedir decisões duplicadas. Ao aprovar, usa
     o retrato de cargos guardado na ausência, atualiza o cartão administrativo e
     tenta avisar o membro, preservando o registro mesmo se a DM estiver fechada.
+
+    O defer vem no começo pelas mesmas razões de processar_decisao_ausencia.
     """
     if interacao.guild is None or not isinstance(interacao.user, discord.Member):
         await responder_erro(
@@ -1236,6 +1296,12 @@ async def processar_decisao_retorno(
             linhas=["Apenas a **Diretoria** pode decidir pedidos de retorno."],
         )
         return
+
+    if not interacao.response.is_done():
+        try:
+            await interacao.response.defer()
+        except discord.HTTPException:
+            return
 
     registro, decidido_agora = await decidir_retorno(
         solicitacao_id=pedido_id,

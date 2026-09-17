@@ -24,7 +24,7 @@ from src.utils.mensagens import (
     responder_erro,
     responder_sucesso,
 )
-from src.utils.permissions import is_authorized
+from src.utils.permissions import membro_e_administrador
 
 
 class AusenciaCogs(commands.Cog):
@@ -45,7 +45,9 @@ class AusenciaCogs(commands.Cog):
         com o mesmo custom_id fazem o clique ser processado duas vezes e
         geram HTTP 40060 (Interaction has already been acknowledged).
         """
-        if not is_authorized(interacao.user):
+        if not isinstance(interacao.user, discord.Member) or not (
+            membro_e_administrador(interacao.user)
+        ):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
@@ -82,6 +84,9 @@ class AusenciaCogs(commands.Cog):
         """
         Só botões dinâmicos de aprovar/recusar (custom_id com id do pedido).
 
+        Depois do reinício a ViewDecisao some da memória do bot; estes
+        custom_id precisam ser tratados aqui, senão o botão "morre".
+
         Os botões fixos do painel (solicitar / retornar) ficam na
         PainelAusenciaLayout registrada em bot.py. Tratar os mesmos
         custom_id aqui de novo causa corrida: os dois handlers passam em
@@ -89,6 +94,9 @@ class AusenciaCogs(commands.Cog):
         """
         if interacao.type is not discord.InteractionType.component:
             return
+        if interacao.response.is_done():
+            return
+
         data = interacao.data or {}
         custom_id = str(data.get("custom_id") or "")
 
@@ -98,7 +106,7 @@ class AusenciaCogs(commands.Cog):
                 pedido_id = int(custom_id[len(CUSTOM_ID_APROVAR_RETORNO) :])
             except ValueError:
                 return
-            if pedido_id <= 0 or interacao.response.is_done():
+            if pedido_id <= 0:
                 return
             await processar_decisao_retorno(interacao, pedido_id, aprovada=True)
         elif custom_id.startswith(CUSTOM_ID_REPROVAR_RETORNO):
@@ -106,7 +114,7 @@ class AusenciaCogs(commands.Cog):
                 pedido_id = int(custom_id[len(CUSTOM_ID_REPROVAR_RETORNO) :])
             except ValueError:
                 return
-            if pedido_id <= 0 or interacao.response.is_done():
+            if pedido_id <= 0:
                 return
             await processar_decisao_retorno(interacao, pedido_id, aprovada=False)
         elif custom_id.startswith(CUSTOM_ID_APROVAR):
@@ -114,7 +122,7 @@ class AusenciaCogs(commands.Cog):
                 pedido_id = int(custom_id[len(CUSTOM_ID_APROVAR) :])
             except ValueError:
                 return
-            if pedido_id <= 0 or interacao.response.is_done():
+            if pedido_id <= 0:
                 return
             await processar_decisao_ausencia(interacao, pedido_id, aprovada=True)
         elif custom_id.startswith(CUSTOM_ID_REPROVAR):
@@ -122,7 +130,7 @@ class AusenciaCogs(commands.Cog):
                 pedido_id = int(custom_id[len(CUSTOM_ID_REPROVAR) :])
             except ValueError:
                 return
-            if pedido_id <= 0 or interacao.response.is_done():
+            if pedido_id <= 0:
                 return
             await processar_decisao_ausencia(interacao, pedido_id, aprovada=False)
 
