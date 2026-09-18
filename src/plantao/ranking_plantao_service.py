@@ -77,6 +77,66 @@ def _formatar_mes_ano(data_e_hora: datetime) -> str:
 def _medalha(posicao: int) -> str:
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(posicao, "🏅")
 
+# Discord TextDisplay: limite prático ~4000 caracteres por bloco.
+# Partimos o corpo para não estourar o card único (falha no edit → republica
+# a cada minuto e "duplica" o ranking no canal).
+LIMITE_TEXTO_CARD = 3500
+
+
+def _partir_texto_em_blocos(texto: str, limite: int = LIMITE_TEXTO_CARD) -> list[str]:
+    """
+    Quebra o texto em pedaços que cabem num TextDisplay.
+
+    Prefere cortar em linhas em branco (blocos de ranking), depois em
+    quebras de linha simples. Nunca devolve string vazia.
+    """
+    texto = (texto or "").strip()
+    if not texto:
+        return ["_Sem dados._"]
+    if len(texto) <= limite:
+        return [texto]
+
+    blocos: list[str] = []
+    restante = texto
+    while restante:
+        if len(restante) <= limite:
+            blocos.append(restante)
+            break
+        pedaco = restante[:limite]
+        # Tenta cortar no último separador de entrada (\n\n)
+        corte = pedaco.rfind("\n\n")
+        if corte < limite // 3:
+            corte = pedaco.rfind("\n")
+        if corte < limite // 3:
+            corte = limite
+        parte = restante[:corte].rstrip()
+        if not parte:
+            parte = restante[:limite]
+            corte = len(parte)
+        blocos.append(parte)
+        restante = restante[corte:].lstrip()
+    return blocos or ["_Sem dados._"]
+
+
+def _textos_corpo_como_componentes(corpo: str) -> list:
+    """Um TextDisplay por bloco — o ranking continua em cards visuais no mesmo LayoutView."""
+    partes = _partir_texto_em_blocos(corpo)
+    componentes = []
+    total_partes = len(partes)
+    for indice, parte in enumerate(partes):
+        if total_partes > 1:
+            cabecalho_parte = f"-# Continuação {indice + 1}/{total_partes}\n"
+            componentes.append(discord.ui.TextDisplay(cabecalho_parte + parte))
+        else:
+            componentes.append(discord.ui.TextDisplay(parte))
+        if indice < total_partes - 1:
+            componentes.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
+    return componentes
+
+
+
 
 def _formatar_mencoes(ids: list[int]) -> str:
     tags = [f"<@{uid}>" for uid in ids]
@@ -355,20 +415,48 @@ def montar_view_ranking_chamadas(
         )
     icon_url = guild.icon.url if guild and guild.icon else None
 
+    componentes_corpo = _textos_corpo_como_componentes(corpo)
+
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(
-        discord.ui.Container(
+    # Card 1: cabeçalho + início do ranking
+    itens_primeiro = []
+    if icon_url:
+        itens_primeiro.append(
             discord.ui.Section(
                 cabecalho,
-                accessory=discord.ui.Thumbnail(icon_url) if icon_url else None,
-            ),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(corpo),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(rodape),
-            accent_color=cor,
+                accessory=discord.ui.Thumbnail(icon_url),
+            )
         )
-    )
+    else:
+        itens_primeiro.append(discord.ui.TextDisplay(cabecalho))
+    itens_primeiro.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+    # Cabe no mesmo container enquanto houver espaço de componentes
+    # (cabeçalho + separadores + blocos + rodapé).
+    max_blocos_no_primeiro = max(1, 12)
+    primeiros = componentes_corpo[:max_blocos_no_primeiro]
+    restante = componentes_corpo[max_blocos_no_primeiro:]
+
+    itens_primeiro.extend(primeiros)
+    if not restante:
+        itens_primeiro.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        itens_primeiro.append(discord.ui.TextDisplay(rodape))
+
+    view.add_item(discord.ui.Container(*itens_primeiro, accent_color=cor))
+
+    # Cards seguintes: continuação do ranking (mesmo LayoutView = uma mensagem
+    # com vários containers; se estourar limites, o tasks envia mensagens extras)
+    while restante:
+        fatia = restante[:max_blocos_no_primeiro]
+        restante = restante[max_blocos_no_primeiro:]
+        itens = list(fatia)
+        if not restante:
+            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            itens.append(discord.ui.TextDisplay(rodape))
+        view.add_item(discord.ui.Container(*itens, accent_color=cor))
+
     return view, total
 
 
@@ -509,32 +597,43 @@ def montar_view_ranking_horas(
         )
     icon_url = guild.icon.url if guild and guild.icon else None
 
-    componentes: list = []
+    componentes_corpo = _textos_corpo_como_componentes(corpo)
+
+    view = discord.ui.LayoutView(timeout=None)
+    itens_primeiro: list = []
     if icon_url:
-        componentes.append(
+        itens_primeiro.append(
             discord.ui.Section(
                 cabecalho,
                 accessory=discord.ui.Thumbnail(icon_url),
             )
         )
     else:
-        componentes.append(discord.ui.TextDisplay(cabecalho))
-    componentes.extend(
-        [
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(corpo),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(rodape),
-        ]
-    )
+        itens_primeiro.append(discord.ui.TextDisplay(cabecalho))
+    itens_primeiro.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
-    view = discord.ui.LayoutView(timeout=None)
-    view.add_item(
-        discord.ui.Container(
-            *componentes,
-            accent_color=cor,
+    max_blocos_no_primeiro = max(1, 12)
+    primeiros = componentes_corpo[:max_blocos_no_primeiro]
+    restante = componentes_corpo[max_blocos_no_primeiro:]
+
+    itens_primeiro.extend(primeiros)
+    if not restante:
+        itens_primeiro.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-    )
+        itens_primeiro.append(discord.ui.TextDisplay(rodape))
+
+    view.add_item(discord.ui.Container(*itens_primeiro, accent_color=cor))
+
+    while restante:
+        fatia = restante[:max_blocos_no_primeiro]
+        restante = restante[max_blocos_no_primeiro:]
+        itens = list(fatia)
+        if not restante:
+            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            itens.append(discord.ui.TextDisplay(rodape))
+        view.add_item(discord.ui.Container(*itens, accent_color=cor))
+
     return view, total
 
 
@@ -616,6 +715,46 @@ async def gerar_view_ranking_horas(
         contagem, inicio, fim, periodo=periodo_view, guild=guild
     )
     return view, contagem, inicio, fim, total
+
+
+
+async def historico_ja_publicado(
+    tipo: str,
+    inicio: datetime,
+    fim: datetime,
+) -> RankingHistorico | None:
+    """
+    Evita postar de novo o ranking oficial da mesma semana/mês.
+
+    Compara tipo + início/fim do período (com tolerância de 1 minuto por
+    diferença de fuso/arredondamento). Usado no fechamento de sábado 11h.
+    """
+    from datetime import timedelta
+
+    margem = timedelta(minutes=2)
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(RankingHistorico)
+            .where(RankingHistorico.tipo == tipo)
+            .order_by(RankingHistorico.criado_em.desc())
+            .limit(20)
+        )
+        for registro in resultado.scalars().all():
+            ini = registro.periodo_inicio
+            fim_reg = registro.periodo_fim
+            if ini is None or fim_reg is None:
+                continue
+            if ini.tzinfo is None:
+                ini = ini.replace(tzinfo=timezone.utc)
+            if fim_reg.tzinfo is None:
+                fim_reg = fim_reg.replace(tzinfo=timezone.utc)
+            alvo_ini = inicio if inicio.tzinfo else inicio.replace(tzinfo=timezone.utc)
+            alvo_fim = fim if fim.tzinfo else fim.replace(tzinfo=timezone.utc)
+            if abs((ini - alvo_ini).total_seconds()) <= margem.total_seconds() and abs(
+                (fim_reg - alvo_fim).total_seconds()
+            ) <= margem.total_seconds():
+                return registro
+    return None
 
 
 async def salvar_historico_plantao(

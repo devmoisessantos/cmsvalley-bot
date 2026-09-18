@@ -42,6 +42,7 @@ from src.database.models import PainelPostado
 from src.plantao.ranking_plantao_service import (
     gerar_view_ranking_chamadas,
     gerar_view_ranking_horas,
+    historico_ja_publicado,
     montar_lista_premiados,
     salvar_historico_plantao,
 )
@@ -247,13 +248,29 @@ class RankingPlantaoTasks(commands.Cog):
                 # Edita o card existente — evita spam e mantém o histórico do canal
                 await mensagem.edit(view=view)
                 return
-            except (discord.NotFound, discord.HTTPException):
-                logger.warning("Mensagem tempo real horas sumiu — republicando")
+            except discord.NotFound:
+                logger.warning(
+                    "Mensagem tempo real horas não encontrada — republicando"
+                )
                 await self._apagar_registro_tempo_real()
+            except discord.HTTPException as erro_http:
+                # Conteúdo grande ou falha transitória: NÃO apaga o registro
+                # (antes isso republicava a cada minuto e "duplicava" o ranking).
+                logger.warning(
+                    "Falha ao editar ranking tempo real horas (%s) — "
+                    "mantém a mensagem atual",
+                    erro_http,
+                )
+                return
 
-        mensagem = await canal.send(view=view)
-        await self._salvar_registro_tempo_real(canal.id, mensagem.id)
-        logger.info("Ranking HORAS tempo real publicado em #%s", canal.name)
+        try:
+            mensagem = await canal.send(view=view)
+            await self._salvar_registro_tempo_real(canal.id, mensagem.id)
+            logger.info("Ranking HORAS tempo real publicado em #%s", canal.name)
+        except discord.HTTPException as erro_envio:
+            logger.exception(
+                "Não publicou ranking tempo real horas: %s", erro_envio
+            )
 
     async def _fechar_ciclo_semanal_horas(self, referencia: datetime) -> None:
         """
@@ -275,6 +292,25 @@ class RankingPlantaoTasks(commands.Cog):
         )
         premiados = montar_lista_premiados(contagem)
 
+        # Idempotência: se este ciclo semanal já foi fechado, não repete
+        # ranking nem premiação (bot reiniciado no sábado 11h, etc.).
+        ja_fechado = await historico_ja_publicado("horas_semanal", inicio, fim)
+        if ja_fechado is not None:
+            logger.info(
+                "Ciclo semanal horas já fechado (histórico #%s) — "
+                "só garante limpeza do card tempo real",
+                ja_fechado.id,
+            )
+            registro = await self._buscar_registro_tempo_real()
+            if registro is not None and canal is not None:
+                try:
+                    mensagem = await canal.fetch_message(int(registro.message_id))
+                    await mensagem.delete()
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+                await self._apagar_registro_tempo_real()
+            return
+
         # 1) Apaga tempo real
         registro = await self._buscar_registro_tempo_real()
         if registro is not None and canal is not None:
@@ -294,22 +330,35 @@ class RankingPlantaoTasks(commands.Cog):
             total_segundos=total,
         )
 
-        # 3) Ranking semanal oficial
+        # 3) Ranking semanal oficial (só se ainda não existe para este período)
         if canal is not None:
-            try:
-                mensagem_publicada = await canal.send(view=view)
-                await salvar_historico_plantao(
-                    tipo="horas_semanal",
-                    inicio=inicio,
-                    fim=fim,
-                    contagem=contagem,
-                    total=total,
-                    channel_id=canal.id,
-                    message_id=mensagem_publicada.id,
+            existente = await historico_ja_publicado("horas_semanal", inicio, fim)
+            if existente is not None:
+                logger.info(
+                    "Ranking HORAS semanal já publicado (histórico #%s) — "
+                    "não duplica",
+                    existente.id,
                 )
-                logger.info("Ranking HORAS semanal oficial postado em #%s", canal.name)
-            except discord.HTTPException as erro:
-                logger.exception("Falha ao postar ranking horas semanal: %s", erro)
+            else:
+                try:
+                    mensagem_publicada = await canal.send(view=view)
+                    await salvar_historico_plantao(
+                        tipo="horas_semanal",
+                        inicio=inicio,
+                        fim=fim,
+                        contagem=contagem,
+                        total=total,
+                        channel_id=canal.id,
+                        message_id=mensagem_publicada.id,
+                    )
+                    logger.info(
+                        "Ranking HORAS semanal oficial postado em #%s",
+                        canal.name,
+                    )
+                except discord.HTTPException as erro:
+                    logger.exception(
+                        "Falha ao postar ranking horas semanal: %s", erro
+                    )
 
     async def _enviar_premiacao_financas(
         self,
@@ -461,6 +510,14 @@ class RankingPlantaoTasks(commands.Cog):
             view, contagem, inicio, fim, total = await gerador(
                 periodo, guild=guild, referencia=referencia, modo_postagem=True
             )
+            existente = await historico_ja_publicado(tipo_hist, inicio, fim)
+            if existente is not None:
+                logger.info(
+                    "Ranking %s já existe (histórico #%s) — não duplica",
+                    tipo_hist,
+                    existente.id,
+                )
+                return True
             mensagem = await canal.send(view=view)
             await salvar_historico_plantao(
                 tipo=tipo_hist,
