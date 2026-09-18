@@ -55,9 +55,7 @@ class PlantaoAtivosTasks(commands.Cog):
     async def _atualizar_ou_publicar(self) -> None:
         canal_id = CANAIS.get("PAINEL_FIXO_PLANTAO_ATIVO") or 0
         if not canal_id:
-            registrador.debug(
-                "PAINEL_FIXO_PLANTAO_ATIVO não configurado; pulando."
-            )
+            registrador.debug("PAINEL_FIXO_PLANTAO_ATIVO não configurado; pulando.")
             return
 
         canal = self.bot.get_channel(canal_id)
@@ -73,7 +71,8 @@ class PlantaoAtivosTasks(commands.Cog):
                 return
 
         estados = await listar_em_servico(limite=80)
-        view = await montar_painel_plantao_ativo(estados)
+        guilda = getattr(canal, "guild", None)
+        view = await montar_painel_plantao_ativo(estados, guild=guilda)
 
         registro = await self._buscar_registro()
         if registro is not None:
@@ -92,9 +91,7 @@ class PlantaoAtivosTasks(commands.Cog):
     async def _buscar_registro(self):
         async with async_session() as sessao:
             resultado = await sessao.execute(
-                select(PainelPostado).where(
-                    PainelPostado.nome_painel == NOME_PAINEL
-                )
+                select(PainelPostado).where(PainelPostado.nome_painel == NOME_PAINEL)
             )
             return resultado.scalar_one_or_none()
 
