@@ -541,13 +541,18 @@ def montar_view_ranking_horas(
     periodo: str,
     guild: discord.Guild | None = None,
     titulo_override: str | None = None,
-) -> tuple[discord.ui.LayoutView, int]:
-    """Monta o relatório visual de horas, destacando prêmios quando cabíveis.
-
-    Recebe segundos já filtrados e devolve a view mais o total acumulado do período.
-    Separar essa montagem da consulta preserva o mesmo critério de premiação nos cards
-    em tempo real, semanais e mensais, sem misturar dados de membros excluídos.
+    entradas_por_card: int = 25,
+) -> tuple[list[discord.ui.LayoutView], int]:
     """
+    Monta o ranking de horas em **vários cards** (uma mensagem cada).
+
+    O Discord corta texto longo num único card. Por isso cada mensagem leva
+    no máximo ``entradas_por_card`` participantes (padrão 25).
+    Cabeçalho só no primeiro card; rodapé só no último.
+    """
+    ordenados = ordenar_ranking_individual(contagem_segundos)
+    total = sum(segundos for _, segundos in ordenados)
+
     total_premios = total_premios_configurados()
     linha_premio = (
         f"🏆 **Premiação configurada** · "
@@ -562,7 +567,6 @@ def montar_view_ranking_horas(
             f"({_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)})"
         )
         cor = discord.Color.green()
-        # Mensal: só relatório (sem foco em premiação semanal)
         linha_extra = "📊 Relatório mensal de tempo em call"
     elif periodo == "tempo_real":
         titulo = titulo_override or "⏱️ **RANKING DE HORAS — TEMPO REAL**"
@@ -582,10 +586,8 @@ def montar_view_ranking_horas(
         linha_extra = linha_premio
 
     cabecalho = f"# {titulo}\n# 📅 **Período**\n{sub}\n{linha_extra}"
-    corpo, total = _montar_corpo_horas_com_premios(contagem_segundos)
 
     agora_ts = int(datetime.now(ZoneInfo("UTC")).timestamp())
-    # Tempo real: mesmo rodapé do ranking de moedas (relativo + “atualizado em tempo real”)
     if periodo == "tempo_real":
         nome_guilda = guild.name if guild else "CENTRO MÉDICO SUL VALLEY"
         rodape = f"-# {nome_guilda} • atualizado em tempo real · <t:{agora_ts}:R>"
@@ -597,44 +599,93 @@ def montar_view_ranking_horas(
         )
     icon_url = guild.icon.url if guild and guild.icon else None
 
-    componentes_corpo = _textos_corpo_como_componentes(corpo)
-
-    view = discord.ui.LayoutView(timeout=None)
-    itens_primeiro: list = []
-    if icon_url:
-        itens_primeiro.append(
-            discord.ui.Section(
-                cabecalho,
-                accessory=discord.ui.Thumbnail(icon_url),
+    if not ordenados:
+        corpo_vazio = (
+            "_Nenhum tempo de plantão registrado neste período._\n\n"
+            "# 📌 **TOTAL GERAL**\n"
+            "⏱️ **Tempo total da equipe**: **0**"
+        )
+        view = discord.ui.LayoutView(timeout=None)
+        itens: list = []
+        if icon_url:
+            itens.append(
+                discord.ui.Section(
+                    cabecalho,
+                    accessory=discord.ui.Thumbnail(icon_url),
+                )
             )
+        else:
+            itens.append(discord.ui.TextDisplay(cabecalho))
+        itens.extend(
+            [
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.TextDisplay(corpo_vazio),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.TextDisplay(rodape),
+            ]
         )
-    else:
-        itens_primeiro.append(discord.ui.TextDisplay(cabecalho))
-    itens_primeiro.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-
-    max_blocos_no_primeiro = max(1, 12)
-    primeiros = componentes_corpo[:max_blocos_no_primeiro]
-    restante = componentes_corpo[max_blocos_no_primeiro:]
-
-    itens_primeiro.extend(primeiros)
-    if not restante:
-        itens_primeiro.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
-        itens_primeiro.append(discord.ui.TextDisplay(rodape))
-
-    view.add_item(discord.ui.Container(*itens_primeiro, accent_color=cor))
-
-    while restante:
-        fatia = restante[:max_blocos_no_primeiro]
-        restante = restante[max_blocos_no_primeiro:]
-        itens = list(fatia)
-        if not restante:
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-            itens.append(discord.ui.TextDisplay(rodape))
         view.add_item(discord.ui.Container(*itens, accent_color=cor))
+        return [view], 0
 
-    return view, total
+    por_pagina = max(1, int(entradas_por_card))
+    paginas: list[list[tuple[int, int]]] = []
+    for indice in range(0, len(ordenados), por_pagina):
+        paginas.append(ordenados[indice : indice + por_pagina])
+
+    total_paginas = len(paginas)
+    views: list[discord.ui.LayoutView] = []
+
+    for numero_pagina, pagina in enumerate(paginas):
+        blocos: list[str] = []
+        for deslocamento, (discord_id, segundos) in enumerate(pagina):
+            posicao = numero_pagina * por_pagina + deslocamento + 1
+            medalha = _medalha(posicao)
+            premio = premio_por_posicao(posicao)
+            linha_tempo = f"↳ **{formatar_hms(segundos)}**"
+            if premio > 0:
+                linha_tempo += f" · 🏆 `{formatar_reais(premio)}`"
+            blocos.append(f"{medalha} <@{discord_id}>\n{linha_tempo}")
+
+        corpo = "\n\n".join(blocos)
+        eh_ultima = numero_pagina == total_paginas - 1
+        if eh_ultima:
+            corpo += (
+                "\n\n# 📌 **TOTAL GERAL**\n"
+                f"⏱️ **Tempo total da equipe**: **{formatar_hms(total)}**"
+            )
+
+        view = discord.ui.LayoutView(timeout=None)
+        itens_card: list = []
+
+        # Cabeçalho completo: somente no primeiro card
+        if numero_pagina == 0:
+            if icon_url:
+                itens_card.append(
+                    discord.ui.Section(
+                        cabecalho,
+                        accessory=discord.ui.Thumbnail(icon_url),
+                    )
+                )
+            else:
+                itens_card.append(discord.ui.TextDisplay(cabecalho))
+            itens_card.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
+
+        itens_card.append(discord.ui.TextDisplay(corpo))
+
+        # Rodapé: somente no último card
+        if eh_ultima:
+            itens_card.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
+            itens_card.append(discord.ui.TextDisplay(rodape))
+
+        view.add_item(discord.ui.Container(*itens_card, accent_color=cor))
+        views.append(view)
+
+    return views, total
+
 
 
 # ── Geração por tipo ─────────────────────────────────────────────────────
@@ -711,10 +762,10 @@ async def gerar_view_ranking_horas(
         guild=guild,
         incluir_ao_vivo=incluir_ao_vivo,
     )
-    view, total = montar_view_ranking_horas(
+    views, total = montar_view_ranking_horas(
         contagem, inicio, fim, periodo=periodo_view, guild=guild
     )
-    return view, contagem, inicio, fim, total
+    return views, contagem, inicio, fim, total
 
 
 

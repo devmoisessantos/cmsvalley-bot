@@ -161,60 +161,101 @@ class RankingPlantaoTasks(commands.Cog):
                 return
             await _processar_decisao_deposito(interacao, pedido_id, aprovar=False)
 
-    async def _buscar_registro_tempo_real(self) -> PainelPostado | None:
-        async with async_session() as sessao:
-            resultado = await sessao.execute(
-                select(PainelPostado).where(
-                    PainelPostado.nome_painel == NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
-                )
-            )
-            return resultado.scalar_one_or_none()
+    def _nome_painel_tempo_real(self, pagina: int) -> str:
+        """Página 1 = nome base; 2+ = nome_2, nome_3…"""
+        if pagina <= 1:
+            return NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
+        return f"{NOME_PAINEL_RANKING_HORAS_TEMPO_REAL}_{pagina}"
 
-    async def _salvar_registro_tempo_real(self, canal_id: int, message_id: int) -> None:
+    async def _listar_registros_tempo_real(self) -> list[PainelPostado]:
+        """Todos os cards do ranking tempo real, ordenados por página."""
+        async with async_session() as sessao:
+            resultado = await sessao.execute(select(PainelPostado))
+            todos = list(resultado.scalars().all())
+        prefixo = NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
+        filtrados: list[PainelPostado] = []
+        for registro in todos:
+            nome = registro.nome_painel or ""
+            if nome == prefixo or nome.startswith(prefixo + "_"):
+                filtrados.append(registro)
+
+        def _ordem(registro: PainelPostado) -> int:
+            nome = registro.nome_painel or ""
+            if nome == prefixo:
+                return 1
+            sufixo = nome[len(prefixo) + 1 :]
+            try:
+                return int(sufixo)
+            except ValueError:
+                return 999
+
+        filtrados.sort(key=_ordem)
+        return filtrados
+
+    async def _buscar_registro_tempo_real(self) -> PainelPostado | None:
+        lista = await self._listar_registros_tempo_real()
+        return lista[0] if lista else None
+
+    async def _salvar_registro_tempo_real_pagina(
+        self, pagina: int, canal_id: int, message_id: int
+    ) -> None:
+        nome = self._nome_painel_tempo_real(pagina)
         async with async_session() as sessao:
             resultado = await sessao.execute(
-                select(PainelPostado).where(
-                    PainelPostado.nome_painel == NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
-                )
+                select(PainelPostado).where(PainelPostado.nome_painel == nome)
             )
             registro = resultado.scalar_one_or_none()
             if registro is None:
-                registro = PainelPostado(
-                    nome_painel=NOME_PAINEL_RANKING_HORAS_TEMPO_REAL,
-                    canal_id=canal_id,
-                    message_id=message_id,
+                sessao.add(
+                    PainelPostado(
+                        nome_painel=nome,
+                        canal_id=canal_id,
+                        message_id=message_id,
+                    )
                 )
-                sessao.add(registro)
             else:
                 registro.canal_id = canal_id
                 registro.message_id = message_id
             await sessao.commit()
 
     async def _apagar_registro_tempo_real(self) -> None:
+        """Remove todos os cards (página 1, 2, 3…) do tempo real."""
+        registros = await self._listar_registros_tempo_real()
+        if not registros:
+            return
         async with async_session() as sessao:
-            resultado = await sessao.execute(
-                select(PainelPostado).where(
-                    PainelPostado.nome_painel == NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
-                )
-            )
-            registro = resultado.scalar_one_or_none()
-            if registro is not None:
-                await sessao.delete(registro)
-                await sessao.commit()
+            for registro in registros:
+                atual = await sessao.get(PainelPostado, registro.id)
+                if atual is not None:
+                    await sessao.delete(atual)
+            await sessao.commit()
+
+    async def _apagar_registros_tempo_real_a_partir_de(self, pagina: int) -> None:
+        """Apaga páginas >= pagina (quando o ranking encolheu)."""
+        registros = await self._listar_registros_tempo_real()
+        for registro in registros:
+            nome = registro.nome_painel or ""
+            if nome == NOME_PAINEL_RANKING_HORAS_TEMPO_REAL:
+                numero = 1
+            else:
+                try:
+                    numero = int(nome.split("_")[-1])
+                except ValueError:
+                    continue
+            if numero >= pagina:
+                async with async_session() as sessao:
+                    atual = await sessao.get(PainelPostado, registro.id)
+                    if atual is not None:
+                        await sessao.delete(atual)
+                        await sessao.commit()
 
     async def _atualizar_ou_criar_tempo_real_horas(self) -> None:
         """
-        Publica ou edita o ranking de horas em tempo real no canal configurado.
+        Publica ou edita o ranking de horas em tempo real.
 
-        Passo a passo (idêntico à ideia do ranking de moedas):
-        1. Resolve guilda e canal ``RANKING_HORAS_PLANTAO``.
-        2. Gera a view com ``gerar_view_ranking_horas("tempo_real")``, que já
-           inclui logs fechados + segundos ainda em call + filtro de elegíveis.
-        3. Se existe message_id em ``paineis_postados``, edita essa mensagem.
-        4. Se não existe ou a mensagem sumiu, envia uma nova e grava o id.
-
-        Na janela de fechamento de sábado (11h00–11h04) não recria o card;
-        o reinício oficial ocorre às 11h05 pelo ``loop_rankings``.
+        Com lista grande o ranking vira **várias mensagens** (cards de
+        continuação). Cada página fica em ``paineis_postados``:
+        ranking_horas_tempo_real, ranking_horas_tempo_real_2, …
         """
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
@@ -224,8 +265,6 @@ class RankingPlantaoTasks(commands.Cog):
         if canal is None:
             return
 
-        # Janela de fechamento no sábado 11h00–11h04: não recria o card
-        # (só volta às 11h05 via loop_rankings).
         agora_local = datetime.now(ZoneInfo(TIMEZONE_LOCAL))
         if (
             agora_local.weekday() == 5
@@ -236,41 +275,61 @@ class RankingPlantaoTasks(commands.Cog):
             if registro is None:
                 return
 
-        # Contagem tempo real: logs do ciclo + trecho aberto em call (ao vivo)
-        view, contagem, inicio, fim, total = await gerar_view_ranking_horas(
+        views, contagem, inicio, fim, total = await gerar_view_ranking_horas(
             "tempo_real", guild=guild, modo_postagem=False
         )
+        if not isinstance(views, list):
+            views = [views]
 
-        registro = await self._buscar_registro_tempo_real()
-        if registro is not None:
+        registros = await self._listar_registros_tempo_real()
+        # Edita páginas já existentes; cria as que faltam; apaga sobras
+        for indice, view in enumerate(views):
+            pagina = indice + 1
+            registro = registros[indice] if indice < len(registros) else None
+            if registro is not None:
+                try:
+                    mensagem = await canal.fetch_message(int(registro.message_id))
+                    await mensagem.edit(view=view)
+                    continue
+                except discord.NotFound:
+                    logger.warning(
+                        "Card tempo real horas página %s sumiu — republicando",
+                        pagina,
+                    )
+                except discord.HTTPException as erro_http:
+                    logger.warning(
+                        "Falha ao editar página %s do ranking horas: %s",
+                        pagina,
+                        erro_http,
+                    )
+                    continue
             try:
-                mensagem = await canal.fetch_message(int(registro.message_id))
-                # Edita o card existente — evita spam e mantém o histórico do canal
-                await mensagem.edit(view=view)
-                return
-            except discord.NotFound:
-                logger.warning(
-                    "Mensagem tempo real horas não encontrada — republicando"
+                mensagem = await canal.send(view=view)
+                await self._salvar_registro_tempo_real_pagina(
+                    pagina, canal.id, mensagem.id
                 )
-                await self._apagar_registro_tempo_real()
-            except discord.HTTPException as erro_http:
-                # Conteúdo grande ou falha transitória: NÃO apaga o registro
-                # (antes isso republicava a cada minuto e "duplicava" o ranking).
-                logger.warning(
-                    "Falha ao editar ranking tempo real horas (%s) — "
-                    "mantém a mensagem atual",
-                    erro_http,
+                logger.info(
+                    "Ranking HORAS tempo real página %s/%s em #%s",
+                    pagina,
+                    len(views),
+                    canal.name,
                 )
-                return
+            except discord.HTTPException as erro_envio:
+                logger.exception(
+                    "Não publicou página %s do ranking horas: %s",
+                    pagina,
+                    erro_envio,
+                )
 
-        try:
-            mensagem = await canal.send(view=view)
-            await self._salvar_registro_tempo_real(canal.id, mensagem.id)
-            logger.info("Ranking HORAS tempo real publicado em #%s", canal.name)
-        except discord.HTTPException as erro_envio:
-            logger.exception(
-                "Não publicou ranking tempo real horas: %s", erro_envio
-            )
+        # Páginas a mais (ranking encolheu): apaga no Discord e no banco
+        if len(registros) > len(views):
+            for registro in registros[len(views) :]:
+                try:
+                    mensagem = await canal.fetch_message(int(registro.message_id))
+                    await mensagem.delete()
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+            await self._apagar_registros_tempo_real_a_partir_de(len(views) + 1)
 
     async def _fechar_ciclo_semanal_horas(self, referencia: datetime) -> None:
         """
@@ -287,9 +346,11 @@ class RankingPlantaoTasks(commands.Cog):
         canal = guild.get_channel(int(canal_id)) if canal_id else None
 
         # Dados do ciclo que fecha (modo postagem = semana completa)
-        view, contagem, inicio, fim, total = await gerar_view_ranking_horas(
+        views, contagem, inicio, fim, total = await gerar_view_ranking_horas(
             "semanal", guild=guild, referencia=referencia, modo_postagem=True
         )
+        if not isinstance(views, list):
+            views = [views]
         premiados = montar_lista_premiados(contagem)
 
         # Idempotência: se este ciclo semanal já foi fechado, não repete
@@ -301,25 +362,29 @@ class RankingPlantaoTasks(commands.Cog):
                 "só garante limpeza do card tempo real",
                 ja_fechado.id,
             )
-            registro = await self._buscar_registro_tempo_real()
-            if registro is not None and canal is not None:
+            registros_tr = await self._listar_registros_tempo_real()
+            if canal is not None:
+                for registro in registros_tr:
+                    try:
+                        mensagem = await canal.fetch_message(
+                            int(registro.message_id)
+                        )
+                        await mensagem.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
+            await self._apagar_registro_tempo_real()
+            return
+
+        # 1) Apaga todos os cards tempo real (página 1, 2, …)
+        registros_tr = await self._listar_registros_tempo_real()
+        if canal is not None:
+            for registro in registros_tr:
                 try:
                     mensagem = await canal.fetch_message(int(registro.message_id))
                     await mensagem.delete()
-                except (discord.NotFound, discord.HTTPException):
-                    pass
-                await self._apagar_registro_tempo_real()
-            return
-
-        # 1) Apaga tempo real
-        registro = await self._buscar_registro_tempo_real()
-        if registro is not None and canal is not None:
-            try:
-                mensagem = await canal.fetch_message(int(registro.message_id))
-                await mensagem.delete()
-            except (discord.NotFound, discord.HTTPException) as erro:
-                logger.warning("Não apagou tempo real horas: %s", erro)
-            await self._apagar_registro_tempo_real()
+                except (discord.NotFound, discord.HTTPException) as erro:
+                    logger.warning("Não apagou tempo real horas: %s", erro)
+        await self._apagar_registro_tempo_real()
 
         # 2) Finanças
         await self._enviar_premiacao_financas(
@@ -341,7 +406,9 @@ class RankingPlantaoTasks(commands.Cog):
                 )
             else:
                 try:
-                    mensagem_publicada = await canal.send(view=view)
+                    mensagem_publicada = None
+                    for view in views:
+                        mensagem_publicada = await canal.send(view=view)
                     await salvar_historico_plantao(
                         tipo="horas_semanal",
                         inicio=inicio,
@@ -349,7 +416,9 @@ class RankingPlantaoTasks(commands.Cog):
                         contagem=contagem,
                         total=total,
                         channel_id=canal.id,
-                        message_id=mensagem_publicada.id,
+                        message_id=(
+                            mensagem_publicada.id if mensagem_publicada else None
+                        ),
                     )
                     logger.info(
                         "Ranking HORAS semanal oficial postado em #%s",
@@ -507,9 +576,12 @@ class RankingPlantaoTasks(commands.Cog):
             return False
 
         try:
-            view, contagem, inicio, fim, total = await gerador(
+            resultado = await gerador(
                 periodo, guild=guild, referencia=referencia, modo_postagem=True
             )
+            views, contagem, inicio, fim, total = resultado
+            if not isinstance(views, list):
+                views = [views]
             existente = await historico_ja_publicado(tipo_hist, inicio, fim)
             if existente is not None:
                 logger.info(
@@ -518,7 +590,9 @@ class RankingPlantaoTasks(commands.Cog):
                     existente.id,
                 )
                 return True
-            mensagem = await canal.send(view=view)
+            mensagem = None
+            for view in views:
+                mensagem = await canal.send(view=view)
             await salvar_historico_plantao(
                 tipo=tipo_hist,
                 inicio=inicio,
