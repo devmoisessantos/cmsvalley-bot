@@ -141,14 +141,18 @@ def _montar_rodape() -> str:
 
 async def montar_painel_plantao_ativo(
     estados: list[EstadoPlantao],
+    *,
+    guild: discord.Guild | None = None,
 ) -> discord.ui.LayoutView:
     """
     Monta o card com a lista de médicos em serviço.
 
     Ordena: em call → mudo/surdo → fora de call.
+    Thumbnail: ícone da guilda no cabeçalho do primeiro card.
     Se a lista for longa, parte em vários containers no mesmo LayoutView
     (até 25 entradas por bloco de texto).
     """
+    icon_url = guild.icon.url if guild and guild.icon else None
     total = len(estados)
 
     # Prepara linhas e contagens
@@ -176,12 +180,20 @@ async def montar_painel_plantao_ativo(
     legenda = _montar_legenda()
     rodape = _montar_rodape()
 
+    def _cabecalho() -> discord.ui.Item:
+        if icon_url:
+            return discord.ui.Section(
+                resumo,
+                accessory=discord.ui.Thumbnail(icon_url),
+            )
+        return discord.ui.TextDisplay(resumo)
+
     if total == 0:
         cor = discord.Color.dark_grey()
         view = discord.ui.LayoutView(timeout=None)
         view.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(resumo),
+                _cabecalho(),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 discord.ui.TextDisplay(
                     "_Nenhum plantão ligado agora._\n"
@@ -232,7 +244,7 @@ async def montar_painel_plantao_ativo(
         eh_ultimo = indice == total_blocos - 1
 
         if eh_primeiro:
-            itens.append(discord.ui.TextDisplay(resumo))
+            itens.append(_cabecalho())
             itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         else:
             itens.append(
@@ -247,6 +259,7 @@ async def montar_painel_plantao_ativo(
         if eh_ultimo:
             itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
             itens.append(discord.ui.TextDisplay(legenda))
+            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
             itens.append(discord.ui.TextDisplay(rodape))
 
         view.add_item(discord.ui.Container(*itens, accent_color=cor))
