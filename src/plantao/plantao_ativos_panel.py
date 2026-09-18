@@ -135,8 +135,14 @@ def _montar_legenda() -> str:
 
 
 def _montar_rodape() -> str:
-    agora = datetime.now(FUSO).strftime("%H:%M:%S")
-    return f"-# CENTRO MÉDICO SUL · Atualizado em tempo real · `{agora}`"
+    """
+    Rodapé com timestamp relativo do Discord (<t:unix:R>).
+
+    O cliente do Discord atualiza sozinho (há 5 segundos, há 23 segundos,
+    há 1 minuto…). Mesmo padrão do ranking de plantão em tempo real.
+    """
+    agora_ts = int(datetime.now(FUSO).timestamp())
+    return f"-# CENTRO MÉDICO SUL · atualizado em tempo real · <t:{agora_ts}:R>"
 
 
 async def montar_painel_plantao_ativo(
