@@ -128,7 +128,6 @@ def _montar_resumo(
 
 def _montar_legenda() -> str:
     return (
-        "-# **Legenda**\n"
         "-# 🟢 Em call (canal de voz) — tempo contando\n"
         "-# 🟡 Mudo ou surdo na call — tempo pausado\n"
         "-# 🔴 Fora de call — plantão ligado, sem voz"
@@ -190,6 +189,7 @@ async def montar_painel_plantao_ativo(
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 discord.ui.TextDisplay(legenda),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 discord.ui.TextDisplay(rodape),
                 accent_color=cor,
             )
