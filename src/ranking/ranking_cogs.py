@@ -83,9 +83,7 @@ class RankingCog(commands.Cog):
         description="Horas de plantão no ciclo atual (parcial / ao vivo)",
     )
     @app_commands.describe(
-        no_canal=(
-            "True = posta no canal oficial. False = só você vê (ephemeral)."
-        ),
+        no_canal=("True = posta no canal oficial. False = só você vê (ephemeral)."),
     )
     async def horas_tempo_real(
         self,
@@ -95,11 +93,12 @@ class RankingCog(commands.Cog):
         """Prévia ou postagem do ranking de horas em tempo real."""
         await interacao.response.defer(ephemeral=True)
         try:
-            view, *_ = await gerar_view_ranking_horas(
+            views, *_ = await gerar_view_ranking_horas(
                 "tempo_real",
                 guild=interacao.guild,
                 modo_postagem=False,
             )
+            view = views
         except Exception as erro:
             await responder_erro(
                 interacao,
@@ -139,11 +138,12 @@ class RankingCog(commands.Cog):
         """Fecha e opcionalmente publica o ranking oficial de horas."""
         await interacao.response.defer(ephemeral=True)
         try:
-            view, contagem, inicio, fim, total = await gerar_view_ranking_horas(
+            views, contagem, inicio, fim, total = await gerar_view_ranking_horas(
                 periodo.value,
                 guild=interacao.guild,
                 modo_postagem=True,
             )
+            view = views
         except Exception as erro:
             await responder_erro(
                 interacao,
@@ -215,9 +215,7 @@ class RankingCog(commands.Cog):
         description="Ranking parcial de chamadas do ciclo atual",
     )
     @app_commands.describe(
-        no_canal=(
-            "True = posta no canal oficial. False = só você vê (ephemeral)."
-        ),
+        no_canal=("True = posta no canal oficial. False = só você vê (ephemeral)."),
     )
     async def chamadas_tempo_real(
         self,
@@ -345,9 +343,7 @@ class RankingCog(commands.Cog):
     )
     @app_commands.describe(
         escopo="Semanal (ciclo atual) ou mensal (mês atual)",
-        no_canal=(
-            "True = posta no canal oficial. False = só você vê (ephemeral)."
-        ),
+        no_canal=("True = posta no canal oficial. False = só você vê (ephemeral)."),
     )
     @app_commands.choices(
         escopo=[
@@ -364,9 +360,7 @@ class RankingCog(commands.Cog):
         """Prévia ou postagem do ranking de recrutamento em tempo real."""
         await interacao.response.defer(ephemeral=True)
         tipo = (
-            "tempo_real"
-            if (escopo is None or escopo.value == "semanal")
-            else "mensal"
+            "tempo_real" if (escopo is None or escopo.value == "semanal") else "mensal"
         )
         try:
             view, *_ = await gerar_view_ranking(
@@ -485,9 +479,7 @@ class RankingCog(commands.Cog):
             registros = await listar_historico(tipo=filtro, limite=limite)
             await responder_view(
                 interacao,
-                montar_view_lista_historico_com_ids(
-                    registros, interacao.guild
-                ),
+                montar_view_lista_historico_com_ids(registros, interacao.guild),
                 ephemeral=True,
             )
         except Exception as erro:
@@ -505,9 +497,7 @@ class RankingCog(commands.Cog):
     )
     @app_commands.describe(
         escopo="Semanal (ciclo atual) ou mensal (mês atual)",
-        no_canal=(
-            "True = posta no canal oficial. False = só você vê (ephemeral)."
-        ),
+        no_canal=("True = posta no canal oficial. False = só você vê (ephemeral)."),
     )
     @app_commands.choices(
         escopo=[
@@ -657,9 +647,7 @@ class RankingCog(commands.Cog):
         description="Ranking de moedas (saldo atual / ao vivo)",
     )
     @app_commands.describe(
-        no_canal=(
-            "True = posta/atualiza no canal oficial. False = só você vê."
-        ),
+        no_canal=("True = posta/atualiza no canal oficial. False = só você vê."),
     )
     async def moedas_tempo_real(
         self,
@@ -702,7 +690,7 @@ class RankingCog(commands.Cog):
     async def _entregar_view(
         self,
         interacao: discord.Interaction,
-        view: discord.ui.LayoutView,
+        view: discord.ui.LayoutView | list,
         *,
         no_canal: bool,
         chave_canal: str,
@@ -713,10 +701,18 @@ class RankingCog(commands.Cog):
         no_canal=False → só o autor vê (ephemeral).
         no_canal=True  → envia no canal oficial e confirma no ephemeral.
 
-        Devolve a mensagem do canal quando publicou; None na prévia.
+        Aceita uma view ou lista de views (continuação em vários cards).
+        Devolve a última mensagem do canal quando publicou; None na prévia.
         """
+        views = view if isinstance(view, list) else [view]
         if not no_canal:
-            await responder_view(interacao, view, ephemeral=True)
+            # Ephemeral: manda o primeiro card na resposta e o resto followup
+            await responder_view(interacao, views[0], ephemeral=True)
+            for extra in views[1:]:
+                try:
+                    await interacao.followup.send(view=extra, ephemeral=True)
+                except Exception as erro:
+                    registrador.warning("Followup ranking: %s", erro)
             return None
 
         canal = _canal_por_chave(interacao.guild, chave_canal)
@@ -731,8 +727,13 @@ class RankingCog(commands.Cog):
             )
             return None
 
-        mensagem = await canal.send(view=view)
-        linhas = [f"Postado em {canal.mention}."]
+        mensagem = None
+        for card in views:
+            mensagem = await canal.send(view=card)
+        linhas = [
+            f"Postado em {canal.mention} "
+            f"({len(views)} card{'s' if len(views) != 1 else ''})."
+        ]
         if linhas_ok:
             linhas.extend(linhas_ok)
         await responder_sucesso(
