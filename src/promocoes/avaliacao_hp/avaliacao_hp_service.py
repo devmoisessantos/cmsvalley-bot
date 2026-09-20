@@ -17,16 +17,7 @@ from typing import Any
 import discord
 from sqlalchemy import func, select
 
-from src.config import (
-    CARGO_DOUTOR,
-    CARGO_INSTRUTOR,
-    CARGO_INSTRUTOR_RESGATE,
-    CARGO_PARAMEDICO,
-    CARGO_PSICOLOGO,
-    CARGO_RECRUTADOR,
-    CARGOS,
-    METAS_POR_CARGO,
-)
+from src.config import CARGOS
 from src.database.conexao import async_session
 from src.database.models import (
     Chamada,
@@ -41,7 +32,20 @@ from src.promocoes.promocoes_service import (
 )
 from src.utils.formatacao import formatar_hms
 
+try:
+    from src.config import METAS_POR_CARGO
+except ImportError:
+    METAS_POR_CARGO = {}
+
 logger = logging.getLogger(__name__)
+
+# Nomes oficiais — iguais a CARGOS_HIERARQUIA / config
+CARGO_PARAMEDICO = "🚑・Paramédico"
+CARGO_DOUTOR = "🥼・Doutor"
+CARGO_PSICOLOGO = "🩺・Psicólogo"
+CARGO_RECRUTADOR = "✈️・Recrutador"
+CARGO_INSTRUTOR = "🥼・Instrutor"
+CARGO_INSTRUTOR_RESGATE = "🚑・Instrutor Resgate"
 
 # Áreas usadas no ranking de destaque (Responsável de área)
 AREAS_PARA_DESTAQUE: list[tuple[str, str]] = [

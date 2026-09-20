@@ -1291,16 +1291,27 @@ CURSOS_PARA_SUPERVISOR = (
 
 # Metas por cargo — edite aqui sem mexer na lógica do serviço.
 # Os nomes CARGO_* estão definidos junto de CARGOS_HIERARQUIA (acima).
-# Chaves de meta usadas pelo checklist:
-#   segundos_minimos_plantao, meta_laudos, meta_recrutamentos,
-#   meta_chamadas, meta_cursos_aplicados, exige_avaliacao_hp
+#
+# segundos_minimos_plantao = ETAPA deste cargo (horas desta promoção quando
+# o cargo é origem em área→área, ou destino com usar_metas_do_destino).
+# O total no banco da trilha = acumulado até a origem + etapa.
+#
+# Produção por especialidade (meta de ORIGEM em área→área):
+#   Doutor → chamadas | Psicólogo → laudos
+#   Recrutador → recrutamentos | Instrutor → cursos aplicados
+#
+# meta_tickets: a partir de Supervisor (assumidos e finalizados).
+# 1ª área do Paramédico: sem produção (ver HORAS_PRIMEIRA_AREA).
+#
+# Escala de plantão da carreira (caminho canônico): ~6 h → ~445 h.
 METAS_POR_CARGO = {
     CARGO_ENFERMEIRO: {
-        "segundos_minimos_plantao": 2 * 3600,
+        "segundos_minimos_plantao": 0,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
         "meta_cursos_aplicados": 0,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_PARAMEDICO: {
@@ -1309,30 +1320,34 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
         "meta_cursos_aplicados": 0,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_DOUTOR: {
         "segundos_minimos_plantao": 12 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
-        "meta_chamadas": 15,
+        "meta_chamadas": 30,
         "meta_cursos_aplicados": 0,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_PSICOLOGO: {
         "segundos_minimos_plantao": 16 * 3600,
-        "meta_laudos": 12,
+        "meta_laudos": 25,
         "meta_recrutamentos": 0,
-        "meta_chamadas": 12,
+        "meta_chamadas": 0,
         "meta_cursos_aplicados": 0,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_RECRUTADOR: {
         "segundos_minimos_plantao": 14 * 3600,
         "meta_laudos": 0,
-        "meta_recrutamentos": 12,
-        "meta_chamadas": 10,
+        "meta_recrutamentos": 20,
+        "meta_chamadas": 0,
         "meta_cursos_aplicados": 0,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_INSTRUTOR: {
@@ -1340,7 +1355,8 @@ METAS_POR_CARGO = {
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
-        "meta_cursos_aplicados": 7,
+        "meta_cursos_aplicados": 10,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_INSTRUTOR_RESGATE: {
@@ -1348,71 +1364,80 @@ METAS_POR_CARGO = {
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
-        "meta_cursos_aplicados": 7,
+        "meta_cursos_aplicados": 10,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_SUPERVISOR: {
-        "segundos_minimos_plantao": 40 * 3600,
-        "meta_laudos": 20,
-        "meta_recrutamentos": 15,
-        "meta_chamadas": 20,
-        "meta_cursos_aplicados": 12,
+        "segundos_minimos_plantao": 31 * 3600,
+        "meta_laudos": 15,
+        "meta_recrutamentos": 12,
+        "meta_chamadas": 15,
+        "meta_cursos_aplicados": 8,
+        "meta_tickets": 12,
         "exige_avaliacao_hp": False,
     },
     CARGO_VICE_DIRETOR: {
-        "segundos_minimos_plantao": 50 * 3600,
-        "meta_laudos": 28,
-        "meta_recrutamentos": 20,
-        "meta_chamadas": 26,
-        "meta_cursos_aplicados": 16,
+        "segundos_minimos_plantao": 45 * 3600,
+        "meta_laudos": 22,
+        "meta_recrutamentos": 18,
+        "meta_chamadas": 22,
+        "meta_cursos_aplicados": 12,
+        "meta_tickets": 15,
         "exige_avaliacao_hp": False,
     },
     CARGO_DIRETOR: {
         "segundos_minimos_plantao": 60 * 3600,
-        "meta_laudos": 36,
-        "meta_recrutamentos": 26,
-        "meta_chamadas": 32,
-        "meta_cursos_aplicados": 22,
+        "meta_laudos": 30,
+        "meta_recrutamentos": 24,
+        "meta_chamadas": 28,
+        "meta_cursos_aplicados": 16,
+        "meta_tickets": 18,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_DOUTOR: {
         "segundos_minimos_plantao": 55 * 3600,
-        "meta_laudos": 10,
-        "meta_recrutamentos": 5,
-        "meta_chamadas": 30,
+        "meta_laudos": 12,
+        "meta_recrutamentos": 6,
+        "meta_chamadas": 40,
         "meta_cursos_aplicados": 8,
+        "meta_tickets": 12,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_PSICOLOGO: {
         "segundos_minimos_plantao": 55 * 3600,
-        "meta_laudos": 30,
-        "meta_recrutamentos": 5,
-        "meta_chamadas": 12,
+        "meta_laudos": 40,
+        "meta_recrutamentos": 6,
+        "meta_chamadas": 10,
         "meta_cursos_aplicados": 8,
+        "meta_tickets": 12,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_RECRUTAMENTO: {
         "segundos_minimos_plantao": 55 * 3600,
         "meta_laudos": 8,
-        "meta_recrutamentos": 30,
-        "meta_chamadas": 12,
+        "meta_recrutamentos": 40,
+        "meta_chamadas": 10,
         "meta_cursos_aplicados": 8,
+        "meta_tickets": 12,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_INSTRUTOR: {
         "segundos_minimos_plantao": 55 * 3600,
         "meta_laudos": 8,
         "meta_recrutamentos": 8,
-        "meta_chamadas": 12,
-        "meta_cursos_aplicados": 28,
+        "meta_chamadas": 10,
+        "meta_cursos_aplicados": 35,
+        "meta_tickets": 12,
         "exige_avaliacao_hp": False,
     },
     CARGO_COORDENADOR: {
         "segundos_minimos_plantao": 70 * 3600,
         "meta_laudos": 40,
         "meta_recrutamentos": 30,
-        "meta_chamadas": 36,
-        "meta_cursos_aplicados": 26,
+        "meta_chamadas": 35,
+        "meta_cursos_aplicados": 22,
+        "meta_tickets": 20,
         "exige_avaliacao_hp": False,
     },
     CARGO_VICE_DIRETOR_GERAL: {
@@ -1420,7 +1445,8 @@ METAS_POR_CARGO = {
         "meta_laudos": 45,
         "meta_recrutamentos": 35,
         "meta_chamadas": 40,
-        "meta_cursos_aplicados": 30,
+        "meta_cursos_aplicados": 28,
+        "meta_tickets": 25,
         "exige_avaliacao_hp": True,
     },
     CARGO_DIRETOR_GERAL: {
@@ -1429,6 +1455,7 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 40,
         "meta_chamadas": 45,
         "meta_cursos_aplicados": 35,
+        "meta_tickets": 30,
         "exige_avaliacao_hp": True,
     },
     CARGO_RESPONSAVEL_GERAL: {
@@ -1437,22 +1464,23 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 45,
         "meta_chamadas": 50,
         "meta_cursos_aplicados": 40,
+        "meta_tickets": 35,
         "exige_avaliacao_hp": True,
     },
 }
 
 # Horas de ETAPA (incrementais) para a PRIMEIRA área do Paramédico.
 # O total exigido no banco = horas já "pagas" nos degraus anteriores + etapa.
-# Ex.: Paramédico (2h) → Doutor (8h) exige 10h no total de plantão.
+# Ex.: Paramédico (6h) → Doutor (18h) exige 24h no total de plantão.
 HORAS_PRIMEIRA_AREA = {
-    CARGO_DOUTOR: 8 * 3600,
-    CARGO_PSICOLOGO: 10 * 3600,
-    CARGO_RECRUTADOR: 10 * 3600,
-    CARGO_INSTRUTOR: 12 * 3600,
+    CARGO_DOUTOR: 18 * 3600,
+    CARGO_PSICOLOGO: 22 * 3600,
+    CARGO_RECRUTADOR: 20 * 3600,
+    CARGO_INSTRUTOR: 26 * 3600,
 }
 
 # Etapa Enfermeiro → Paramédico (base da carreira)
-SEGUNDOS_ETAPA_ENFERMEIRO_PARAMEDICO = 2 * 3600
+SEGUNDOS_ETAPA_ENFERMEIRO_PARAMEDICO = 6 * 3600
 
 # Acumulado mínimo de plantão para "ter chegado" em cada cargo (via caminho
 # canônico). Preenchido ao montar as trilhas.
@@ -1470,6 +1498,7 @@ def _metas_do_cargo(nome_cargo: str) -> dict:
         "meta_recrutamentos": int(base.get("meta_recrutamentos") or 0),
         "meta_chamadas": int(base.get("meta_chamadas") or 0),
         "meta_cursos_aplicados": int(base.get("meta_cursos_aplicados") or 0),
+        "meta_tickets": int(base.get("meta_tickets") or 0),
         "exige_avaliacao_hp": bool(base.get("exige_avaliacao_hp") or False),
     }
 
@@ -1510,6 +1539,7 @@ def _montar_trilha(
             "meta_recrutamentos": 0,
             "meta_chamadas": 0,
             "meta_cursos_aplicados": 0,
+            "meta_tickets": 0,
             "exige_avaliacao_hp": False,
         }
     )
@@ -1564,7 +1594,7 @@ TRILHAS_PROMOCAO.append(
         usar_metas_do_destino=False,
         segundos_etapa=SEGUNDOS_ETAPA_ENFERMEIRO_PARAMEDICO,
         observacao=(
-            "Etapa de 2h de plantão (total 2h no banco). Boa conduta e sem adv."
+            "Etapa de 6h de plantão (total 6h no banco). Boa conduta e sem adv."
         ),
     )
 )
@@ -1593,8 +1623,8 @@ for cargo_area, chave_area, cursos_area in AREAS_MEDICAS:
             primeira_area=True,
             observacao=(
                 f"Primeira área: {texto_cursos}. "
-                f"Etapa {etapa // 3600}h além das 2h de Paramédico "
-                f"(total no banco = 2h + etapa). Sem metas de produção."
+                f"Etapa {etapa // 3600}h além das 6h de Paramédico "
+                f"(total no banco = 6h + etapa). Sem metas de produção."
             ),
         )
     )
@@ -1636,6 +1666,7 @@ for cargo_de, chave_de, _cursos_de in AREAS_MEDICAS:
         trilha_area["meta_recrutamentos"] = metas_origem["meta_recrutamentos"]
         trilha_area["meta_chamadas"] = metas_origem["meta_chamadas"]
         trilha_area["meta_cursos_aplicados"] = metas_origem["meta_cursos_aplicados"]
+        trilha_area["meta_tickets"] = metas_origem["meta_tickets"]
 
 # 4) Qualquer área → Supervisor (exige todas as quatro áreas na prática
 #    via cursos; o serviço ainda confere cargos de área quando necessário)

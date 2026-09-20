@@ -445,6 +445,7 @@ def montar_checklist_trilha(
             ("meta_recrutamentos", "Recrutamentos"),
             ("meta_chamadas", "Chamadas"),
             ("meta_cursos_aplicados", "Cursos aplicados"),
+            ("meta_tickets", "Tickets finalizados"),
         ):
             exigido = int(trilha.get(chave_meta) or 0)
             if exigido <= 0:
@@ -525,13 +526,14 @@ def montar_checklist_trilha(
 
 async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
     """
-    Conta laudos, recrutamentos, chamadas (como doutor) e cursos aplicados.
+    Conta laudos, recrutamentos, chamadas, cursos aplicados e tickets.
 
     Usa os models reais do projeto:
     - Laudo.discord_id_psicologo
     - Recrutamento (recrutador + APROVADO)
     - Chamada.doutor_id
     - SolicitacaoCurso.instrutor_id
+    - Ticket (staff_finalizou_id + status finalizado)
     """
     from sqlalchemy import func
 
@@ -547,6 +549,7 @@ async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
         "meta_cursos_aplicados": 0,
+        "meta_tickets": 0,
     }
 
     async with async_session() as sessao:
@@ -587,6 +590,19 @@ async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
             )
         )
         contagens["meta_cursos_aplicados"] = int(resultado.scalar_one() or 0)
+
+        # Tickets assumidos e finalizados pela staff (diretoria / equipe ticket)
+        from src.database.models import Ticket
+
+        resultado = await sessao.execute(
+            select(func.count())
+            .select_from(Ticket)
+            .where(
+                Ticket.staff_finalizou_id == discord_id,
+                Ticket.status == "finalizado",
+            )
+        )
+        contagens["meta_tickets"] = int(resultado.scalar_one() or 0)
 
     return contagens
 

@@ -16,13 +16,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.config import (
-    CARGO_DOUTOR,
-    CARGO_INSTRUTOR,
-    CARGO_PSICOLOGO,
-    CARGO_RECRUTADOR,
-    CARGOS,
-)
+from src.config import CARGOS
 from src.promocoes.avaliacao_hp.avaliacao_hp_service import (
     formatar_destaques_em_linhas,
     formatar_relatorio_area_em_linhas,
@@ -35,6 +29,12 @@ from src.utils.mensagens import responder_erro, responder_info
 from src.utils.permissions import membro_tem_cargo
 
 logger = logging.getLogger(__name__)
+
+# Nomes oficiais — iguais a CARGOS_HIERARQUIA / config
+CARGO_DOUTOR = "🥼・Doutor"
+CARGO_PSICOLOGO = "🩺・Psicólogo"
+CARGO_RECRUTADOR = "✈️・Recrutador"
+CARGO_INSTRUTOR = "🥼・Instrutor"
 
 # Quem pode abrir os relatórios de avaliação HP
 CARGOS_QUE_PODEM_AVALIAR = (
