@@ -54,6 +54,7 @@ from src.punicoes.punicoes_classes import limpar_sessao, obter_sessao
 from src.punicoes.punicoes_helpers import resolver_id_fivem
 from src.punicoes.punicoes_panel import (
     FluxoAplicarAdvertenciaView,
+    FluxoConsultarPunicaoView,
 )
 from src.punicoes.punicoes_service import executar_exoneracao
 from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
@@ -564,7 +565,9 @@ class PainelGerenciarMembrosLayout(LoggingViewMixin, discord.ui.LayoutView):
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
         # Bloco 2: separador
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Bloco 3: aviso de acesso e auditoria
         componentes.append(
@@ -577,7 +580,9 @@ class PainelGerenciarMembrosLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 4: separador antes do botão
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Botão (inalterado)
         linha_botoes = discord.ui.ActionRow()
@@ -833,7 +838,9 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             comps.append(rc)
         else:
             executor = self.executor
-            mostra_admin = executor is not None and e_admin_ou_responsavel_hp(executor)
+            mostra_admin = executor is not None and e_admin_ou_responsavel_hp(
+                executor
+            )
             mostra_diretoria = executor is None or e_equipe_diretoria(executor)
 
             # Linha 1 — plantão (admin / Responsável HP)
@@ -1006,7 +1013,11 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _refresh(self, i, status=None, conf=False):
         estado = await buscar_estado_plantao(self.alvo.id)
-        executor = i.user if isinstance(i.user, discord.Member) else self.executor
+        executor = (
+            i.user
+            if isinstance(i.user, discord.Member)
+            else self.executor
+        )
         view = FichaMembroAdminView(
             self.alvo,
             estado,
@@ -1140,7 +1151,9 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         """Demissão administrativa (funciona mesmo fora do servidor)."""
         if not await self._perm_diretoria(i):
             return
-        await i.response.send_modal(ModalDemitirMembro(self.alvo, self.bloco_ativo))
+        await i.response.send_modal(
+            ModalDemitirMembro(self.alvo, self.bloco_ativo)
+        )
 
     async def _voltar(self, i):
         if not await self._perm_diretoria(i):
@@ -1226,7 +1239,9 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
             i,
             self.alvo,
             bloco=self.bloco,
-            status=(f"Horas `{formatar_hms(antes)}` → `{formatar_hms(depois)}`"),
+            status=(
+                f"Horas `{formatar_hms(antes)}` → `{formatar_hms(depois)}`"
+            ),
         )
 
 

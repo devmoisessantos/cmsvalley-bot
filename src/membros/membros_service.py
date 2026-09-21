@@ -645,6 +645,61 @@ async def zerar_ciclo_plantao(discord_id: int) -> bool:
         return True
 
 
+async def ajustar_horas_plantao(
+    discord_id: int,
+    *,
+    segundos_absolutos: int | None = None,
+    delta_segundos: int | None = None,
+    executor_id: int | None = None,
+    motivo: str | None = None,
+) -> tuple[int, int]:
+    """
+    Ajusta o banco de horas (soma de log_plantao).
+
+    ABSOLUTO: define o total desejado (insere log de ajuste com a diferença).
+    DELTA: soma ou subtrai segundos (log com duração positiva ou negativa).
+
+    Devolve (total_antes, total_depois).
+    """
+    if segundos_absolutos is None and delta_segundos is None:
+        raise ValueError("Informe segundos_absolutos ou delta_segundos.")
+    if segundos_absolutos is not None and segundos_absolutos < 0:
+        raise ValueError("Total de horas não pode ser negativo.")
+
+    total_antes = await tempo_total_segundos_plantao(discord_id)
+
+    if segundos_absolutos is not None:
+        diferenca = int(segundos_absolutos) - int(total_antes)
+    else:
+        diferenca = int(delta_segundos or 0)
+
+    if total_antes + diferenca < 0:
+        diferenca = -int(total_antes)
+
+    total_depois = int(total_antes) + diferenca
+
+    if diferenca == 0:
+        return int(total_antes), int(total_antes)
+
+    texto_motivo = (motivo or "ajuste admin").strip()[:200]
+    async with async_session() as session:
+        session.add(
+            LogPlantao(
+                discord_id=int(discord_id),
+                evento="AJUSTE_ADMIN",
+                duracao_segundos=int(diferenca),
+                detalhes=(
+                    f"executor={executor_id or 0}; "
+                    f"antes={total_antes}; depois={total_depois}; "
+                    f"{texto_motivo}"
+                )[:300],
+            )
+        )
+        await session.commit()
+
+    return int(total_antes), int(total_depois)
+
+
 async def ajustar_saldo_moedas(
     discord_id: int,
     *,
