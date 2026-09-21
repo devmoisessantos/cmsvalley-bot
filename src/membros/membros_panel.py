@@ -11,6 +11,7 @@ from src.config import CARGOS, NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME
 from src.membros.cargos_panel import GerenciarCargosView
 from src.membros.membros_service import (
     STATUS_USUARIO_CANONICOS,
+    ajustar_horas_plantao,
     ajustar_saldo_moedas,
     buscar_estado_plantao,
     buscar_snapshot_cargos,
@@ -835,7 +836,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             mostra_admin = executor is not None and e_admin_ou_responsavel_hp(executor)
             mostra_diretoria = executor is None or e_equipe_diretoria(executor)
 
-            # Linha 1 — só admin Discord ou Responsavel HP
+            # Linha 1 — plantão (admin / Responsável HP)
             if mostra_admin:
                 r1 = discord.ui.ActionRow()
                 for label, style, emoji, cb, dis in [
@@ -861,10 +862,10 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                         False,
                     ),
                     (
-                        "FiveM",
+                        "Ajustar horas",
                         discord.ButtonStyle.primary,
-                        "🪪",
-                        self._fivem,
+                        "⌛",
+                        self._horas,
                         False,
                     ),
                 ]:
@@ -875,7 +876,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                     r1.add_item(b)
                 comps.append(r1)
 
-            # Linha 2 — diretoria / equipe diretoria
+            # Linha 2 — punição / cargos / demissão (diretoria)
             if mostra_diretoria:
                 r2 = discord.ui.ActionRow()
                 for label, style, emoji, cb, dis in [
@@ -887,13 +888,6 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                         False,
                     ),
                     (
-                        "Ajustar cargos",
-                        discord.ButtonStyle.primary,
-                        "🏷️",
-                        self._cargos,
-                        not no,
-                    ),
-                    (
                         "Advertencia",
                         discord.ButtonStyle.danger,
                         "⚠️",
@@ -901,11 +895,11 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                         not no,
                     ),
                     (
-                        "Status DB",
-                        discord.ButtonStyle.secondary,
-                        "📝",
-                        self._status,
-                        False,
+                        "Ajustar cargos",
+                        discord.ButtonStyle.primary,
+                        "🏷️",
+                        self._cargos,
+                        not no,
                     ),
                     (
                         "Exonerar",
@@ -913,6 +907,13 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                         "⛔",
                         self._exon,
                         not no,
+                    ),
+                    (
+                        "Demitir",
+                        discord.ButtonStyle.danger,
+                        "🚪",
+                        self._demitir,
+                        False,
                     ),
                 ]:
                     b = discord.ui.Button(
@@ -922,26 +923,40 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                     r2.add_item(b)
                 comps.append(r2)
 
-                # Linha 3 — demissão (ActionRow no Discord tem no máximo 5 botões)
-                r_demitir = discord.ui.ActionRow()
-                botao_demitir = discord.ui.Button(
-                    label="Demitir",
-                    style=discord.ButtonStyle.danger,
-                    emoji="🚪",
-                    disabled=False,
-                )
-                botao_demitir.callback = self._demitir
-                r_demitir.add_item(botao_demitir)
-                comps.append(r_demitir)
-
-            # Linha final — navegação
+            # Linha 3 — status / identidade / navegação
             r3 = discord.ui.ActionRow()
-            for label, emoji, cb in [
-                ("Atualizar", "🔄", self._att),
-                ("Nova busca", "↩️", self._voltar),
+            for label, style, emoji, cb, dis in [
+                (
+                    "Status DB",
+                    discord.ButtonStyle.secondary,
+                    "📝",
+                    self._status,
+                    not mostra_diretoria,
+                ),
+                (
+                    "FiveM ID",
+                    discord.ButtonStyle.primary,
+                    "🪪",
+                    self._fivem,
+                    not mostra_admin,
+                ),
+                (
+                    "Atualizar",
+                    discord.ButtonStyle.secondary,
+                    "🔄",
+                    self._att,
+                    not mostra_diretoria,
+                ),
+                (
+                    "Nova busca",
+                    discord.ButtonStyle.secondary,
+                    "↩️",
+                    self._voltar,
+                    not mostra_diretoria,
+                ),
             ]:
                 b = discord.ui.Button(
-                    label=label, style=discord.ButtonStyle.secondary, emoji=emoji
+                    label=label, style=style, emoji=emoji, disabled=dis
                 )
                 b.callback = cb
                 r3.add_item(b)
@@ -949,7 +964,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             if not no:
                 comps.append(
                     discord.ui.TextDisplay(
-                        "-# Fora do server: desligar/cargos/advertencia/exonerar "
+                        "-# Fora do server: desligar/advertencia/exonerar "
                         "bloqueados. **Demitir** continua disponível."
                     )
                 )
@@ -1058,6 +1073,11 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             return
         await i.response.send_modal(ModalAjustarMoedas(self.alvo, self.bloco_ativo))
 
+    async def _horas(self, i):
+        if not await self._perm_admin(i):
+            return
+        await i.response.send_modal(ModalAjustarHoras(self.alvo, self.bloco_ativo))
+
     async def _fivem(self, i):
         if not await self._perm_admin(i):
             return
@@ -1126,6 +1146,88 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         if not await self._perm_diretoria(i):
             return
         await editar_mensagem_original(i, view=SeletorMembroAdminView())
+
+
+class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar horas"):
+    modo = discord.ui.TextInput(
+        label="Modo ABSOLUTO ou DELTA",
+        default="DELTA",
+        max_length=10,
+    )
+    valor = discord.ui.TextInput(
+        label="Horas (ex: 2.5 ou -1)",
+        required=True,
+        max_length=12,
+    )
+    motivo = discord.ui.TextInput(
+        label="Motivo",
+        required=False,
+        max_length=120,
+    )
+
+    def __init__(self, alvo, bloco=BLOCO_RESUMO):
+        super().__init__()
+        self.alvo = alvo
+        self.bloco = bloco
+
+    async def on_submit(self, i: discord.Interaction):
+        if not isinstance(i.user, discord.Member) or not e_admin_ou_responsavel_hp(
+            i.user
+        ):
+            await responder_erro(
+                i,
+                titulo="Sem permissao",
+                linhas=[
+                    "Apenas **Administrador** ou **Responsavel HP** "
+                    "podem ajustar horas."
+                ],
+            )
+            return
+        modo = (self.modo.value or "DELTA").strip().upper()
+        bruto = (self.valor.value or "").strip().replace(",", ".")
+        try:
+            horas = float(bruto)
+        except ValueError:
+            await responder_erro(
+                i,
+                titulo="Valor inválido",
+                linhas=["Use número de horas, ex: `2.5` ou `-1`."],
+            )
+            return
+        segundos = int(round(horas * 3600))
+        await i.response.defer(ephemeral=True)
+        try:
+            if modo.startswith("ABS"):
+                antes, depois = await ajustar_horas_plantao(
+                    self.alvo.id,
+                    segundos_absolutos=max(0, segundos),
+                    executor_id=i.user.id,
+                    motivo=self.motivo.value or "absoluto",
+                )
+            else:
+                antes, depois = await ajustar_horas_plantao(
+                    self.alvo.id,
+                    delta_segundos=segundos,
+                    executor_id=i.user.id,
+                    motivo=self.motivo.value or "delta",
+                )
+        except ValueError as erro_valor:
+            await responder_erro(i, titulo="Recusado", linhas=[str(erro_valor)])
+            return
+        await registrar_auditoria_admin(
+            i.guild,
+            executor=i.user,
+            alvo=self.alvo,
+            acao="AJUSTAR_HORAS",
+            detalhes=f"{antes}->{depois}",
+            cor=discord.Color.green(),
+        )
+        await _abrir_ficha(
+            i,
+            self.alvo,
+            bloco=self.bloco,
+            status=(f"Horas `{formatar_hms(antes)}` → `{formatar_hms(depois)}`"),
+        )
 
 
 class ModalAjustarMoedas(LoggingModalMixin, discord.ui.Modal, title="Ajustar moedas"):

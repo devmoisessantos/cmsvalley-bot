@@ -101,9 +101,7 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
         # Bloco 2: separador
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
         # Bloco 3: antes de solicitar
         componentes.append(
@@ -127,9 +125,7 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 5: separador antes do botão
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
         # Botão (inalterado)
         linha = discord.ui.ActionRow()
@@ -619,10 +615,10 @@ async def publicar_log_demissao(
         if registro.data_efetiva
         else "—"
     )
-    mencao = membro.mention if membro else f"`{registro.discord_id}`"
+    id_membro = int(registro.discord_id)
+    nome = (registro.membro_nome or "—").strip() or "—"
     corpo = (
-        f"- **Membro:** {mencao} (`{registro.discord_id}`)\n"
-        f"- **Nome no pedido:** `{registro.membro_nome}`\n"
+        f"- **Membro:** <@{id_membro}> · `{nome}` (`{id_membro}`)\n"
         f"- **Cargo:** `{registro.cargo or '—'}`\n"
         f"- **Tipo:** `{registro.tipo_demissao}`\n"
         f"- **Status:** {status}\n"
@@ -711,10 +707,11 @@ async def publicar_aviso_abandono(
     if canal is None:
         return
 
-    mencao = membro.mention if membro else f"`{registro.discord_id}`"
+    id_membro = int(registro.discord_id)
+    nome = (registro.membro_nome or "—").strip() or "—"
+    # Sempre <@id> para o Discord resolver a menção, mesmo fora do server
     corpo = (
-        f"- **Membro:** {mencao} (`{registro.discord_id}`)\n"
-        f"- **Nome:** `{registro.membro_nome}`\n"
+        f"- **Membro:** <@{id_membro}> · `{nome}` (`{id_membro}`)\n"
         f"- **Último cargo:** `{registro.cargo or '—'}`\n"
         f"- **Tipo:** `{registro.tipo_demissao}`\n"
         f"- **Pedido:** `#{registro.id}`\n"
@@ -826,36 +823,46 @@ async def processar_removido_do_painel(
         membro=membro,
     )
 
-    # Desabilita o botão no card de aviso
+    # Auditoria admin (além do LOG_DEMISSAO)
     try:
-        if interacao.message is not None:
-            view_final = discord.ui.LayoutView(timeout=None)
-            texto = (
-                f"# 🚪 Saída informal — formalizada\n"
-                f"- **Membro:** `{registro.membro_nome}` (`{registro.discord_id}`)\n"
-                f"- **Pedido:** `#{registro.id}`\n"
-                f"- **Painel in-game:** removido por {interacao.user.mention}\n"
-                f"- **Log:** publicado em LOG_DEMISSAO"
-            )
-            view_final.add_item(
-                discord.ui.Container(
-                    discord.ui.TextDisplay(texto),
-                    accent_color=discord.Color.dark_grey(),
-                )
-            )
-            await interacao.message.edit(view=view_final)
-    except discord.HTTPException as erro_edit:
+        from src.plantao.auditoria_service import registrar_auditoria_admin
+
+        await registrar_auditoria_admin(
+            interacao.guild,
+            executor=interacao.user,
+            alvo=membro,
+            acao="DEMISSAO_PAINEL_IN_GAME_REMOVIDO",
+            detalhes=(
+                f"pedido #{registro.id} · "
+                f"<@{registro.discord_id}> · "
+                f"{registro.membro_nome}"
+            ),
+        )
+    except Exception as erro_auditoria:
         ignorar_falha_cosmetica(
-            erro_edit,
-            o_que_falhou="desabilitar card de abandono",
+            erro_auditoria,
+            o_que_falhou="auditoria demissão painel in-game",
         )
 
+    # Remove o card do canal (não deixa "Saída informal — formalizada")
+    try:
+        if interacao.message is not None:
+            await interacao.message.delete()
+    except discord.HTTPException as erro_delete:
+        ignorar_falha_cosmetica(
+            erro_delete,
+            o_que_falhou="apagar card de abandono formalizado",
+        )
+
+    id_membro = int(registro.discord_id)
+    nome = (registro.membro_nome or "—").strip() or "—"
     await responder_sucesso(
         interacao,
         titulo="Painel confirmado",
         linhas=[
             f"Pedido `#{registro.id}` formalizado.",
+            f"Membro: <@{id_membro}> · `{nome}` (`{id_membro}`).",
             "Log de demissão publicado.",
         ],
-        delay=12,
+        delay=14,
     )
