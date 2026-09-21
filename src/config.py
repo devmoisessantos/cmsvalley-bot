@@ -1678,7 +1678,7 @@ for cargo_de, chave_de, _ in AREAS_MEDICAS:
             cargo_de,
             CARGO_SUPERVISOR,
             list(CURSOS_PARA_SUPERVISOR),
-            usar_metas_do_destino=True,
+            usar_metas_do_destino=False,
             observacao=(
                 "Primeiro cargo da diretoria. Exige práticos 1.0 e 2.0, "
                 "os quatro cursos de área, Curso Diretoria, horas e metas."
