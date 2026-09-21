@@ -84,7 +84,17 @@ async def abrir_ticket_por_categoria(
         )
         return
 
-    # Apenas 1 ticket aberto por membro (qualquer categoria)
+    guilda = interacao.guild
+    if guilda is None:
+        await responder_erro(
+            interacao,
+            titulo="Servidor não encontrado",
+            linhas=["Guilda não encontrada."],
+        )
+        return
+
+    # 1 ticket aberto por membro (qualquer categoria). Checagem rápida
+    # antes da trava interna de criar_ticket (que repete a busca).
     ticket_existente = await buscar_ticket_aberto_do_autor(
         autor_discord_id=membro.id,
         categoria_chave=None,
@@ -106,17 +116,30 @@ async def abrir_ticket_por_categoria(
         )
         return
 
-    guilda = interacao.guild
-    if guilda is None:
-        await responder_erro(
-            interacao,
-            titulo="Servidor não encontrado",
-            linhas=["Guilda não encontrada."],
-        )
-        return
-
     resultado = await criar_ticket(guilda, membro, categoria_chave)
     if resultado is None:
+        # Pode ser falha de config OU bloqueio por ticket aberto
+        # (corrida de clique duplo resolvida pela trava).
+        ticket_existente = await buscar_ticket_aberto_do_autor(
+            autor_discord_id=membro.id,
+            categoria_chave=None,
+        )
+        if ticket_existente is not None:
+            await responder_card(
+                interacao,
+                titulo="Você já tem um ticket aberto",
+                linhas=[
+                    f"Categoria: **{ticket_existente.categoria_rotulo}**",
+                    f"Canal: <#{ticket_existente.canal_id}>",
+                    "Só é permitido **1 ticket aberto** por vez.",
+                    "Finalize o atual antes de abrir outro (em qualquer categoria).",
+                ],
+                cor=COR_AVISO,
+                extra_row=_montar_linha_botao_canal_id(
+                    ticket_existente.canal_id, interacao.guild
+                ),
+            )
+            return
         await responder_erro(
             interacao,
             titulo="Falha ao criar ticket",

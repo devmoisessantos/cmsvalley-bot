@@ -4,6 +4,7 @@ Lógica de tickets: criar canal, assumir, finalizar e preparar transcript.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from pathlib import Path
@@ -26,6 +27,20 @@ from src.database.models import (
 from src.utils.error_handling import ignorar_falha_cosmetica
 
 registrador = logging.getLogger(__name__)
+
+# Uma trava por autor: evita clique duplo criar dois canais ao mesmo tempo.
+_travas_abertura_por_autor: dict[int, asyncio.Lock] = {}
+_trava_mapa_travas = asyncio.Lock()
+
+
+async def _obter_trava_abertura(autor_discord_id: int) -> asyncio.Lock:
+    """Devolve (e cria se precisar) a trava de abertura deste membro."""
+    async with _trava_mapa_travas:
+        trava = _travas_abertura_por_autor.get(autor_discord_id)
+        if trava is None:
+            trava = asyncio.Lock()
+            _travas_abertura_por_autor[autor_discord_id] = trava
+        return trava
 
 
 def _nomes_cargos_staff_da_categoria(categoria_chave: str | None) -> list[str]:
@@ -272,16 +287,24 @@ async def buscar_ticket_aberto_do_autor(
 
     Por padrão (categoria_chave=None) busca em QUALQUER categoria —
     só pode existir 1 ticket aberto por membro no servidor.
+
+    Usa limit(1) ordenado pelo mais recente: se já houver duplicata no
+    banco, não estoura MultipleResultsFound e ainda bloqueia nova abertura.
     """
     async with async_session() as sessao:
-        consulta = select(Ticket).where(
-            Ticket.autor_discord_id == autor_discord_id,
-            Ticket.status.in_(["aberto", "assumido"]),
+        consulta = (
+            select(Ticket)
+            .where(
+                Ticket.autor_discord_id == autor_discord_id,
+                Ticket.status.in_(["aberto", "assumido"]),
+            )
+            .order_by(Ticket.aberto_em.desc())
+            .limit(1)
         )
         if categoria_chave:
             consulta = consulta.where(Ticket.categoria_chave == categoria_chave)
         resultado = await sessao.execute(consulta)
-        return resultado.scalar_one_or_none()
+        return resultado.scalars().first()
 
 
 def membro_tem_cargo_obrigatorio_ticket(
@@ -324,6 +347,9 @@ async def criar_ticket(
     Cria o canal privado do ticket e registra no banco.
 
     Retorna (ticket, canal) ou None se a categoria for inválida.
+
+    Usa trava por autor + rechecagem imediata antes de criar o canal,
+    para clique duplo não gerar dois tickets abertos.
     """
     definicao = TICKETS_CATEGORIAS.get(categoria_chave)
     if definicao is None:
@@ -343,85 +369,101 @@ async def criar_ticket(
     ):
         return None
 
-    username = nome_usuario_discord(autor)
-    nome_canal = sanitizar_nome_canal(f"{definicao['prefixo_canal']}-{username}")
-    cargos_staff = _cargos_staff_na_guilda(guilda, categoria_chave)
-    overwrite_staff = _overwrite_staff_texto()
-
-    overwrites: dict[
-        discord.Role | discord.Member,
-        discord.PermissionOverwrite,
-    ] = {
-        guilda.default_role: discord.PermissionOverwrite(view_channel=False),
-        autor: discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            attach_files=True,
-            embed_links=True,
-            read_message_history=True,
-        ),
-        guilda.me: discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            manage_channels=True,
-            manage_messages=True,
-            attach_files=True,
-            embed_links=True,
-            read_message_history=True,
-        ),
-    }
-
-    for cargo_staff in cargos_staff:
-        overwrites[cargo_staff] = overwrite_staff
-
-    registrador.info(
-        "Criando ticket categoria=%s com %s cargos de staff: %s",
-        categoria_chave,
-        len(cargos_staff),
-        ", ".join(f"{cargo.name}({cargo.id})" for cargo in cargos_staff) or "(nenhum)",
-    )
-
-    canal = await guilda.create_text_channel(
-        name=nome_canal,
-        category=categoria_discord,
-        overwrites=overwrites,
-        topic=f"Ticket criado para o usuário: {username}",
-        reason=f"Ticket aberto por {username} — {definicao['rotulo']}",
-    )
-
-    # Reforço: aplica de novo cada cargo. Garante que a API gravou
-    # mesmo se a categoria tentar sincronizar permissões herdadas.
-    for cargo_staff in cargos_staff:
-        try:
-            await canal.set_permissions(
-                cargo_staff,
-                overwrite=overwrite_staff,
-                reason="Reforço de staff após criar ticket",
-            )
-        except discord.HTTPException as erro:
-            registrador.warning(
-                "Falha ao reforçar cargo %s (%s) no canal %s: %s",
-                cargo_staff.name,
-                cargo_staff.id,
-                canal.id,
-                erro,
-            )
-
-    async with async_session() as sessao:
-        ticket = Ticket(
-            categoria_chave=categoria_chave,
-            categoria_rotulo=definicao["rotulo"],
-            status="aberto",
+    trava = await _obter_trava_abertura(autor.id)
+    async with trava:
+        # Segunda barreira: outro clique pode ter passado no painel
+        # enquanto o primeiro ainda criava o canal.
+        ja_aberto = await buscar_ticket_aberto_do_autor(
             autor_discord_id=autor.id,
-            autor_nome=username,
-            canal_id=canal.id,
-            aberto_em=agora(),
+            categoria_chave=None,
         )
-        sessao.add(ticket)
-        await sessao.commit()
-        await sessao.refresh(ticket)
+        if ja_aberto is not None:
+            registrador.info(
+                "Abertura bloqueada: autor %s já tem ticket #%s (%s)",
+                autor.id,
+                ja_aberto.id,
+                ja_aberto.categoria_chave,
+            )
+            return None
 
-    return ticket, canal
+        username = nome_usuario_discord(autor)
+        nome_canal = sanitizar_nome_canal(f"{definicao['prefixo_canal']}-{username}")
+        cargos_staff = _cargos_staff_na_guilda(guilda, categoria_chave)
+        overwrite_staff = _overwrite_staff_texto()
+
+        overwrites: dict[
+            discord.Role | discord.Member,
+            discord.PermissionOverwrite,
+        ] = {
+            guilda.default_role: discord.PermissionOverwrite(view_channel=False),
+            autor: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True,
+            ),
+            guilda.me: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                manage_channels=True,
+                manage_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True,
+            ),
+        }
+
+        for cargo_staff in cargos_staff:
+            overwrites[cargo_staff] = overwrite_staff
+
+        registrador.info(
+            "Criando ticket categoria=%s com %s cargos de staff: %s",
+            categoria_chave,
+            len(cargos_staff),
+            ", ".join(f"{cargo.name}({cargo.id})" for cargo in cargos_staff)
+            or "(nenhum)",
+        )
+
+        canal = await guilda.create_text_channel(
+            name=nome_canal,
+            category=categoria_discord,
+            overwrites=overwrites,
+            topic=f"Ticket criado para o usuário: {username}",
+            reason=f"Ticket aberto por {username} — {definicao['rotulo']}",
+        )
+
+        for cargo_staff in cargos_staff:
+            try:
+                await canal.set_permissions(
+                    cargo_staff,
+                    overwrite=overwrite_staff,
+                    reason="Reforço de staff após criar ticket",
+                )
+            except discord.HTTPException as erro:
+                registrador.warning(
+                    "Falha ao reforçar cargo %s (%s) no canal %s: %s",
+                    cargo_staff.name,
+                    cargo_staff.id,
+                    canal.id,
+                    erro,
+                )
+
+        async with async_session() as sessao:
+            ticket = Ticket(
+                categoria_chave=categoria_chave,
+                categoria_rotulo=definicao["rotulo"],
+                status="aberto",
+                autor_discord_id=autor.id,
+                autor_nome=username,
+                canal_id=canal.id,
+                aberto_em=agora(),
+            )
+            sessao.add(ticket)
+            await sessao.commit()
+            await sessao.refresh(ticket)
+
+        return ticket, canal
 
 
 async def sincronizar_permissoes_do_canal_ticket(
