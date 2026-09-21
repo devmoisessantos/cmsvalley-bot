@@ -1315,7 +1315,7 @@ METAS_POR_CARGO = {
         "exige_avaliacao_hp": False,
     },
     CARGO_PARAMEDICO: {
-        "segundos_minimos_plantao": 6 * 3600,
+        "segundos_minimos_plantao": 2 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
