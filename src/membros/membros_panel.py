@@ -564,7 +564,9 @@ class PainelGerenciarMembrosLayout(LoggingViewMixin, discord.ui.LayoutView):
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
         # Bloco 2: separador
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Bloco 3: aviso de acesso e auditoria
         componentes.append(
@@ -577,7 +579,9 @@ class PainelGerenciarMembrosLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 4: separador antes do botão
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Botão (inalterado)
         linha_botoes = discord.ui.ActionRow()
@@ -833,7 +837,9 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             comps.append(rc)
         else:
             executor = self.executor
-            mostra_admin = executor is not None and e_admin_ou_responsavel_hp(executor)
+            mostra_admin = executor is not None and e_admin_ou_responsavel_hp(
+                executor
+            )
             mostra_diretoria = executor is None or e_equipe_diretoria(executor)
 
             # Linha 1 — só admin Discord ou Responsavel HP
@@ -915,6 +921,13 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                         self._exon,
                         not no,
                     ),
+                    (
+                        "Demitir",
+                        discord.ButtonStyle.danger,
+                        "🚪",
+                        self._demitir,
+                        False,
+                    ),
                 ]:
                     b = discord.ui.Button(
                         label=label, style=style, emoji=emoji, disabled=dis
@@ -939,7 +952,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                 comps.append(
                     discord.ui.TextDisplay(
                         "-# Fora do server: desligar/cargos/advertencia/exonerar "
-                        "bloqueados."
+                        "bloqueados. **Demitir** continua disponível."
                     )
                 )
         self.add_item(
@@ -980,7 +993,11 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _refresh(self, i, status=None, conf=False):
         estado = await buscar_estado_plantao(self.alvo.id)
-        executor = i.user if isinstance(i.user, discord.Member) else self.executor
+        executor = (
+            i.user
+            if isinstance(i.user, discord.Member)
+            else self.executor
+        )
         view = FichaMembroAdminView(
             self.alvo,
             estado,
@@ -1092,7 +1109,10 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ver_pun(self, i):
         if not await self._perm_diretoria(i):
             return
-        await responder_view(i, FluxoConsultarPunicaoView(), ephemeral=True)
+        # Já temos o alvo da ficha: abre o histórico direto, sem novo select
+        from src.punicoes.punicoes_panel import _exibir_historico_punicoes
+
+        await _exibir_historico_punicoes(i, self.alvo)
 
     async def _exon(self, i):
         if not await self._perm_diretoria(i):
@@ -1101,6 +1121,14 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             await responder_erro(i, titulo="Alvo", linhas=["Precisa estar no server."])
             return
         await i.response.send_modal(ModalExonerarMembro(self.alvo, self.bloco_ativo))
+
+    async def _demitir(self, i):
+        """Demissão administrativa (funciona mesmo fora do servidor)."""
+        if not await self._perm_diretoria(i):
+            return
+        await i.response.send_modal(
+            ModalDemitirMembro(self.alvo, self.bloco_ativo)
+        )
 
     async def _voltar(self, i):
         if not await self._perm_diretoria(i):
@@ -1267,6 +1295,117 @@ class ModalEditarStatus(LoggingModalMixin, discord.ui.Modal, title="Status DB"):
         )
         await _abrir_ficha(
             i, self.alvo, bloco=self.bloco, status=f"Status `{ant}` → `{novo}`"
+        )
+
+
+class ModalDemitirMembro(LoggingModalMixin, discord.ui.Modal, title="Demitir membro"):
+    motivo = discord.ui.TextInput(
+        label="Motivo",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=1500,
+    )
+    confirmar = discord.ui.TextInput(
+        label="Digite DEMITIR",
+        required=True,
+        max_length=20,
+    )
+
+    def __init__(self, alvo, bloco=BLOCO_RESUMO):
+        super().__init__()
+        self.alvo = alvo
+        self.bloco = bloco
+
+    async def on_submit(self, i: discord.Interaction):
+        if not isinstance(i.user, discord.Member) or not e_equipe_diretoria(i.user):
+            await responder_erro(
+                i,
+                titulo="Sem permissao",
+                linhas=[mensagem_sem_permissao("demitir")],
+            )
+            return
+        if (self.confirmar.value or "").strip().upper() != "DEMITIR":
+            await responder_erro(
+                i,
+                titulo="Confirmacao",
+                linhas=["Digite DEMITIR para confirmar."],
+            )
+            return
+        if i.guild is None:
+            await responder_erro(i, titulo="Contexto", linhas=["Guilda invalida."])
+            return
+
+        await i.response.defer(ephemeral=True)
+
+        from src.demissao.demissao_panel import publicar_aviso_abandono
+        from src.demissao.demissao_service import (
+            processar_demissao_admin_fora_do_servidor,
+            processar_demissao_por_abandono,
+        )
+
+        motivo = self.motivo.value.strip()
+        membro_vivo = (
+            i.guild.get_member(self.alvo.id)
+            if isinstance(self.alvo, discord.Member)
+            else i.guild.get_member(self.alvo.id)
+        )
+
+        if membro_vivo is not None:
+            registro = await processar_demissao_por_abandono(
+                membro_vivo,
+                motivo=f"Demissão admin (gerenciar-membros): {motivo}",
+            )
+            if registro is None:
+                # Já não era APROVADO: força limpeza mesmo assim
+                registro = await processar_demissao_admin_fora_do_servidor(
+                    discord_id=membro_vivo.id,
+                    guild_id=i.guild.id,
+                    membro_nome=membro_vivo.display_name,
+                    executor=i.user,
+                    motivo=f"Demissão admin (gerenciar-membros): {motivo}",
+                )
+            # Se ainda está no server, tira cargos (Visitantes)
+            from src.demissao.demissao_service import aplicar_cargos_demissao
+
+            await aplicar_cargos_demissao(
+                membro_vivo,
+                executor=i.user,
+                motivo=motivo,
+            )
+            await publicar_aviso_abandono(
+                i.guild,
+                registro=registro,
+                membro=membro_vivo,
+            )
+        else:
+            registro = await processar_demissao_admin_fora_do_servidor(
+                discord_id=self.alvo.id,
+                guild_id=i.guild.id,
+                membro_nome=getattr(self.alvo, "display_name", str(self.alvo.id)),
+                executor=i.user,
+                motivo=f"Demissão admin fora do server: {motivo}",
+            )
+            await publicar_aviso_abandono(
+                i.guild,
+                registro=registro,
+                membro=None,
+            )
+
+        await registrar_auditoria_admin(
+            i.guild,
+            executor=i.user,
+            alvo=self.alvo,
+            acao="DEMITIR_MEMBRO",
+            detalhes=f"pedido #{registro.id} · {motivo[:120]}",
+        )
+        await _abrir_ficha(
+            i,
+            self.alvo,
+            bloco=self.bloco,
+            status=(
+                f"Demitido (pedido `#{registro.id}`). "
+                "Aguardando remoção do painel in-game."
+            ),
         )
 
 

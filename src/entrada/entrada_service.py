@@ -57,13 +57,50 @@ async def processar_saida_do_membro(
     """
     Trata a saída de um membro do servidor.
 
-    Publica o card de adeus. A linha em ``usuarios`` permanece no banco
-    para histórico e para um possível retorno (rejoin).
+    1. Publica o card de adeus.
+    2. Se o status no banco era APROVADO, aplica demissão por abandono:
+       status DEMITIDO, zera plantão/moedas/horas, snapshot só com
+       Visitantes + Exonerado, e avisa a diretoria (painel in-game).
+
+    A linha em ``usuarios`` permanece no banco para histórico e rejoin.
     """
     if membro.bot:
         return
 
     await _publicar_adeus(membro)
+    await _tratar_abandono_se_aprovado(membro)
+
+
+async def _tratar_abandono_se_aprovado(membro: discord.Member) -> None:
+    """
+    Saída informal de quem estava APROVADO.
+
+    Falhas aqui não impedem o card de adeus (já publicado).
+    """
+    try:
+        from src.demissao.demissao_panel import publicar_aviso_abandono
+        from src.demissao.demissao_service import processar_demissao_por_abandono
+
+        registro = await processar_demissao_por_abandono(membro)
+        if registro is None:
+            return
+        await publicar_aviso_abandono(
+            membro.guild,
+            registro=registro,
+            membro=membro,
+        )
+    except SQLAlchemyError as erro_do_banco:
+        registrador.exception(
+            "Falha de banco na demissão por abandono de %s: %s",
+            membro.id,
+            erro_do_banco,
+        )
+    except Exception as erro_inesperado:
+        registrador.exception(
+            "Erro inesperado na demissão por abandono de %s: %s",
+            membro.id,
+            erro_inesperado,
+        )
 
 
 async def _publicar_boas_vindas(membro: discord.Member) -> None:

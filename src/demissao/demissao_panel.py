@@ -14,6 +14,7 @@ from src.demissao.demissao_service import (
     criar_solicitacao,
     decidir_demissao,
     marcar_mensagem_pedido,
+    marcar_painel_in_game_removido,
     membro_e_diretoria,
     membro_pode_solicitar_demissao,
     obter_pedido_pendente,
@@ -43,6 +44,7 @@ from src.utils.notificacao import (
 CUSTOM_ID_SOLICITAR = "demissao:solicitar"
 CUSTOM_ID_APROVAR = "demissao:aprovar:"
 CUSTOM_ID_REPROVAR = "demissao:reprovar:"
+CUSTOM_ID_REMOVIDO_PAINEL = "demissao:removido_painel:"
 
 
 def _formatar_momento_brasilia(data: datetime | None = None) -> str:
@@ -99,7 +101,9 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
         # Bloco 2: separador
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Bloco 3: antes de solicitar
         componentes.append(
@@ -107,7 +111,7 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "## 📌 Antes de solicitar\n\n"
                 "- Certifique-se de que deseja **realmente** se desligar da "
                 "organização\n"
-                "- Verifique suas **pendências** ativas\n"
+                "- Revise seus **contratos e pendências** ativas\n"
                 "- O processo é **irreversível** após aprovação da diretoria"
             )
         )
@@ -123,7 +127,9 @@ class PainelDemissaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 5: separador antes do botão
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Botão (inalterado)
         linha = discord.ui.ActionRow()
@@ -663,3 +669,193 @@ async def publicar_log_demissao(
 def view_painel_demissao(guilda: discord.Guild | None = None) -> PainelDemissaoLayout:
     """Cria o painel persistente usando ícone da guilda quando ele está disponível."""
     return PainelDemissaoLayout(guilda=guilda)
+
+
+class ViewRemovidoDoPainel(LoggingViewMixin, discord.ui.LayoutView):
+    """
+    Card de aviso: membro APROVADO saiu sem demissão formal.
+
+    O botão confirma que a diretoria já retirou o jogador do painel
+    in-game e formaliza o LOG_DEMISSAO.
+    """
+
+    def __init__(self, solicitacao_id: int, *, desabilitada: bool = False):
+        super().__init__(timeout=None)
+        self.solicitacao_id = int(solicitacao_id)
+        linha = discord.ui.ActionRow()
+        botao = discord.ui.Button(
+            label="Removido do Painel",
+            style=discord.ButtonStyle.danger,
+            emoji="🗑️",
+            custom_id=f"{CUSTOM_ID_REMOVIDO_PAINEL}{self.solicitacao_id}",
+            disabled=desabilitada,
+        )
+        linha.add_item(botao)
+        self.add_item(linha)
+
+
+async def publicar_aviso_abandono(
+    guilda: discord.Guild,
+    *,
+    registro: object,
+    membro: discord.Member | None = None,
+) -> None:
+    """
+    Avisa a diretoria no canal de aprovar demissão.
+
+    Texto pede conferência do painel in-game. O botão formaliza o log
+    depois que a equipe remove o jogador de lá.
+    """
+    canal_id = CANAIS.get("CANAL_APROVAR_DEMISSAO") or 0
+    canal = guilda.get_channel(int(canal_id)) if canal_id else None
+    if canal is None:
+        return
+
+    mencao = membro.mention if membro else f"`{registro.discord_id}`"
+    corpo = (
+        f"- **Membro:** {mencao} (`{registro.discord_id}`)\n"
+        f"- **Nome:** `{registro.membro_nome}`\n"
+        f"- **Último cargo:** `{registro.cargo or '—'}`\n"
+        f"- **Tipo:** `{registro.tipo_demissao}`\n"
+        f"- **Pedido:** `#{registro.id}`\n"
+        f"- **Motivo:** {str(registro.motivo)[:400]}\n"
+        f"- **Status no banco:** `DEMITIDO` (progresso zerado)\n"
+        f"- **Snapshot:** Visitantes + Exonerado (rejoin sem hierarquia)\n\n"
+        "### Ação da diretoria\n"
+        "1. Confira se o jogador ainda está no **painel in-game**.\n"
+        "2. Se estiver, **remova** do painel da cidade.\n"
+        "3. Clique em **Removido do Painel** para gravar o log formal."
+    )
+    url = membro.display_avatar.url if membro else None
+    componentes: list = [
+        discord.ui.TextDisplay("# 🚪 Saída informal — demissão por abandono"),
+    ]
+    if url:
+        componentes.append(
+            discord.ui.Section(
+                corpo,
+                accessory=discord.ui.Thumbnail(url),
+            )
+        )
+    else:
+        componentes.append(discord.ui.TextDisplay(corpo))
+
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+    view = ViewRemovidoDoPainel(registro.id)
+    # O botão fica na view; o texto no container
+    view.clear_items()
+    linha = discord.ui.ActionRow()
+    botao = discord.ui.Button(
+        label="Removido do Painel",
+        style=discord.ButtonStyle.danger,
+        emoji="🗑️",
+        custom_id=f"{CUSTOM_ID_REMOVIDO_PAINEL}{registro.id}",
+    )
+    linha.add_item(botao)
+    view.add_item(
+        discord.ui.Container(
+            *componentes,
+            linha,
+            accent_color=discord.Color.orange(),
+        )
+    )
+    try:
+        mensagem = await canal.send(view=view)
+        await marcar_mensagem_pedido(registro.id, canal.id, mensagem.id)
+    except discord.HTTPException as erro_http:
+        ignorar_falha_cosmetica(
+            erro_http,
+            o_que_falhou="publicar aviso de abandono",
+        )
+
+
+async def processar_removido_do_painel(
+    interacao: discord.Interaction,
+    solicitacao_id: int,
+) -> None:
+    """
+    Clique em Removido do Painel: formaliza demissão e publica LOG_DEMISSAO.
+    """
+    if interacao.guild is None or not isinstance(interacao.user, discord.Member):
+        await responder_erro(
+            interacao,
+            titulo="Contexto inválido",
+            linhas=["Use este botão dentro do servidor."],
+        )
+        return
+
+    if not membro_e_diretoria(interacao.user):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Só a **diretoria** confirma a remoção do painel in-game."],
+        )
+        return
+
+    if not interacao.response.is_done():
+        await interacao.response.defer(ephemeral=True)
+
+    registro, acabou_de_marcar = await marcar_painel_in_game_removido(
+        solicitacao_id,
+        diretor=interacao.user,
+    )
+    if registro is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=[f"Solicitação `#{solicitacao_id}` não existe mais."],
+        )
+        return
+    if not acabou_de_marcar:
+        await responder_aviso(
+            interacao,
+            titulo="Já formalizado",
+            linhas=[
+                f"Pedido `#{registro.id}` já está como `{registro.status}`.",
+            ],
+        )
+        return
+
+    membro = interacao.guild.get_member(registro.discord_id)
+    await publicar_log_demissao(
+        interacao.guild,
+        registro=registro,
+        diretor=interacao.user,
+        aprovada=True,
+        membro=membro,
+    )
+
+    # Desabilita o botão no card de aviso
+    try:
+        if interacao.message is not None:
+            view_final = discord.ui.LayoutView(timeout=None)
+            texto = (
+                f"# 🚪 Saída informal — formalizada\n"
+                f"- **Membro:** `{registro.membro_nome}` (`{registro.discord_id}`)\n"
+                f"- **Pedido:** `#{registro.id}`\n"
+                f"- **Painel in-game:** removido por {interacao.user.mention}\n"
+                f"- **Log:** publicado em LOG_DEMISSAO"
+            )
+            view_final.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay(texto),
+                    accent_color=discord.Color.dark_grey(),
+                )
+            )
+            await interacao.message.edit(view=view_final)
+    except discord.HTTPException as erro_edit:
+        ignorar_falha_cosmetica(
+            erro_edit,
+            o_que_falhou="desabilitar card de abandono",
+        )
+
+    await responder_sucesso(
+        interacao,
+        titulo="Painel confirmado",
+        linhas=[
+            f"Pedido `#{registro.id}` formalizado.",
+            "Log de demissão publicado.",
+        ],
+        delay=12,
+    )

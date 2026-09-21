@@ -1,8 +1,10 @@
 # src/demissao/demissao_service.py
-"""Regras de demissão voluntária."""
+"""Regras de demissão voluntária e demissão por abandono (saída informal)."""
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import (
     datetime,
     timezone,
@@ -10,22 +12,32 @@ from datetime import (
 
 import discord
 from sqlalchemy import (
+    delete,
     func,
     select,
 )
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.config import (
     CARGOS,
     CARGOS_DIRETORIA,
     CARGOS_HIERARQUIA,
+    CARGOS_PUNICOES,
 )
 from src.database.conexao import async_session
 from src.database.models import (
+    EstadoPlantao,
+    LogPlantao,
     Punicao,
+    SnapshotCargosMembro,
     SolicitacaoDemissao,
+    Usuario,
+    agora,
 )
 from src.utils.error_handling import ignorar_falha_cosmetica
 from src.utils.nickname import remover_prefixo_existente
+
+registrador = logging.getLogger(__name__)
 
 
 def cargo_atual_hierarquia(membro: discord.Member) -> str:
@@ -228,3 +240,289 @@ async def aplicar_cargos_demissao(
         )
 
     return True, "Cargos ajustados (restou Visitantes) e prefixo removido do nick."
+
+
+async def obter_status_usuario(discord_id: int) -> str | None:
+    """Lê o status atual em usuarios, ou None se não houver linha."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Usuario.status).where(Usuario.discord_id == int(discord_id))
+        )
+        valor = resultado.scalar_one_or_none()
+        return str(valor) if valor is not None else None
+
+
+async def marcar_usuario_demitido(discord_id: int) -> bool:
+    """
+    Define status DEMITIDO em usuarios.
+
+    Devolve True se a linha existia e foi atualizada.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Usuario).where(Usuario.discord_id == int(discord_id))
+        )
+        usuario = resultado.scalar_one_or_none()
+        if usuario is None:
+            return False
+        usuario.status = "DEMITIDO"
+        await sessao.commit()
+        return True
+
+
+async def limpar_progresso_do_membro(discord_id: int) -> dict[str, int]:
+    """
+    Zera conquistas de quem saiu sem demissão formal.
+
+    - Apaga estado_plantao (moedas e ciclo em aberto)
+    - Apaga log_plantao (banco de horas usado em ranking/promoção)
+    - Não apaga laudos/chamadas/recrutamentos operacionais do hospital
+      (ficam no histórico da instituição; o status DEMITIDO impede
+      reaproveitar a carreira sem novo processo)
+
+    Devolve contagens do que foi limpo.
+    """
+    id_membro = int(discord_id)
+    contagens = {
+        "estados_plantao": 0,
+        "logs_plantao": 0,
+    }
+    async with async_session() as sessao:
+        try:
+            resultado_estado = await sessao.execute(
+                select(EstadoPlantao).where(EstadoPlantao.discord_id == id_membro)
+            )
+            estado = resultado_estado.scalar_one_or_none()
+            if estado is not None:
+                await sessao.delete(estado)
+                contagens["estados_plantao"] = 1
+
+            resultado_logs = await sessao.execute(
+                delete(LogPlantao).where(LogPlantao.discord_id == id_membro)
+            )
+            contagens["logs_plantao"] = int(resultado_logs.rowcount or 0)
+
+            await sessao.commit()
+        except SQLAlchemyError as erro_do_banco:
+            await sessao.rollback()
+            registrador.exception(
+                "Falha ao limpar progresso do membro %s: %s",
+                id_membro,
+                erro_do_banco,
+            )
+            raise
+    return contagens
+
+
+def _ids_cargos_demitido() -> list[int]:
+    """IDs de Visitantes + Exonerado para o snapshot pós-demissão informal."""
+    ids: list[int] = []
+    id_visitantes = CARGOS.get("Visitantes")
+    if id_visitantes:
+        ids.append(int(id_visitantes))
+    for nome, cargo_id in CARGOS_PUNICOES.items():
+        if "exonerado" in str(nome).lower() and cargo_id:
+            ids.append(int(cargo_id))
+            break
+    return ids
+
+
+def _nomes_cargos_demitido() -> list[str]:
+    nomes: list[str] = []
+    if CARGOS.get("Visitantes"):
+        nomes.append("Visitantes")
+    for nome in CARGOS_PUNICOES:
+        if "exonerado" in str(nome).lower():
+            nomes.append(str(nome))
+            break
+    return nomes
+
+
+async def substituir_snapshot_demitido(
+    discord_id: int,
+    guild_id: int,
+    *,
+    nickname: str | None = None,
+) -> None:
+    """
+    Troca o snapshot de cargos por Visitantes + Exonerado.
+
+    No rejoin o bot reaplica só esses cargos, sem devolver a hierarquia.
+    """
+    ids = _ids_cargos_demitido()
+    nomes = _nomes_cargos_demitido()
+    nick_limpo = None
+    if nickname:
+        nick_limpo = remover_prefixo_existente(nickname)[:100] or None
+
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SnapshotCargosMembro).where(
+                SnapshotCargosMembro.discord_id == int(discord_id)
+            )
+        )
+        registro = resultado.scalar_one_or_none()
+        texto_ids = json.dumps(ids)
+        texto_nomes = json.dumps(nomes, ensure_ascii=False)
+        if registro is None:
+            sessao.add(
+                SnapshotCargosMembro(
+                    discord_id=int(discord_id),
+                    guild_id=int(guild_id),
+                    role_ids=texto_ids,
+                    role_names=texto_nomes,
+                    nickname=nick_limpo,
+                    atualizado_em=agora(),
+                )
+            )
+        else:
+            registro.guild_id = int(guild_id)
+            registro.role_ids = texto_ids
+            registro.role_names = texto_nomes
+            registro.nickname = nick_limpo
+            registro.atualizado_em = agora()
+        await sessao.commit()
+
+
+async def criar_solicitacao_abandono(
+    *,
+    discord_id: int,
+    membro_nome: str,
+    cargo: str,
+    motivo: str,
+) -> SolicitacaoDemissao:
+    """Registra demissão por abandono (saída sem pedir demissão)."""
+    advertencias = await contar_advertencias_ativas(discord_id)
+    async with async_session() as sessao:
+        registro = SolicitacaoDemissao(
+            discord_id=int(discord_id),
+            membro_nome=membro_nome[:120],
+            cargo=cargo[:120] if cargo else None,
+            tipo_demissao="abandono",
+            motivo=motivo[:2000],
+            data_solicitacao=datetime.now(timezone.utc),
+            data_efetiva=datetime.now(timezone.utc),
+            solicitante_nome="sistema (saída informal)",
+            advertencias=advertencias,
+            status="pendente_painel",
+        )
+        sessao.add(registro)
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
+async def processar_demissao_por_abandono(
+    membro: discord.Member,
+    *,
+    motivo: str = "Saiu do Discord sem solicitar demissão formal.",
+) -> SolicitacaoDemissao | None:
+    """
+    Pipeline completo da saída informal de quem estava APROVADO.
+
+    1. Confere status APROVADO no banco
+    2. Marca DEMITIDO
+    3. Limpa plantão/moedas/horas
+    4. Snapshot vira Visitantes + Exonerado
+    5. Cria solicitação tipo abandono (aguarda botão do painel in-game)
+
+    Devolve a solicitação criada, ou None se não era APROVADO.
+    """
+    status_atual = await obter_status_usuario(membro.id)
+    if status_atual != "APROVADO":
+        return None
+
+    cargo = cargo_atual_hierarquia(membro)
+    await marcar_usuario_demitido(membro.id)
+    await limpar_progresso_do_membro(membro.id)
+    await substituir_snapshot_demitido(
+        membro.id,
+        membro.guild.id,
+        nickname=membro.nick or membro.display_name,
+    )
+    registro = await criar_solicitacao_abandono(
+        discord_id=membro.id,
+        membro_nome=membro.display_name,
+        cargo=cargo,
+        motivo=motivo,
+    )
+    return registro
+
+
+async def processar_demissao_admin_fora_do_servidor(
+    *,
+    discord_id: int,
+    guild_id: int,
+    membro_nome: str,
+    executor: discord.abc.User,
+    motivo: str,
+) -> SolicitacaoDemissao:
+    """
+    Demissão manual pelo painel gerenciar-membros (membro já fora do server).
+
+    Mesma limpeza da saída informal: DEMITIDO, progresso zerado, snapshot
+    só com Visitantes + Exonerado.
+    """
+    await marcar_usuario_demitido(discord_id)
+    await limpar_progresso_do_membro(discord_id)
+    await substituir_snapshot_demitido(
+        discord_id,
+        guild_id,
+        nickname=membro_nome,
+    )
+    async with async_session() as sessao:
+        registro = SolicitacaoDemissao(
+            discord_id=int(discord_id),
+            membro_nome=membro_nome[:120],
+            cargo="—",
+            tipo_demissao="admin_fora",
+            motivo=motivo[:2000],
+            data_solicitacao=datetime.now(timezone.utc),
+            data_efetiva=datetime.now(timezone.utc),
+            solicitante_nome=str(executor)[:120],
+            advertencias=await contar_advertencias_ativas(discord_id),
+            status="pendente_painel",
+            aprovado_por_id=executor.id,
+            aprovado_por_nome=str(executor)[:120],
+        )
+        sessao.add(registro)
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
+async def marcar_painel_in_game_removido(
+    solicitacao_id: int,
+    *,
+    diretor: discord.Member,
+) -> tuple[SolicitacaoDemissao | None, bool]:
+    """
+    Diretoria confirma que retirou o membro do painel in-game.
+
+    Status passa de pendente_painel → aprovada e libera o log formal.
+    """
+    async with async_session() as sessao:
+        registro = await sessao.get(SolicitacaoDemissao, solicitacao_id)
+        if registro is None:
+            return None, False
+        if registro.status not in ("pendente_painel", "pendente"):
+            return registro, False
+        registro.status = "aprovada"
+        registro.aprovado_por_id = diretor.id
+        registro.aprovado_por_nome = str(diretor)[:120]
+        registro.data_efetiva = datetime.now(timezone.utc)
+        registro.atualizado_em = datetime.now(timezone.utc)
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro, True
+
+
+async def listar_ids_abandono_pendente_painel() -> list[int]:
+    """IDs de demissões abandono ainda aguardando botão do painel in-game."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoDemissao.id).where(
+                SolicitacaoDemissao.status == "pendente_painel"
+            )
+        )
+        return [int(linha[0]) for linha in resultado.all()]

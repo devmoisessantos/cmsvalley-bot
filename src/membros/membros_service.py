@@ -52,6 +52,7 @@ STATUS_USUARIO_CANONICOS = (
     "ESTUDANTE",
     "PROVA",
     "APROVADO",
+    "DEMITIDO",
 )
 
 

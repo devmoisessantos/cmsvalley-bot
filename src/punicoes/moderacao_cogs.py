@@ -1,18 +1,12 @@
 # src/punicoes/moderacao_cogs.py
 """
-Grupo /moderacao — ferramentas rápidas de moderação e wipe de temporada.
+Grupo /moderacao — ferramentas rápidas de moderação.
 
   /moderacao limpar
   /moderacao apelido
-  /moderacao wipe
-  /moderacao wipe-status
-  /moderacao wipe-diretoria
 
 Não substitui o sistema de punições do domínio punicoes/.
-
-O wipe vive em src/wipe/. Os handlers são importados DENTRO de cada
-comando (import preguiçoso) para que uma falha no domínio wipe NÃO
-derrube o cog inteiro nem impeça limpar/apelido de subir no Discord.
+O wipe fica só no painel persistente (domínio wipe/).
 """
 
 from __future__ import annotations
@@ -40,7 +34,7 @@ class ModeracaoCog(commands.Cog):
 
     grupo_moderacao = app_commands.Group(
         name="moderacao",
-        description="Ferramentas rápidas de moderação e wipe de temporada",
+        description="Ferramentas rápidas de moderação",
     )
 
     def __init__(self, bot: commands.Bot):
@@ -163,71 +157,6 @@ class ModeracaoCog(commands.Cog):
             cor=COR_SUCESSO,
             delay=12,
         )
-
-    @grupo_moderacao.command(
-        name="wipe",
-        description="Assistente de wipe: expulsar membros e limpar canais",
-    )
-    @apenas_administrador()
-    async def wipe(self, interacao: discord.Interaction):
-        """Abre o assistente de wipe (não destrói nada até confirmar com WIPE)."""
-        try:
-            from src.wipe.wipe_cogs import executar_comando_wipe
-        except Exception as erro_importacao:
-            registrador.exception(
-                "Falha ao importar o domínio wipe: %s", erro_importacao
-            )
-            await responder_erro(
-                interacao,
-                titulo="Wipe indisponível",
-                linhas=[
-                    "Não consegui carregar o módulo de wipe.",
-                    f"Detalhe técnico: `{erro_importacao}`",
-                    "Avise a equipe de desenvolvimento com o log do bot.",
-                ],
-            )
-            return
-        await executar_comando_wipe(interacao)
-
-    @grupo_moderacao.command(
-        name="wipe-status",
-        description="Mostra se há wipe em andamento e o resumo do último",
-    )
-    @apenas_administrador()
-    async def wipe_status(self, interacao: discord.Interaction):
-        """Consulta o estado do wipe neste processo do bot."""
-        try:
-            from src.wipe.wipe_cogs import executar_comando_wipe_status
-        except Exception as erro_importacao:
-            registrador.exception("Falha ao importar wipe-status: %s", erro_importacao)
-            await responder_erro(
-                interacao,
-                titulo="Wipe indisponível",
-                linhas=[f"Não consegui carregar o módulo: `{erro_importacao}`"],
-            )
-            return
-        await executar_comando_wipe_status(interacao)
-
-    @grupo_moderacao.command(
-        name="wipe-diretoria",
-        description="Lista quem seria preservado se o wipe rodasse agora",
-    )
-    @apenas_administrador()
-    async def wipe_diretoria(self, interacao: discord.Interaction):
-        """Lista preservados e quantidade de expulsáveis no momento."""
-        try:
-            from src.wipe.wipe_cogs import executar_comando_wipe_diretoria
-        except Exception as erro_importacao:
-            registrador.exception(
-                "Falha ao importar wipe-diretoria: %s", erro_importacao
-            )
-            await responder_erro(
-                interacao,
-                titulo="Wipe indisponível",
-                linhas=[f"Não consegui carregar o módulo: `{erro_importacao}`"],
-            )
-            return
-        await executar_comando_wipe_diretoria(interacao)
 
 
 async def setup(bot: commands.Bot):

@@ -90,6 +90,13 @@ def _escolher_status_final(
     """Não rebaixa APROVADO; preserva ja_foi_aprovado se já for True."""
     ja_foi = ja_foi_aprovado_banco or aprovado_inferido
 
+    # Saída informal / demissão admin: só volta a APROVADO se o Discord
+    # mostrar cargo de hierarquia de novo (recontratação).
+    if status_banco == "DEMITIDO":
+        if status_inferido == "APROVADO":
+            return "APROVADO", True
+        return "DEMITIDO", ja_foi
+
     if status_banco == "APROVADO" or status_inferido == "APROVADO":
         return "APROVADO", True
 

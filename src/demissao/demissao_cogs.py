@@ -10,10 +10,14 @@ from discord.ext import commands
 from src.config import CANAIS
 from src.demissao.demissao_panel import (
     CUSTOM_ID_APROVAR,
+    CUSTOM_ID_REMOVIDO_PAINEL,
     CUSTOM_ID_REPROVAR,
     PainelDemissaoLayout,
+    ViewRemovidoDoPainel,
     processar_decisao_demissao,
+    processar_removido_do_painel,
 )
+from src.demissao.demissao_service import listar_ids_abandono_pendente_painel
 from src.demissao.demissao_setup import garantir_painel_demissao
 from src.utils.mensagens import (
     responder_erro,
@@ -27,6 +31,25 @@ class DemissaoCogs(commands.Cog):
         self.bot = bot
         # Painel persistente (botão fixo)
         self.bot.add_view(PainelDemissaoLayout())
+
+    async def cog_load(self) -> None:
+        """Reativa botões de abandono pendentes após restart."""
+        import logging
+
+        registrador = logging.getLogger(__name__)
+        try:
+            ids = await listar_ids_abandono_pendente_painel()
+            for solicitacao_id in ids:
+                self.bot.add_view(ViewRemovidoDoPainel(solicitacao_id))
+            registrador.info(
+                "Demissão: %s view(s) de abandono pendente registradas.",
+                len(ids),
+            )
+        except Exception as erro_capturado:
+            registrador.exception(
+                "Falha ao registrar views de abandono pendentes: %s",
+                erro_capturado,
+            )
 
     @app_commands.command(
         name="painel-demissao",
@@ -102,6 +125,14 @@ class DemissaoCogs(commands.Cog):
             if pedido_id <= 0 or interacao.response.is_done():
                 return
             await processar_decisao_demissao(interacao, pedido_id, aprovada=False)
+        elif custom_id.startswith(CUSTOM_ID_REMOVIDO_PAINEL):
+            try:
+                pedido_id = int(custom_id[len(CUSTOM_ID_REMOVIDO_PAINEL) :])
+            except ValueError:
+                return
+            if pedido_id <= 0 or interacao.response.is_done():
+                return
+            await processar_removido_do_painel(interacao, pedido_id)
 
 
 async def setup(bot: commands.Bot):

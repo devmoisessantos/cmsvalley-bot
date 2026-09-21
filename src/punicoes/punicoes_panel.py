@@ -1092,10 +1092,12 @@ class ModalDiscordIdConsultar(
 
 
 async def _exibir_historico_punicoes(
-    interaction: discord.Interaction, membro: discord.Member
+    interaction: discord.Interaction,
+    membro: discord.Member | discord.abc.User | object,
 ):
     """Monta o painel de histórico e edita a ephemeral."""
-    registros = await listar_punicoes_membro(membro.id)
+    id_do_membro = int(getattr(membro, "id"))
+    registros = await listar_punicoes_membro(id_do_membro)
     ativas = [registro for registro in registros if registro.ativa]
     total = len(registros)
 
@@ -1146,7 +1148,7 @@ async def _exibir_historico_punicoes(
 
     async def _ao_ir_remover(interacao: discord.Interaction):
         membro_no_servidor = (
-            interacao.guild.get_member(membro.id) if interacao.guild else None
+            interacao.guild.get_member(id_do_membro) if interacao.guild else None
         )
         if membro_no_servidor is None:
             await responder_erro(
@@ -1178,7 +1180,7 @@ async def _exibir_historico_punicoes(
         discord.ui.Container(
             discord.ui.TextDisplay(
                 f"# ⚖️ Histórico de Punições\n"
-                f"**Usuário:** {membro.mention} (`{membro.id}`)"
+                f"**Usuário:** <@{id_do_membro}> (`{id_do_membro}`)"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(

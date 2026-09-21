@@ -114,7 +114,9 @@ class GerenciarCargosView(LoggingViewMixin, discord.ui.LayoutView):
         ]
 
         if self.candidato_selecionado is None:
-            select_membro = discord.ui.UserSelect(placeholder="1. Selecione o membro")
+            select_membro = discord.ui.UserSelect(
+                placeholder="1. Selecione o membro"
+            )
             select_membro.callback = self._ao_selecionar_membro
             linha_do_membro = discord.ui.ActionRow()
             linha_do_membro.add_item(select_membro)
@@ -242,7 +244,9 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
         # Bloco 2: separador
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Bloco 3: ações disponíveis
         componentes.append(
@@ -254,7 +258,9 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 4: separador
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
 
         # Bloco 5: avisos importantes
         componentes.append(
@@ -272,7 +278,9 @@ class PainelGerenciarCargoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 6: separador antes do botão
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+        )
 
         # Botão (inalterado)
         linha_do_botao = discord.ui.ActionRow()
