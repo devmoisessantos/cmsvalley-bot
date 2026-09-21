@@ -1300,7 +1300,7 @@ CURSOS_PARA_SUPERVISOR = (
 #   Doutor → chamadas | Psicólogo → laudos
 #   Recrutador → recrutamentos | Instrutor → cursos aplicados
 #
-# meta_tickets: a partir de Supervisor (assumidos e finalizados).
+# meta_tickets: só na subida Supervisor → Vice Diretor.
 # 1ª área do Paramédico: sem produção (ver HORAS_PRIMEIRA_AREA).
 #
 # Escala de plantão da carreira (caminho canônico): ~6 h → ~445 h.
@@ -1315,7 +1315,7 @@ METAS_POR_CARGO = {
         "exige_avaliacao_hp": False,
     },
     CARGO_PARAMEDICO: {
-        "segundos_minimos_plantao": 2 * 3600,
+        "segundos_minimos_plantao": 6 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
@@ -1342,7 +1342,7 @@ METAS_POR_CARGO = {
         "exige_avaliacao_hp": False,
     },
     CARGO_RECRUTADOR: {
-        "segundos_minimos_plantao": 14 * 3600,
+        "segundos_minimos_plantao": 18 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 20,
         "meta_chamadas": 0,
@@ -1351,7 +1351,7 @@ METAS_POR_CARGO = {
         "exige_avaliacao_hp": False,
     },
     CARGO_INSTRUTOR: {
-        "segundos_minimos_plantao": 20 * 3600,
+        "segundos_minimos_plantao": 22 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
@@ -1374,7 +1374,8 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 12,
         "meta_chamadas": 15,
         "meta_cursos_aplicados": 8,
-        "meta_tickets": 12,
+        # Tickets só na promoção Supervisor → Vice Diretor
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_VICE_DIRETOR: {
@@ -1383,6 +1384,7 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 18,
         "meta_chamadas": 22,
         "meta_cursos_aplicados": 12,
+        # Meta de tickets desta subida (Supervisor → Vice Diretor)
         "meta_tickets": 15,
         "exige_avaliacao_hp": False,
     },
@@ -1392,43 +1394,43 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 24,
         "meta_chamadas": 28,
         "meta_cursos_aplicados": 16,
-        "meta_tickets": 18,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_DOUTOR: {
-        "segundos_minimos_plantao": 55 * 3600,
+        "segundos_minimos_plantao": 65 * 3600,
         "meta_laudos": 12,
         "meta_recrutamentos": 6,
         "meta_chamadas": 40,
         "meta_cursos_aplicados": 8,
-        "meta_tickets": 12,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_PSICOLOGO: {
-        "segundos_minimos_plantao": 55 * 3600,
+        "segundos_minimos_plantao": 65 * 3600,
         "meta_laudos": 40,
         "meta_recrutamentos": 6,
         "meta_chamadas": 10,
         "meta_cursos_aplicados": 8,
-        "meta_tickets": 12,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_RECRUTAMENTO: {
-        "segundos_minimos_plantao": 55 * 3600,
+        "segundos_minimos_plantao": 65 * 3600,
         "meta_laudos": 8,
         "meta_recrutamentos": 40,
         "meta_chamadas": 10,
         "meta_cursos_aplicados": 8,
-        "meta_tickets": 12,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_INSTRUTOR: {
-        "segundos_minimos_plantao": 55 * 3600,
+        "segundos_minimos_plantao": 65 * 3600,
         "meta_laudos": 8,
         "meta_recrutamentos": 8,
         "meta_chamadas": 10,
         "meta_cursos_aplicados": 35,
-        "meta_tickets": 12,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_COORDENADOR: {
@@ -1437,7 +1439,7 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 30,
         "meta_chamadas": 35,
         "meta_cursos_aplicados": 22,
-        "meta_tickets": 20,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_VICE_DIRETOR_GERAL: {
@@ -1446,7 +1448,7 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 35,
         "meta_chamadas": 40,
         "meta_cursos_aplicados": 28,
-        "meta_tickets": 25,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": True,
     },
     CARGO_DIRETOR_GERAL: {
@@ -1455,7 +1457,7 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 40,
         "meta_chamadas": 45,
         "meta_cursos_aplicados": 35,
-        "meta_tickets": 30,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": True,
     },
     CARGO_RESPONSAVEL_GERAL: {
@@ -1464,7 +1466,7 @@ METAS_POR_CARGO = {
         "meta_recrutamentos": 45,
         "meta_chamadas": 50,
         "meta_cursos_aplicados": 40,
-        "meta_tickets": 35,
+        "meta_tickets": 0,
         "exige_avaliacao_hp": True,
     },
 }
@@ -1659,32 +1661,77 @@ for cargo_de, chave_de, _cursos_de in AREAS_MEDICAS:
                 ),
             )
         )
-        # Metas de produção vêm do cargo de origem (já batidas para pedir)
+        # Metas de produção vêm do cargo de origem (já batidas para pedir).
+        # Tickets nunca entram em área → área.
         trilha_area = TRILHAS_PROMOCAO[-1]
         metas_origem = _metas_do_cargo(cargo_de)
         trilha_area["meta_laudos"] = metas_origem["meta_laudos"]
         trilha_area["meta_recrutamentos"] = metas_origem["meta_recrutamentos"]
         trilha_area["meta_chamadas"] = metas_origem["meta_chamadas"]
         trilha_area["meta_cursos_aplicados"] = metas_origem["meta_cursos_aplicados"]
-        trilha_area["meta_tickets"] = metas_origem["meta_tickets"]
+        trilha_area["meta_tickets"] = 0
 
-# 4) Qualquer área → Supervisor (exige todas as quatro áreas na prática
-#    via cursos; o serviço ainda confere cargos de área quando necessário)
-for cargo_de, chave_de, _ in AREAS_MEDICAS:
-    TRILHAS_PROMOCAO.append(
-        _montar_trilha(
-            f"{chave_de}_supervisor",
-            f"{cargo_de} → Supervisor",
-            cargo_de,
-            CARGO_SUPERVISOR,
-            list(CURSOS_PARA_SUPERVISOR),
-            usar_metas_do_destino=False,
-            observacao=(
-                "Primeiro cargo da diretoria. Exige práticos 1.0 e 2.0, "
-                "os quatro cursos de área, Curso Diretoria, horas e metas."
-            ),
-        )
+# 4) Áreas completas → Supervisor
+# Uma única trilha (não lista Doutor/Psicólogo/Recrutador/Instrutor → Supervisor).
+# Só libera quem passou pelas quatro áreas: cursos de cada uma + metas de
+# produção de cada especialidade + plantão acumulado do caminho completo.
+_segundos_base_paramedico = int(
+    METAS_POR_CARGO[CARGO_PARAMEDICO]["segundos_minimos_plantao"]
+)
+_segundos_soma_areas = sum(
+    int(METAS_POR_CARGO[cargo_area]["segundos_minimos_plantao"])
+    for cargo_area, _chave, _cursos in AREAS_MEDICAS
+)
+_segundos_etapa_supervisor = int(
+    METAS_POR_CARGO[CARGO_SUPERVISOR]["segundos_minimos_plantao"]
+)
+_segundos_total_ate_supervisor = (
+    _segundos_base_paramedico + _segundos_soma_areas + _segundos_etapa_supervisor
+)
+
+TRILHAS_PROMOCAO.append(
+    _montar_trilha(
+        "areas_completas_supervisor",
+        "Áreas completas → Supervisor",
+        CARGO_DOUTOR,
+        CARGO_SUPERVISOR,
+        list(CURSOS_PARA_SUPERVISOR),
+        usar_metas_do_destino=False,
+        segundos_etapa=_segundos_total_ate_supervisor,
+        observacao=(
+            "Só sobe a Supervisor depois de passar pelas quatro áreas "
+            "(Doutor, Psicólogo, Recrutador e Instrutor): cursos de cada "
+            "uma, metas de produção de cada especialidade e plantão do "
+            "caminho completo. Sem meta de tickets nesta subida."
+        ),
     )
+)
+_trilha_supervisor = TRILHAS_PROMOCAO[-1]
+_trilha_supervisor["de_cargos"] = [
+    CARGO_DOUTOR,
+    CARGO_PSICOLOGO,
+    CARGO_RECRUTADOR,
+    CARGO_INSTRUTOR,
+]
+_trilha_supervisor["exige_todas_as_areas"] = True
+# Metas = soma das quatro especialidades (não as metas genéricas de Supervisor)
+_trilha_supervisor["meta_laudos"] = int(METAS_POR_CARGO[CARGO_PSICOLOGO]["meta_laudos"])
+_trilha_supervisor["meta_recrutamentos"] = int(
+    METAS_POR_CARGO[CARGO_RECRUTADOR]["meta_recrutamentos"]
+)
+_trilha_supervisor["meta_chamadas"] = int(
+    METAS_POR_CARGO[CARGO_DOUTOR]["meta_chamadas"]
+)
+_trilha_supervisor["meta_cursos_aplicados"] = int(
+    METAS_POR_CARGO[CARGO_INSTRUTOR]["meta_cursos_aplicados"]
+)
+_trilha_supervisor["meta_tickets"] = 0
+_trilha_supervisor["segundos_minimos_plantao"] = _segundos_total_ate_supervisor
+_trilha_supervisor["segundos_etapa"] = _segundos_etapa_supervisor
+_trilha_supervisor["segundos_acumulados_origem"] = (
+    _segundos_base_paramedico + _segundos_soma_areas
+)
+_registrar_acumulado(CARGO_SUPERVISOR, _segundos_total_ate_supervisor)
 
 # 5) Diretoria interna
 TRILHAS_PROMOCAO.append(
@@ -1694,7 +1741,7 @@ TRILHAS_PROMOCAO.append(
         CARGO_SUPERVISOR,
         CARGO_VICE_DIRETOR,
         [],
-        observacao="Metas e horas do cargo. Sem curso novo.",
+        observacao=("Metas e horas do cargo. Única subida com meta de tickets."),
     )
 )
 TRILHAS_PROMOCAO.append(

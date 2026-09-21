@@ -125,6 +125,32 @@ def trilhas_para_cargo_destino(nome_cargo: str) -> list[dict]:
     ]
 
 
+def _origens_da_trilha(trilha: dict) -> list[str]:
+    """
+    Cargos de origem aceitos pela trilha.
+
+    Trilhas normais usam só ``de_cargo``. A trilha de Supervisor aceita
+    qualquer uma das quatro áreas via ``de_cargos``.
+    """
+    lista = list(trilha.get("de_cargos") or [])
+    if lista:
+        return lista
+    de_cargo = trilha.get("de_cargo") or ""
+    if de_cargo:
+        return [de_cargo]
+    return []
+
+
+def _trilha_parte_do_cargo(trilha: dict, nome_cargo: str) -> bool:
+    """True se a trilha parte deste cargo (de_cargo ou de_cargos)."""
+    if not nome_cargo:
+        return False
+    for origem in _origens_da_trilha(trilha):
+        if _nomes_cargo_equivalentes(origem, nome_cargo):
+            return True
+    return False
+
+
 def trilhas_a_partir_do_membro(membro: discord.Member) -> list[dict]:
     """
     Trilhas que partem do cargo mais alto do membro.
@@ -138,7 +164,7 @@ def trilhas_a_partir_do_membro(membro: discord.Member) -> list[dict]:
 
     disponiveis: list[dict] = []
     for trilha in TRILHAS_PROMOCAO:
-        if not _nomes_cargo_equivalentes(trilha.get("de_cargo") or "", cargo_alto):
+        if not _trilha_parte_do_cargo(trilha, cargo_alto):
             continue
         destino = trilha.get("para_cargo") or ""
         if destino and membro_tem_cargo_nome(membro, destino):
@@ -160,11 +186,12 @@ def obter_trilha_por_destino_e_origem(
         return None
     if cargo_alto:
         for trilha in candidatas:
-            if _nomes_cargo_equivalentes(trilha.get("de_cargo") or "", cargo_alto):
+            if _trilha_parte_do_cargo(trilha, cargo_alto):
                 return trilha
     for trilha in candidatas:
-        if membro_tem_cargo_nome(membro, trilha["de_cargo"]):
-            return trilha
+        for origem in _origens_da_trilha(trilha):
+            if membro_tem_cargo_nome(membro, origem):
+                return trilha
     return None
 
 
@@ -317,7 +344,8 @@ def montar_checklist_trilha(
 
     cargo_de = trilha["de_cargo"]
     cargo_para = trilha["para_cargo"]
-    tem_de = membro_tem_cargo_nome(membro, cargo_de)
+    origens_aceitas = _origens_da_trilha(trilha)
+    tem_de = any(membro_tem_cargo_nome(membro, origem) for origem in origens_aceitas)
     tem_para = membro_tem_cargo_nome(membro, cargo_para)
 
     if tem_para:
@@ -326,13 +354,28 @@ def montar_checklist_trilha(
         pendencias.append(f"Cargo destino `{cargo_para}` já atribuído")
     elif exigir_cargo_origem:
         if tem_de:
-            bloco_situacao.append(f"- ✅ Cargo atual: `{cargo_de}`")
+            if trilha.get("exige_todas_as_areas"):
+                bloco_situacao.append(
+                    "- ✅ Cargo de área reconhecido (subida a Supervisor "
+                    "exige as **quatro áreas** completas)"
+                )
+            else:
+                bloco_situacao.append(f"- ✅ Cargo atual: `{cargo_de}`")
         else:
             pode_enviar = False
-            bloco_situacao.append(
-                f"- ❌ Cargo atual exigido: `{cargo_de}` (você não possui)"
-            )
-            pendencias.append(f"Obter o cargo `{cargo_de}`")
+            if trilha.get("exige_todas_as_areas"):
+                bloco_situacao.append(
+                    "- ❌ É preciso estar em uma das quatro áreas "
+                    "(Doutor, Psicólogo, Recrutador ou Instrutor)"
+                )
+                pendencias.append(
+                    "Estar em uma das quatro áreas antes de pedir Supervisor"
+                )
+            else:
+                bloco_situacao.append(
+                    f"- ❌ Cargo atual exigido: `{cargo_de}` (você não possui)"
+                )
+                pendencias.append(f"Obter o cargo `{cargo_de}`")
     else:
         # Primeira área: não exige o cargo intermediário da trilha
         if membro_e_paramedico(membro):
@@ -344,6 +387,13 @@ def montar_checklist_trilha(
             bloco_situacao.append(
                 f"- ℹ️ Cargo de origem da trilha (`{cargo_de}`) não exigido neste modo"
             )
+
+    if trilha.get("exige_todas_as_areas"):
+        bloco_situacao.append(
+            "- 📌 **Regra Supervisor:** não existe trilha direta de uma "
+            "área só. É obrigatório ter passado por Doutor, Psicólogo, "
+            "Recrutador e Instrutor (cursos + metas + plantão do caminho)."
+        )
 
     # ── Cursos ─────────────────────────────────────────────────────
     bloco_cursos: list[str] = ["## 📚 Cursos Obrigatórios"]
