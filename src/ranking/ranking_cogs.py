@@ -83,15 +83,55 @@ class RankingCog(commands.Cog):
         description="Horas de plantão no ciclo atual (parcial / ao vivo)",
     )
     @app_commands.describe(
-        no_canal=("True = posta no canal oficial. False = só você vê (ephemeral)."),
+        no_canal=(
+            "True = atualiza o card oficial no canal. False = só você vê (ephemeral)."
+        ),
     )
     async def horas_tempo_real(
         self,
         interacao: discord.Interaction,
         no_canal: bool = False,
     ):
-        """Prévia ou postagem do ranking de horas em tempo real."""
+        """
+        Prévia ou atualização do ranking de horas em tempo real.
+
+        no_canal=True **não** posta mensagens novas soltas: usa o mesmo
+        caminho do loop (edita/republica as páginas controladas), para
+        não bagunçar a ordem dos cards no canal.
+        """
         await interacao.response.defer(ephemeral=True)
+        if no_canal:
+            try:
+                cog_tasks = self.bot.get_cog("RankingPlantaoTasks")
+                if cog_tasks is None:
+                    await responder_erro(
+                        interacao,
+                        titulo="Sistema indisponível",
+                        linhas=[
+                            "O cog de tasks do ranking de plantão não está carregado.",
+                        ],
+                    )
+                    return
+                await cog_tasks._atualizar_ou_criar_tempo_real_horas()
+                await responder_sucesso(
+                    interacao,
+                    titulo="Ranking de horas (tempo real)",
+                    linhas=[
+                        "Card oficial atualizado no canal de ranking.",
+                    ],
+                )
+            except Exception as erro:
+                registrador.exception(
+                    "Falha ao atualizar ranking horas tempo real: %s",
+                    erro,
+                )
+                await responder_erro(
+                    interacao,
+                    titulo="Falha inesperada",
+                    linhas=[f"Erro: `{erro}`"],
+                )
+            return
+
         try:
             views, *_ = await gerar_view_ranking_horas(
                 "tempo_real",
@@ -109,7 +149,7 @@ class RankingCog(commands.Cog):
         await self._entregar_view(
             interacao,
             view,
-            no_canal=no_canal,
+            no_canal=False,
             chave_canal="RANKING_HORAS_PLANTAO",
             titulo_ok="Ranking de horas (tempo real)",
         )
