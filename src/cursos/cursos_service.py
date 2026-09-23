@@ -536,6 +536,39 @@ async def aceitar_agendamento(
         return registro
 
 
+async def recusar_agendamento(
+    *,
+    solicitacao_id: int,
+    instrutor_id: int,
+    motivo: str | None,
+) -> SolicitacaoCurso | None:
+    """
+    Recusa um pedido ainda em AGENDADO (erro do aluno, data inválida, etc.).
+
+    Status vira CANCELADO. Moedas de desconto, se houver, são devolvidas
+    ao aluno fora desta função (quem chama decide).
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return None
+        if registro.status != "AGENDADO":
+            return registro
+        registro.status = "CANCELADO"
+        registro.instrutor_id = instrutor_id
+        registro.aplicado_por = instrutor_id
+        texto_motivo = (motivo or "").strip()
+        if texto_motivo:
+            registro.observacao_instrutor = texto_motivo[:500]
+        registro.atualizado_em = agora()
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
 async def decidir_curso(
     *,
     solicitacao_id: int,

@@ -1011,7 +1011,10 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                     f"{interacao.user.mention}\n> {obs}"
                 )
             else:
-                corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
+                corpo += (
+                    f"\n\n### 📌 Observação do instrutor: "
+                    f"{interacao.user.mention}"
+                )
 
             # Desativa botão no agendamento
             if self.mensagem_agendamento is not None and guilda is not None:
@@ -1346,7 +1349,10 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 # Pedidos legados pagos 100% em moedas: instrutor recebe
                 # a fatia proporcional. No fluxo novo (IN_GAME + desconto)
                 # a receita é in-game e não vira moeda para o instrutor.
-                if registro.forma_pagamento == "MOEDAS" and registro.moedas_debitadas:
+                if (
+                    registro.forma_pagamento == "MOEDAS"
+                    and registro.moedas_debitadas
+                ):
                     valor_total = soma_valor_ingame(
                         parse_chaves_json(
                             registro.chaves_cursos_json,
@@ -1357,7 +1363,11 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                     if valor_total > 0 and valor_aprov > 0:
                         moedas_credito = max(
                             1,
-                            int(registro.moedas_debitadas * valor_aprov / valor_total),
+                            int(
+                                registro.moedas_debitadas
+                                * valor_aprov
+                                / valor_total
+                            ),
                         )
                         await creditar_moedas_instrutor(
                             membro.id,
@@ -1395,9 +1405,9 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             )
 
             resumo = (
-                f"Aprovados: \n"
-                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in aprovadas) or '—'}\n\n"
-                f"Reprovados: \n"
+                f"Aprovados: "
+                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in aprovadas) or '—'}\n"
+                f"Reprovados: "
                 f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in reprovadas) or '—'}"
             )
             try:
@@ -1845,7 +1855,10 @@ class ModalRecusarAgendamento(LoggingModalMixin, discord.ui.Modal):
                 membro=aluno or interacao.user,  # type: ignore[arg-type]
                 registro=registro,
             )
-            corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
+            corpo += (
+                f"\n\n### 📌 Observação do instrutor: "
+                f"{interacao.user.mention}"
+            )
             if motivo:
                 corpo += f"\n> {motivo}"
             corpo += "\n\n-# ❌ **Solicitação recusada**"
@@ -1978,6 +1991,7 @@ async def processar_clique_abrir_decisao(
                 linhas=[
                     f"Antes de **{acao}**, registre o pagamento do "
                     "repasse ao hospital.",
+                    "Mesmo em caso de reprovação o aluno precisa pagar.",
                     "Clique em **Registrar Pagamento** e envie o "
                     "print do comprovante neste canal.",
                 ],
@@ -2072,7 +2086,7 @@ async def processar_registrar_repasse_curso(
         linhas=[
             "Envie **neste canal** o print do comprovante do "
             "pagamento/repasse ao hospital.",
-            "Formatos: **PNG ou JPG**.",
+            "Formatos: **PNG, JPG, WEBP, GIF ou PDF**.",
             f"Prazo: **{minutos} minutos**.",
             "Só conta mensagem **sua** com **anexo válido**.",
         ],
@@ -2176,7 +2190,8 @@ async def processar_registrar_repasse_curso(
     )
     if moedas > 0:
         texto_card += (
-            f"**Desconto:** `{moedas}` moeda(s) ({formatar_reais(cotacao)} cada)\n"
+            f"**Desconto:** `{moedas}` moeda(s) "
+            f"({formatar_reais(cotacao)} cada)\n"
         )
     texto_card += (
         f"**Status do repasse:** registrado por {membro.mention}\n"
