@@ -145,6 +145,17 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "BOOLEAN NOT NULL DEFAULT FALSE"
         ),
     ),
+    Migracao(
+        numero=8,
+        descricao=(
+            "Curso: rastreio de repasses parciais (práticos juntos, "
+            "área um a um) em repasses_json."
+        ),
+        comando_sql=(
+            "ALTER TABLE solicitacoes_curso "
+            "ADD COLUMN IF NOT EXISTS repasses_json TEXT"
+        ),
+    ),
 ]
 
 

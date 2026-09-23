@@ -563,8 +563,13 @@ CANAIS = {
     "LOG_AUSENCIA": 0,  # opcional: log de ausências aprovadas/negadas (0 = desativado)
     "CANAL_APROVADOS_CURSOS": 1545848827766898810,
     "CANAL_REPROVADOS_CURSOS": 1545849048186233052,
-    # Comprovante de repasse do curso prático (instrutor → hospital)
+    # Comprovante de repasse (instrutor → hospital) por tipo de curso
     "REGISTRAR_CURSO_PRATICOS": 1545846776181825596,
+    "REGISTRAR_CURSO_RECRUTADOR": 1486369075566477464,
+    "REGISTRAR_CURSO_DOUTOR": 1486369147008057495,
+    "REGISTRAR_CURSO_PSICOLOGO": 1486369171385225316,
+    "REGISTRAR_CURSO_INSTRUTOR": 1545830635057193101,
+    "REGISTRAR_CURSO_DIRETORIA": 1486369135012089946,
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
     # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
     "RANKING_RECRUTADORES": 1486369056574406736,
@@ -997,6 +1002,8 @@ HORA_LIMITE_MOEDA_SABADO = 12  # a partir das 12:00 de sábado, zero moeda
 MOEDAS_DESCONTO_MAX_POR_PEDIDO = 10
 MOEDAS_DESCONTO_MAX_RESGATE_PARCIAL = 5  # resgate com < 6h de plantão
 HORAS_ISENCAO_RESGATE = 6  # enfermeiro com >= 6h no ciclo → resgate grátis
+# Parte do valor pago in-game que vai ao caixa do hospital (1/4)
+DIVISOR_REPASSE_CURSO = 4
 
 # Plantão — ociosidade (fora de call com toggle ligado)
 # O loop verifica a cada 1 minuto; avisos em 10 / 15 / 25; desliga em 30.

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from src.config import (
     CARGO_ENFERMEIRO,
     CURSOS,
+    DIVISOR_REPASSE_CURSO,
     HORAS_ISENCAO_RESGATE,
     MOEDAS_DESCONTO_MAX_POR_PEDIDO,
     MOEDAS_DESCONTO_MAX_RESGATE_PARCIAL,
@@ -41,6 +42,143 @@ def listar_cursos_ordenados() -> list[tuple[str, dict]]:
 def obter_curso(chave: str) -> dict | None:
     """Retorna os dados do catálogo para a chave, ou `None` se ela não existir."""
     return CURSOS.get(chave)
+
+
+def curso_e_pratico(chave: str) -> bool:
+    """True se o curso está marcado como prático no catálogo."""
+    dados = obter_curso(chave) or {}
+    return bool(dados.get("pratico"))
+
+
+def canal_repasse_da_chave(chave: str) -> str:
+    """
+    Chave de CANAIS onde o comprovante desse curso deve ser postado.
+    """
+    if curso_e_pratico(chave):
+        return "REGISTRAR_CURSO_PRATICOS"
+    mapa = {
+        "doutor": "REGISTRAR_CURSO_DOUTOR",
+        "psicologo": "REGISTRAR_CURSO_PSICOLOGO",
+        "recrutador": "REGISTRAR_CURSO_RECRUTADOR",
+        "instrutor": "REGISTRAR_CURSO_INSTRUTOR",
+        "diretoria": "REGISTRAR_CURSO_DIRETORIA",
+        "diretoria_geral": "REGISTRAR_CURSO_DIRETORIA",
+    }
+    return mapa.get(chave, "REGISTRAR_CURSO_PRATICOS")
+
+
+def calcular_repasse_hospital(valor_pago_ingame: int) -> int:
+    """1/4 do valor pago in-game vai ao caixa do hospital."""
+    if valor_pago_ingame <= 0:
+        return 0
+    divisor = int(DIVISOR_REPASSE_CURSO) or 4
+    return int(valor_pago_ingame) // divisor
+
+
+def valores_pagos_por_chave(
+    chaves: list[str],
+    valor_a_pagar_total: int,
+) -> dict[str, int]:
+    """
+    Distribui o valor pago in-game entre os cursos na proporção do catálogo.
+    """
+    brutos: dict[str, int] = {}
+    total_bruto = 0
+    for chave in chaves:
+        dados = obter_curso(chave) or {}
+        bruto = int(dados.get("valor_ingame") or 0)
+        brutos[chave] = bruto
+        total_bruto += bruto
+    if total_bruto <= 0 or valor_a_pagar_total <= 0:
+        return {chave: 0 for chave in chaves}
+    pagos: dict[str, int] = {}
+    restante = int(valor_a_pagar_total)
+    ordenadas = list(chaves)
+    for indice, chave in enumerate(ordenadas):
+        if indice == len(ordenadas) - 1:
+            pagos[chave] = max(0, restante)
+        else:
+            fatia = int(
+                valor_a_pagar_total * brutos[chave] / total_bruto
+            )
+            pagos[chave] = fatia
+            restante -= fatia
+    return pagos
+
+
+def ler_repasses_feitos(registro: SolicitacaoCurso) -> dict:
+    """Dicionário de grupos já registrados a partir de repasses_json."""
+    bruto = getattr(registro, "repasses_json", None) or ""
+    if not bruto:
+        return {}
+    try:
+        dados = json.loads(bruto)
+        if isinstance(dados, dict):
+            return dados
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return {}
+
+
+def montar_grupos_repasse(
+    chaves: list[str],
+    valor_a_pagar_total: int,
+) -> list[dict]:
+    """
+    Grupos de comprovante:
+
+    - um grupo ``praticos`` com todos os práticos do pedido
+    - um grupo por curso de área (chave = nome do curso)
+    """
+    pagos = valores_pagos_por_chave(chaves, valor_a_pagar_total)
+    praticos = [chave for chave in chaves if curso_e_pratico(chave)]
+    areas = [chave for chave in chaves if not curso_e_pratico(chave)]
+    grupos: list[dict] = []
+    if praticos:
+        valor_pago = sum(pagos.get(chave, 0) for chave in praticos)
+        grupos.append(
+            {
+                "id": "praticos",
+                "chaves": praticos,
+                "valor_pago": valor_pago,
+                "repasse": calcular_repasse_hospital(valor_pago),
+                "canal_chave": "REGISTRAR_CURSO_PRATICOS",
+                "rotulo": "Cursos práticos",
+            }
+        )
+    for chave in areas:
+        valor_pago = pagos.get(chave, 0)
+        grupos.append(
+            {
+                "id": chave,
+                "chaves": [chave],
+                "valor_pago": valor_pago,
+                "repasse": calcular_repasse_hospital(valor_pago),
+                "canal_chave": canal_repasse_da_chave(chave),
+                "rotulo": (obter_curso(chave) or {}).get("nome") or chave,
+            }
+        )
+    return grupos
+
+
+def proximo_grupo_repasse_pendente(
+    registro: SolicitacaoCurso,
+) -> dict | None:
+    """Próximo grupo que ainda não teve comprovante registrado."""
+    chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+    grupos = montar_grupos_repasse(chaves, int(registro.valor_ingame or 0))
+    feitos = ler_repasses_feitos(registro)
+    for grupo in grupos:
+        if not feitos.get(grupo["id"]):
+            return grupo
+    return None
+
+
+def repasse_total_do_pedido(registro: SolicitacaoCurso) -> int:
+    """Soma dos repasses de todos os grupos do pedido."""
+    chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+    grupos = montar_grupos_repasse(chaves, int(registro.valor_ingame or 0))
+    return sum(int(grupo["repasse"]) for grupo in grupos)
 
 
 def soma_valor_ingame(chaves: list[str]) -> int:
@@ -741,18 +879,69 @@ def montar_linhas_corpo_pedido(
             f"`{formatar_reais(valor_a_pagar)}`\n"
         )
 
-    if getattr(registro, "repasse_registrado", False):
-        corpo += "**Repasse ao hospital:** `registrado`\n"
-    elif forma not in ("GRATUITO", "MOEDAS"):
-        corpo += "**Repasse ao hospital:** `pendente`\n"
+    if forma not in ("GRATUITO", "MOEDAS"):
+        total_repasse = repasse_total_do_pedido(registro)
+        status_repasse = (
+            "registrado"
+            if getattr(registro, "repasse_registrado", False)
+            else "pendente"
+        )
+        corpo += (
+            f"**Repasse ao hospital:** "
+            f"`{formatar_reais(total_repasse)}` · `{status_repasse}`\n"
+        )
+        # Detalhe por grupo ainda pendente
+        if not getattr(registro, "repasse_registrado", False):
+            feitos = ler_repasses_feitos(registro)
+            grupos = montar_grupos_repasse(chaves, valor_a_pagar)
+            for grupo in grupos:
+                marca = "✓" if feitos.get(grupo["id"]) else "○"
+                corpo += (
+                    f"> {marca} {grupo['rotulo']}: "
+                    f"`{formatar_reais(int(grupo['repasse']))}`\n"
+                )
 
     corpo += f"\n{nota_instrutor}"
 
     return titulo, corpo
 
 
+async def marcar_grupo_repasse(
+    solicitacao_id: int,
+    grupo_id: str,
+) -> SolicitacaoCurso | None:
+    """
+    Marca um grupo de repasse como registrado.
+
+    Quando todos os grupos do pedido estão ok, liga ``repasse_registrado``.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return None
+        feitos = ler_repasses_feitos(registro)
+        feitos[grupo_id] = True
+        registro.repasses_json = json.dumps(feitos, ensure_ascii=False)
+        chaves = parse_chaves_json(
+            registro.chaves_cursos_json,
+            registro.chave_curso,
+        )
+        grupos = montar_grupos_repasse(chaves, int(registro.valor_ingame or 0))
+        todos_ok = all(feitos.get(grupo["id"]) for grupo in grupos)
+        if not grupos:
+            todos_ok = True
+        registro.repasse_registrado = todos_ok
+        registro.atualizado_em = agora()
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
 async def marcar_repasse_registrado(solicitacao_id: int) -> SolicitacaoCurso | None:
-    """Marca que o instrutor enviou o comprovante do repasse ao hospital."""
+    """Compatibilidade: marca o pedido inteiro como repasse concluído."""
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)

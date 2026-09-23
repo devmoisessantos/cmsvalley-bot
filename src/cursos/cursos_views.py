@@ -19,8 +19,8 @@ from src.cursos.cursos_service import (
     debitar_moedas_curso,
     decidir_cursos_parciais,
     listar_cursos_ordenados,
+    marcar_grupo_repasse,
     marcar_mensagem_solicitacao_curso,
-    marcar_repasse_registrado,
     membro_tem_curso,
     menção_cargo_curso,
     mesclar_cursos_no_pedido,
@@ -28,6 +28,7 @@ from src.cursos.cursos_service import (
     obter_curso,
     obter_solicitacao_curso,
     parse_chaves_json,
+    proximo_grupo_repasse_pendente,
     recusar_agendamento,
     registrar_solicitacao_pacote,
     rotulo_curso,
@@ -1101,12 +1102,15 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
         desabilitada: bool = False,
         chaves_cursos: list[str] | None = None,
         bloquear_decisao: bool = False,
+        mostrar_botao_repasse: bool = True,
     ):
         """
         modo: normal | selecionar_aprovar | selecionar_reprovar | final
 
         ``bloquear_decisao`` desativa Aprovar/Reprovar até o repasse
         com comprovante ser registrado.
+        ``mostrar_botao_repasse`` some quando todos os comprovantes
+        já foram enviados.
         """
         super().__init__(timeout=None)
         self.solicitacao_id = solicitacao_id
@@ -1116,6 +1120,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
         self.url_avatar = url_avatar
         self.chaves_cursos = list(chaves_cursos or [])
         self.bloquear_decisao = bloquear_decisao
+        self.mostrar_botao_repasse = mostrar_botao_repasse
 
         componentes: list = [discord.ui.TextDisplay(f"# {titulo}")]
         if url_avatar:
@@ -1181,12 +1186,14 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             linha2.add_item(botao_cancelar)
             componentes.append(linha2)
         else:
-            botao_repasse = discord.ui.Button(
-                label="Registrar Pagamento",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"{CUSTOM_ID_REGISTRAR_REPASSE}{solicitacao_id}",
-                disabled=False,
-            )
+            if mostrar_botao_repasse:
+                botao_repasse = discord.ui.Button(
+                    label="Registrar Pagamento",
+                    style=discord.ButtonStyle.primary,
+                    custom_id=f"{CUSTOM_ID_REGISTRAR_REPASSE}{solicitacao_id}",
+                    disabled=False,
+                )
+                linha.add_item(botao_repasse)
             botao_ok = discord.ui.Button(
                 label="Aprovar",
                 style=discord.ButtonStyle.success,
@@ -1202,7 +1209,6 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 disabled=bloquear_decisao,
             )
             # Callbacks via on_interaction no cog (sobrevivem a restart)
-            linha.add_item(botao_repasse)
             linha.add_item(botao_ok)
             linha.add_item(botao_nao)
             componentes.append(linha)
@@ -1606,9 +1612,9 @@ async def publicar_para_decisao(
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
     forma = registro.forma_pagamento or ""
     precisa_repasse = forma in ("IN_GAME", "IN_GAME_COM_DESCONTO")
-    bloquear = precisa_repasse and not getattr(
-        registro, "repasse_registrado", False
-    )
+    completo = bool(getattr(registro, "repasse_registrado", False))
+    bloquear = precisa_repasse and not completo
+    mostrar_repasse = precisa_repasse and not completo
     try:
         await canal.send(
             view=ViewDecisaoCurso(
@@ -1620,6 +1626,7 @@ async def publicar_para_decisao(
                 modo="normal",
                 chaves_cursos=chaves,
                 bloquear_decisao=bloquear,
+                mostrar_botao_repasse=mostrar_repasse,
             )
         )
     except discord.HTTPException as erro:
@@ -1746,9 +1753,9 @@ async def montar_view_decisao_a_partir_do_banco(
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
     forma = registro.forma_pagamento or ""
     precisa_repasse = forma in ("IN_GAME", "IN_GAME_COM_DESCONTO")
-    bloquear = precisa_repasse and not getattr(
-        registro, "repasse_registrado", False
-    )
+    completo = bool(getattr(registro, "repasse_registrado", False))
+    bloquear = precisa_repasse and not completo
+    mostrar_repasse = precisa_repasse and not completo
     return ViewDecisaoCurso(
         titulo=titulo,
         corpo=corpo,
@@ -1758,6 +1765,7 @@ async def montar_view_decisao_a_partir_do_banco(
         modo=modo,
         chaves_cursos=chaves,
         bloquear_decisao=bloquear if modo == "normal" else False,
+        mostrar_botao_repasse=mostrar_repasse if modo == "normal" else False,
     )
 
 
@@ -2093,7 +2101,7 @@ async def processar_registrar_repasse_curso(
         await responder_aviso(
             interacao,
             titulo="Já registrado",
-            linhas=["O comprovante deste pedido já foi enviado."],
+            linhas=["Todos os comprovantes deste pedido já foram enviados."],
             delay=10,
         )
         return
@@ -2110,6 +2118,16 @@ async def processar_registrar_repasse_curso(
         )
         return
 
+    grupo = proximo_grupo_repasse_pendente(registro)
+    if grupo is None:
+        await responder_aviso(
+            interacao,
+            titulo="Nada pendente",
+            linhas=["Não há grupo de repasse aguardando comprovante."],
+            delay=10,
+        )
+        return
+
     if not interacao.response.is_done():
         await interacao.response.defer(ephemeral=True)
 
@@ -2118,8 +2136,12 @@ async def processar_registrar_repasse_curso(
         interacao,
         titulo="Comprovante do repasse",
         linhas=[
-            "Envie **neste canal** o print do comprovante do "
-            "pagamento/repasse ao hospital.",
+            f"**Grupo:** {grupo['rotulo']}",
+            f"**Repasse ao hospital:** "
+            f"`{formatar_reais(int(grupo['repasse']))}`",
+            f"**Valor pago in-game (grupo):** "
+            f"`{formatar_reais(int(grupo['valor_pago']))}`",
+            "Envie **neste canal** o print do comprovante.",
             "Formatos: **PNG, JPG, WEBP, GIF ou PDF**.",
             f"Prazo: **{minutos} minutos**.",
             "Só conta mensagem **sua** com **anexo válido**.",
@@ -2195,47 +2217,52 @@ async def processar_registrar_repasse_curso(
     if guilda is None:
         return
 
-    canal_destino_id = CANAIS.get("REGISTRAR_CURSO_PRATICOS") or 0
+    chave_canal = grupo["canal_chave"]
+    canal_destino_id = CANAIS.get(chave_canal) or 0
     canal_destino = guilda.get_channel(int(canal_destino_id))
     if canal_destino is None:
         await responder_erro(
             interacao,
             titulo="Canal não configurado",
-            linhas=["`REGISTRAR_CURSO_PRATICOS` ausente ou inválido."],
+            linhas=[f"`{chave_canal}` ausente ou inválido."],
         )
         return
 
     aluno = guilda.get_member(registro.discord_id)
     mencao_aluno = aluno.mention if aluno else f"<@{registro.discord_id}>"
-    valor_txt = formatar_reais(int(registro.valor_ingame or 0))
+    valor_pago_txt = formatar_reais(int(grupo["valor_pago"]))
+    repasse_txt = formatar_reais(int(grupo["repasse"]))
     moedas = int(registro.moedas_debitadas or 0)
     cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
-    chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
     linhas_cursos = []
-    for chave in chaves:
+    for chave in grupo["chaves"]:
         linhas_cursos.append(f"> {menção_cargo_curso(chave)}")
     bloco_cursos = "\n".join(linhas_cursos) if linhas_cursos else "> —"
 
     instrutor_responsavel = _mencao_instrutor(guilda, registro.instrutor_id)
     momento = int(datetime.now(timezone.utc).timestamp())
+    titulo_card_repasse = (
+        "# 📝 Repasse de Curso Prático"
+        if grupo["id"] == "praticos"
+        else f"# 📝 Repasse — {grupo['rotulo']}"
+    )
 
     texto_card = (
-        f"# 📝 Repasse de Curso Prático\n"
+        f"{titulo_card_repasse}\n"
         f"**👤 Aluno:** {mencao_aluno} | **📋 Pedido:** `#{registro.id}`\n"
         f"**🛡️ Instrutor responsável:** {instrutor_responsavel}\n"
-        f"**🌄 Cursos aplicados:**\n"
+        f"**🌄 Curso(s):**\n"
         f"{bloco_cursos}\n"
         f"**💳 Forma de pagamento:** `{registro.forma_pagamento}`\n"
-        f"**Valor pago in-game:** `{valor_txt}`\n"
+        f"**Valor pago in-game (grupo):** `{valor_pago_txt}`\n"
+        f"**Repasse ao hospital:** `{repasse_txt}`\n"
     )
-    if moedas > 0:
+    if moedas > 0 and grupo["id"] == "praticos":
         texto_card += (
-            f"**Desconto:** `{moedas}` moeda(s) "
+            f"**Desconto do pedido:** `{moedas}` moeda(s) "
             f"({formatar_reais(cotacao)} cada)\n"
         )
-    texto_card += (
-        f"**Status do repasse:** registrado por {membro.mention}"
-    )
+    texto_card += f"**Status do repasse:** registrado por {membro.mention}"
 
     import io
 
@@ -2291,10 +2318,12 @@ async def processar_registrar_repasse_curso(
                 filename=nome_arquivo,
             )
             texto_simples = (
-                f"**📝 Repasse de Curso Prático** · Pedido `#{registro.id}`\n"
+                f"**📝 Repasse — {grupo['rotulo']}** · "
+                f"Pedido `#{registro.id}`\n"
                 f"Aluno: {mencao_aluno} · Instrutor: {instrutor_responsavel}\n"
                 f"Forma: `{registro.forma_pagamento}` · "
-                f"Valor: `{valor_txt}` · por {membro.mention}"
+                f"Pago: `{valor_pago_txt}` · "
+                f"Repasse: `{repasse_txt}` · por {membro.mention}"
             )
             await canal_destino.send(
                 content=texto_simples,
@@ -2317,9 +2346,16 @@ async def processar_registrar_repasse_curso(
             )
             return
 
-    await marcar_repasse_registrado(solicitacao_id)
+    registro_atualizado = await marcar_grupo_repasse(
+        solicitacao_id,
+        grupo["id"],
+    )
+    completo = bool(
+        registro_atualizado
+        and getattr(registro_atualizado, "repasse_registrado", False)
+    )
 
-    # Atualiza o card de decisão (libera Aprovar / Reprovar)
+    # Atualiza o card de decisão
     if interacao.message is not None:
         view_atualizada = await montar_view_decisao_a_partir_do_banco(
             guilda,
@@ -2338,22 +2374,32 @@ async def processar_registrar_repasse_curso(
     except (discord.NotFound, discord.HTTPException):
         pass
 
-    # Apaga a ephemeral de “envie o comprovante” se ainda existir
     if mensagem_pedido_comprovante is not None:
         try:
             await mensagem_pedido_comprovante.delete()
         except (discord.NotFound, discord.HTTPException):
             pass
 
+    if completo:
+        linhas_ok = [
+            f"Grupo **{grupo['rotulo']}** registrado "
+            f"(repasse `{repasse_txt}`).",
+            "Todos os comprovantes deste pedido estão ok.",
+            "Aprovar e Reprovar estão **liberados**.",
+        ]
+    else:
+        linhas_ok = [
+            f"Grupo **{grupo['rotulo']}** registrado "
+            f"(repasse `{repasse_txt}`).",
+            "Ainda há curso(s) de área pendente(s).",
+            "Clique de novo em **Registrar Pagamento** "
+            "para o próximo comprovante.",
+        ]
     await responder_sucesso(
         interacao,
         titulo="Repasse registrado",
-        linhas=[
-            f"Comprovante do pedido `#{solicitacao_id}` enviado "
-            "ao canal de registro.",
-            "Aprovar e Reprovar estão **liberados**.",
-        ],
-        delay=12,
+        linhas=linhas_ok,
+        delay=15,
     )
 
 

@@ -661,8 +661,10 @@ class SolicitacaoCurso(Base):
     cotacao_moeda: Mapped[int] = mapped_column(Integer, default=0)
     # GRATUITO | IN_GAME | IN_GAME_COM_DESCONTO | MOEDAS (legado)
     forma_pagamento: Mapped[str] = mapped_column(String(30), default="IN_GAME")
-    # Instrutor já enviou comprovante do repasse ao hospital
+    # Instrutor já enviou todos os comprovantes de repasse
     repasse_registrado: Mapped[bool] = mapped_column(Boolean, default=False)
+    # JSON: grupos registrados, ex. {"praticos": true, "doutor": true}
+    repasses_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # AGENDADO | ACEITO | APROVADO | REPROVADO | CANCELADO
     status: Mapped[str] = mapped_column(String(20), default="AGENDADO", index=True)
     observacao_aluno: Mapped[str | None] = mapped_column(Text, nullable=True)
