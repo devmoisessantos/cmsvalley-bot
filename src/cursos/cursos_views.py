@@ -1012,10 +1012,7 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                     f"{interacao.user.mention}\n> {obs}"
                 )
             else:
-                corpo += (
-                    f"\n\n### 📌 Observação do instrutor: "
-                    f"{interacao.user.mention}"
-                )
+                corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
 
             # Desativa botão no agendamento
             if self.mensagem_agendamento is not None and guilda is not None:
@@ -1373,10 +1370,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 # Pedidos legados pagos 100% em moedas: instrutor recebe
                 # a fatia proporcional. No fluxo novo (IN_GAME + desconto)
                 # a receita é in-game e não vira moeda para o instrutor.
-                if (
-                    registro.forma_pagamento == "MOEDAS"
-                    and registro.moedas_debitadas
-                ):
+                if registro.forma_pagamento == "MOEDAS" and registro.moedas_debitadas:
                     valor_total = soma_valor_ingame(
                         parse_chaves_json(
                             registro.chaves_cursos_json,
@@ -1387,11 +1381,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                     if valor_total > 0 and valor_aprov > 0:
                         moedas_credito = max(
                             1,
-                            int(
-                                registro.moedas_debitadas
-                                * valor_aprov
-                                / valor_total
-                            ),
+                            int(registro.moedas_debitadas * valor_aprov / valor_total),
                         )
                         await creditar_moedas_instrutor(
                             membro.id,
@@ -1429,20 +1419,20 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             )
 
             resumo = (
-                f"Aprovados: "
+                f"**Aprovados:** \n"
                 f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in aprovadas) or '—'}\n"
-                f"Reprovados: "
-                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in reprovadas) or '—'}"
+                f"**Reprovados:** \n"
+                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in reprovadas) or '—'}\n"
             )
             if observacao_decisao:
-                resumo += f"\nObs. decisão: {observacao_decisao}"
+                resumo += f"\n📌 — {observacao_decisao}"
             mensagem_para_editar = interacao.message
             try:
                 if mensagem_para_editar is not None:
                     await mensagem_para_editar.edit(
                         view=ViewDecisaoCurso(
                             titulo=self.titulo,
-                            corpo=self.corpo + f"\n\n-# **Decisão:**\n{resumo}",
+                            corpo=self.corpo + f"\n\n{resumo}",
                             guild=guilda,
                             solicitacao_id=registro.id,
                             url_avatar=self.url_avatar,
@@ -1897,10 +1887,7 @@ class ModalRecusarAgendamento(LoggingModalMixin, discord.ui.Modal):
                 membro=aluno or interacao.user,  # type: ignore[arg-type]
                 registro=registro,
             )
-            corpo += (
-                f"\n\n### 📌 Observação do instrutor: "
-                f"{interacao.user.mention}"
-            )
+            corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
             if motivo:
                 corpo += f"\n> {motivo}"
             corpo += "\n\n-# ❌ **Solicitação recusada**"
@@ -2136,13 +2123,11 @@ async def processar_registrar_repasse_curso(
         interacao,
         titulo="Comprovante do repasse",
         linhas=[
-            f"**Grupo:** {grupo['rotulo']}",
-            f"**Repasse ao hospital:** "
-            f"`{formatar_reais(int(grupo['repasse']))}`",
-            f"**Valor pago in-game (grupo):** "
-            f"`{formatar_reais(int(grupo['valor_pago']))}`",
+            f"**Área:** {grupo['rotulo']}",
+            f"**Repasse ao hospital:** `{formatar_reais(int(grupo['repasse']))}`",
+            f"**Valor pago in-game:** `{formatar_reais(int(grupo['valor_pago']))}`",
             "Envie **neste canal** o print do comprovante.",
-            "Formatos: **PNG, JPG, WEBP, GIF ou PDF**.",
+            "Formatos: **PNG ou JPG**.",
             f"Prazo: **{minutos} minutos**.",
             "Só conta mensagem **sua** com **anexo válido**.",
         ],
@@ -2236,33 +2221,33 @@ async def processar_registrar_repasse_curso(
     cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
     linhas_cursos = []
     for chave in grupo["chaves"]:
-        linhas_cursos.append(f"> {menção_cargo_curso(chave)}")
+        linhas_cursos.append(f">  •  {menção_cargo_curso(chave)}")
     bloco_cursos = "\n".join(linhas_cursos) if linhas_cursos else "> —"
 
     instrutor_responsavel = _mencao_instrutor(guilda, registro.instrutor_id)
     momento = int(datetime.now(timezone.utc).timestamp())
     titulo_card_repasse = (
-        "# 📝 Repasse de Curso Prático"
+        "# 📝 Repasse de Curso Prático(s)"
         if grupo["id"] == "praticos"
         else f"# 📝 Repasse — {grupo['rotulo']}"
     )
 
     texto_card = (
-        f"{titulo_card_repasse}\n"
+        f"{titulo_card_repasse}\n\n"
         f"**👤 Aluno:** {mencao_aluno} | **📋 Pedido:** `#{registro.id}`\n"
-        f"**🛡️ Instrutor responsável:** {instrutor_responsavel}\n"
+        f"**🛡️ Instrutor responsável:** {instrutor_responsavel}\n\n"
         f"**🌄 Curso(s):**\n"
-        f"{bloco_cursos}\n"
-        f"**💳 Forma de pagamento:** `{registro.forma_pagamento}`\n"
-        f"**Valor pago in-game (grupo):** `{valor_pago_txt}`\n"
-        f"**Repasse ao hospital:** `{repasse_txt}`\n"
+        f"{bloco_cursos}\n\n"
+        f"**`💳` Forma de pagamento:** `{registro.forma_pagamento}`\n"
+        f"**`💰` Valor pago in-game:** `{valor_pago_txt}`\n"
+        f"**`🏥` Repasse ao hospital:** `{repasse_txt}`\n"
     )
     if moedas > 0 and grupo["id"] == "praticos":
         texto_card += (
-            f"**Desconto do pedido:** `{moedas}` moeda(s) "
-            f"({formatar_reais(cotacao)} cada)\n"
+            f"**`🏷️` Desconto aplicado:** {moedas} moeda(s) — "
+            f"`{formatar_reais(cotacao)}` cada\n"
         )
-    texto_card += f"**Status do repasse:** registrado por {membro.mention}"
+    texto_card += f"**`📌` Status do repasse:** Registrado por {membro.mention}"
 
     import io
 
@@ -2271,9 +2256,7 @@ async def processar_registrar_repasse_curso(
     buffer_anexo.seek(0)
     arquivo = discord.File(fp=buffer_anexo, filename=nome_arquivo)
 
-    e_imagem = nome_arquivo.lower().endswith(
-        (".png", ".jpg", ".jpeg", ".webp", ".gif")
-    )
+    e_imagem = nome_arquivo.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
     componentes_card: list = [
         discord.ui.TextDisplay(texto_card),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
@@ -2288,15 +2271,11 @@ async def processar_registrar_repasse_curso(
     else:
         # PDF / outros: componente File no card
         try:
-            componentes_card.append(
-                discord.ui.File(f"attachment://{nome_arquivo}")
-            )
+            componentes_card.append(discord.ui.File(f"attachment://{nome_arquivo}"))
         except (TypeError, AttributeError):
             pass
     componentes_card.append(
-        discord.ui.TextDisplay(
-            f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>"
-        )
+        discord.ui.TextDisplay(f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>")
     )
 
     try:
@@ -2308,7 +2287,7 @@ async def processar_registrar_repasse_curso(
             )
         )
         await canal_destino.send(view=view_log, file=arquivo)
-    except discord.HTTPException as erro_envio:
+    except discord.HTTPException:
         # Fallback: mensagem clássica só com o arquivo + texto
         try:
             buffer_fallback = io.BytesIO(bytes_do_arquivo)
@@ -2318,12 +2297,11 @@ async def processar_registrar_repasse_curso(
                 filename=nome_arquivo,
             )
             texto_simples = (
-                f"**📝 Repasse — {grupo['rotulo']}** · "
-                f"Pedido `#{registro.id}`\n"
-                f"Aluno: {mencao_aluno} · Instrutor: {instrutor_responsavel}\n"
-                f"Forma: `{registro.forma_pagamento}` · "
-                f"Pago: `{valor_pago_txt}` · "
-                f"Repasse: `{repasse_txt}` · por {membro.mention}"
+                f"**📝 Repasse — {grupo['rotulo']}** | **📋 Pedido:** `#{registro.id}`\n"
+                f"**👤 Aluno:** {mencao_aluno} · **🛡️ Instrutor responsável:** {instrutor_responsavel}\n\n"
+                f"**`💳` Forma de pagamento:** `{registro.forma_pagamento}`\n"
+                f"**`💰` Valor pago in-game:** `{valor_pago_txt}`\n"
+                f"**`🏥` Repasse ao hospital:** `{repasse_txt}` · por {membro.mention}\n"
             )
             await canal_destino.send(
                 content=texto_simples,
@@ -2382,18 +2360,15 @@ async def processar_registrar_repasse_curso(
 
     if completo:
         linhas_ok = [
-            f"Grupo **{grupo['rotulo']}** registrado "
-            f"(repasse `{repasse_txt}`).",
+            f"Grupo **{grupo['rotulo']}** registrado (repasse `{repasse_txt}`).",
             "Todos os comprovantes deste pedido estão ok.",
             "Aprovar e Reprovar estão **liberados**.",
         ]
     else:
         linhas_ok = [
-            f"Grupo **{grupo['rotulo']}** registrado "
-            f"(repasse `{repasse_txt}`).",
+            f"Grupo **{grupo['rotulo']}** registrado (repasse `{repasse_txt}`).",
             "Ainda há curso(s) de área pendente(s).",
-            "Clique de novo em **Registrar Pagamento** "
-            "para o próximo comprovante.",
+            "Clique de novo em **Registrar Pagamento** para o próximo comprovante.",
         ]
     await responder_sucesso(
         interacao,
@@ -2556,17 +2531,17 @@ class ModalObservacaoDecisao(LoggingModalMixin, discord.ui.Modal):
         # Modal não tem interacao.message do card — edita a mensagem guardada
         if self.mensagem_decisao is not None:
             resumo = (
-                f"Aprovados: "
+                f"**Aprovados:** \n"
                 f"{', '.join(rotulo_curso(c) for c in self.aprovadas) or '—'}\n"
-                f"Reprovados: "
+                f"**Reprovados:** \n"
                 f"{', '.join(rotulo_curso(c) for c in self.reprovadas) or '—'}\n"
-                f"Obs. decisão: {observacao}"
+                f"\n`📌` — {observacao}"
             )
             try:
                 await self.mensagem_decisao.edit(
                     view=ViewDecisaoCurso(
                         titulo=self.titulo_card,
-                        corpo=self.corpo_card + f"\n\n-# **Decisão:**\n{resumo}",
+                        corpo=self.corpo_card + f"\n\n{resumo}",
                         guild=guilda,
                         solicitacao_id=self.solicitacao_id,
                         url_avatar=self.url_avatar,
