@@ -1100,9 +1100,13 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
         modo: str = "normal",
         desabilitada: bool = False,
         chaves_cursos: list[str] | None = None,
+        bloquear_decisao: bool = False,
     ):
         """
         modo: normal | selecionar_aprovar | selecionar_reprovar | final
+
+        ``bloquear_decisao`` desativa Aprovar/Reprovar até o repasse
+        com comprovante ser registrado.
         """
         super().__init__(timeout=None)
         self.solicitacao_id = solicitacao_id
@@ -1111,6 +1115,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
         self.guild_ref = guild
         self.url_avatar = url_avatar
         self.chaves_cursos = list(chaves_cursos or [])
+        self.bloquear_decisao = bloquear_decisao
 
         componentes: list = [discord.ui.TextDisplay(f"# {titulo}")]
         if url_avatar:
@@ -1180,24 +1185,34 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 label="Registrar Pagamento",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"{CUSTOM_ID_REGISTRAR_REPASSE}{solicitacao_id}",
+                disabled=False,
             )
             botao_ok = discord.ui.Button(
                 label="Aprovar",
                 style=discord.ButtonStyle.success,
                 emoji="✅",
                 custom_id=f"{CUSTOM_ID_APROVAR}{solicitacao_id}",
+                disabled=bloquear_decisao,
             )
             botao_nao = discord.ui.Button(
                 label="Reprovar",
                 style=discord.ButtonStyle.danger,
                 emoji="❌",
                 custom_id=f"{CUSTOM_ID_REPROVAR}{solicitacao_id}",
+                disabled=bloquear_decisao,
             )
             # Callbacks via on_interaction no cog (sobrevivem a restart)
             linha.add_item(botao_repasse)
             linha.add_item(botao_ok)
             linha.add_item(botao_nao)
             componentes.append(linha)
+            if bloquear_decisao:
+                componentes.append(
+                    discord.ui.TextDisplay(
+                        "-# Aprovar e Reprovar liberam após "
+                        "**Registrar Pagamento** com o print do comprovante."
+                    )
+                )
 
         componentes.append(discord.ui.TextDisplay(_rodape(guild)))
         cor = discord.Color.dark_gold()
@@ -1306,16 +1321,19 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
         interacao: discord.Interaction,
         aprovadas: list[str],
         reprovadas: list[str],
+        observacao_decisao: str | None = None,
     ):
         membro = interacao.user
         assert isinstance(membro, discord.Member)
         try:
-            await interacao.response.defer(ephemeral=True)
+            if not interacao.response.is_done():
+                await interacao.response.defer(ephemeral=True)
             registro = await decidir_cursos_parciais(
                 solicitacao_id=self.solicitacao_id,
                 chaves_aprovadas=aprovadas,
                 chaves_reprovadas=reprovadas,
                 instrutor_id=membro.id,
+                observacao_decisao=observacao_decisao,
             )
             if registro is None:
                 await responder_erro(
@@ -1410,19 +1428,23 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 f"Reprovados: "
                 f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in reprovadas) or '—'}"
             )
+            if observacao_decisao:
+                resumo += f"\nObs. decisão: {observacao_decisao}"
+            mensagem_para_editar = interacao.message
             try:
-                await interacao.message.edit(
-                    view=ViewDecisaoCurso(
-                        titulo=self.titulo,
-                        corpo=self.corpo + f"\n\n-# **Decisão:**\n{resumo}",
-                        guild=guilda,
-                        solicitacao_id=registro.id,
-                        url_avatar=self.url_avatar,
-                        modo="final",
-                        desabilitada=True,
-                        chaves_cursos=self.chaves_cursos,
+                if mensagem_para_editar is not None:
+                    await mensagem_para_editar.edit(
+                        view=ViewDecisaoCurso(
+                            titulo=self.titulo,
+                            corpo=self.corpo + f"\n\n-# **Decisão:**\n{resumo}",
+                            guild=guilda,
+                            solicitacao_id=registro.id,
+                            url_avatar=self.url_avatar,
+                            modo="final",
+                            desabilitada=True,
+                            chaves_cursos=self.chaves_cursos,
+                        )
                     )
-                )
             except discord.HTTPException as erro_em_aplicar_decisao_parcial:
                 # Enfeite que falhou: atualizar o card da decisao parcial.
                 # A acao principal ja tinha dado certo, entao so registro.
@@ -1582,6 +1604,11 @@ async def publicar_para_decisao(
     corpo += _bloco_observacao_instrutor(guilda, registro)
     url = getattr(getattr(membro_ref, "display_avatar", None), "url", None)
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+    forma = registro.forma_pagamento or ""
+    precisa_repasse = forma in ("IN_GAME", "IN_GAME_COM_DESCONTO")
+    bloquear = precisa_repasse and not getattr(
+        registro, "repasse_registrado", False
+    )
     try:
         await canal.send(
             view=ViewDecisaoCurso(
@@ -1592,6 +1619,7 @@ async def publicar_para_decisao(
                 url_avatar=url,
                 modo="normal",
                 chaves_cursos=chaves,
+                bloquear_decisao=bloquear,
             )
         )
     except discord.HTTPException as erro:
@@ -1716,6 +1744,11 @@ async def montar_view_decisao_a_partir_do_banco(
     corpo += _bloco_observacao_instrutor(guilda, registro)
     url = getattr(getattr(membro_ref, "display_avatar", None), "url", None)
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+    forma = registro.forma_pagamento or ""
+    precisa_repasse = forma in ("IN_GAME", "IN_GAME_COM_DESCONTO")
+    bloquear = precisa_repasse and not getattr(
+        registro, "repasse_registrado", False
+    )
     return ViewDecisaoCurso(
         titulo=titulo,
         corpo=corpo,
@@ -1724,6 +1757,7 @@ async def montar_view_decisao_a_partir_do_banco(
         url_avatar=url,
         modo=modo,
         chaves_cursos=chaves,
+        bloquear_decisao=bloquear if modo == "normal" else False,
     )
 
 
@@ -2080,7 +2114,7 @@ async def processar_registrar_repasse_curso(
         await interacao.response.defer(ephemeral=True)
 
     minutos = PRAZO_COMPROVANTE_REPASSE_SEGUNDOS // 60
-    await responder_info(
+    mensagem_pedido_comprovante = await responder_info(
         interacao,
         titulo="Comprovante do repasse",
         linhas=[
@@ -2177,15 +2211,21 @@ async def processar_registrar_repasse_curso(
     moedas = int(registro.moedas_debitadas or 0)
     cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
-    lista_cursos = ", ".join(rotulo_curso(chave) for chave in chaves) or "—"
+    linhas_cursos = []
+    for chave in chaves:
+        linhas_cursos.append(f"> {menção_cargo_curso(chave)}")
+    bloco_cursos = "\n".join(linhas_cursos) if linhas_cursos else "> —"
+
+    instrutor_responsavel = _mencao_instrutor(guilda, registro.instrutor_id)
+    momento = int(datetime.now(timezone.utc).timestamp())
 
     texto_card = (
-        f"# Repasse de curso prático\n"
-        f"**Pedido:** `#{registro.id}`\n"
-        f"**Aluno:** {mencao_aluno}\n"
-        f"**Instrutor:** {membro.mention}\n"
-        f"**Cursos:** {lista_cursos}\n"
-        f"**Forma:** `{registro.forma_pagamento}`\n"
+        f"# 📝 Repasse de Curso Prático\n"
+        f"**👤 Aluno:** {mencao_aluno} | **📋 Pedido:** `#{registro.id}`\n"
+        f"**🛡️ Instrutor responsável:** {instrutor_responsavel}\n"
+        f"**🌄 Cursos aplicados:**\n"
+        f"{bloco_cursos}\n"
+        f"**💳 Forma de pagamento:** `{registro.forma_pagamento}`\n"
         f"**Valor pago in-game:** `{valor_txt}`\n"
     )
     if moedas > 0:
@@ -2194,44 +2234,92 @@ async def processar_registrar_repasse_curso(
             f"({formatar_reais(cotacao)} cada)\n"
         )
     texto_card += (
-        f"**Status do repasse:** registrado por {membro.mention}\n"
-        f"-# Comprovante em anexo"
+        f"**Status do repasse:** registrado por {membro.mention}"
     )
 
     import io
 
-    arquivo = discord.File(
-        fp=io.BytesIO(bytes_do_arquivo),
-        filename=nome_arquivo,
+    # Cópia local dos bytes — envio independente do CDN do Discord
+    buffer_anexo = io.BytesIO(bytes_do_arquivo)
+    buffer_anexo.seek(0)
+    arquivo = discord.File(fp=buffer_anexo, filename=nome_arquivo)
+
+    e_imagem = nome_arquivo.lower().endswith(
+        (".png", ".jpg", ".jpeg", ".webp", ".gif")
     )
+    componentes_card: list = [
+        discord.ui.TextDisplay(texto_card),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+    ]
+    if e_imagem:
+        # Components V2: galeria aponta para o anexo enviado no mesmo send
+        componentes_card.append(
+            discord.ui.MediaGallery(
+                discord.MediaGalleryItem(f"attachment://{nome_arquivo}")
+            )
+        )
+    else:
+        # PDF / outros: componente File no card
+        try:
+            componentes_card.append(
+                discord.ui.File(f"attachment://{nome_arquivo}")
+            )
+        except (TypeError, AttributeError):
+            pass
+    componentes_card.append(
+        discord.ui.TextDisplay(
+            f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>"
+        )
+    )
+
     try:
         view_log = discord.ui.LayoutView(timeout=None)
         view_log.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(texto_card),
+                *componentes_card,
                 accent_color=discord.Color.dark_teal(),
             )
         )
-        # Card + anexo no mesmo envio (sem DM)
         await canal_destino.send(view=view_log, file=arquivo)
     except discord.HTTPException as erro_envio:
-        await enviar_erro_para_log_erros(
-            guilda,
-            "Falha ao postar comprovante de repasse",
-            erro_envio,
-            contexto="processar_registrar_repasse_curso.send",
-            usuario=membro,
-        )
-        await responder_erro(
-            interacao,
-            titulo="Falha ao publicar",
-            linhas=["Não consegui enviar o comprovante ao canal de registro."],
-        )
-        return
+        # Fallback: mensagem clássica só com o arquivo + texto
+        try:
+            buffer_fallback = io.BytesIO(bytes_do_arquivo)
+            buffer_fallback.seek(0)
+            arquivo_fallback = discord.File(
+                fp=buffer_fallback,
+                filename=nome_arquivo,
+            )
+            texto_simples = (
+                f"**📝 Repasse de Curso Prático** · Pedido `#{registro.id}`\n"
+                f"Aluno: {mencao_aluno} · Instrutor: {instrutor_responsavel}\n"
+                f"Forma: `{registro.forma_pagamento}` · "
+                f"Valor: `{valor_txt}` · por {membro.mention}"
+            )
+            await canal_destino.send(
+                content=texto_simples,
+                file=arquivo_fallback,
+            )
+        except discord.HTTPException as erro_fallback:
+            await enviar_erro_para_log_erros(
+                guilda,
+                "Falha ao postar comprovante de repasse",
+                erro_fallback,
+                contexto="processar_registrar_repasse_curso.send",
+                usuario=membro,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Falha ao publicar",
+                linhas=[
+                    "Não consegui enviar o comprovante ao canal de registro.",
+                ],
+            )
+            return
 
     await marcar_repasse_registrado(solicitacao_id)
 
-    # Atualiza o card de decisão com o status de repasse
+    # Atualiza o card de decisão (libera Aprovar / Reprovar)
     if interacao.message is not None:
         view_atualizada = await montar_view_decisao_a_partir_do_banco(
             guilda,
@@ -2244,19 +2332,28 @@ async def processar_registrar_repasse_curso(
             except discord.HTTPException:
                 pass
 
+    # Apaga o print no canal de decisão
     try:
-        await mensagem_comprovante.delete(delay=10)
+        await mensagem_comprovante.delete()
     except (discord.NotFound, discord.HTTPException):
         pass
+
+    # Apaga a ephemeral de “envie o comprovante” se ainda existir
+    if mensagem_pedido_comprovante is not None:
+        try:
+            await mensagem_pedido_comprovante.delete()
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
     await responder_sucesso(
         interacao,
         titulo="Repasse registrado",
         linhas=[
-            f"Comprovante do pedido `#{solicitacao_id}` enviado ao canal de registro.",
-            "Agora você pode **aprovar** o curso.",
+            f"Comprovante do pedido `#{solicitacao_id}` enviado "
+            "ao canal de registro.",
+            "Aprovar e Reprovar estão **liberados**.",
         ],
-        delay=15,
+        delay=12,
     )
 
 
@@ -2334,7 +2431,106 @@ async def processar_select_decisao_curso(
     else:
         reprovadas = [c for c in todas if c in marcados]
         aprovadas = [c for c in todas if c not in marcados]
-    await view._aplicar_decisao_parcial(interacao, aprovadas, reprovadas)
+
+    # Observação da decisão é nova — não reutiliza a da aceitação
+    await interacao.response.send_modal(
+        ModalObservacaoDecisao(
+            solicitacao_id=solicitacao_id,
+            aprovadas=aprovadas,
+            reprovadas=reprovadas,
+            titulo_card=view.titulo,
+            corpo_card=view.corpo,
+            url_avatar=view.url_avatar,
+            chaves_cursos=view.chaves_cursos,
+            mensagem_decisao=interacao.message,
+        )
+    )
+
+
+class ModalObservacaoDecisao(LoggingModalMixin, discord.ui.Modal):
+    """
+    Observação da aprovação/reprovação (independente da aceitação).
+    """
+
+    def __init__(
+        self,
+        *,
+        solicitacao_id: int,
+        aprovadas: list[str],
+        reprovadas: list[str],
+        titulo_card: str,
+        corpo_card: str,
+        url_avatar: str | None,
+        chaves_cursos: list[str],
+        mensagem_decisao: discord.Message | None,
+    ):
+        super().__init__(title="Observação da decisão")
+        self.solicitacao_id = solicitacao_id
+        self.aprovadas = list(aprovadas)
+        self.reprovadas = list(reprovadas)
+        self.titulo_card = titulo_card
+        self.corpo_card = corpo_card
+        self.url_avatar = url_avatar
+        self.chaves_cursos = list(chaves_cursos)
+        self.mensagem_decisao = mensagem_decisao
+        self.campo = discord.ui.TextInput(
+            label="Observação da decisão",
+            style=discord.TextStyle.paragraph,
+            placeholder="Ex.: Aplicado com sucesso / aluno não compareceu",
+            required=True,
+            max_length=400,
+        )
+        self.add_item(self.campo)
+
+    async def on_submit(self, interacao: discord.Interaction):
+        observacao = (self.campo.value or "").strip()
+        guilda = interacao.guild
+        if guilda is None:
+            await responder_erro(
+                interacao,
+                titulo="Contexto inválido",
+                linhas=["Use este formulário dentro do servidor."],
+            )
+            return
+        view_tmp = ViewDecisaoCurso(
+            titulo=self.titulo_card,
+            corpo=self.corpo_card,
+            guild=guilda,
+            solicitacao_id=self.solicitacao_id,
+            url_avatar=self.url_avatar,
+            modo="final",
+            chaves_cursos=self.chaves_cursos,
+        )
+        await view_tmp._aplicar_decisao_parcial(
+            interacao,
+            self.aprovadas,
+            self.reprovadas,
+            observacao_decisao=observacao,
+        )
+        # Modal não tem interacao.message do card — edita a mensagem guardada
+        if self.mensagem_decisao is not None:
+            resumo = (
+                f"Aprovados: "
+                f"{', '.join(rotulo_curso(c) for c in self.aprovadas) or '—'}\n"
+                f"Reprovados: "
+                f"{', '.join(rotulo_curso(c) for c in self.reprovadas) or '—'}\n"
+                f"Obs. decisão: {observacao}"
+            )
+            try:
+                await self.mensagem_decisao.edit(
+                    view=ViewDecisaoCurso(
+                        titulo=self.titulo_card,
+                        corpo=self.corpo_card + f"\n\n-# **Decisão:**\n{resumo}",
+                        guild=guilda,
+                        solicitacao_id=self.solicitacao_id,
+                        url_avatar=self.url_avatar,
+                        modo="final",
+                        desabilitada=True,
+                        chaves_cursos=self.chaves_cursos,
+                    )
+                )
+            except discord.HTTPException:
+                pass
 
 
 def view_persistente_cursos() -> PainelCursosLayout:

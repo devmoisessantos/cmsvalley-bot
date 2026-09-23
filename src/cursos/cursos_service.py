@@ -450,10 +450,14 @@ async def decidir_cursos_parciais(
     chaves_aprovadas: list[str],
     chaves_reprovadas: list[str],
     instrutor_id: int,
+    observacao_decisao: str | None = None,
 ) -> SolicitacaoCurso | None:
     """
     Fecha o pedido com listas de aprovados/reprovados.
     Status final: APROVADO se houver ao menos um aprovado; senão REPROVADO.
+
+    ``observacao_decisao`` é a nota da aprovação/reprovação (não reutiliza
+    a observação da aceitação do agendamento).
     """
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -465,18 +469,16 @@ async def decidir_cursos_parciais(
         if registro.status not in ("ACEITO", "AGENDADO"):
             return registro
 
-        # Guarda decisão no campo de observação do instrutor (resumo)
         texto_aprovados = ", ".join(chaves_aprovadas) or "—"
         texto_reprovados = ", ".join(chaves_reprovadas) or "—"
         resumo = f"Aprovados: {texto_aprovados}\nReprovados: {texto_reprovados}"
-        anterior = (registro.observacao_instrutor or "").strip()
-        if anterior:
-            registro.observacao_instrutor = f"{anterior}\n{resumo}"
-        else:
-            registro.observacao_instrutor = resumo
+        nota = (observacao_decisao or "").strip()
+        if nota:
+            resumo = f"Decisão: {nota}\n{resumo}"
+        # Substitui pela decisão final — não mantém só a obs. de aceitação
+        registro.observacao_instrutor = resumo[:500]
         registro.aplicado_por = instrutor_id
         registro.status = "APROVADO" if chaves_aprovadas else "REPROVADO"
-        # Se parcial, marca como APROVADO_PARCIAL no texto — status APROVADO se algum ok
         if chaves_aprovadas and chaves_reprovadas:
             registro.status = "APROVADO"
         registro.atualizado_em = agora()
