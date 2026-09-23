@@ -93,8 +93,10 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
         corpo = (
             f"> `👤` * **Membro:** {membro.mention} | **FID:** `{id_fivem}`\n"
             f"> `🪙` * **Saldo:** `{saldo} moedas`\n"
-            f"> `💵` * **Equivalente:** `{equivalente_em_reais(saldo)}`\n"
-            f"> `⏱️` * **Ganho:** `1 moeda / 30 min` em call de plantão\n\n"
+            f"> `💵` * **Equivalente:** "
+            f"`{equivalente_em_reais(saldo, membro=membro)}`\n"
+            f"> `⏱️` * **Ganho:** `1 moeda / 30 min` (teto 14/dia, 84/semana)\n"
+            f"> `📅` * **Domingo:** sem moeda · **Sábado:** moeda só até 12h\n\n"
             "## Ações\n"
             "Use os botões abaixo para movimentar suas moedas."
         )
@@ -786,11 +788,11 @@ class ViewIntroDeposito(LoggingViewMixin, discord.ui.LayoutView):
             "> Troca **inversa**: você envia o dinheiro **in-game** e, "
             "após aprovação, recebe **moedas**.\n\n"
             f"> `🪙` * **Saldo atual:** `{saldo} moedas`\n"
-            f"> `💵` * **Valor por moeda:** "
-            f"`{formatar_dinheiro(VALOR_MOEDA_INGAME)}`\n\n"
+            f"> `💵` * **Cotação:** conforme **seu cargo** "
+            f"(ver tabela no hospital)\n\n"
             "## Como funciona\n"
             "1. Informe quantas moedas deseja **comprar** com $.\n"
-            "2. O pedido vai para a **equipe financeira**.\n"
+            "2. O pedido usa a cotação do **seu cargo** no momento.\n"
             "3. Você transfere o $ in-game conforme orientação.\n"
             "4. Após confirmação, as moedas são **creditadas**."
         )

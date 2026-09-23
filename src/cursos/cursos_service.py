@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 
 import discord
 from sqlalchemy import select
 
 from src.config import (
+    CARGO_ENFERMEIRO,
     CURSOS,
-    VALOR_MOEDA_INGAME,
+    HORAS_ISENCAO_RESGATE,
+    MOEDAS_DESCONTO_MAX_POR_PEDIDO,
+    MOEDAS_DESCONTO_MAX_RESGATE_PARCIAL,
 )
 from src.database.conexao import async_session
 from src.database.models import (
@@ -19,6 +21,7 @@ from src.database.models import (
     SolicitacaoCurso,
     agora,
 )
+from src.plantao.carteira_service import cotacao_moeda_do_membro
 from src.utils.error_handling import ignorar_falha_cosmetica
 from src.utils.formatacao import formatar_reais
 
@@ -40,31 +43,6 @@ def obter_curso(chave: str) -> dict | None:
     return CURSOS.get(chave)
 
 
-def moedas_necessarias_para_valor(valor_ingame: int) -> int:
-    """Calcula moedas inteiras sem cobrar por cursos gratuitos.
-
-    Arredonda para cima para que valores que não dividem exatamente a conversão
-    sejam pagos integralmente, sem criar saldo fracionado no plantão.
-    """
-    if valor_ingame <= 0:
-        return 0
-    return max(1, math.ceil(valor_ingame / VALOR_MOEDA_INGAME))
-
-
-def moedas_necessarias_para_curso(chave: str) -> int:
-    """Converte o valor do curso conhecido em moedas de plantão."""
-    dados = obter_curso(chave)
-    if not dados:
-        return 0
-    return moedas_necessarias_para_valor(int(dados.get("valor_ingame") or 0))
-
-
-def moedas_necessarias_para_pacote(chaves: list[str]) -> int:
-    """Calcula a cobrança em moedas a partir do valor somado do pacote."""
-    total_valor = soma_valor_ingame(chaves)
-    return moedas_necessarias_para_valor(total_valor)
-
-
 def soma_valor_ingame(chaves: list[str]) -> int:
     """Soma somente cursos existentes para não cobrar chaves inválidas.
 
@@ -77,6 +55,138 @@ def soma_valor_ingame(chaves: list[str]) -> int:
         if dados:
             total += int(dados.get("valor_ingame") or 0)
     return total
+
+
+def membro_e_enfermeiro(membro: discord.Member) -> bool:
+    """True se o membro tem o cargo de Enfermeiro (isenção de Resgate)."""
+    return any(cargo.name == CARGO_ENFERMEIRO for cargo in membro.roles)
+
+
+async def segundos_plantao_ciclo_atual(discord_id: int) -> int:
+    """
+    Tempo de plantão do membro no ciclo atual (ranking tempo real).
+
+    Usado só para isenção do Resgate (≥ 6h).
+    """
+    from src.plantao.ranking_plantao_service import (
+        buscar_horas_por_membro,
+        _periodos,
+    )
+
+    inicio, fim, _ = _periodos(
+        "horas",
+        "tempo_real",
+        None,
+        modo_postagem=False,
+    )
+    contagem = await buscar_horas_por_membro(
+        inicio,
+        fim,
+        guild=None,
+        incluir_ao_vivo=True,
+    )
+    return int(contagem.get(int(discord_id), 0))
+
+
+async def calcular_cobranca_pacote(
+    membro: discord.Member,
+    chaves: list[str],
+    *,
+    moedas_desconto_desejadas: int = 0,
+) -> dict:
+    """
+    Calcula valor IN_GAME e desconto em moedas para o pacote.
+
+    Regras:
+    - Pagamento base sempre em dinheiro in-game.
+    - Moedas só abatem (nunca pagam o curso sozinhas).
+    - Resgate: enfermeiro com ≥ 6h no ciclo → grátis (sem desconto).
+      Com < 6h → desconto máximo de 5 moedas.
+    - Demais cursos / pacotes: desconto máximo de 10 moedas.
+    - Abatimento em R$ = moedas × cotação do aluno, sem passar do total.
+    """
+    chaves_validas = [chave for chave in chaves if obter_curso(chave)]
+    cotacao = cotacao_moeda_do_membro(membro)
+    valor_bruto = soma_valor_ingame(chaves_validas)
+
+    so_resgate = chaves_validas == ["resgate"]
+    isento = False
+    motivo_isencao = ""
+    teto_moedas = MOEDAS_DESCONTO_MAX_POR_PEDIDO
+
+    if so_resgate and membro_e_enfermeiro(membro):
+        segundos = await segundos_plantao_ciclo_atual(membro.id)
+        horas = segundos / 3600.0
+        if horas >= HORAS_ISENCAO_RESGATE:
+            isento = True
+            motivo_isencao = (
+                f"Enfermeiro com {horas:.1f}h de plantão no ciclo "
+                f"(mínimo {HORAS_ISENCAO_RESGATE}h)."
+            )
+            valor_bruto = 0
+            teto_moedas = 0
+        else:
+            teto_moedas = MOEDAS_DESCONTO_MAX_RESGATE_PARCIAL
+
+    if isento:
+        return {
+            "chaves": chaves_validas,
+            "valor_bruto": 0,
+            "valor_a_pagar_ingame": 0,
+            "moedas_desconto": 0,
+            "desconto_em_reais": 0,
+            "cotacao": cotacao,
+            "teto_moedas": 0,
+            "isento": True,
+            "motivo_isencao": motivo_isencao,
+            "forma": "GRATUITO",
+        }
+
+    desejadas = max(0, int(moedas_desconto_desejadas))
+    moedas_usadas = min(desejadas, teto_moedas)
+    if cotacao > 0 and valor_bruto > 0:
+        max_pelo_preco = valor_bruto // cotacao
+        moedas_usadas = min(moedas_usadas, max_pelo_preco)
+
+    desconto_reais = moedas_usadas * cotacao
+    valor_a_pagar = max(0, valor_bruto - desconto_reais)
+
+    return {
+        "chaves": chaves_validas,
+        "valor_bruto": valor_bruto,
+        "valor_a_pagar_ingame": valor_a_pagar,
+        "moedas_desconto": moedas_usadas,
+        "desconto_em_reais": desconto_reais,
+        "cotacao": cotacao,
+        "teto_moedas": teto_moedas,
+        "isento": False,
+        "motivo_isencao": "",
+        "forma": "IN_GAME",
+    }
+
+
+# Compatibilidade com trechos antigos que ainda importam estes nomes.
+def moedas_necessarias_para_valor(valor_ingame: int) -> int:
+    """Legado: não use para cobrar curso. Preferir calcular_cobranca_pacote."""
+    from src.config import VALOR_MOEDA_INGAME
+    import math
+
+    if valor_ingame <= 0:
+        return 0
+    return max(1, math.ceil(valor_ingame / VALOR_MOEDA_INGAME))
+
+
+def moedas_necessarias_para_curso(chave: str) -> int:
+    """Legado — mantido para imports antigos."""
+    dados = obter_curso(chave)
+    if not dados:
+        return 0
+    return moedas_necessarias_para_valor(int(dados.get("valor_ingame") or 0))
+
+
+def moedas_necessarias_para_pacote(chaves: list[str]) -> int:
+    """Legado — teto de desconto, não preço integral em moedas."""
+    return MOEDAS_DESCONTO_MAX_POR_PEDIDO
 
 
 def membro_tem_curso(membro: discord.Member, chave: str) -> bool:

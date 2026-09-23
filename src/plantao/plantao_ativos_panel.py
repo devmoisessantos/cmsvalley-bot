@@ -142,7 +142,10 @@ def _montar_rodape() -> str:
     há 1 minuto…). Mesmo padrão do ranking de plantão em tempo real.
     """
     agora_ts = int(datetime.now(FUSO).timestamp())
-    return f"-# CENTRO MÉDICO SUL · atualizado em tempo real · <t:{agora_ts}:R>"
+    return (
+        f"-# CENTRO MÉDICO SUL · atualizado em tempo real · "
+        f"<t:{agora_ts}:R>"
+    )
 
 
 async def montar_painel_plantao_ativo(
@@ -251,21 +254,30 @@ async def montar_painel_plantao_ativo(
 
         if eh_primeiro:
             itens.append(_cabecalho())
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            itens.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
         else:
             itens.append(
                 discord.ui.TextDisplay(
-                    f"-# Continuação · plantão ativo ({indice + 1}/{total_blocos})"
+                    f"-# Continuação · plantão ativo "
+                    f"({indice + 1}/{total_blocos})"
                 )
             )
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+            itens.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+            )
 
         itens.append(discord.ui.TextDisplay(corpo))
 
         if eh_ultimo:
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            itens.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
             itens.append(discord.ui.TextDisplay(legenda))
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            itens.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
             itens.append(discord.ui.TextDisplay(rodape))
 
         view.add_item(discord.ui.Container(*itens, accent_color=cor))

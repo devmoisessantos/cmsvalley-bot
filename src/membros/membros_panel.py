@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 import discord
 
 from src.bau.bau_service import formatar_bloco_itens_yaml, ler_itens_do_caso
-from src.config import CARGOS, NOMES_CANAIS_PLANTAO, VALOR_MOEDA_INGAME
+from src.config import CARGOS, NOMES_CANAIS_PLANTAO
 from src.membros.cargos_panel import GerenciarCargosView
+from src.plantao.carteira_service import cotacao_moeda_do_membro
 from src.membros.membros_service import (
     STATUS_USUARIO_CANONICOS,
     ajustar_horas_plantao,
@@ -235,8 +236,10 @@ async def _t_plantao(membro, estado):
         st = "em servico · aguardando call"
     else:
         st = "fora de servico"
+    cotacao = cotacao_moeda_do_membro(membro)
     return (
-        f"## Plantao\n**{st}**\n**Moedas:** `{saldo}` ({formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
+        f"## Plantao\n**{st}**\n"
+        f"**Moedas:** `{saldo}` ({formatar_dinheiro(saldo * cotacao)})\n"
         f"**Ciclo:** `{segs}s` · **Total:** `{formatar_hms(total)}`"
     )
 

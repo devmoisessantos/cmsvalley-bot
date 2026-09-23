@@ -23,14 +23,21 @@ async def registrar_auditoria_admin(
     if canal is None:
         return
 
-    linhas = f"- **Executor:** {executor.mention} (`{executor.id}`)\n- **Ação:** {acao}"
+    linhas = (
+        f"- **Executor:** {executor.mention} (`{executor.id}`)\n"
+        f"- **Ação:** {acao}"
+    )
     if alvo is not None:
         id_alvo = int(getattr(alvo, "id", 0) or 0)
         nome_alvo = (
-            getattr(alvo, "display_name", None) or getattr(alvo, "name", None) or "—"
+            getattr(alvo, "display_name", None)
+            or getattr(alvo, "name", None)
+            or "—"
         )
         # Sempre <@id> para mencionar mesmo se o alvo já saiu do servidor
-        linhas += f"\n- **Alvo:** <@{id_alvo}> · `{nome_alvo}` (`{id_alvo}`)"
+        linhas += (
+            f"\n- **Alvo:** <@{id_alvo}> · `{nome_alvo}` (`{id_alvo}`)"
+        )
     if detalhes:
         linhas += f"\n- **Detalhes:** {detalhes}"
 

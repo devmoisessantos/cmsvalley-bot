@@ -357,11 +357,11 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(
             discord.ui.TextDisplay(
                 "## 💰 Sistema de Recompensas\n"
-                "- | ⏱️ 30 minutos · 🪙 **1 Moeda** (Valor: $100.000)\n"
-                "- | ⏱️ 1 hora · 🪙 **2 Moedas** (Valor: $200.000)\n"
-                "- | ⏱️ 2 horas · 🪙 **4 Moedas** (Valor: $400.000)\n\n"
-                "> 📈 **Bônus acumulativo:** Quanto mais tempo, maior sua "
-                "recompensa!\n"
+                "- | ⏱️ **30 min** em call · 🪙 **1 moeda**\n"
+                "- | 📌 Cotação da moeda **varia pelo cargo** (ver carteira)\n"
+                "- | 🚫 Teto **14 moedas/dia** e **84/semana**\n"
+                "- | 📅 Domingo sem moeda · Sábado só até **12h**\n"
+                "- | ⏱️ Horas de plantão **continuam** após o teto\n\n"
                 "-# Utilize os botões abaixo para gerenciar seu serviço."
             )
         )
@@ -599,6 +599,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                 "cronômetro)"
             )
 
+        from src.plantao.carteira_service import cotacao_moeda_do_membro
+
+        cotacao = cotacao_moeda_do_membro(self.membro)
         linhas = (
             f"`⏱️` **Status:** {status_texto}\n"
             f"`⏳` **Tempo do ciclo:** "
@@ -606,9 +609,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             f"`🗓️` **Tempo total (histórico):** "
             f"`{formatar_hms(self.tempo_total_segundos)}`\n"
             f"`💰` **Moedas (saldo):** **{saldo}** "
-            f"({formatar_dinheiro(saldo * VALOR_MOEDA_INGAME)})\n"
-            f"`💵` **Valor por moeda:** "
-            f"{formatar_dinheiro(VALOR_MOEDA_INGAME)} / 30 min"
+            f"({formatar_dinheiro(saldo * cotacao)})\n"
+            f"`💵` **Sua cotação:** "
+            f"{formatar_dinheiro(cotacao)} por moeda · 1 / 30 min"
         )
         if linha_call:
             linhas += f"\n{linha_call}"

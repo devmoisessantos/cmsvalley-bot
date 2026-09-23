@@ -19,6 +19,7 @@ virada do dia.
 """
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import discord
 from sqlalchemy import select
@@ -27,12 +28,20 @@ from src.config import (
     CARGOS,
     CARGOS_DOUTOR_OU_ACIMA,
     CARGOS_HIERARQUIA,
+    HORA_LIMITE_MOEDA_SABADO,
     SEGUNDOS_PARA_MOEDA,
+    TETO_MOEDAS_POR_DIA,
+    TETO_MOEDAS_POR_SEMANA,
+    TIMEZONE_LOCAL,
     VALOR_MOEDA_INGAME,
     obter_todos_ids_canais_plantao,
 )
 from src.database.conexao import async_session
 from src.database.models import EstadoPlantao
+from src.plantao.carteira_service import (
+    cotacao_moeda_do_membro,
+    valor_ingame_de_moedas,
+)
 from src.plantao.plantao_logger import registrar_evento_plantao
 from src.utils.error_handling import capturar_erro_e_logar
 from src.utils.formatacao import formatar_dinheiro, formatar_reais
@@ -97,18 +106,82 @@ def _acumular_segmento_atual(estado: EstadoPlantao) -> int:
     return max(0, decorrido)
 
 
+def _agora_local() -> datetime:
+    """Relógio do hospital (fuso do config), para tetos e bloqueio de domingo/sábado."""
+    return datetime.now(ZoneInfo(TIMEZONE_LOCAL))
+
+
+def _chave_semana_iso(data_local: datetime) -> str:
+    """Identificador estável da semana civil (ISO), ex.: 2026-W39."""
+    ano, semana, _ = data_local.isocalendar()
+    return f"{ano}-W{semana:02d}"
+
+
+def _janela_permite_moeda(agora_local: datetime) -> bool:
+    """
+    Domingo: não gera moeda.
+    Sábado a partir de HORA_LIMITE_MOEDA_SABADO: não gera moeda.
+    Horas de plantão continuam em qualquer dia.
+    """
+    # weekday: segunda=0 … domingo=6
+    if agora_local.weekday() == 6:
+        return False
+    if agora_local.weekday() == 5 and agora_local.hour >= HORA_LIMITE_MOEDA_SABADO:
+        return False
+    return True
+
+
+def _garantir_contadores_de_teto(
+    estado: EstadoPlantao,
+    agora_local: datetime,
+) -> None:
+    """Zera contadores diário/semanal quando o dia ou a semana viram."""
+    data_hoje = agora_local.date().isoformat()
+    if estado.data_moedas_dia != data_hoje:
+        estado.data_moedas_dia = data_hoje
+        estado.moedas_ganhas_no_dia = 0
+
+    chave_semana = _chave_semana_iso(agora_local)
+    if estado.chave_semana_moedas != chave_semana:
+        estado.chave_semana_moedas = chave_semana
+        estado.moedas_ganhas_na_semana = 0
+
+
 def _creditar_moedas_de_acumulado(
     estado: EstadoPlantao,
 ) -> int:
     """
-    Converte segundos_acumulados em moedas (1 / SEGUNDOS_PARA_MOEDA). Retorna moedas
-    ganhas.
+    Converte segundos_acumulados em moedas (1 / SEGUNDOS_PARA_MOEDA).
+
+    Respeita:
+    - domingo sem moeda; sábado só antes do meio-dia
+    - teto diário e semanal
+
+    Os segundos além do teto **não são descartados**: ficam no acumulado
+    para o próximo dia/semana em que ainda houver cota. Horas de ranking
+    vêm dos logs de plantão, não deste contador.
     """
+    agora_local = _agora_local()
+    if not _janela_permite_moeda(agora_local):
+        return 0
+
+    _garantir_contadores_de_teto(estado, agora_local)
+
     moedas_ganhas = 0
     while int(estado.segundos_acumulados or 0) >= SEGUNDOS_PARA_MOEDA:
+        ja_no_dia = int(estado.moedas_ganhas_no_dia or 0)
+        ja_na_semana = int(estado.moedas_ganhas_na_semana or 0)
+        if ja_no_dia >= TETO_MOEDAS_POR_DIA:
+            break
+        if ja_na_semana >= TETO_MOEDAS_POR_SEMANA:
+            break
+
         estado.segundos_acumulados -= SEGUNDOS_PARA_MOEDA
         estado.saldo_moedas = int(estado.saldo_moedas or 0) + 1
+        estado.moedas_ganhas_no_dia = ja_no_dia + 1
+        estado.moedas_ganhas_na_semana = ja_na_semana + 1
         moedas_ganhas += 1
+
     return moedas_ganhas
 
 
@@ -260,14 +333,17 @@ async def desligar_servico(membro: discord.Member) -> str:
             detalhes="Encerrado por saída manual do serviço",
         )
 
+    cotacao = cotacao_moeda_do_membro(membro)
     await registrar_evento_plantao(
         membro.guild,
         membro.id,
         "TOGGLE_OFF",
         id_fivem_atual,
         campos_extra={
-            "Saldo Final": f"{saldo_final} moedas ({formatar_dinheiro(saldo_final * VALOR_MOEDA_INGAME)}"
-            f")"
+            "Saldo Final": (
+                f"{saldo_final} moedas "
+                f"({formatar_dinheiro(saldo_final * cotacao)})"
+            )
         },
     )
 
@@ -644,7 +720,7 @@ async def solicitar_troca_moedas(
         saldo_restante = int(estado.saldo_moedas)
         id_fivem = estado.id_fivem
 
-    valor_ingame = quantidade_moedas * VALOR_MOEDA_INGAME
+    valor_ingame = valor_ingame_de_moedas(quantidade_moedas, membro=membro)
 
     try:
         from src.plantao.carteira_service import registrar_movimentacao
@@ -719,7 +795,8 @@ def montar_corpo_solicitacao_troca_moedas(
 
     fid = id_fivem or "—"
     data_txt = formatar_data_solicitacao()
-    valor_unitario_txt = formatar_reais(VALOR_MOEDA_INGAME)
+    cotacao = cotacao_moeda_do_membro(membro)
+    valor_unitario_txt = formatar_reais(cotacao)
     valor_total_txt = formatar_reais(valor_ingame)
 
     titulo = "🏥 PAGAMENTO — TROCA DE MOEDAS"

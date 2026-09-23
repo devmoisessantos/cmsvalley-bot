@@ -496,3 +496,50 @@ async def publicar_solicitacao_troca_moedas(
         # O post no canal já saiu; ainda assim devolve True para o membro
         # não achar que as moedas foram estornadas. A staff vê o log de erros.
     return True
+
+
+async def reajustar_valores_trocas_pendentes(guilda: discord.Guild) -> int:
+    """
+    Recalcula ``valor_ingame`` das trocas ainda pendentes com a cotação
+    atual do cargo do beneficiário.
+
+    O número de moedas debitadas não muda — só o valor em $ que a staff
+    deve pagar. Devolve quantos registros foram atualizados.
+    """
+    from src.plantao.carteira_service import valor_ingame_de_moedas
+
+    atualizados = 0
+    try:
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(SolicitacaoTrocaMoedas).where(
+                    SolicitacaoTrocaMoedas.status == "pendente"
+                )
+            )
+            pendentes = list(resultado.scalars().all())
+            for registro in pendentes:
+                membro = guilda.get_member(
+                    int(registro.discord_id_beneficiario)
+                )
+                novo_valor = valor_ingame_de_moedas(
+                    int(registro.quantidade_moedas),
+                    membro=membro,
+                )
+                if int(registro.valor_ingame) == novo_valor:
+                    continue
+                registro.valor_ingame = novo_valor
+                atualizados += 1
+            if atualizados:
+                await sessao.commit()
+    except SQLAlchemyError as erro_do_banco:
+        logger.exception(
+            "Falha ao reajustar trocas pendentes: %s",
+            erro_do_banco,
+        )
+        return 0
+    if atualizados:
+        logger.info(
+            "Trocas pendentes reajustadas à nova cotação: %s",
+            atualizados,
+        )
+    return atualizados

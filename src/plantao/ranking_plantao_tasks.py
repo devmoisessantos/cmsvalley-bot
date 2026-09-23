@@ -105,6 +105,19 @@ class RankingPlantaoTasks(commands.Cog):
         """Espera o bot conectar antes de publicar ou editar o ranking de horas."""
         await self.bot.wait_until_ready()
         logger.info("✅ Loop ranking HORAS tempo real (1 min) ativo")
+        try:
+            from src.financas.financas_service import (
+                reajustar_valores_trocas_pendentes,
+            )
+
+            guilda = self.bot.get_guild(int(GUILD_ID))
+            if guilda is not None:
+                await reajustar_valores_trocas_pendentes(guilda)
+        except Exception as erro_reajuste:
+            logger.exception(
+                "Reajuste de trocas pendentes na subida: %s",
+                erro_reajuste,
+            )
 
     @tasks.loop(minutes=1)
     async def loop_ranking_moedas(self):
@@ -462,7 +475,8 @@ class RankingPlantaoTasks(commands.Cog):
             existente = await historico_ja_publicado("horas_semanal", inicio, fim)
             if existente is not None:
                 logger.info(
-                    "Ranking HORAS semanal já publicado (histórico #%s) — não duplica",
+                    "Ranking HORAS semanal já publicado (histórico #%s) — "
+                    "não duplica",
                     existente.id,
                 )
             else:
@@ -486,7 +500,9 @@ class RankingPlantaoTasks(commands.Cog):
                         canal.name,
                     )
                 except discord.HTTPException as erro:
-                    logger.exception("Falha ao postar ranking horas semanal: %s", erro)
+                    logger.exception(
+                        "Falha ao postar ranking horas semanal: %s", erro
+                    )
 
     async def _enviar_premiacao_financas(
         self,

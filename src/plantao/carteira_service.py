@@ -20,6 +20,7 @@ from sqlalchemy import select
 from src.config import (
     CARGOS_HIERARQUIA,
     VALOR_MOEDA_INGAME,
+    VALOR_MOEDA_POR_CARGO,
 )
 from src.database.conexao import async_session
 from src.database.models import (
@@ -45,9 +46,58 @@ def cargo_principal_hierarquia(membro: discord.Member) -> str:
     return "—"
 
 
-def equivalente_em_reais(moedas: int) -> str:
-    """Converte moedas em dinheiro in-game usando a cotação centralizada."""
-    return formatar_dinheiro(int(moedas) * int(VALOR_MOEDA_INGAME))
+def cotacao_moeda_do_cargo(nome_cargo: str | None) -> int:
+    """
+    Valor in-game de 1 moeda para o cargo informado.
+
+    Sem cargo ou cargo fora da tabela → cotação mínima (Enfermeiro).
+    """
+    if not nome_cargo or nome_cargo == "—":
+        return int(VALOR_MOEDA_INGAME)
+    return int(VALOR_MOEDA_POR_CARGO.get(nome_cargo, VALOR_MOEDA_INGAME))
+
+
+def cotacao_moeda_do_membro(membro: discord.Member | None) -> int:
+    """Cotação da moeda pelo maior cargo hospitalar do membro."""
+    if membro is None:
+        return int(VALOR_MOEDA_INGAME)
+    nome = cargo_principal_hierarquia(membro)
+    return cotacao_moeda_do_cargo(nome)
+
+
+def equivalente_em_reais(
+    moedas: int,
+    membro: discord.Member | None = None,
+    cotacao: int | None = None,
+) -> str:
+    """
+    Converte moedas em dinheiro in-game.
+
+    Prioridade da cotação: argumento ``cotacao`` → cargo do ``membro`` →
+    fallback mínimo do config.
+    """
+    if cotacao is not None:
+        valor_unitario = int(cotacao)
+    elif membro is not None:
+        valor_unitario = cotacao_moeda_do_membro(membro)
+    else:
+        valor_unitario = int(VALOR_MOEDA_INGAME)
+    return formatar_dinheiro(int(moedas) * valor_unitario)
+
+
+def valor_ingame_de_moedas(
+    moedas: int,
+    membro: discord.Member | None = None,
+    cotacao: int | None = None,
+) -> int:
+    """Mesma regra de ``equivalente_em_reais``, mas devolve inteiro."""
+    if cotacao is not None:
+        valor_unitario = int(cotacao)
+    elif membro is not None:
+        valor_unitario = cotacao_moeda_do_membro(membro)
+    else:
+        valor_unitario = int(VALOR_MOEDA_INGAME)
+    return int(moedas) * valor_unitario
 
 
 async def obter_saldo(discord_id: int) -> int:
@@ -212,7 +262,7 @@ async def criar_pedido_deposito(
     if not membro_na_hierarquia(membro):
         return False, "Apenas membros da hierarquia podem solicitar depósito.", None
 
-    valor_ingame = quantidade * int(VALOR_MOEDA_INGAME)
+    valor_ingame = valor_ingame_de_moedas(quantidade, membro=membro)
     async with async_session() as sessao:
         pedido = PedidoDepositoMoeda(
             discord_id=membro.id,

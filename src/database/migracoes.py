@@ -116,6 +116,22 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
 )
 """,
     ),
+    Migracao(
+        numero=6,
+        descricao=(
+            "Tetos diário/semanal de moedas de plantão: contadores em "
+            "estado_plantao (horas continuam contando após o teto)."
+        ),
+        comando_sql=(
+            "ALTER TABLE estado_plantao "
+            "ADD COLUMN IF NOT EXISTS moedas_ganhas_no_dia "
+            "INTEGER NOT NULL DEFAULT 0, "
+            "ADD COLUMN IF NOT EXISTS data_moedas_dia VARCHAR(10), "
+            "ADD COLUMN IF NOT EXISTS moedas_ganhas_na_semana "
+            "INTEGER NOT NULL DEFAULT 0, "
+            "ADD COLUMN IF NOT EXISTS chave_semana_moedas VARCHAR(16)"
+        ),
+    ),
 ]
 
 

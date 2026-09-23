@@ -265,15 +265,11 @@ async def processar_pagamento_realizado(
         )
         return False
 
-    titulo = (
-        (registro.titulo if registro else None)
-        or titulo_fallback
-        or ("🏥 PAGAMENTO — TROCA DE MOEDAS")
+    titulo = (registro.titulo if registro else None) or titulo_fallback or (
+        "🏥 PAGAMENTO — TROCA DE MOEDAS"
     )
-    corpo = (
-        (registro.corpo if registro else None)
-        or corpo_fallback
-        or ("_Solicitação de troca de moedas._")
+    corpo = (registro.corpo if registro else None) or corpo_fallback or (
+        "_Solicitação de troca de moedas._"
     )
     id_beneficiario = (
         registro.discord_id_beneficiario
@@ -422,7 +418,8 @@ async def processar_pagamento_realizado(
         )
     elif id_beneficiario is None:
         logger.warning(
-            "Pagamento realizado sem discord_id do beneficiário (mensagem_id=%s)",
+            "Pagamento realizado sem discord_id do beneficiário "
+            "(mensagem_id=%s)",
             mensagem_id,
         )
 

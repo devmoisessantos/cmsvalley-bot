@@ -958,7 +958,43 @@ CANAIS_PLANTAO = {
 
 # Plantão — tempo em call para creditar 1 moeda (30 minutos)
 SEGUNDOS_PARA_MOEDA = 1800
-VALOR_MOEDA_INGAME = 100_000
+
+# Cotação da moeda por cargo (maior cargo da hierarquia do membro).
+# Fallback (sem cargo na tabela) = valor do Enfermeiro.
+VALOR_MOEDA_POR_CARGO: dict[str, int] = {
+    CARGO_ENFERMEIRO: 10_000,
+    CARGO_PARAMEDICO: 20_000,
+    CARGO_DOUTOR: 25_000,
+    CARGO_PSICOLOGO: 25_000,
+    CARGO_RECRUTADOR: 30_000,
+    CARGO_INSTRUTOR: 30_000,
+    CARGO_INSTRUTOR_RESGATE: 30_000,
+    CARGO_SUPERVISOR: 35_000,
+    CARGO_VICE_DIRETOR: 40_000,
+    CARGO_DIRETOR: 45_000,
+    CARGO_RESP_DOUTOR: 50_000,
+    CARGO_RESP_PSICOLOGO: 50_000,
+    CARGO_RESP_RECRUTAMENTO: 50_000,
+    CARGO_RESP_INSTRUTOR: 50_000,
+    CARGO_COORDENADOR: 55_000,
+    CARGO_VICE_DIRETOR_GERAL: 60_000,
+    CARGO_DIRETOR_GERAL: 65_000,
+    CARGO_RESPONSAVEL_GERAL: 70_000,
+    "Responsavel HP": 70_000,
+}
+# Compatibilidade: caminhos sem membro usam a cotação mínima (Enfermeiro).
+VALOR_MOEDA_INGAME = VALOR_MOEDA_POR_CARGO[CARGO_ENFERMEIRO]
+
+# Teto de recompensa em moedas (horas de plantão continuam contando).
+TETO_MOEDAS_POR_DIA = 14
+TETO_MOEDAS_POR_SEMANA = 84  # 14 × 6 dias (domingo não gera moeda)
+# Domingo = sem moeda; sábado gera moeda só até este horário local (inclusive 11h).
+HORA_LIMITE_MOEDA_SABADO = 12  # a partir das 12:00 de sábado, zero moeda
+
+# Cursos — pagamento sempre IN_GAME; moedas só como desconto limitado.
+MOEDAS_DESCONTO_MAX_POR_PEDIDO = 10
+MOEDAS_DESCONTO_MAX_RESGATE_PARCIAL = 5  # resgate com < 6h de plantão
+HORAS_ISENCAO_RESGATE = 6  # enfermeiro com >= 6h no ciclo → resgate grátis
 
 # Plantão — ociosidade (fora de call com toggle ligado)
 # O loop verifica a cada 1 minuto; avisos em 10 / 15 / 25; desliga em 30.
@@ -1143,8 +1179,8 @@ ALIASES_ITENS_BAU = {
 
 # ---------------------------------------------------------------------------
 # Cursos (cargo Discord = comprovante de conclusão)
-# valor_ingame: preço em R$ in-game (pagamento ao instrutor)
-# moedas necessárias = ceil(valor_ingame / VALOR_MOEDA_INGAME)
+# valor_ingame: preço em R$ in-game (obrigatório; moedas só descontam)
+# Desconto: até MOEDAS_DESCONTO_MAX_POR_PEDIDO moedas × cotação do aluno
 # ---------------------------------------------------------------------------
 
 CURSOS = {

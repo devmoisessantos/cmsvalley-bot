@@ -223,6 +223,13 @@ class EstadoPlantao(Base):
     )
     segundos_acumulados: Mapped[int] = mapped_column(Integer, default=0)
     saldo_moedas: Mapped[int] = mapped_column(Integer, default=0)
+    # Tetos de recompensa (horas de plantão seguem mesmo após o teto)
+    moedas_ganhas_no_dia: Mapped[int] = mapped_column(Integer, default=0)
+    data_moedas_dia: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    moedas_ganhas_na_semana: Mapped[int] = mapped_column(Integer, default=0)
+    chave_semana_moedas: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
 
     ultima_atualizacao: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=agora, onupdate=agora

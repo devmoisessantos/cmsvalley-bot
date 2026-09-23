@@ -9,13 +9,11 @@ from datetime import (
 
 import discord
 
-from src.config import (
-    CANAIS,
-    VALOR_MOEDA_INGAME,
-)
+from src.config import CANAIS
 from src.cursos.cursos_service import (
     aceitar_agendamento,
     buscar_pedido_aberto,
+    calcular_cobranca_pacote,
     conceder_cargos_dos_cursos,
     creditar_moedas_instrutor,
     debitar_moedas_curso,
@@ -25,7 +23,6 @@ from src.cursos.cursos_service import (
     membro_tem_curso,
     menção_cargo_curso,
     mesclar_cursos_no_pedido,
-    moedas_necessarias_para_pacote,
     montar_linhas_corpo_pedido,
     obter_curso,
     obter_solicitacao_curso,
@@ -124,7 +121,10 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
                     "✅ Veja os **valores** dos cursos antes de pagar.\n"
                     "✅ Você pode marcar **vários** cursos de uma vez.\n"
                     "✅ Informe data/horário se quiser (ou deixe em branco).\n"
-                    "✅ Pague com **moedas de plantão** ou registre **in-game**.\n"
+                    "✅ Pagamento **obrigatório in-game**; moedas só como "
+                    "**desconto** (até 10 por pedido).\n"
+                    "✅ Resgate: Enfermeiro com **6h+** de plantão no ciclo = "
+                    "**grátis**.\n"
                     "✅ Curso concluído = você recebe o **cargo** correspondente.\n"
                     "✅ Se já tiver um pedido aberto, novos cursos **entram no mesmo "
                     "card**."
@@ -306,10 +306,24 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
             )
             return
         observacao = (self.campo_observacao.value or "").strip()
+        membro = interacao.user
+        if not isinstance(membro, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Apenas no servidor",
+                linhas=["Use o painel no Discord do hospital."],
+            )
+            return
+        cobranca = await calcular_cobranca_pacote(
+            membro,
+            self.chaves,
+            moedas_desconto_desejadas=0,
+        )
         view = ConfirmacaoPagamentoPacoteView(
             chaves=self.chaves,
             solicitante_id=self.solicitante_id,
             observacao_aluno=observacao,
+            cobranca=cobranca,
         )
         # Uma única mensagem efêmera de confirmação (substitui o fluxo anterior)
         await responder_view(
@@ -332,7 +346,12 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
 
 
 class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
-    """Confirma pagamento do pacote (moedas ou in-game)."""
+    """
+    Confirma o pedido: pagamento sempre IN_GAME.
+
+    Moedas entram só como desconto (até o teto do pacote). Resgate isento
+    quando a regra de 6h for atendida.
+    """
 
     def __init__(
         self,
@@ -340,14 +359,13 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
         chaves: list[str],
         solicitante_id: int,
         observacao_aluno: str,
+        cobranca: dict,
     ):
         super().__init__(timeout=180)
         self.chaves = chaves
         self.solicitante_id = solicitante_id
         self.observacao_aluno = observacao_aluno
-
-        valor_total = soma_valor_ingame(chaves)
-        moedas = moedas_necessarias_para_pacote(chaves)
+        self.cobranca = cobranca
 
         lista = "\n".join(
             f"• {rotulo_curso(chave)} — "
@@ -355,32 +373,34 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
             for chave in chaves
         )
         obs_txt = observacao_aluno if observacao_aluno else "_Sem observação_"
+        cotacao = int(cobranca.get("cotacao") or 0)
+        teto = int(cobranca.get("teto_moedas") or 0)
+        valor_bruto = int(cobranca.get("valor_bruto") or 0)
+        isento = bool(cobranca.get("isento"))
 
         linha = discord.ui.ActionRow()
-        if valor_total > 0:
-            botao_moedas = discord.ui.Button(
-                label=f"Pagar com moedas ({moedas})",
-                style=discord.ButtonStyle.success,
-                emoji="🪙",
-            )
-            botao_moedas.callback = self._ao_pagar_moedas
-            linha.add_item(botao_moedas)
-
-            botao_ingame = discord.ui.Button(
-                label="Pagar in-game",
-                style=discord.ButtonStyle.primary,
-                emoji="💵",
-            )
-            botao_ingame.callback = self._ao_pagar_ingame
-            linha.add_item(botao_ingame)
-        else:
+        if isento or valor_bruto <= 0:
             botao_gratis = discord.ui.Button(
-                label="Registrar solicitação",
+                label="Registrar solicitação (grátis)",
                 style=discord.ButtonStyle.success,
-                emoji="📋",
             )
             botao_gratis.callback = self._ao_gratuito
             linha.add_item(botao_gratis)
+        else:
+            botao_ingame = discord.ui.Button(
+                label="Pagar in-game (sem desconto)",
+                style=discord.ButtonStyle.primary,
+            )
+            botao_ingame.callback = self._ao_pagar_ingame
+            linha.add_item(botao_ingame)
+
+            if teto > 0:
+                botao_desconto = discord.ui.Button(
+                    label=f"Pagar in-game com desconto (até {teto} moedas)",
+                    style=discord.ButtonStyle.success,
+                )
+                botao_desconto.callback = self._ao_pagar_com_desconto
+                linha.add_item(botao_desconto)
 
         botao_cancelar = discord.ui.Button(
             label="Cancelar",
@@ -389,19 +409,26 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
         botao_cancelar.callback = self._ao_cancelar
         linha.add_item(botao_cancelar)
 
+        texto_extra = ""
+        if isento:
+            texto_extra = (
+                f"**Isento:** {cobranca.get('motivo_isencao') or 'gratuito'}\n"
+            )
+        elif valor_bruto > 0:
+            texto_extra = (
+                f"**Total in-game:** {formatar_reais(valor_bruto)}\n"
+                f"**Sua cotação:** 1 moeda = {formatar_reais(cotacao)}\n"
+                f"**Desconto máximo:** até `{teto}` moeda(s) neste pedido\n"
+                "_Cursos não são pagos só com moedas — o restante é in-game._\n"
+            )
+
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# Confirmar pedido de curso\n"
                     f"{lista}\n\n"
-                    f"**Total in-game:** {formatar_reais(valor_total)}\n"
-                    + (
-                        f"**Moedas necessárias:** `{moedas}` "
-                        f"(1 moeda = {formatar_reais(VALOR_MOEDA_INGAME)})\n"
-                        if valor_total > 0
-                        else ""
-                    )
-                    + f"**Observação:** {obs_txt}"
+                    f"{texto_extra}"
+                    f"**Observação:** {obs_txt}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha,
@@ -419,25 +446,29 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
             return False
         return True
 
-    async def _ao_pagar_moedas(self, interacao: discord.Interaction):
-        if not await self._garantir_dono(interacao):
-            return
-        await finalizar_pedido(
-            interacao,
-            chaves=self.chaves,
-            forma="MOEDAS",
-            observacao_aluno=self.observacao_aluno,
-        )
-
     async def _ao_pagar_ingame(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
         await finalizar_pedido(
             interacao,
             chaves=self.chaves,
-            forma="IN_GAME",
             observacao_aluno=self.observacao_aluno,
+            moedas_desconto=0,
         )
+
+    async def _ao_pagar_com_desconto(self, interacao: discord.Interaction):
+        if not await self._garantir_dono(interacao):
+            return
+        teto = int(self.cobranca.get("teto_moedas") or 0)
+        modal = ModalDescontoMoedasCurso(
+            chaves=self.chaves,
+            solicitante_id=self.solicitante_id,
+            observacao_aluno=self.observacao_aluno,
+            teto_moedas=teto,
+            cotacao=int(self.cobranca.get("cotacao") or 0),
+            valor_bruto=int(self.cobranca.get("valor_bruto") or 0),
+        )
+        await interacao.response.send_modal(modal)
 
     async def _ao_gratuito(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
@@ -445,8 +476,9 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
         await finalizar_pedido(
             interacao,
             chaves=self.chaves,
-            forma="GRATUITO",
             observacao_aluno=self.observacao_aluno,
+            moedas_desconto=0,
+            forcar_gratuito=True,
         )
 
     async def _ao_cancelar(self, interacao: discord.Interaction):
@@ -458,19 +490,81 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
         )
 
 
+class ModalDescontoMoedasCurso(LoggingModalMixin, discord.ui.Modal):
+    """Pergunta quantas moedas (0 até o teto) usar como desconto no pedido."""
+
+    def __init__(
+        self,
+        *,
+        chaves: list[str],
+        solicitante_id: int,
+        observacao_aluno: str,
+        teto_moedas: int,
+        cotacao: int,
+        valor_bruto: int,
+    ):
+        super().__init__(title="Desconto em moedas")
+        self.chaves = chaves
+        self.solicitante_id = solicitante_id
+        self.observacao_aluno = observacao_aluno
+        self.teto_moedas = max(0, int(teto_moedas))
+        self.cotacao = int(cotacao)
+        self.valor_bruto = int(valor_bruto)
+        self.campo_quantidade = discord.ui.TextInput(
+            label=f"Moedas (0 a {self.teto_moedas})",
+            placeholder=f"Máximo {self.teto_moedas}",
+            required=True,
+            max_length=3,
+        )
+        self.add_item(self.campo_quantidade)
+
+    async def on_submit(self, interacao: discord.Interaction):
+        if interacao.user.id != self.solicitante_id:
+            await responder_erro(
+                interacao,
+                titulo="Não é seu pedido",
+                linhas=["Só quem montou o pedido pode pagar."],
+            )
+            return
+        bruto = (self.campo_quantidade.value or "").strip()
+        try:
+            quantidade = int(bruto)
+        except ValueError:
+            await responder_erro(
+                interacao,
+                titulo="Quantidade inválida",
+                linhas=["Informe um número inteiro de moedas."],
+            )
+            return
+        if quantidade < 0 or quantidade > self.teto_moedas:
+            await responder_erro(
+                interacao,
+                titulo="Fora do limite",
+                linhas=[
+                    f"Use de 0 a {self.teto_moedas} moedas neste pedido.",
+                ],
+            )
+            return
+        await finalizar_pedido(
+            interacao,
+            chaves=self.chaves,
+            observacao_aluno=self.observacao_aluno,
+            moedas_desconto=quantidade,
+        )
+
+
 async def finalizar_pedido(
     interacao: discord.Interaction,
     *,
     chaves: list[str],
-    forma: str,
     observacao_aluno: str,
+    moedas_desconto: int = 0,
+    forcar_gratuito: bool = False,
 ) -> None:
     """Cria ou amplia o pedido de cursos e o encaminha para agendamento.
 
-    Evita cobrar cursos que o membro já concluiu ou que já constam em um pedido
-    aberto. Debita moedas quando escolhido, persiste o pedido no banco e
-    publica ou atualiza seu card no Discord, registrando falhas inesperadas
-    para a equipe sem deixar o solicitante sem resposta.
+    Pagamento base é sempre IN_GAME (ou GRATUITO na isenção de Resgate).
+    Moedas só entram como desconto, debitadas aqui se o aluno pediu.
     """
     membro = interacao.user
     if not isinstance(membro, discord.Member):
@@ -482,7 +576,8 @@ async def finalizar_pedido(
         return
 
     try:
-        await interacao.response.defer(ephemeral=True)
+        if not interacao.response.is_done():
+            await interacao.response.defer(ephemeral=True)
 
         # Já possui o cargo = não pode pedir de novo
         chaves_novas: list[str] = []
@@ -532,11 +627,31 @@ async def finalizar_pedido(
             )
             return
 
-        moedas = 0
+        cobranca = await calcular_cobranca_pacote(
+            membro,
+            chaves_para_adicionar,
+            moedas_desconto_desejadas=moedas_desconto,
+        )
+        if forcar_gratuito and not cobranca.get("isento"):
+            # Botão grátis só deve aparecer quando já calculamos isenção
+            await responder_erro(
+                interacao,
+                titulo="Isenção não aplicável",
+                linhas=[
+                    "Este pacote não está isento. Use pagamento in-game "
+                    "(com ou sem desconto em moedas).",
+                ],
+            )
+            return
+
+        forma = "GRATUITO" if cobranca.get("isento") else "IN_GAME"
+        moedas = int(cobranca.get("moedas_desconto") or 0)
         saldo_restante = None
-        if forma == "MOEDAS":
-            moedas = moedas_necessarias_para_pacote(chaves_para_adicionar)
-            ok, saldo_restante, erro_txt = await debitar_moedas_curso(membro.id, moedas)
+        if moedas > 0:
+            ok, saldo_restante, erro_txt = await debitar_moedas_curso(
+                membro.id,
+                moedas,
+            )
             if not ok:
                 await responder_erro(
                     interacao,
@@ -1132,14 +1247,33 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                         contexto="ViewDecisaoCurso.conceder",
                         usuario=membro,
                     )
-                if registro.forma_pagamento == "MOEDAS" and registro.moedas_debitadas:
-                    # Credita só a fatia dos cursos aprovados
-                    valor_aprov = soma_valor_ingame(aprovadas)
-                    moedas_credito = (
-                        moedas_necessarias_para_pacote(aprovadas) if valor_aprov else 0
+                # Pedidos legados pagos 100% em moedas: instrutor recebe
+                # a fatia proporcional. No fluxo novo (IN_GAME + desconto)
+                # a receita é in-game e não vira moeda para o instrutor.
+                if (
+                    registro.forma_pagamento == "MOEDAS"
+                    and registro.moedas_debitadas
+                ):
+                    valor_total = soma_valor_ingame(
+                        parse_chaves_json(
+                            registro.chaves_cursos_json,
+                            registro.chave_curso,
+                        )
                     )
-                    if moedas_credito:
-                        await creditar_moedas_instrutor(membro.id, moedas_credito)
+                    valor_aprov = soma_valor_ingame(aprovadas)
+                    if valor_total > 0 and valor_aprov > 0:
+                        moedas_credito = max(
+                            1,
+                            int(
+                                registro.moedas_debitadas
+                                * valor_aprov
+                                / valor_total
+                            ),
+                        )
+                        await creditar_moedas_instrutor(
+                            membro.id,
+                            moedas_credito,
+                        )
 
             if aprovadas:
                 await publicar_resultado_final(
