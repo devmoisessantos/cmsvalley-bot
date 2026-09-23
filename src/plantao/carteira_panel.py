@@ -7,7 +7,6 @@ import discord
 
 from src.config import (
     CANAIS,
-    VALOR_MOEDA_INGAME,
 )
 from src.plantao.carteira_service import (
     aprovar_deposito,

@@ -323,23 +323,31 @@ async def registrar_solicitacao_pacote(
     forma_pagamento: str,
     moedas_debitadas: int,
     observacao_aluno: str | None,
+    valor_a_pagar_ingame: int | None = None,
+    cotacao_moeda: int = 0,
 ) -> SolicitacaoCurso:
     """Cria no banco um pedido agendado para um curso ou pacote.
 
-    Calcula novamente o valor a partir das chaves recebidas e armazena a lista
-    em JSON, mantendo o resumo compatível com pedidos individuais. A observação
-    do aluno é normalizada para não persistir texto em branco.
+    ``valor_a_pagar_ingame`` já vem com desconto de moedas aplicado.
+    Se não for informado, usa a soma bruta do catálogo.
     """
-    valor_total = soma_valor_ingame(chaves)
+    valor_bruto = soma_valor_ingame(chaves)
+    valor_gravar = (
+        int(valor_a_pagar_ingame)
+        if valor_a_pagar_ingame is not None
+        else valor_bruto
+    )
     chave_resumo = chaves[0] if len(chaves) == 1 else "pacote"
     async with async_session() as sessao:
         registro = SolicitacaoCurso(
             discord_id=discord_id,
             chave_curso=chave_resumo,
             chaves_cursos_json=json.dumps(chaves, ensure_ascii=False),
-            valor_ingame=valor_total,
+            valor_ingame=valor_gravar,
             moedas_debitadas=moedas_debitadas,
+            cotacao_moeda=int(cotacao_moeda or 0),
             forma_pagamento=forma_pagamento,
+            repasse_registrado=False,
             status="AGENDADO",
             observacao_aluno=(observacao_aluno or "").strip() or None,
             criado_em=agora(),
@@ -380,6 +388,7 @@ async def mesclar_cursos_no_pedido(
     forma_pagamento: str,
     moedas_extra: int,
     observacao_aluno: str | None,
+    cotacao_moeda: int = 0,
 ) -> SolicitacaoCurso | None:
     """
     Acrescenta cursos a um pedido aberto.
@@ -403,14 +412,21 @@ async def mesclar_cursos_no_pedido(
 
         registro.chaves_cursos_json = json.dumps(unidas, ensure_ascii=False)
         registro.chave_curso = unidas[0] if len(unidas) == 1 else "pacote"
-        registro.valor_ingame = soma_valor_ingame(unidas)
+        # Valor a pagar: bruto do pacote menos desconto já acumulado
+        valor_bruto = soma_valor_ingame(unidas)
         registro.moedas_debitadas = int(registro.moedas_debitadas or 0) + int(
             moedas_extra
         )
-        # Mantém forma já paga em moedas se já havia débito
-        if forma_pagamento == "MOEDAS" or int(registro.moedas_debitadas or 0) > 0:
-            if int(registro.moedas_debitadas or 0) > 0:
+        if cotacao_moeda > 0 and int(getattr(registro, "cotacao_moeda", 0) or 0) == 0:
+            registro.cotacao_moeda = int(cotacao_moeda)
+        cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
+        desconto = int(registro.moedas_debitadas or 0) * cotacao
+        registro.valor_ingame = max(0, valor_bruto - desconto)
+        if int(registro.moedas_debitadas or 0) > 0:
+            if forma_pagamento == "MOEDAS":
                 registro.forma_pagamento = "MOEDAS"
+            else:
+                registro.forma_pagamento = "IN_GAME_COM_DESCONTO"
         elif forma_pagamento:
             registro.forma_pagamento = forma_pagamento
 
@@ -597,8 +613,16 @@ def montar_linhas_corpo_pedido(
     Retorna (titulo, corpo_markdown) para o card de agendamento.
     """
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
-    forma = registro.forma_pagamento
+    forma = registro.forma_pagamento or "IN_GAME"
     observacao = registro.observacao_aluno
+    valor_bruto = soma_valor_ingame(chaves)
+    valor_a_pagar = int(registro.valor_ingame or 0)
+    moedas = int(registro.moedas_debitadas or 0)
+    cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
+    desconto_reais = moedas * cotacao if moedas and cotacao else 0
+    # Se cotação antiga não gravada, deduz pelo que falta no total
+    if moedas > 0 and desconto_reais == 0 and valor_bruto > valor_a_pagar:
+        desconto_reais = valor_bruto - valor_a_pagar
 
     if len(chaves) <= 1:
         chave = chaves[0] if chaves else registro.chave_curso
@@ -607,7 +631,7 @@ def montar_linhas_corpo_pedido(
         titulo = f"{emoji} {dados.get('nome', chave)} — Pedido de Curso"
         corpo_cursos = (
             f"**Curso:** {menção_cargo_curso(chave)}\n"
-            f"**Valor in-game:** "
+            f"**Valor catálogo:** "
             f"`{formatar_reais(int(dados.get('valor_ingame') or 0))}`"
         )
     else:
@@ -620,25 +644,35 @@ def montar_linhas_corpo_pedido(
         corpo_cursos = (
             "## 🛒 Cursos Solicitados\n"
             + "\n".join(linhas_itens)
-            + f"\n\n**Total:** `{formatar_reais(int(registro.valor_ingame or 0))}`"
+            + f"\n\n**Subtotal catálogo:** `{formatar_reais(valor_bruto)}`"
         )
 
     if forma == "MOEDAS":
         nota_instrutor = (
-            "> 🪙 **Pagamento em MOEDAS:** já debitado do aluno.\n"
-            "> Após aplicar e **aprovar**, as moedas são creditadas a você."
+            "> 🪙 **Pagamento legado em MOEDAS** (já debitado do aluno).\n"
+            "> Após **aprovar**, as moedas podem ser creditadas a você."
+        )
+    elif forma == "IN_GAME_COM_DESCONTO":
+        nota_instrutor = (
+            "> 💵 **Pagamento IN-GAME com desconto em moedas.**\n"
+            "> Cobre o **valor a pagar** no jogo com o aluno.\n"
+            "> Use **Registrar Pagamento** para o comprovante do repasse "
+            "ao hospital antes de aprovar."
         )
     elif forma == "IN_GAME":
         nota_instrutor = (
-            "> 💵 **Pagamento IN-GAME (jogo):** as moedas de plantão **não** foram "
-            "usadas.\n"
+            "> 💵 **Pagamento IN-GAME (jogo).**\n"
             "> Confira o valor com o aluno **no jogo** antes da aula.\n"
-            "> Só **aprove** depois de receber o pagamento in-game."
+            "> Use **Registrar Pagamento** para o comprovante do repasse "
+            "ao hospital antes de aprovar."
+        )
+    elif forma == "GRATUITO":
+        nota_instrutor = (
+            "> 📋 **Pedido gratuito** (isenção). Sem cobrança in-game."
         )
     else:
         nota_instrutor = (
-            "> 📋 **Sem cobrança automática de moedas.** "
-            "Combine o valor (se houver) com o aluno."
+            "> 📋 Confira a forma de pagamento com o aluno antes da aula."
         )
 
     bloco_obs = ""
@@ -653,9 +687,46 @@ def montar_linhas_corpo_pedido(
         f"{corpo_cursos}\n"
         f"**Forma de pagamento:** `{forma}`\n"
     )
-    if forma == "MOEDAS" and registro.moedas_debitadas:
-        corpo += f"**Moedas debitadas:** `{registro.moedas_debitadas}`\n"
-    # Saldo restante NÃO aparece no canal — só o aluno vê no card efêmero
+    if forma == "GRATUITO":
+        corpo += "**Valor a pagar in-game:** `R$ 0`\n"
+    else:
+        if moedas > 0:
+            texto_cotacao = (
+                formatar_reais(cotacao) if cotacao > 0 else "cotação do aluno"
+            )
+            corpo += (
+                f"**Desconto:** `{moedas}` moeda(s) "
+                f"({texto_cotacao} cada"
+            )
+            if desconto_reais > 0:
+                corpo += f" · abate `{formatar_reais(desconto_reais)}`"
+            corpo += ")\n"
+        corpo += (
+            f"**Valor a pagar in-game:** "
+            f"`{formatar_reais(valor_a_pagar)}`\n"
+        )
+
+    if getattr(registro, "repasse_registrado", False):
+        corpo += "**Repasse ao hospital:** `registrado`\n"
+    elif forma not in ("GRATUITO", "MOEDAS"):
+        corpo += "**Repasse ao hospital:** `pendente`\n"
+
     corpo += f"\n{nota_instrutor}"
 
     return titulo, corpo
+
+
+async def marcar_repasse_registrado(solicitacao_id: int) -> SolicitacaoCurso | None:
+    """Marca que o instrutor enviou o comprovante do repasse ao hospital."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return None
+        registro.repasse_registrado = True
+        registro.atualizado_em = agora()
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro

@@ -563,6 +563,8 @@ CANAIS = {
     "LOG_AUSENCIA": 0,  # opcional: log de ausências aprovadas/negadas (0 = desativado)
     "CANAL_APROVADOS_CURSOS": 1545848827766898810,
     "CANAL_REPROVADOS_CURSOS": 1545849048186233052,
+    # Comprovante de repasse do curso prático (instrutor → hospital)
+    "REGISTRAR_CURSO_PRATICOS": 1545846776181825596,
     "MANAGE_ROLE_CHANNEL_ID": 1529960097130741801,
     # ← Canal onde o ranking semanal de recrutadores é postado (todo sábado 11h)
     "RANKING_RECRUTADORES": 1486369056574406736,

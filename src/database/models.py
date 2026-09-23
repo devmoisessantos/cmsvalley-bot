@@ -654,10 +654,15 @@ class SolicitacaoCurso(Base):
     chave_curso: Mapped[str] = mapped_column(String(40), index=True)
     # JSON: ["alpinista", "arcanjo", ...]
     chaves_cursos_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Valor que o aluno deve pagar in-game (já com desconto de moedas)
     valor_ingame: Mapped[int] = mapped_column(Integer, default=0)
     moedas_debitadas: Mapped[int] = mapped_column(Integer, default=0)
-    # MOEDAS | IN_GAME | GRATUITO
-    forma_pagamento: Mapped[str] = mapped_column(String(20), default="MOEDAS")
+    # Cotação usada no desconto (R$ por moeda do aluno no momento do pedido)
+    cotacao_moeda: Mapped[int] = mapped_column(Integer, default=0)
+    # GRATUITO | IN_GAME | IN_GAME_COM_DESCONTO | MOEDAS (legado)
+    forma_pagamento: Mapped[str] = mapped_column(String(30), default="IN_GAME")
+    # Instrutor já enviou comprovante do repasse ao hospital
+    repasse_registrado: Mapped[bool] = mapped_column(Boolean, default=False)
     # AGENDADO | ACEITO | APROVADO | REPROVADO | CANCELADO
     status: Mapped[str] = mapped_column(String(20), default="AGENDADO", index=True)
     observacao_aluno: Mapped[str | None] = mapped_column(Text, nullable=True)

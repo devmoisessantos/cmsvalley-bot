@@ -20,6 +20,7 @@ from src.cursos.cursos_service import (
     decidir_cursos_parciais,
     listar_cursos_ordenados,
     marcar_mensagem_solicitacao_curso,
+    marcar_repasse_registrado,
     membro_tem_curso,
     menção_cargo_curso,
     mesclar_cursos_no_pedido,
@@ -27,6 +28,7 @@ from src.cursos.cursos_service import (
     obter_curso,
     obter_solicitacao_curso,
     parse_chaves_json,
+    recusar_agendamento,
     registrar_solicitacao_pacote,
     rotulo_curso,
     soma_valor_ingame,
@@ -52,11 +54,15 @@ from src.utils.notificacao import enviar_dm_card
 CUSTOM_ID_BOTAO_SELECIONAR = "cursos:botao_selecionar"
 CUSTOM_ID_SELECT_MULTI = "cursos:select_multi"
 CUSTOM_ID_ACEITAR = "cursos:aceitar:"
+CUSTOM_ID_RECUSAR = "cursos:recusar:"
 CUSTOM_ID_APROVAR = "cursos:aprovar:"
 CUSTOM_ID_REPROVAR = "cursos:reprovar:"
 CUSTOM_ID_CONFIRMA_APROVAR = "cursos:confirma_aprovar:"
 CUSTOM_ID_CONFIRMA_REPROVAR = "cursos:confirma_reprovar:"
 CUSTOM_ID_CANCELA_DECISAO = "cursos:cancela_decisao:"
+CUSTOM_ID_REGISTRAR_REPASSE = "cursos:registrar_repasse:"
+
+PRAZO_COMPROVANTE_REPASSE_SEGUNDOS = 300
 
 
 def _instrutor_ou_diretoria(membro: discord.Member) -> bool:
@@ -68,6 +74,52 @@ def _instrutor_ou_diretoria(membro: discord.Member) -> bool:
         if "instrutor" in nome:
             return True
     return False
+
+
+def _mencao_instrutor(
+    guilda: discord.Guild | None,
+    instrutor_id: int | None,
+) -> str:
+    """Menção do instrutor que aceitou o pedido, ou texto neutro."""
+    if not instrutor_id:
+        return "_não definido_"
+    if guilda is not None:
+        membro = guilda.get_member(int(instrutor_id))
+        if membro is not None:
+            return membro.mention
+    return f"<@{int(instrutor_id)}>"
+
+
+def _bloco_observacao_instrutor(
+    guilda: discord.Guild | None,
+    registro,
+) -> str:
+    """
+    Cabeçalho fixo: ### 📌 Observação do instrutor: @instrutor
+    """
+    mencao = _mencao_instrutor(guilda, getattr(registro, "instrutor_id", None))
+    texto = (getattr(registro, "observacao_instrutor", None) or "").strip()
+    if texto:
+        return f"\n\n### 📌 Observação do instrutor: {mencao}\n> {texto}"
+    return f"\n\n### 📌 Observação do instrutor: {mencao}"
+
+
+def _pode_decidir_pedido(
+    membro: discord.Member,
+    registro,
+) -> bool:
+    """
+    Quem pode aprovar, reprovar ou registrar repasse:
+
+    - o instrutor que aceitou o pedido
+    - a equipe de Diretoria (intervém se o instrutor sair ou não concluir)
+    """
+    if e_diretoria(membro):
+        return True
+    instrutor_id = getattr(registro, "instrutor_id", None)
+    if not instrutor_id:
+        return False
+    return int(instrutor_id) == int(membro.id)
 
 
 # ---------------------------------------------------------------------------
@@ -644,8 +696,15 @@ async def finalizar_pedido(
             )
             return
 
-        forma = "GRATUITO" if cobranca.get("isento") else "IN_GAME"
         moedas = int(cobranca.get("moedas_desconto") or 0)
+        if cobranca.get("isento"):
+            forma = "GRATUITO"
+        elif moedas > 0:
+            forma = "IN_GAME_COM_DESCONTO"
+        else:
+            forma = "IN_GAME"
+        valor_a_pagar = int(cobranca.get("valor_a_pagar_ingame") or 0)
+        cotacao = int(cobranca.get("cotacao") or 0)
         saldo_restante = None
         if moedas > 0:
             ok, saldo_restante, erro_txt = await debitar_moedas_curso(
@@ -667,6 +726,7 @@ async def finalizar_pedido(
                 forma_pagamento=forma,
                 moedas_extra=moedas,
                 observacao_aluno=observacao_aluno,
+                cotacao_moeda=cotacao,
             )
             if registro is None:
                 await responder_erro(
@@ -688,9 +748,10 @@ async def finalizar_pedido(
                     rotulo_curso(chave_do_curso)
                     for chave_do_curso in chaves_para_adicionar
                 ),
-                f"Forma: `{forma}`"
+                f"Forma: `{forma}` · A pagar: "
+                f"`{formatar_reais(int(registro.valor_ingame or 0))}`"
                 + (
-                    f" · Moedas debitadas agora: `{moedas}` · Saldo: `{saldo_restante}`"
+                    f" · Desconto: `{moedas}` moeda(s) · Saldo: `{saldo_restante}`"
                     if moedas
                     else ""
                 ),
@@ -702,6 +763,8 @@ async def finalizar_pedido(
                 forma_pagamento=forma,
                 moedas_debitadas=moedas,
                 observacao_aluno=observacao_aluno,
+                valor_a_pagar_ingame=valor_a_pagar,
+                cotacao_moeda=cotacao,
             )
             ok_post = await publicar_no_agendamentos(
                 interacao.guild,
@@ -711,9 +774,10 @@ async def finalizar_pedido(
             titulo_ok = "Pedido enviado ao agendamento"
             linhas_ok = [
                 f"Pedido `#{registro.id}` publicado.",
-                f"Forma: `{forma}`"
+                f"Forma: `{forma}` · A pagar: `{formatar_reais(valor_a_pagar)}`"
                 + (
-                    f" · Moedas: `{moedas}` · Saldo: `{saldo_restante}`"
+                    f" · Desconto: `{moedas}` moeda(s) "
+                    f"({formatar_reais(cotacao)} cada) · Saldo: `{saldo_restante}`"
                     if moedas
                     else ""
                 ),
@@ -785,7 +849,7 @@ def _rodape(guilda: discord.Guild | None) -> str:
 
 
 class ViewAceitarAgendamento(LoggingViewMixin, discord.ui.LayoutView):
-    """Mensagem em CANAL_AGENDAMENTOS — botão único Aceitar."""
+    """Mensagem em CANAL_AGENDAMENTOS — Aceitar ou Recusar."""
 
     def __init__(
         self,
@@ -796,6 +860,7 @@ class ViewAceitarAgendamento(LoggingViewMixin, discord.ui.LayoutView):
         solicitacao_id: int,
         url_avatar: str | None,
         ja_aceito: bool = False,
+        ja_recusado: bool = False,
     ):
         super().__init__(timeout=None)
         self.solicitacao_id = solicitacao_id
@@ -815,29 +880,50 @@ class ViewAceitarAgendamento(LoggingViewMixin, discord.ui.LayoutView):
 
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
+        finalizado = ja_aceito or ja_recusado
         linha = discord.ui.ActionRow()
-        botao = discord.ui.Button(
-            label="Aceitar Solicitação" if not ja_aceito else "Aceito ✓",
-            style=(
-                discord.ButtonStyle.success
-                if not ja_aceito
-                else discord.ButtonStyle.secondary
-            ),
-            emoji="✅",
-            custom_id=f"{CUSTOM_ID_ACEITAR}{solicitacao_id}",
-            disabled=ja_aceito,
-        )
-        # Callback via on_interaction no cog (sobrevive a restart)
-        linha.add_item(botao)
+        if ja_recusado:
+            botao_aceitar = discord.ui.Button(
+                label="Recusado",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+                custom_id=f"{CUSTOM_ID_ACEITAR}{solicitacao_id}",
+            )
+            linha.add_item(botao_aceitar)
+        else:
+            botao_aceitar = discord.ui.Button(
+                label="Aceitar Solicitação" if not ja_aceito else "Aceito ✓",
+                style=(
+                    discord.ButtonStyle.success
+                    if not ja_aceito
+                    else discord.ButtonStyle.secondary
+                ),
+                emoji="✅",
+                custom_id=f"{CUSTOM_ID_ACEITAR}{solicitacao_id}",
+                disabled=finalizado,
+            )
+            botao_recusar = discord.ui.Button(
+                label="Recusar",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"{CUSTOM_ID_RECUSAR}{solicitacao_id}",
+                disabled=finalizado,
+            )
+            # Callbacks via on_interaction no cog (sobrevivem a restart)
+            linha.add_item(botao_aceitar)
+            linha.add_item(botao_recusar)
         componentes.append(linha)
         componentes.append(discord.ui.TextDisplay(_rodape(guild)))
 
+        if ja_recusado:
+            cor = discord.Color.red()
+        elif ja_aceito:
+            cor = discord.Color.green()
+        else:
+            cor = discord.Color.dark_gold()
         self.add_item(
             discord.ui.Container(
                 *componentes,
-                accent_color=(
-                    discord.Color.green() if ja_aceito else discord.Color.dark_gold()
-                ),
+                accent_color=cor,
             )
         )
 
@@ -920,8 +1006,12 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                 registro=registro,
             )
             if obs:
-                corpo += f"\n\n### 📌 Observação do instrutor\n> {obs}"
-            corpo += f"\n**Instrutor:** {interacao.user.mention}"
+                corpo += (
+                    f"\n\n### 📌 Observação do instrutor: "
+                    f"{interacao.user.mention}\n> {obs}"
+                )
+            else:
+                corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
 
             # Desativa botão no agendamento
             if self.mensagem_agendamento is not None and guilda is not None:
@@ -1083,6 +1173,11 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             linha2.add_item(botao_cancelar)
             componentes.append(linha2)
         else:
+            botao_repasse = discord.ui.Button(
+                label="Registrar Pagamento",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"{CUSTOM_ID_REGISTRAR_REPASSE}{solicitacao_id}",
+            )
             botao_ok = discord.ui.Button(
                 label="Aprovar",
                 style=discord.ButtonStyle.success,
@@ -1096,6 +1191,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 custom_id=f"{CUSTOM_ID_REPROVAR}{solicitacao_id}",
             )
             # Callbacks via on_interaction no cog (sobrevivem a restart)
+            linha.add_item(botao_repasse)
             linha.add_item(botao_ok)
             linha.add_item(botao_nao)
             componentes.append(linha)
@@ -1250,10 +1346,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 # Pedidos legados pagos 100% em moedas: instrutor recebe
                 # a fatia proporcional. No fluxo novo (IN_GAME + desconto)
                 # a receita é in-game e não vira moeda para o instrutor.
-                if (
-                    registro.forma_pagamento == "MOEDAS"
-                    and registro.moedas_debitadas
-                ):
+                if registro.forma_pagamento == "MOEDAS" and registro.moedas_debitadas:
                     valor_total = soma_valor_ingame(
                         parse_chaves_json(
                             registro.chaves_cursos_json,
@@ -1264,11 +1357,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                     if valor_total > 0 and valor_aprov > 0:
                         moedas_credito = max(
                             1,
-                            int(
-                                registro.moedas_debitadas
-                                * valor_aprov
-                                / valor_total
-                            ),
+                            int(registro.moedas_debitadas * valor_aprov / valor_total),
                         )
                         await creditar_moedas_instrutor(
                             membro.id,
@@ -1306,9 +1395,9 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             )
 
             resumo = (
-                f"Aprovados: "
-                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in aprovadas) or '—'}\n"
-                f"Reprovados: "
+                f"Aprovados: \n"
+                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in aprovadas) or '—'}\n\n"
+                f"Reprovados: \n"
                 f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in reprovadas) or '—'}"
             )
             try:
@@ -1419,6 +1508,7 @@ async def atualizar_ou_publicar_agendamento(
         solicitacao_id=registro.id,
         url_avatar=membro.display_avatar.url,
         ja_aceito=registro.status == "ACEITO",
+        ja_recusado=registro.status == "CANCELADO",
     )
 
     if registro.mensagem_id and registro.mensagem_canal_id:
@@ -1479,10 +1569,7 @@ async def publicar_para_decisao(
         membro=membro_ref,  # type: ignore[arg-type]
         registro=registro,
     )
-    if registro.observacao_instrutor:
-        corpo += (
-            f"\n\n### 📌 Observação do instrutor\n> {registro.observacao_instrutor}"
-        )
+    corpo += _bloco_observacao_instrutor(guilda, registro)
     url = getattr(getattr(membro_ref, "display_avatar", None), "url", None)
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
     try:
@@ -1616,10 +1703,7 @@ async def montar_view_decisao_a_partir_do_banco(
         membro=membro_ref,  # type: ignore[arg-type]
         registro=registro,
     )
-    if registro.observacao_instrutor:
-        corpo += (
-            f"\n\n### 📌 Observação do instrutor\n> {registro.observacao_instrutor}"
-        )
+    corpo += _bloco_observacao_instrutor(guilda, registro)
     url = getattr(getattr(membro_ref, "display_avatar", None), "url", None)
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
     return ViewDecisaoCurso(
@@ -1646,6 +1730,15 @@ async def processar_clique_aceitar_curso(
             linhas=["Apenas **Instrutor** ou **Diretoria** pode aceitar."],
         )
         return
+    registro = await obter_solicitacao_curso(solicitacao_id)
+    if registro is not None and registro.status != "AGENDADO":
+        await responder_aviso(
+            interacao,
+            titulo="Pedido indisponível",
+            linhas=[f"Status atual: `{registro.status}`."],
+            delay=10,
+        )
+        return
     await interacao.response.send_modal(
         ModalObservacaoInstrutor(
             solicitacao_id=solicitacao_id,
@@ -1653,6 +1746,181 @@ async def processar_clique_aceitar_curso(
             mensagem_agendamento=interacao.message,
         )
     )
+
+
+async def processar_clique_recusar_curso(
+    interacao: discord.Interaction,
+    solicitacao_id: int,
+) -> None:
+    """Abre o modal para recusar um pedido ainda em agendamento."""
+    membro = interacao.user
+    if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(membro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Apenas **Instrutor** ou **Diretoria** pode recusar."],
+        )
+        return
+    registro = await obter_solicitacao_curso(solicitacao_id)
+    if registro is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=[f"`#{solicitacao_id}`"],
+        )
+        return
+    if registro.status != "AGENDADO":
+        await responder_aviso(
+            interacao,
+            titulo="Pedido indisponível",
+            linhas=[f"Status atual: `{registro.status}`."],
+            delay=10,
+        )
+        return
+    await interacao.response.send_modal(
+        ModalRecusarAgendamento(
+            solicitacao_id=solicitacao_id,
+            instrutor_id=membro.id,
+            mensagem_agendamento=interacao.message,
+        )
+    )
+
+
+class ModalRecusarAgendamento(LoggingModalMixin, discord.ui.Modal):
+    """Motivo opcional ao recusar pedido no canal de agendamentos."""
+
+    def __init__(
+        self,
+        *,
+        solicitacao_id: int,
+        instrutor_id: int,
+        mensagem_agendamento: discord.Message | None,
+    ):
+        super().__init__(title="Recusar solicitação")
+        self.solicitacao_id = solicitacao_id
+        self.instrutor_id = instrutor_id
+        self.mensagem_agendamento = mensagem_agendamento
+        self.campo = discord.ui.TextInput(
+            label="Motivo (opcional)",
+            style=discord.TextStyle.paragraph,
+            placeholder="Ex.: Data inválida / curso errado / aluno sem requisito",
+            required=False,
+            max_length=500,
+        )
+        self.add_item(self.campo)
+
+    async def on_submit(self, interacao: discord.Interaction):
+        try:
+            await interacao.response.defer(ephemeral=True)
+            motivo = (self.campo.value or "").strip()
+            registro = await recusar_agendamento(
+                solicitacao_id=self.solicitacao_id,
+                instrutor_id=self.instrutor_id,
+                motivo=motivo,
+            )
+            if registro is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Pedido não encontrado",
+                    linhas=[f"ID `#{self.solicitacao_id}`."],
+                )
+                return
+            if registro.status != "CANCELADO":
+                await responder_aviso(
+                    interacao,
+                    titulo="Não foi possível recusar",
+                    linhas=[f"Status atual: `{registro.status}`."],
+                    delay=10,
+                )
+                return
+
+            # Devolve moedas de desconto, se houver
+            moedas = int(registro.moedas_debitadas or 0)
+            if moedas > 0:
+                await creditar_moedas_instrutor(registro.discord_id, moedas)
+
+            guilda = interacao.guild
+            aluno = guilda.get_member(registro.discord_id) if guilda else None
+            titulo, corpo = montar_linhas_corpo_pedido(
+                membro=aluno or interacao.user,  # type: ignore[arg-type]
+                registro=registro,
+            )
+            corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
+            if motivo:
+                corpo += f"\n> {motivo}"
+            corpo += "\n\n-# ❌ **Solicitação recusada**"
+
+            if self.mensagem_agendamento is not None and guilda is not None:
+                url_avatar = (
+                    aluno.display_avatar.url
+                    if aluno is not None
+                    else interacao.user.display_avatar.url
+                )
+                try:
+                    await self.mensagem_agendamento.edit(
+                        view=ViewAceitarAgendamento(
+                            titulo=titulo,
+                            corpo=corpo,
+                            guild=guilda,
+                            solicitacao_id=registro.id,
+                            url_avatar=url_avatar,
+                            ja_recusado=True,
+                        )
+                    )
+                except discord.HTTPException as erro:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Falha ao marcar agendamento como recusado",
+                        erro,
+                        contexto="ModalRecusarAgendamento.edit",
+                        usuario=interacao.user,
+                    )
+
+            if aluno is not None:
+                linhas_dm = [
+                    f"Seu pedido `#{registro.id}` foi **recusado**.",
+                    f"Por: {interacao.user.mention}",
+                ]
+                if motivo:
+                    linhas_dm.append(f"Motivo: {motivo}")
+                if moedas > 0:
+                    linhas_dm.append(
+                        f"As **{moedas}** moeda(s) de desconto foram devolvidas."
+                    )
+                await enviar_dm_card(
+                    aluno,
+                    titulo="Pedido de curso recusado",
+                    linhas=linhas_dm,
+                    cor=discord.Color.red(),
+                    guilda=guilda,
+                )
+
+            await responder_sucesso(
+                interacao,
+                titulo="Solicitação recusada",
+                linhas=[
+                    f"Pedido `#{registro.id}` cancelado.",
+                    *(
+                        [f"**{moedas}** moeda(s) devolvidas ao aluno."]
+                        if moedas
+                        else []
+                    ),
+                ],
+                delay=15,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao recusar agendamento de curso",
+                erro,
+                contexto="ModalRecusarAgendamento.on_submit",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Falha ao recusar. Veja LOG_ERROS."],
+            )
 
 
 async def processar_clique_abrir_decisao(
@@ -1676,6 +1944,47 @@ async def processar_clique_abrir_decisao(
             linhas=["Use este botão dentro do servidor."],
         )
         return
+
+    registro = await obter_solicitacao_curso(solicitacao_id)
+    if registro is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=[f"`#{solicitacao_id}`"],
+        )
+        return
+
+    # Instrutor que aceitou, ou Diretoria em intervenção
+    if not _pode_decidir_pedido(membro, registro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão neste pedido",
+            linhas=[
+                "Somente quem **aceitou** esta solicitação "
+                "(ou a **Diretoria**) pode aprovar ou reprovar.",
+            ],
+        )
+        return
+
+    # Aprovar e reprovar exigem repasse (aluno paga mesmo se reprovado)
+    if modo in ("selecionar_aprovar", "selecionar_reprovar"):
+        forma = registro.forma_pagamento or ""
+        precisa_repasse = forma in ("IN_GAME", "IN_GAME_COM_DESCONTO")
+        if precisa_repasse and not getattr(registro, "repasse_registrado", False):
+            acao = "aprovar" if modo == "selecionar_aprovar" else "reprovar"
+            await responder_aviso(
+                interacao,
+                titulo="Repasse pendente",
+                linhas=[
+                    f"Antes de **{acao}**, registre o pagamento do "
+                    "repasse ao hospital.",
+                    "Clique em **Registrar Pagamento** e envie o "
+                    "print do comprovante neste canal.",
+                ],
+                delay=20,
+            )
+            return
+
     view = await montar_view_decisao_a_partir_do_banco(
         interacao.guild,
         solicitacao_id,
@@ -1689,6 +1998,251 @@ async def processar_clique_abrir_decisao(
         )
         return
     await editar_mensagem_original(interacao, view=view)
+
+
+async def processar_registrar_repasse_curso(
+    interacao: discord.Interaction,
+    solicitacao_id: int,
+) -> None:
+    """
+    Pede comprovante do repasse no canal de decisão e publica no
+    REGISTRAR_CURSO_PRATICOS (sem DM).
+    """
+    from src.financas.financas_views import (
+        _primeiro_anexo_valido,
+        anexo_e_comprovante_valido,
+    )
+    from src.utils.mensagens import responder_info
+
+    membro = interacao.user
+    if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(membro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Apenas **Instrutor** ou **Diretoria**."],
+        )
+        return
+
+    registro = await obter_solicitacao_curso(solicitacao_id)
+    if registro is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=[f"`#{solicitacao_id}`"],
+        )
+        return
+
+    if registro.forma_pagamento == "GRATUITO":
+        await responder_aviso(
+            interacao,
+            titulo="Pedido gratuito",
+            linhas=["Não há repasse in-game neste pedido."],
+            delay=12,
+        )
+        return
+
+    if getattr(registro, "repasse_registrado", False):
+        await responder_aviso(
+            interacao,
+            titulo="Já registrado",
+            linhas=["O comprovante deste pedido já foi enviado."],
+            delay=10,
+        )
+        return
+
+    # Instrutor que aceitou, ou Diretoria em intervenção
+    if not _pode_decidir_pedido(membro, registro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão neste pedido",
+            linhas=[
+                "Só quem **aceitou** o agendamento "
+                "(ou a **Diretoria**) registra o repasse.",
+            ],
+        )
+        return
+
+    if not interacao.response.is_done():
+        await interacao.response.defer(ephemeral=True)
+
+    minutos = PRAZO_COMPROVANTE_REPASSE_SEGUNDOS // 60
+    await responder_info(
+        interacao,
+        titulo="Comprovante do repasse",
+        linhas=[
+            "Envie **neste canal** o print do comprovante do "
+            "pagamento/repasse ao hospital.",
+            "Formatos: **PNG ou JPG**.",
+            f"Prazo: **{minutos} minutos**.",
+            "Só conta mensagem **sua** com **anexo válido**.",
+        ],
+        delay=None,
+    )
+
+    bot = interacao.client
+    canal_id = interacao.channel_id
+    autor_id = membro.id
+
+    def checagem(mensagem: discord.Message) -> bool:
+        if mensagem.author.id != autor_id:
+            return False
+        if mensagem.channel.id != canal_id:
+            return False
+        return _primeiro_anexo_valido(mensagem) is not None
+
+    try:
+        mensagem_comprovante = await bot.wait_for(
+            "message",
+            timeout=PRAZO_COMPROVANTE_REPASSE_SEGUNDOS,
+            check=checagem,
+        )
+    except TimeoutError:
+        await responder_aviso(
+            interacao,
+            titulo="Prazo esgotado",
+            linhas=[
+                f"Nenhum comprovante em **{minutos} minutos**.",
+                "Clique de novo em **Registrar Pagamento** quando tiver o print.",
+            ],
+            delay=20,
+        )
+        return
+
+    anexo = _primeiro_anexo_valido(mensagem_comprovante)
+    if anexo is None or not anexo_e_comprovante_valido(anexo):
+        await responder_erro(
+            interacao,
+            titulo="Comprovante inválido",
+            linhas=["Envie imagem ou PDF e tente de novo."],
+        )
+        return
+
+    nome_arquivo = anexo.filename or "comprovante_repasse.png"
+    try:
+        bytes_do_arquivo = await anexo.read()
+    except (discord.HTTPException, OSError) as erro_leitura:
+        await enviar_erro_para_log_erros(
+            interacao.guild,
+            "Falha ao baixar comprovante de repasse de curso",
+            erro_leitura,
+            contexto="processar_registrar_repasse_curso.read",
+            usuario=membro,
+        )
+        await responder_erro(
+            interacao,
+            titulo="Falha no comprovante",
+            linhas=["Não consegui ler o anexo. Envie de novo."],
+        )
+        return
+
+    if not bytes_do_arquivo:
+        await responder_erro(
+            interacao,
+            titulo="Arquivo vazio",
+            linhas=["O anexo veio sem conteúdo."],
+        )
+        return
+
+    guilda = interacao.guild
+    if guilda is None:
+        return
+
+    canal_destino_id = CANAIS.get("REGISTRAR_CURSO_PRATICOS") or 0
+    canal_destino = guilda.get_channel(int(canal_destino_id))
+    if canal_destino is None:
+        await responder_erro(
+            interacao,
+            titulo="Canal não configurado",
+            linhas=["`REGISTRAR_CURSO_PRATICOS` ausente ou inválido."],
+        )
+        return
+
+    aluno = guilda.get_member(registro.discord_id)
+    mencao_aluno = aluno.mention if aluno else f"<@{registro.discord_id}>"
+    valor_txt = formatar_reais(int(registro.valor_ingame or 0))
+    moedas = int(registro.moedas_debitadas or 0)
+    cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
+    chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+    lista_cursos = ", ".join(rotulo_curso(chave) for chave in chaves) or "—"
+
+    texto_card = (
+        f"# Repasse de curso prático\n"
+        f"**Pedido:** `#{registro.id}`\n"
+        f"**Aluno:** {mencao_aluno}\n"
+        f"**Instrutor:** {membro.mention}\n"
+        f"**Cursos:** {lista_cursos}\n"
+        f"**Forma:** `{registro.forma_pagamento}`\n"
+        f"**Valor pago in-game:** `{valor_txt}`\n"
+    )
+    if moedas > 0:
+        texto_card += (
+            f"**Desconto:** `{moedas}` moeda(s) ({formatar_reais(cotacao)} cada)\n"
+        )
+    texto_card += (
+        f"**Status do repasse:** registrado por {membro.mention}\n"
+        f"-# Comprovante em anexo"
+    )
+
+    import io
+
+    arquivo = discord.File(
+        fp=io.BytesIO(bytes_do_arquivo),
+        filename=nome_arquivo,
+    )
+    try:
+        view_log = discord.ui.LayoutView(timeout=None)
+        view_log.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(texto_card),
+                accent_color=discord.Color.dark_teal(),
+            )
+        )
+        # Card + anexo no mesmo envio (sem DM)
+        await canal_destino.send(view=view_log, file=arquivo)
+    except discord.HTTPException as erro_envio:
+        await enviar_erro_para_log_erros(
+            guilda,
+            "Falha ao postar comprovante de repasse",
+            erro_envio,
+            contexto="processar_registrar_repasse_curso.send",
+            usuario=membro,
+        )
+        await responder_erro(
+            interacao,
+            titulo="Falha ao publicar",
+            linhas=["Não consegui enviar o comprovante ao canal de registro."],
+        )
+        return
+
+    await marcar_repasse_registrado(solicitacao_id)
+
+    # Atualiza o card de decisão com o status de repasse
+    if interacao.message is not None:
+        view_atualizada = await montar_view_decisao_a_partir_do_banco(
+            guilda,
+            solicitacao_id,
+            modo="normal",
+        )
+        if view_atualizada is not None:
+            try:
+                await interacao.message.edit(view=view_atualizada)
+            except discord.HTTPException:
+                pass
+
+    try:
+        await mensagem_comprovante.delete(delay=10)
+    except (discord.NotFound, discord.HTTPException):
+        pass
+
+    await responder_sucesso(
+        interacao,
+        titulo="Repasse registrado",
+        linhas=[
+            f"Comprovante do pedido `#{solicitacao_id}` enviado ao canal de registro.",
+            "Agora você pode **aprovar** o curso.",
+        ],
+        delay=15,
+    )
 
 
 async def processar_clique_cancelar_decisao(
@@ -1722,6 +2276,25 @@ async def processar_select_decisao_curso(
             interacao,
             titulo="Contexto inválido",
             linhas=["Use este botão dentro do servidor."],
+        )
+        return
+
+    registro = await obter_solicitacao_curso(solicitacao_id)
+    if registro is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=[f"`#{solicitacao_id}`"],
+        )
+        return
+    if not _pode_decidir_pedido(membro, registro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão neste pedido",
+            linhas=[
+                "Somente quem **aceitou** esta solicitação "
+                "(ou a **Diretoria**) pode aprovar ou reprovar.",
+            ],
         )
         return
 

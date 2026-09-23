@@ -132,6 +132,19 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "ADD COLUMN IF NOT EXISTS chave_semana_moedas VARCHAR(16)"
         ),
     ),
+    Migracao(
+        numero=7,
+        descricao=(
+            "Curso: cotação do desconto, flag de repasse registrado e "
+            "forma_pagamento maior (IN_GAME_COM_DESCONTO)."
+        ),
+        comando_sql=(
+            "ALTER TABLE solicitacoes_curso "
+            "ADD COLUMN IF NOT EXISTS cotacao_moeda INTEGER NOT NULL DEFAULT 0, "
+            "ADD COLUMN IF NOT EXISTS repasse_registrado "
+            "BOOLEAN NOT NULL DEFAULT FALSE"
+        ),
+    ),
 ]
 
 

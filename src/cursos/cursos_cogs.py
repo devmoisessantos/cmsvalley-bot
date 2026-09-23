@@ -11,6 +11,7 @@ from sqlalchemy import delete
 
 from src.cursos.cursos_setup import garantir_painel_cursos
 from src.cursos.cursos_views import (
+    CUSTOM_ID_REGISTRAR_REPASSE,
     CUSTOM_ID_ACEITAR,
     CUSTOM_ID_APROVAR,
     CUSTOM_ID_CANCELA_DECISAO,
@@ -18,6 +19,7 @@ from src.cursos.cursos_views import (
     processar_clique_abrir_decisao,
     processar_clique_aceitar_curso,
     processar_clique_cancelar_decisao,
+    processar_registrar_repasse_curso,
     processar_select_decisao_curso,
     view_persistente_cursos,
 )
@@ -111,6 +113,17 @@ class CursosCog(commands.Cog):
                 solicitacao_id = int(custom_id[len(CUSTOM_ID_CANCELA_DECISAO) :])
                 if solicitacao_id > 0:
                     await processar_clique_cancelar_decisao(
+                        interacao,
+                        solicitacao_id,
+                    )
+                return
+
+            if custom_id.startswith(CUSTOM_ID_REGISTRAR_REPASSE):
+                solicitacao_id = int(
+                    custom_id[len(CUSTOM_ID_REGISTRAR_REPASSE) :]
+                )
+                if solicitacao_id > 0:
+                    await processar_registrar_repasse_curso(
                         interacao,
                         solicitacao_id,
                     )
