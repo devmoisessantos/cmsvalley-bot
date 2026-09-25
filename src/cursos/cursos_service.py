@@ -506,6 +506,25 @@ async def obter_solicitacao_curso(solicitacao_id: int) -> SolicitacaoCurso | Non
         return resultado.scalar_one_or_none()
 
 
+async def listar_solicitacoes_por_status(
+    *status_lista: str,
+) -> list[SolicitacaoCurso]:
+    """Lista pedidos com um dos status informados, do mais antigo ao mais novo.
+
+    Usado por comandos admin para republicar a fila de agendamento ou
+    de decisão sem depender das mensagens já publicadas no Discord.
+    """
+    if not status_lista:
+        return []
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso)
+            .where(SolicitacaoCurso.status.in_(status_lista))
+            .order_by(SolicitacaoCurso.id.asc())
+        )
+        return list(resultado.scalars().all())
+
+
 async def buscar_pedido_aberto(discord_id: int) -> SolicitacaoCurso | None:
     """Pedido ainda em andamento (agendado ou aceito) do aluno."""
     async with async_session() as sessao:
@@ -644,6 +663,26 @@ async def marcar_mensagem_solicitacao_curso(
             return
         registro.mensagem_canal_id = canal_id
         registro.mensagem_id = mensagem_id
+        registro.atualizado_em = agora()
+        await sessao.commit()
+
+
+async def limpar_mensagem_solicitacao_curso(solicitacao_id: int) -> None:
+    """Remove do banco a referência da mensagem do card de agendamento.
+
+    Usado quando o card é apagado do Discord (aceito, recusado ou
+    republicado mais abaixo no canal). Assim não tentamos editar uma
+    mensagem que já não existe.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return
+        registro.mensagem_canal_id = None
+        registro.mensagem_id = None
         registro.atualizado_em = agora()
         await sessao.commit()
 
