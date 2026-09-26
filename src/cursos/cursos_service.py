@@ -200,11 +200,17 @@ def membro_e_enfermeiro(membro: discord.Member) -> bool:
     return any(cargo.name == CARGO_ENFERMEIRO for cargo in membro.roles)
 
 
-async def segundos_plantao_ciclo_atual(discord_id: int) -> int:
+async def segundos_plantao_ciclo_atual(
+    discord_id: int,
+    *,
+    guild: discord.Guild | None = None,
+) -> int:
     """
     Tempo de plantão do membro no ciclo atual (ranking tempo real).
 
-    Usado só para isenção do Resgate (≥ 6h).
+    Usado só para isenção do Resgate (≥ 6h). Inclui plantão em andamento
+    (ao vivo). Sem guild, não aplica filtro de ranking — conta as horas
+    brutas do banco + call aberta.
     """
     from src.plantao.ranking_plantao_service import (
         buscar_horas_por_membro,
@@ -220,7 +226,7 @@ async def segundos_plantao_ciclo_atual(discord_id: int) -> int:
     contagem = await buscar_horas_por_membro(
         inicio,
         fim,
-        guild=None,
+        guild=guild,
         incluir_ao_vivo=True,
     )
     return int(contagem.get(int(discord_id), 0))
@@ -253,7 +259,12 @@ async def calcular_cobranca_pacote(
     teto_moedas = MOEDAS_DESCONTO_MAX_POR_PEDIDO
 
     if so_resgate and membro_e_enfermeiro(membro):
-        segundos = await segundos_plantao_ciclo_atual(membro.id)
+        # Conta horas brutas (guild=None) para não excluir o aluno
+        # por regra de ranking e ainda assim liberar o Resgate grátis.
+        segundos = await segundos_plantao_ciclo_atual(
+            membro.id,
+            guild=None,
+        )
         horas = segundos / 3600.0
         if horas >= HORAS_ISENCAO_RESGATE:
             isento = True

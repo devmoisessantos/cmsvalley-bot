@@ -434,8 +434,13 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
 
         linha = discord.ui.ActionRow()
         if isento or valor_bruto <= 0:
+            so_resgate = list(chaves) == ["resgate"]
+            if so_resgate and isento:
+                rotulo_gratis = "Resgatar grátis"
+            else:
+                rotulo_gratis = "Registrar solicitação (grátis)"
             botao_gratis = discord.ui.Button(
-                label="Registrar solicitação (grátis)",
+                label=rotulo_gratis,
                 style=discord.ButtonStyle.success,
             )
             botao_gratis.callback = self._ao_gratuito
@@ -737,11 +742,20 @@ async def finalizar_pedido(
                     linhas=["Não foi possível mesclar os cursos no pedido aberto."],
                 )
                 return
-            ok_post = await atualizar_ou_publicar_agendamento(
-                interacao.guild,
-                membro=membro,
-                registro=registro,
-            )
+            # AGENDADO: republica no fim do canal de agendamentos.
+            # ACEITO: atualiza o card de decisão no lugar (não apaga).
+            if registro.status == "ACEITO":
+                ok_post = await _atualizar_card_decisao_no_lugar(
+                    interacao.guild,
+                    registro=registro,
+                    aluno=membro,
+                )
+            else:
+                ok_post = await atualizar_ou_publicar_agendamento(
+                    interacao.guild,
+                    membro=membro,
+                    registro=registro,
+                )
             titulo_ok = "Pedido atualizado"
             linhas_ok = [
                 f"Pedido `#{registro.id}` **atualizado** (sem segundo card).",
@@ -1003,16 +1017,51 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
 
             guilda = interacao.guild
             aluno = guilda.get_member(registro.discord_id) if guilda else None
-
-            # Remove o card do canal de agendamentos (id no banco + fallback)
-            # e publica o card de decisão com id novo gravado no banco.
-            await apagar_card_do_pedido(
-                guilda,
-                registro.id,
-                mensagem_fallback=self.mensagem_agendamento,
+            titulo, corpo = montar_linhas_corpo_pedido(
+                membro=aluno or interacao.user,  # type: ignore[arg-type]
+                registro=registro,
             )
+            if obs:
+                corpo += (
+                    f"\n\n### 📌 Observação do instrutor: "
+                    f"{interacao.user.mention}\n> {obs}"
+                )
+            else:
+                corpo += (
+                    f"\n\n### 📌 Observação do instrutor: "
+                    f"{interacao.user.mention}"
+                )
 
-            # Publica em aprovar/reprovar (grava mensagem_id no banco)
+            # Mantém o card no canal de agendamentos (histórico).
+            # Só marca como aceito — o pedido não some da conversa.
+            if self.mensagem_agendamento is not None and guilda is not None:
+                url_avatar = (
+                    aluno.display_avatar.url
+                    if aluno is not None
+                    else interacao.user.display_avatar.url
+                )
+                try:
+                    await self.mensagem_agendamento.edit(
+                        view=ViewAceitarAgendamento(
+                            titulo=titulo,
+                            corpo=corpo + "\n\n-# ✅ **Solicitação aceita**",
+                            guild=guilda,
+                            solicitacao_id=registro.id,
+                            url_avatar=url_avatar,
+                            ja_aceito=True,
+                        )
+                    )
+                except discord.HTTPException as erro:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Falha ao marcar agendamento como aceito",
+                        erro,
+                        contexto="ModalObservacaoInstrutor.edit",
+                        usuario=interacao.user,
+                    )
+
+            # Card de decisão novo no canal de aprovar/reprovar
+            # (grava mensagem_id no banco para edições futuras).
             await publicar_para_decisao(guilda, registro=registro, aluno=aluno)
 
             # DM do aluno + log LOG_NOTIFICACOES_DM
@@ -1405,13 +1454,29 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             if observacao_decisao:
                 resumo += f"\nObs. decisão: {observacao_decisao}"
 
-            # Resultado já foi para aprovados/reprovados. Apaga o card
-            # da fila de decisão (id no banco) para os pendentes no fim.
-            await apagar_card_do_pedido(
-                guilda,
-                registro.id,
-                mensagem_fallback=interacao.message,
-            )
+            # Mantém o card no canal de decisão (histórico), só trava os
+            # botões. O resultado detalhado já foi para aprovados/reprovados.
+            mensagem_para_editar = interacao.message
+            try:
+                if mensagem_para_editar is not None:
+                    await mensagem_para_editar.edit(
+                        view=ViewDecisaoCurso(
+                            titulo=self.titulo,
+                            corpo=self.corpo + f"\n\n-# **Decisão:**\n{resumo}",
+                            guild=guilda,
+                            solicitacao_id=registro.id,
+                            url_avatar=self.url_avatar,
+                            modo="final",
+                            desabilitada=True,
+                            chaves_cursos=self.chaves_cursos,
+                        )
+                    )
+            except discord.HTTPException as erro_em_aplicar_decisao_parcial:
+                ignorar_falha_cosmetica(
+                    erro_em_aplicar_decisao_parcial,
+                    o_que_falhou="atualizar o card da decisao parcial",
+                )
+            await limpar_mensagem_solicitacao_curso(registro.id)
 
             await responder_sucesso(
                 interacao,
@@ -1543,11 +1608,11 @@ async def atualizar_ou_publicar_agendamento(
     membro: discord.Member,
     registro,
 ) -> bool:
-    """Republica o card pendente no fim do canal (apaga o antigo se existir).
+    """Republica o card **pendente** (AGENDADO) no fim do canal.
 
-    Assim os pedidos ainda em aberto ficam sempre abaixo dos já tratados,
-    facilitando achar o próximo a aceitar. O id da mensagem nova é gravado
-    no banco para sobreviver a restart e permitir apagar de novo depois.
+    Apaga só o card antigo deste pedido e publica de novo embaixo, para
+    a fila aberta ficar fácil de achar. Pedidos já aceitos/recusados
+    não passam por aqui — ficam no histórico acima.
     """
     if guilda is None:
         return False
@@ -1558,6 +1623,48 @@ async def atualizar_ou_publicar_agendamento(
         guilda,
         membro=membro,
         registro=registro,
+    )
+
+
+async def _atualizar_card_decisao_no_lugar(
+    guilda: discord.Guild | None,
+    *,
+    registro,
+    aluno: discord.Member | None,
+) -> bool:
+    """Edita o card de decisão no mesmo lugar (pedido ACEITO atualizado).
+
+    Se a mensagem do banco não existir mais, publica um card novo e
+    grava o id. Nunca apaga o histórico de cards já finalizados.
+    """
+    if guilda is None:
+        return False
+
+    view = await montar_view_decisao_a_partir_do_banco(
+        guilda,
+        registro.id,
+        modo="normal",
+    )
+    if view is None:
+        return False
+
+    if registro.mensagem_id and registro.mensagem_canal_id:
+        canal = guilda.get_channel(int(registro.mensagem_canal_id))
+        if canal is not None:
+            try:
+                mensagem = await canal.fetch_message(int(registro.mensagem_id))
+                await mensagem.edit(view=view)
+                return True
+            except (discord.NotFound, discord.HTTPException) as erro:
+                ignorar_falha_cosmetica(
+                    erro,
+                    o_que_falhou="editar card de decisão após mesclar cursos",
+                )
+
+    return await publicar_para_decisao(
+        guilda,
+        registro=registro,
+        aluno=aluno,
     )
 
 
@@ -1895,13 +2002,45 @@ class ModalRecusarAgendamento(LoggingModalMixin, discord.ui.Modal):
 
             guilda = interacao.guild
             aluno = guilda.get_member(registro.discord_id) if guilda else None
-
-            # Remove o card do canal de agendamentos (id no banco + fallback)
-            await apagar_card_do_pedido(
-                guilda,
-                registro.id,
-                mensagem_fallback=self.mensagem_agendamento,
+            titulo, corpo = montar_linhas_corpo_pedido(
+                membro=aluno or interacao.user,  # type: ignore[arg-type]
+                registro=registro,
             )
+            corpo += (
+                f"\n\n### 📌 Observação do instrutor: "
+                f"{interacao.user.mention}"
+            )
+            if motivo:
+                corpo += f"\n> {motivo}"
+            corpo += "\n\n-# ❌ **Solicitação recusada**"
+
+            # Mantém o card no canal (histórico); só marca como recusado.
+            if self.mensagem_agendamento is not None and guilda is not None:
+                url_avatar = (
+                    aluno.display_avatar.url
+                    if aluno is not None
+                    else interacao.user.display_avatar.url
+                )
+                try:
+                    await self.mensagem_agendamento.edit(
+                        view=ViewAceitarAgendamento(
+                            titulo=titulo,
+                            corpo=corpo,
+                            guild=guilda,
+                            solicitacao_id=registro.id,
+                            url_avatar=url_avatar,
+                            ja_recusado=True,
+                        )
+                    )
+                except discord.HTTPException as erro:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Falha ao marcar agendamento como recusado",
+                        erro,
+                        contexto="ModalRecusarAgendamento.edit",
+                        usuario=interacao.user,
+                    )
+            await limpar_mensagem_solicitacao_curso(registro.id)
 
             if aluno is not None:
                 linhas_dm = [
@@ -1999,19 +2138,23 @@ async def processar_clique_abrir_decisao(
         precisa_repasse = forma in ("IN_GAME", "IN_GAME_COM_DESCONTO")
         if precisa_repasse and not getattr(registro, "repasse_registrado", False):
             acao = "aprovar" if modo == "selecionar_aprovar" else "reprovar"
-            # Cards antigos podem não ter o botão Registrar Pagamento:
-            # apaga (id no banco) e republica no fim com o botão atual.
-            aluno_para_card = interacao.guild.get_member(registro.discord_id)
-            await apagar_card_do_pedido(
+            # Atualiza o card no lugar com o botão Registrar Pagamento
+            # (não apaga o histórico do canal).
+            view_com_botao = await montar_view_decisao_a_partir_do_banco(
                 interacao.guild,
                 solicitacao_id,
-                mensagem_fallback=interacao.message,
+                modo="normal",
             )
-            await publicar_para_decisao(
-                interacao.guild,
-                registro=registro,
-                aluno=aluno_para_card,
-            )
+            if view_com_botao is not None and interacao.message is not None:
+                try:
+                    await interacao.message.edit(view=view_com_botao)
+                except discord.HTTPException as erro_edit:
+                    ignorar_falha_cosmetica(
+                        erro_edit,
+                        o_que_falhou=(
+                            "atualizar card com botão Registrar Pagamento"
+                        ),
+                    )
             await responder_aviso(
                 interacao,
                 titulo="Repasse pendente",
@@ -2019,11 +2162,10 @@ async def processar_clique_abrir_decisao(
                     f"Antes de **{acao}**, registre o pagamento do "
                     "repasse ao hospital.",
                     "Mesmo em caso de reprovação o aluno precisa pagar.",
-                    "O card foi republicado no fim do canal com o botão "
-                    "**Registrar Pagamento**.",
-                    "Clique nele e envie o print do comprovante neste canal.",
+                    "Clique em **Registrar Pagamento** e envie o "
+                    "print do comprovante neste canal.",
                 ],
-                delay=25,
+                delay=20,
             )
             return
 
@@ -2341,26 +2483,26 @@ async def processar_registrar_repasse_curso(
         and getattr(registro_atualizado, "repasse_registrado", False)
     )
 
-    # Apaga o print e o aviso no canal de decisão
+    # Apaga só o print e o aviso temporários — o card do pedido fica.
     await _apagar_mensagem_segura(mensagem_comprovante)
     await _apagar_mensagem_segura(mensagem_pedido_comprovante)
 
-    # Republica o card no fim do canal com botões atualizados
-    # (inclui Registrar Pagamento se ainda faltar grupo, ou libera
-    # Aprovar/Reprovar quando o repasse está completo).
-    # Apaga pelo id no banco e grava o id da mensagem nova.
-    aluno_para_card = guilda.get_member(registro.discord_id)
-    await apagar_card_do_pedido(
-        guilda,
-        solicitacao_id,
-        mensagem_fallback=interacao.message,
-    )
-    if registro_atualizado is not None:
-        await publicar_para_decisao(
+    # Atualiza o card no mesmo lugar (botão some se completo; senão
+    # continua pedindo o próximo grupo).
+    if interacao.message is not None:
+        view_atualizada = await montar_view_decisao_a_partir_do_banco(
             guilda,
-            registro=registro_atualizado,
-            aluno=aluno_para_card,
+            solicitacao_id,
+            modo="normal",
         )
+        if view_atualizada is not None:
+            try:
+                await interacao.message.edit(view=view_atualizada)
+            except discord.HTTPException as erro_edit:
+                ignorar_falha_cosmetica(
+                    erro_edit,
+                    o_que_falhou="atualizar card após registrar repasse",
+                )
 
     if completo:
         linhas_ok = [
@@ -2535,9 +2677,31 @@ class ModalObservacaoDecisao(LoggingModalMixin, discord.ui.Modal):
             self.reprovadas,
             observacao_decisao=observacao,
         )
-        # _aplicar_decisao_parcial já apaga pelo id no banco. Se o modal
-        # ainda tiver a mensagem (mesmo uptime), tenta de novo por segurança.
-        await _apagar_mensagem_segura(self.mensagem_decisao)
+        # Se a interação do modal não tinha a mensagem do card, edita
+        # pela referência guardada (mesmo uptime).
+        if self.mensagem_decisao is not None:
+            resumo = (
+                f"Aprovados: "
+                f"{', '.join(rotulo_curso(c) for c in self.aprovadas) or '—'}\n"
+                f"Reprovados: "
+                f"{', '.join(rotulo_curso(c) for c in self.reprovadas) or '—'}\n"
+                f"Obs. decisão: {observacao}"
+            )
+            try:
+                await self.mensagem_decisao.edit(
+                    view=ViewDecisaoCurso(
+                        titulo=self.titulo_card,
+                        corpo=self.corpo_card + f"\n\n-# **Decisão:**\n{resumo}",
+                        guild=guilda,
+                        solicitacao_id=self.solicitacao_id,
+                        url_avatar=self.url_avatar,
+                        modo="final",
+                        desabilitada=True,
+                        chaves_cursos=self.chaves_cursos,
+                    )
+                )
+            except discord.HTTPException:
+                pass
 
 
 def view_persistente_cursos() -> PainelCursosLayout:

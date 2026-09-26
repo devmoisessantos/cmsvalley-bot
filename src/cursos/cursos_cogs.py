@@ -18,8 +18,8 @@ from src.cursos.cursos_views import (
     CUSTOM_ID_RECUSAR,
     CUSTOM_ID_REGISTRAR_REPASSE,
     CUSTOM_ID_REPROVAR,
-    apagar_card_do_pedido,
     atualizar_ou_publicar_agendamento,
+    montar_view_decisao_a_partir_do_banco,
     processar_clique_abrir_decisao,
     processar_clique_aceitar_curso,
     processar_clique_cancelar_decisao,
@@ -135,18 +135,39 @@ class CursosCog(commands.Cog):
             for registro in aceitos:
                 aluno = guilda.get_member(registro.discord_id)
                 try:
-                    # Apaga pelo id no banco (se existir) e publica de novo
-                    # gravando o id da mensagem nova.
-                    await apagar_card_do_pedido(guilda, registro.id)
-                    ok = await publicar_para_decisao(
-                        guilda,
-                        registro=registro,
-                        aluno=aluno,
-                    )
-                    if ok:
-                        ok_decisao += 1
-                    else:
-                        falha_decisao += 1
+                    # Prefere editar o card existente (não perde histórico).
+                    # Só publica novo se não houver mensagem no banco.
+                    editou = False
+                    if registro.mensagem_id and registro.mensagem_canal_id:
+                        canal = guilda.get_channel(
+                            int(registro.mensagem_canal_id)
+                        )
+                        if canal is not None:
+                            try:
+                                mensagem = await canal.fetch_message(
+                                    int(registro.mensagem_id)
+                                )
+                                view = await montar_view_decisao_a_partir_do_banco(
+                                    guilda,
+                                    registro.id,
+                                    modo="normal",
+                                )
+                                if view is not None:
+                                    await mensagem.edit(view=view)
+                                    editou = True
+                                    ok_decisao += 1
+                            except (discord.NotFound, discord.HTTPException):
+                                editou = False
+                    if not editou:
+                        ok = await publicar_para_decisao(
+                            guilda,
+                            registro=registro,
+                            aluno=aluno,
+                        )
+                        if ok:
+                            ok_decisao += 1
+                        else:
+                            falha_decisao += 1
                 except Exception as erro_decisao:
                     falha_decisao += 1
                     await enviar_erro_para_log_erros(
@@ -158,21 +179,22 @@ class CursosCog(commands.Cog):
                     )
 
             linhas = [
-                f"**Agendamento:** {ok_agendamento} republicado(s)"
+                f"**Agendamento (pendentes no fim):** "
+                f"{ok_agendamento} republicado(s)"
                 + (
                     f", {falha_agendamento} falha(s)"
                     if falha_agendamento
                     else ""
                 )
-                + f" de {len(agendados)} pendente(s).",
-                f"**Aprovar/reprovar:** {ok_decisao} republicado(s)"
+                + f" de {len(agendados)}.",
+                f"**Aprovar/reprovar:** {ok_decisao} atualizado(s)"
                 + (
                     f", {falha_decisao} falha(s)"
                     if falha_decisao
                     else ""
                 )
-                + f" de {len(aceitos)} aceito(s).",
-                "Cada card grava `mensagem_id` no banco.",
+                + f" de {len(aceitos)}.",
+                "Cards aceitos/decididos permanecem no canal (histórico).",
                 "Botões usam custom_id e sobrevivem a restart.",
             ]
             await responder_sucesso(
