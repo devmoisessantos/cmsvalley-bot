@@ -101,9 +101,9 @@ class BackupCog(commands.Cog):
         self.tarefa_backup_automatico.cancel()
         self.tarefa_backup_banco.cancel()
 
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------
     # Helpers internos
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------
 
     async def _carregar_backup_alvo(
         self,
