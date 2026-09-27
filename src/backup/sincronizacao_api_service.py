@@ -229,16 +229,89 @@ def _tupla_pk(linha: dict, chaves_primarias: list[str]) -> tuple:
     return tuple(linha.get(nome) for nome in chaves_primarias)
 
 
+# Quantas linhas entram em cada INSERT em lote no restore aditivo.
+# Lote grande demais estoura parâmetros do asyncpg; lote pequeno demais
+# deixa o import de banco vazio impraticável.
+TAMANHO_DO_LOTE_DE_INSERT = 100
+
+
+def _mensagem_eh_unique(erro: BaseException) -> bool:
+    """Detecta violação de unique/duplicate key em mensagens do Postgres."""
+    mensagem_do_erro = str(erro).lower()
+    return (
+        "uniqueviolation" in mensagem_do_erro
+        or "unique constraint" in mensagem_do_erro
+        or "duplicate key" in mensagem_do_erro
+    )
+
+
+def _montar_valores_da_linha(tabela, linha: dict[str, Any]) -> dict[str, Any]:
+    """
+    Monta o dicionário de colunas para INSERT a partir de uma linha do snapshot.
+
+    Só usa colunas que existem na tabela atual e reconverte datas/números
+    serializados em JSON.
+    """
+    valores: dict[str, Any] = {}
+    for coluna in tabela.columns:
+        if coluna.name not in linha:
+            continue
+        valor_bruto = linha.get(coluna.name)
+        valores[coluna.name] = _deserializar_valor(valor_bruto, coluna.type)
+    return valores
+
+
+async def _ajustar_sequences_da_tabela(sessao, tabela, nome_tabela: str) -> None:
+    """
+    Alinha o contador serial/identity com o MAX atual da coluna.
+
+    Depois de importar ids antigos, o próximo INSERT automático precisa
+    continuar de onde o snapshot parou, senão o Postgres gera PK duplicada.
+    """
+    for coluna in tabela.primary_key.columns:
+        if coluna.name not in tabela.c:
+            continue
+        tipo_texto = str(coluna.type).upper()
+        if not (
+            tipo_texto.startswith("INTEGER")
+            or "SERIAL" in tipo_texto
+            or "BIGINT" in tipo_texto
+        ):
+            continue
+        try:
+            async with sessao.begin_nested():
+                await sessao.execute(
+                    text(
+                        f"SELECT setval("
+                        f"pg_get_serial_sequence(:tab, :col), "
+                        f"COALESCE((SELECT MAX({coluna.name}) "
+                        f"FROM {nome_tabela}), 1))"
+                    ),
+                    {"tab": nome_tabela, "col": coluna.name},
+                )
+        except Exception as erro_ao_ajustar_sequencia:
+            # Nem toda PK tem sequence. Falha esperada em chaves manuais.
+            logging.debug(
+                "Sem contador automatico para ajustar em %s.%s: %s",
+                nome_tabela,
+                coluna.name,
+                erro_ao_ajustar_sequencia,
+            )
+
+
 async def restaurar_faltantes_no_banco(snapshot: dict[str, Any]) -> dict[str, int]:
     """
     Insere no Postgres local apenas linhas que ainda não existem (por PK).
     Nunca apaga nem atualiza registro já presente.
 
-    Cada insert e cada ajuste de sequence rodam dentro de um savepoint
-    (begin_nested). Assim, se uma linha falhar, a transação principal
-    continua viva e as tabelas seguintes ainda são processadas.
-    Sem isso o Postgres aborta a transação inteira e o próximo SELECT
-    explode com InFailedSQLTransactionError.
+    Estratégia (pensada para banco novo / Fadehost vazio):
+      1. Lê as PKs já existentes de cada tabela.
+      2. Filtra as linhas do snapshot que faltam.
+      3. Insere em lotes (TAMANHO_DO_LOTE_DE_INSERT).
+      4. Faz commit por tabela — progresso parcial não se perde se o
+         processo cair no meio.
+      5. Se um lote inteiro falhar, tenta linha a linha com savepoint
+         (unique secundária conta como "já existia").
     """
     estatisticas = {
         "tabelas_tocadas": 0,
@@ -252,124 +325,125 @@ async def restaurar_faltantes_no_banco(snapshot: dict[str, Any]) -> dict[str, in
 
     mapa_tabelas = {tabela.name: tabela for tabela in Base.metadata.sorted_tables}
 
-    async with async_session() as sessao:
-        for nome_tabela, bloco in tabelas_snapshot.items():
-            if not isinstance(bloco, dict):
-                continue
-            tabela = mapa_tabelas.get(nome_tabela)
-            if tabela is None:
-                # Tabela do snapshot que o código atual ainda não mapeia — ignora
-                continue
-
-            chaves_primarias = list(
-                bloco.get("chaves_primarias")
-                or [coluna.name for coluna in tabela.primary_key.columns]
+    for nome_tabela, bloco in tabelas_snapshot.items():
+        if not isinstance(bloco, dict):
+            continue
+        tabela = mapa_tabelas.get(nome_tabela)
+        if tabela is None:
+            # Tabela do snapshot que o código atual ainda não mapeia — ignora
+            logger.info(
+                "[api-db] tabela %s no snapshot não existe no ORM — ignorada",
+                nome_tabela,
             )
-            linhas_remotas = [
-                linha
-                for linha in (bloco.get("linhas") or [])
-                if isinstance(linha, dict)
-            ]
-            if not linhas_remotas:
-                continue
+            continue
 
-            # Conjunto de PKs já no banco local
-            colunas_pk = [
-                tabela.c[nome] for nome in chaves_primarias if nome in tabela.c
-            ]
-            pks_locais: set[tuple] = set()
-            if colunas_pk:
-                resultado_local = await sessao.execute(select(*colunas_pk))
-                for registro in resultado_local.all():
-                    pks_locais.add(tuple(registro))
+        chaves_primarias = list(
+            bloco.get("chaves_primarias")
+            or [coluna.name for coluna in tabela.primary_key.columns]
+        )
+        linhas_remotas = [
+            linha
+            for linha in (bloco.get("linhas") or [])
+            if isinstance(linha, dict)
+        ]
+        if not linhas_remotas:
+            continue
 
-            estatisticas["tabelas_tocadas"] += 1
-            for linha in linhas_remotas:
-                chave = _tupla_pk(linha, chaves_primarias)
-                if chave in pks_locais:
-                    estatisticas["linhas_ja_existiam"] += 1
-                    continue
+        try:
+            async with async_session() as sessao:
+                colunas_pk = [
+                    tabela.c[nome]
+                    for nome in chaves_primarias
+                    if nome in tabela.c
+                ]
+                pks_locais: set[tuple] = set()
+                if colunas_pk:
+                    resultado_local = await sessao.execute(select(*colunas_pk))
+                    for registro in resultado_local.all():
+                        pks_locais.add(tuple(registro))
 
-                # Só colunas que existem na tabela atual.
-                # Converte strings ISO de volta para datetime/date antes do insert.
-                valores = {}
-                for coluna in tabela.columns:
-                    if coluna.name not in linha:
-                        continue
-                    valor_bruto = linha.get(coluna.name)
-                    valores[coluna.name] = _deserializar_valor(
-                        valor_bruto,
-                        coluna.type,
-                    )
-                if not valores:
-                    continue
-                try:
-                    # Savepoint: se o insert falhar, só este bloco regride.
-                    # A transação principal segue limpa para as próximas tabelas.
-                    async with sessao.begin_nested():
-                        await sessao.execute(tabela.insert().values(**valores))
-                    pks_locais.add(chave)
-                    estatisticas["linhas_inseridas"] += 1
-                except Exception as erro:
-                    # Unique em coluna secundária (ex.: paineis_postados.nome_painel):
-                    # o id do snapshot é outro, mas o dado lógico já está no banco.
-                    # Em restore aditivo isso conta como "já existia", não como erro.
-                    mensagem_do_erro = str(erro).lower()
-                    eh_unique = (
-                        "uniqueviolation" in mensagem_do_erro
-                        or "unique constraint" in mensagem_do_erro
-                        or "duplicate key" in mensagem_do_erro
-                    )
-                    if eh_unique:
+                estatisticas["tabelas_tocadas"] += 1
+                linhas_para_inserir: list[dict[str, Any]] = []
+                for linha in linhas_remotas:
+                    chave = _tupla_pk(linha, chaves_primarias)
+                    if chave in pks_locais:
                         estatisticas["linhas_ja_existiam"] += 1
-                        logger.debug(
-                            "[api-db] %s chave %s já existia por unique: %s",
-                            nome_tabela,
-                            chave,
-                            erro,
-                        )
-                    else:
-                        estatisticas["erros"] += 1
-                        logger.warning(
-                            "[api-db] insert em %s falhou (%s): %s",
-                            nome_tabela,
-                            chave,
-                            erro,
-                        )
+                        continue
+                    valores = _montar_valores_da_linha(tabela, linha)
+                    if not valores:
+                        continue
+                    linhas_para_inserir.append(valores)
 
-            # Ajusta sequence de colunas serial/identity quando houver id numérico
-            for coluna in tabela.primary_key.columns:
-                if coluna.name not in tabela.c:
+                if not linhas_para_inserir:
+                    await sessao.commit()
+                    logger.info(
+                        "[api-db] %s: nada novo (%s já existiam)",
+                        nome_tabela,
+                        len(linhas_remotas),
+                    )
                     continue
-                if (
-                    str(coluna.type).upper().startswith("INTEGER")
-                    or "SERIAL" in str(coluna.type).upper()
-                ):
-                    try:
-                        # Savepoint também no setval: nem toda PK tem sequence.
-                        async with sessao.begin_nested():
-                            await sessao.execute(
-                                text(
-                                    f"SELECT setval("
-                                    f"pg_get_serial_sequence(:tab, :col), "
-                                    f"COALESCE((SELECT MAX({coluna.name}) "
-                                    f"FROM {nome_tabela}), 1))"
-                                ),
-                                {"tab": nome_tabela, "col": coluna.name},
-                            )
-                    except Exception as erro_ao_ajustar_sequencia:
-                        # Nem toda chave primaria e "serial" (contador
-                        # automatico). Quando nao e, o setval acima falha e
-                        # isso e esperado: nao existe contador para ajustar.
-                        # Registro em nivel debug so para deixar rastro.
-                        logging.debug(
-                            "Sem contador automatico para ajustar em %s.%s: %s",
-                            nome_tabela,
-                            coluna.name,
-                            erro_ao_ajustar_sequencia,
-                        )
 
-        await sessao.commit()
+                inseridas_nesta_tabela = 0
+                total_lotes = (
+                    len(linhas_para_inserir) + TAMANHO_DO_LOTE_DE_INSERT - 1
+                ) // TAMANHO_DO_LOTE_DE_INSERT
+
+                passo = TAMANHO_DO_LOTE_DE_INSERT
+                for indice_lote in range(0, len(linhas_para_inserir), passo):
+                    lote = linhas_para_inserir[indice_lote : indice_lote + passo]
+                    numero_do_lote = (
+                        indice_lote // TAMANHO_DO_LOTE_DE_INSERT
+                    ) + 1
+                    try:
+                        async with sessao.begin_nested():
+                            await sessao.execute(tabela.insert(), lote)
+                        inseridas_nesta_tabela += len(lote)
+                        estatisticas["linhas_inseridas"] += len(lote)
+                    except Exception as erro_do_lote:
+                        # Lote inteiro falhou (unique misto, tipo, etc.).
+                        # Cai para linha a linha para não perder o resto.
+                        logger.warning(
+                            "[api-db] lote %s/%s em %s falhou (%s) — "
+                            "tentando linha a linha",
+                            numero_do_lote,
+                            total_lotes,
+                            nome_tabela,
+                            erro_do_lote,
+                        )
+                        for valores in lote:
+                            try:
+                                async with sessao.begin_nested():
+                                    await sessao.execute(
+                                        tabela.insert().values(**valores)
+                                    )
+                                inseridas_nesta_tabela += 1
+                                estatisticas["linhas_inseridas"] += 1
+                            except Exception as erro_linha:
+                                if _mensagem_eh_unique(erro_linha):
+                                    estatisticas["linhas_ja_existiam"] += 1
+                                else:
+                                    estatisticas["erros"] += 1
+                                    logger.warning(
+                                        "[api-db] insert em %s falhou: %s",
+                                        nome_tabela,
+                                        erro_linha,
+                                    )
+
+                await _ajustar_sequences_da_tabela(sessao, tabela, nome_tabela)
+                await sessao.commit()
+                logger.info(
+                    "[api-db] %s: +%s inseridas (de %s no snapshot)",
+                    nome_tabela,
+                    inseridas_nesta_tabela,
+                    len(linhas_remotas),
+                )
+        except Exception as erro_da_tabela:
+            estatisticas["erros"] += 1
+            logger.exception(
+                "[api-db] falha ao restaurar a tabela %s: %s",
+                nome_tabela,
+                erro_da_tabela,
+            )
 
     return estatisticas
 

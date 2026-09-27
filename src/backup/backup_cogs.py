@@ -1161,8 +1161,14 @@ class BackupCog(commands.Cog):
 
         Aceita `.zip` (formato atual) e `.json` (legado). Os registros ausentes
         são inseridos sem apagar nem atualizar o que já existe.
+
+        O defer com thinking=True vem no primeiro instante: baixar o anexo e
+        inserir milhares de linhas passa fácil de 3 segundos.
         """
-        await interacao.response.defer(ephemeral=True)
+        # Responde ao Discord imediatamente — sem isso aparece
+        # "O aplicativo não respondeu" em import grande.
+        await interacao.response.defer(thinking=True, ephemeral=True)
+
         nome = (arquivo.filename or "").lower()
         if not (nome.endswith(".zip") or nome.endswith(".json")):
             await enviar_card(
@@ -1173,8 +1179,22 @@ class BackupCog(commands.Cog):
                 delay=15,
             )
             return
+
+        tamanho_mb = (arquivo.size or 0) / (1024 * 1024)
+        registrador.info(
+            "[backup-db] importando %s (%.2f MB) pedido por %s",
+            arquivo.filename,
+            tamanho_mb,
+            interacao.user.id,
+        )
+
         try:
             snapshot = await ler_snapshot_do_anexo(arquivo)
+            tabelas_no_arquivo = len((snapshot.get("tabelas") or {}))
+            registrador.info(
+                "[backup-db] snapshot lido: %s tabela(s) — iniciando restore",
+                tabelas_no_arquivo,
+            )
             estatisticas = await importar_snapshot_aditivo(snapshot)
             await enviar_card(
                 interacao,
@@ -1201,10 +1221,19 @@ class BackupCog(commands.Cog):
                 autor=str(interacao.user),
             )
         except Exception as erro:
+            registrador.exception(
+                "[backup-db] falha ao importar %s: %s",
+                arquivo.filename,
+                erro,
+            )
             await enviar_card(
                 interacao,
                 titulo="Falha ao importar",
-                linhas=[str(erro)[:400]],
+                linhas=[
+                    str(erro)[:400],
+                    "Se o arquivo for muito grande, tente de novo — "
+                    "o progresso por tabela já fica gravado.",
+                ],
                 cor=COR_ERRO,
                 delay=25,
             )
