@@ -3,14 +3,14 @@
 Cofre do banco de dados no canal LOG_BACKUP do Discord.
 
 Fluxo simples (sem API externa):
-  - Exportar → gera JSON e posta no LOG_BACKUP (com anexo)
+  - Exportar → gera snapshot, compacta em .zip e posta no LOG_BACKUP
   - Listar / baixar → lê mensagens marcadas nesse canal
   - Verificar → compara hash local com o último backup do canal
-  - Importar → JSON editado (VS Code) via anexo → INSERT só do que falta
+  - Importar → .zip (ou .json legado) via anexo → INSERT só do que falta
 
 Modal do Discord NÃO aceita arquivo. Por isso o upload é:
   - comando /backup banco-importar com anexo, ou
-  - botão do painel que espera a próxima mensagem sua com o .json
+  - botão do painel que espera a próxima mensagem sua com o .zip
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import zipfile
 from datetime import (
     datetime,
     timezone,
@@ -47,11 +48,12 @@ from src.utils.mensagens import (
 
 MARCADOR_BACKUP_DB = "🗄️ DB_BACKUP"
 PADRAO_HASH = re.compile(r"hash=`([a-f0-9]{16,64})`", re.IGNORECASE)
-# Nome do anexo: db_backup_<hash16>_<timestamp>.json
+# Nome do anexo: db_backup_<hash16>_<timestamp>.zip (legado .json ainda aceito)
 PADRAO_HASH_NO_ARQUIVO = re.compile(
     r"db_backup_([a-f0-9]{16})_",
     re.IGNORECASE,
 )
+NOME_JSON_DENTRO_DO_ZIP = "snapshot.json"
 
 
 def _canal_log_backup(guilda: discord.Guild) -> discord.TextChannel | None:
@@ -206,32 +208,77 @@ def _extrair_hash_da_mensagem(mensagem: discord.Message) -> str | None:
     return None
 
 
-def _anexo_json_da_mensagem(mensagem: discord.Message) -> discord.Attachment | None:
+def _anexo_backup_da_mensagem(
+    mensagem: discord.Message,
+) -> discord.Attachment | None:
+    """
+    Acha o anexo de backup do banco na mensagem.
+
+    Aceita .zip (formato atual) e .json (legado).
+    """
     for anexo in mensagem.attachments:
         nome = (anexo.filename or "").lower()
-        if nome.endswith(".json"):
+        if nome.endswith(".zip") or nome.endswith(".json"):
             return anexo
-        if "json" in (anexo.content_type or ""):
+        tipo = (anexo.content_type or "").lower()
+        if "zip" in tipo or "json" in tipo:
             return anexo
     return None
 
 
-async def ler_snapshot_do_anexo(anexo: discord.Attachment) -> dict[str, Any]:
-    """
-    Converte um anexo JSON em um retrato de banco pronto para importação.
+# Nome antigo ainda usado em alguns pontos do painel; aponta para a mesma lógica.
+def _anexo_json_da_mensagem(mensagem: discord.Message) -> discord.Attachment | None:
+    return _anexo_backup_da_mensagem(mensagem)
 
-    Lê os bytes enviados pelo Discord, decodifica UTF-8 e exige a chave `tabelas`,
-    estrutura mínima de uma exportação do bot. Em vez de aceitar qualquer JSON, gera
-    um erro claro para impedir que um arquivo incompatível alcance o banco.
+
+def _decodificar_snapshot_dos_bytes(
+    dados_brutos: bytes,
+    nome_arquivo: str,
+) -> dict[str, Any]:
     """
-    dados_brutos = await anexo.read()
-    texto = dados_brutos.decode("utf-8")
+    Lê bytes de um .zip ou .json e devolve o dicionário do snapshot.
+
+    No .zip espera um único JSON (snapshot.json ou o primeiro .json encontrado).
+    """
+    nome = (nome_arquivo or "").lower()
+    if nome.endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(dados_brutos), "r") as arquivo_zip:
+            nomes_dentro = arquivo_zip.namelist()
+            nome_json = None
+            if NOME_JSON_DENTRO_DO_ZIP in nomes_dentro:
+                nome_json = NOME_JSON_DENTRO_DO_ZIP
+            else:
+                for candidato in nomes_dentro:
+                    if candidato.lower().endswith(".json"):
+                        nome_json = candidato
+                        break
+            if nome_json is None:
+                raise ValueError(
+                    "ZIP inválido: não achei nenhum .json dentro do arquivo."
+                )
+            texto = arquivo_zip.read(nome_json).decode("utf-8")
+    else:
+        texto = dados_brutos.decode("utf-8")
+
     snapshot = json.loads(texto)
     if not isinstance(snapshot, dict) or "tabelas" not in snapshot:
         raise ValueError(
-            "JSON inválido: precisa ter a chave `tabelas` (export do bot)."
+            "Snapshot inválido: precisa ter a chave `tabelas` (export do bot)."
         )
     return snapshot
+
+
+async def ler_snapshot_do_anexo(anexo: discord.Attachment) -> dict[str, Any]:
+    """
+    Converte um anexo (.zip ou .json legado) em retrato de banco para importação.
+
+    Exige a chave `tabelas`, estrutura mínima de uma exportação do bot.
+    """
+    dados_brutos = await anexo.read()
+    return _decodificar_snapshot_dos_bytes(
+        dados_brutos,
+        anexo.filename or "",
+    )
 
 
 async def exportar_banco_para_canal(
@@ -275,13 +322,24 @@ async def exportar_banco_para_canal(
     quantidade_tabelas, quantidade_linhas = _contar_linhas(snapshot)
     carimbo = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     hash_curto = (hash_local or "semhash")[:16]
-    nome_arquivo = f"db_backup_{hash_curto}_{carimbo}.json"
+    nome_arquivo = f"db_backup_{hash_curto}_{carimbo}.zip"
     conteudo_json = json.dumps(snapshot, ensure_ascii=False, indent=2)
     bytes_json = conteudo_json.encode("utf-8")
-    tamanho_bytes = len(bytes_json)
+
+    # Compacta o JSON em ZIP para ocupar bem menos no canal e no disco.
+    buffer_zip = io.BytesIO()
+    with zipfile.ZipFile(
+        buffer_zip,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as arquivo_zip:
+        arquivo_zip.writestr(NOME_JSON_DENTRO_DO_ZIP, bytes_json)
+    bytes_zip = buffer_zip.getvalue()
+    tamanho_bytes = len(bytes_zip)
 
     # Components V2 não envia anexo na mesma mensagem do card.
-    # 1ª mensagem = card | 2ª = só o arquivo JSON (sem texto)
+    # 1ª mensagem = card | 2ª = só o arquivo ZIP (sem texto)
     view_card = _montar_card_backup_db(
         guilda,
         snapshot,
@@ -292,7 +350,7 @@ async def exportar_banco_para_canal(
     mensagem_card = await canal.send(view=view_card)
 
     arquivo = discord.File(
-        fp=io.BytesIO(bytes_json),
+        fp=io.BytesIO(bytes_zip),
         filename=nome_arquivo,
     )
     mensagem_arquivo = await canal.send(file=arquivo)
@@ -314,9 +372,9 @@ async def exportar_banco_para_canal(
 async def obter_ultimo_backup_mensagem(
     canal: discord.TextChannel,
 ) -> discord.Message | None:
-    """Última mensagem do canal que tem anexo .json de backup."""
+    """Última mensagem do canal que tem anexo .zip ou .json de backup."""
     async for mensagem in canal.history(limit=50):
-        anexo = _anexo_json_da_mensagem(mensagem)
+        anexo = _anexo_backup_da_mensagem(mensagem)
         if anexo is None:
             continue
         nome = (anexo.filename or "").lower()
@@ -324,8 +382,8 @@ async def obter_ultimo_backup_mensagem(
             mensagem.content or ""
         ):
             return mensagem
-        # Qualquer .json no LOG_BACKUP conta (legado)
-        if nome.endswith(".json"):
+        # Qualquer .zip/.json no LOG_BACKUP conta (legado e atual)
+        if nome.endswith(".zip") or nome.endswith(".json"):
             return mensagem
     return None
 
@@ -349,13 +407,14 @@ async def listar_backups_do_canal(
 
     encontrados: list[dict[str, Any]] = []
     async for mensagem in canal.history(limit=80):
-        anexo = _anexo_json_da_mensagem(mensagem)
+        anexo = _anexo_backup_da_mensagem(mensagem)
         if anexo is None:
             continue
         nome = (anexo.filename or "").lower()
         if not (
             nome.startswith("db_backup_")
             or MARCADOR_BACKUP_DB in (mensagem.content or "")
+            or nome.endswith(".zip")
             or nome.endswith(".json")
         ):
             continue
@@ -478,7 +537,7 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
         )
         botao_listar.callback = self._ao_listar
         botao_importar = discord.ui.Button(
-            label="Importar JSON (anexo)",
+            label="Importar ZIP (anexo)",
             style=discord.ButtonStyle.danger,
             emoji="📥",
             custom_id="backup_db:importar",
@@ -491,9 +550,11 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# 🗄️ Painel — Backup do banco\n"
-                    "Cofre = canal **LOG_BACKUP** (arquivo JSON anexado).\n"
-                    "Edição: baixe o JSON → VS Code → envie de volta (só adiciona "
-                    "linhas)."
+                    "Cofre = canal **LOG_BACKUP** (arquivo `.zip` anexado).\n"
+                    "Horários automáticos (Brasília): **00:00**, **11:00** e "
+                    "**17:00**.\n"
+                    "Edição: baixe o ZIP → extraia o JSON → edite → reenvie "
+                    "(só adiciona linhas)."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(
@@ -501,7 +562,7 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
                     "• **Exportar** — posta snapshot atual no canal (se hash mudou).\n"
                     "• **Verificar** — compara banco local × último do canal.\n"
                     "• **Listar** — últimos backups com link de download.\n"
-                    "• **Importar** — envie o `.json` na próxima mensagem (90s).\n"
+                    "• **Importar** — envie o `.zip` (ou `.json` legado) em 90s.\n"
                     "• Atalho slash: `/backup banco-importar` com anexo."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
@@ -657,7 +718,7 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
                     titulo="Nenhum backup no canal",
                     linhas=[
                         "Ainda não há mensagem com o marcador "
-                        f"`{MARCADOR_BACKUP_DB}` e anexo `.json`.",
+                        f"`{MARCADOR_BACKUP_DB}` e anexo `.zip`.",
                         "Use **Exportar** para criar o primeiro.",
                     ],
                     delay=20,
@@ -697,10 +758,10 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
 
         await responder_aviso(
             interacao,
-            titulo="Envie o arquivo JSON",
+            titulo="Envie o arquivo de backup",
             linhas=[
                 "Nas **próximas 90 segundos**, mande neste canal (ou em DM comigo) "
-                "uma mensagem **só com o anexo** `.json` do backup.",
+                "uma mensagem **só com o anexo** `.zip` (ou `.json` legado).",
                 "O bot lê o arquivo e **só adiciona** linhas que faltam no banco "
                 "(nunca apaga o que já existe).",
                 "Atalho: `/backup banco-importar` + anexo.",
@@ -711,7 +772,7 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
         def _filtro(mensagem: discord.Message) -> bool:
             if mensagem.author.id != interacao.user.id:
                 return False
-            return _anexo_json_da_mensagem(mensagem) is not None
+            return _anexo_backup_da_mensagem(mensagem) is not None
 
         try:
             mensagem_arquivo = await self.bot.wait_for(
@@ -724,19 +785,19 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Tempo esgotado",
                 linhas=[
-                    "Nenhum `.json` recebido em 90s.",
+                    "Nenhum `.zip`/`.json` recebido em 90s.",
                     "Tente de novo ou use `/backup banco-importar`.",
                 ],
                 delay=15,
             )
             return
 
-        anexo = _anexo_json_da_mensagem(mensagem_arquivo)
+        anexo = _anexo_backup_da_mensagem(mensagem_arquivo)
         if anexo is None:
             await responder_erro(
                 interacao,
                 titulo="Anexo inválido",
-                linhas=["Não achei um arquivo `.json` na mensagem."],
+                linhas=["Não achei um arquivo `.zip` ou `.json` na mensagem."],
             )
             return
 

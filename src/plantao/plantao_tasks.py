@@ -46,6 +46,7 @@ from src.config import (
 from src.database.conexao import (
     async_session,
     reiniciar_pool_se_preciso,
+    tentar_reanimar_as_conexoes,
 )
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_logger import registrar_evento_plantao
@@ -124,12 +125,14 @@ class PlantaoTasks(commands.Cog):
                     )
                 )
                 estados = list(resultado.scalars().all())
-        except (DBAPIError, OperationalError) as erro_banco:
+        except (DBAPIError, OperationalError, TimeoutError) as erro_banco:
             logger.warning(
                 "Falha ao listar plantões para ciclo minuto: %s",
                 erro_banco,
             )
-            await reiniciar_pool_se_preciso(erro_banco)
+            await tentar_reanimar_as_conexoes(
+                contexto="listar plantões para ciclo minuto"
+            )
             return
 
         for estado in estados:
@@ -149,6 +152,18 @@ class PlantaoTasks(commands.Cog):
                         segundos,
                         moedas,
                     )
+            except (DBAPIError, OperationalError, TimeoutError) as erro_ciclo:
+                logger.exception(
+                    "Falha no ciclo minuto do membro %s: %s",
+                    estado.discord_id,
+                    erro_ciclo,
+                )
+                await tentar_reanimar_as_conexoes(
+                    contexto=(
+                        "ciclo minuto de plantão do membro "
+                        f"{estado.discord_id}"
+                    )
+                )
             except Exception as erro_ciclo:
                 logger.exception(
                     "Falha no ciclo minuto do membro %s: %s",

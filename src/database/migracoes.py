@@ -156,6 +156,40 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "ADD COLUMN IF NOT EXISTS repasses_json TEXT"
         ),
     ),
+    Migracao(
+        numero=9,
+        descricao=(
+            "log_plantao: índices em discord_id e criado_em para "
+            "acelerar SUM de horas e reduzir contenção nos inserts "
+            "do ciclo minuto e dos eventos de call."
+        ),
+        comando_sql=(
+            "CREATE INDEX IF NOT EXISTS ix_log_plantao_discord_id "
+            "ON log_plantao (discord_id)"
+        ),
+    ),
+    Migracao(
+        numero=10,
+        descricao=(
+            "log_plantao: índice em criado_em para filtros por data "
+            "no ranking e no extrato de horas."
+        ),
+        comando_sql=(
+            "CREATE INDEX IF NOT EXISTS ix_log_plantao_criado_em "
+            "ON log_plantao (criado_em)"
+        ),
+    ),
+    Migracao(
+        numero=11,
+        descricao=(
+            "log_plantao: índice composto (discord_id, criado_em) "
+            "para o SUM de horas por membro no intervalo do ciclo."
+        ),
+        comando_sql=(
+            "CREATE INDEX IF NOT EXISTS ix_log_plantao_discord_criado "
+            "ON log_plantao (discord_id, criado_em)"
+        ),
+    ),
 ]
 
 

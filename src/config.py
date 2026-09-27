@@ -123,7 +123,14 @@ BACKUP_DIR = _ler_texto_do_ambiente("BACKUP_DIR", "src/data/backups")
 MAX_BACKUPS_PER_GUILD = _ler_numero_do_ambiente("MAX_BACKUPS_PER_GUILD", 10)
 # Backup estrutural do Discord (cargos/canais) — intervalo em horas
 AUTO_BACKUP_INTERVAL_HOURS = _ler_numero_do_ambiente("AUTO_BACKUP_INTERVAL_HOURS", 24)
-# Backup do banco (JSON no LOG_BACKUP) — verificação silenciosa em minutos
+# Backup do banco no LOG_BACKUP: horários fixos em Brasília (hora, minuto).
+# Não roda mais a cada minuto — só nesses três pontos do dia.
+HORARIOS_BACKUP_BANCO = (
+    (0, 0),
+    (11, 0),
+    (17, 0),
+)
+# Mantido só para leitura de .env legado; a tarefa usa HORARIOS_BACKUP_BANCO.
 AUTO_BACKUP_DB_INTERVAL_MINUTES = _ler_numero_do_ambiente(
     "AUTO_BACKUP_DB_INTERVAL_MINUTES",
     1,

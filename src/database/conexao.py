@@ -31,15 +31,16 @@ from src.database.models import Base
 
 registrador = logging.getLogger(__name__)
 
-# Render / Neon / proxies costumam fechar conexões ociosas.
+# Postgres remoto (Fadehost e similares) fecha conexões ociosas.
 # pre_ping + recycle evitam entregar uma conexão já morta às tasks.
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=5,
-    max_overflow=10,
+    # Folga no pico (voice + ciclo minuto + tasks) para não esgotar o pool.
+    pool_size=8,
+    max_overflow=15,
     pool_pre_ping=True,
-    pool_recycle=3600,
+    pool_recycle=1800,
     connect_args={
         "timeout": 30,
         "command_timeout": 60,

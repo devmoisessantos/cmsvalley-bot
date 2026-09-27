@@ -227,7 +227,9 @@ class EstadoPlantao(Base):
     moedas_ganhas_no_dia: Mapped[int] = mapped_column(Integer, default=0)
     data_moedas_dia: Mapped[str | None] = mapped_column(String(10), nullable=True)
     moedas_ganhas_na_semana: Mapped[int] = mapped_column(Integer, default=0)
-    chave_semana_moedas: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    chave_semana_moedas: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
 
     ultima_atualizacao: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=agora, onupdate=agora
@@ -255,12 +257,16 @@ class LogPlantao(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    discord_id: Mapped[int] = mapped_column(BigInteger)
+    # Índice: SUM e filtros por membro no ranking/horas do ciclo.
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
     evento: Mapped[str] = mapped_column(String(30))
     canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     duracao_segundos: Mapped[int | None] = mapped_column(Integer, nullable=True)
     detalhes: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    # Índice: recortes por data (horas do ciclo, extrato).
+    criado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora, index=True
+    )
 
 
 class ControleChamada(Base):
@@ -379,13 +385,17 @@ class SolicitacaoIngressoGate(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     discord_id_candidato: Mapped[int] = mapped_column(BigInteger, index=True)
-    discord_id_recrutador: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    discord_id_recrutador: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
     # pendente | aprovado | reprovado | cancelado
     status: Mapped[str] = mapped_column(String(20), default="pendente", index=True)
     canal_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     mensagem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     motivo_reprovacao: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    criado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
     decidido_em: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

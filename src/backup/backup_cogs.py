@@ -48,12 +48,13 @@ from src.backup.retrato_de_membros_service import (
     sincronizar_todos_os_membros,
 )
 from src.config import (
-    AUTO_BACKUP_DB_INTERVAL_MINUTES,
     AUTO_BACKUP_INTERVAL_HOURS,
     BACKUP_DIR,
     CONFIRMATION_TIMEOUT,
+    HORARIOS_BACKUP_BANCO,
     MAX_BACKUPS_PER_GUILD,
 )
+from src.utils.formatacao import agora_brasilia
 from src.membros.sincronizar_usuarios_service import (
     garantir_usuario_basico,
     sincronizar_usuarios_do_servidor,
@@ -89,9 +90,10 @@ class BackupCog(commands.Cog):
         self.logger = BackupLogger()
         self.tarefa_backup_automatico.change_interval(hours=AUTO_BACKUP_INTERVAL_HOURS)
         self.tarefa_backup_automatico.start()
-        # Banco: a cada N minutos, só posta no LOG_BACKUP se o hash mudou
-        minutos_banco = max(1, int(AUTO_BACKUP_DB_INTERVAL_MINUTES or 1))
-        self.tarefa_backup_banco.change_interval(minutes=minutos_banco)
+        # Banco: só nos horários fixos de Brasília (ver HORARIOS_BACKUP_BANCO).
+        # O loop acorda a cada minuto, mas só grava quando bate o horário.
+        self._chave_ultimo_backup_banco: str | None = None
+        self.tarefa_backup_banco.change_interval(minutes=1)
         self.tarefa_backup_banco.start()
 
     def cog_unload(self):
@@ -250,28 +252,39 @@ class BackupCog(commands.Cog):
     @tasks.loop(minutes=1)
     async def tarefa_backup_banco(self):
         """
-        A cada AUTO_BACKUP_DB_INTERVAL_MINUTES (padrão 1):
+        Nos horários de Brasília em HORARIOS_BACKUP_BANCO (00:00, 11:00, 17:00):
           - calcula o snapshot do Postgres
-          - compara hash com o último JSON no LOG_BACKUP
+          - compara hash com o último ZIP/JSON no LOG_BACKUP
           - se igual → silêncio total
-          - se diferente → posta o novo arquivo no canal (sem spam de log extra)
+          - se diferente → posta o novo .zip no canal
+
+        Fora desses horários a tarefa não faz nada (só acorda a cada minuto
+        para saber se chegou a hora).
         """
+        agora = agora_brasilia()
+        horario_atual = (agora.hour, agora.minute)
+        if horario_atual not in HORARIOS_BACKUP_BANCO:
+            return
+
+        # Evita rodar duas vezes no mesmo horário do mesmo dia.
+        chave = f"{agora.date().isoformat()}-{agora.hour:02d}:{agora.minute:02d}"
+        if self._chave_ultimo_backup_banco == chave:
+            return
+        self._chave_ultimo_backup_banco = chave
+
         for guilda in self.bot.guilds:
             try:
                 resultado_banco = await exportar_banco_para_canal(
                     guilda,
-                    autor="Sistema (verificação automática)",
+                    autor="Sistema (backup agendado)",
                     forcar=False,
                 )
                 if resultado_banco.get("enviado"):
-                    # Só um print no console — o próprio anexo no LOG_BACKUP já é o
-                    # registro
                     registrador.info(
                         f"[backup-db] atualizado: {resultado_banco.get('arquivo')} "
                         f"hash={str(resultado_banco.get('hash') or '')[:12]} "
                         f"linhas={resultado_banco.get('linhas')}"
                     )
-                # Sem alteração → nada no console (silencioso)
             except Exception as erro:
                 registrador.error(f"[backup-db] erro em {guilda.name}: {erro}")
 
@@ -1130,11 +1143,12 @@ class BackupCog(commands.Cog):
 
     @grupo_backup.command(
         name="banco-importar",
-        description="Importa JSON do banco (só adiciona linhas que faltam — nunca "
-        "apaga)",
+        description=(
+            "Importa backup do banco (.zip ou .json) — só adiciona o que falta"
+        ),
     )
     @app_commands.describe(
-        arquivo="Arquivo .json exportado (pode ter sido editado no VS Code)"
+        arquivo="Arquivo .zip exportado (ou .json legado)"
     )
     @apenas_administrador()
     async def banco_importar(
@@ -1143,20 +1157,18 @@ class BackupCog(commands.Cog):
         arquivo: discord.Attachment,
     ):
         """
-        Acrescenta ao banco as linhas válidas presentes em um anexo JSON.
+        Acrescenta ao banco as linhas válidas presentes no anexo.
 
-        O anexo deve terminar em `.json`; depois de lido, seus registros ausentes
-        são inseridos no banco sem apagar nem atualizar os que já existem. Esse
-        comportamento aditivo reduz o risco de perder dados locais ao recuperar um
-        arquivo editado ou exportado anteriormente.
+        Aceita `.zip` (formato atual) e `.json` (legado). Os registros ausentes
+        são inseridos sem apagar nem atualizar o que já existe.
         """
         await interacao.response.defer(ephemeral=True)
         nome = (arquivo.filename or "").lower()
-        if not nome.endswith(".json"):
+        if not (nome.endswith(".zip") or nome.endswith(".json")):
             await enviar_card(
                 interacao,
                 titulo="Arquivo inválido",
-                linhas=["Envie um anexo com extensão `.json`."],
+                linhas=["Envie um anexo com extensão `.zip` ou `.json`."],
                 cor=COR_ERRO,
                 delay=15,
             )
@@ -1179,7 +1191,7 @@ class BackupCog(commands.Cog):
             )
             await self.logger.log(
                 interacao.guild,
-                "📥 Importação de banco (JSON)",
+                "📥 Importação de banco",
                 (
                     f"{arquivo.filename} · "
                     f"+{estatisticas.get('linhas_inseridas', 0)} inseridas · "
@@ -1199,7 +1211,7 @@ class BackupCog(commands.Cog):
 
     @grupo_backup.command(
         name="banco-verificar",
-        description="Compara o banco local com o último JSON no LOG_BACKUP",
+        description="Compara o banco local com o último backup no LOG_BACKUP",
     )
     @apenas_administrador()
     async def banco_verificar(self, interacao: discord.Interaction):
