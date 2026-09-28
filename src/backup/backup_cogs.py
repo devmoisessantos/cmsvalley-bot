@@ -4,10 +4,16 @@ Comandos e listeners do sistema de backup.
 
 Grupo único: /backup
 
-  criar · listar · exportar · deletar · comparar · status
-  restaurar-cargos · restaurar-canais · restaurar-membros · restaurar-tudo
-  rejoin · sincronizar-membros · sincronizar-usuarios
-  banco-painel · banco-exportar · banco-importar · banco-verificar · banco-listar
+  Estrutura Discord:
+    criar · listar · exportar · deletar · comparar · status
+    restaurar-cargos · restaurar-canais · restaurar-membros · restaurar-tudo
+    rejoin · sincronizar-membros · sincronizar-usuarios
+
+  Banco (Postgres):
+    banco-painel · banco-exportar · banco-importar
+
+  Recuperação a partir dos LOGs (antes era /recuperar solto):
+    recuperar plantao · recrutamentos · aprovacoes · …
 
 Respostas ao usuário passam por src.utils.mensagens.
 Logs de canal passam por BackupLogger (Components V2).
@@ -35,8 +41,20 @@ from src.backup.banco_no_discord_service import (
     exportar_banco_para_canal,
     importar_snapshot_aditivo,
     ler_snapshot_do_anexo,
-    listar_backups_do_canal,
-    verificar_banco_vs_canal,
+)
+from src.backup.recuperacao_logs_service import (
+    id_canal_log,
+    id_canal_log_plantao,
+    importar_log_aprovacoes_do_canal,
+    importar_log_cargos_do_canal,
+    importar_log_chamadas_do_canal,
+    importar_log_laudos_do_canal,
+    importar_log_plantao_do_canal,
+    importar_log_promocoes_do_canal,
+    importar_log_punicoes_do_canal,
+    importar_log_recrutamentos_do_canal,
+    importar_log_reprovacoes_do_canal,
+    importar_log_whitelist_do_canal,
 )
 from src.backup.comparacao_service import DiffEngine
 from src.backup.restauracao_service import RestoreManager
@@ -66,6 +84,9 @@ from src.utils.mensagens import (
     COR_SUCESSO,
     enviar_card,
     excluir_mensagem,
+    responder_erro,
+    responder_info,
+    responder_sucesso,
     responder_view,
 )
 from src.utils.permissions import apenas_administrador
@@ -75,11 +96,17 @@ registrador = logging.getLogger(__name__)
 
 
 class BackupCog(commands.Cog):
-    """Todos os comandos de backup ficam neste único grupo."""
+    """Todos os comandos de backup e recuperação ficam neste único grupo."""
 
     grupo_backup = app_commands.Group(
         name="backup",
-        description="Backup e restauração do servidor (somente Administradores)",
+        description="Backup, restauração e recuperação (somente Administradores)",
+    )
+    # Antes era o grupo solto /recuperar — agora vive sob /backup recuperar …
+    grupo_recuperar = app_commands.Group(
+        name="recuperar",
+        description="Recuperar dados a partir dos canais de LOG",
+        parent=grupo_backup,
     )
 
     def __init__(self, bot: commands.Bot):
@@ -103,9 +130,9 @@ class BackupCog(commands.Cog):
         self.tarefa_backup_automatico.cancel()
         self.tarefa_backup_banco.cancel()
 
-    # --------------------------------------------------------
+    # ------------------------------------------------------------------
     # Helpers internos
-    # --------------------------------------------------------
+    # ------------------------------------------------------------------
 
     async def _carregar_backup_alvo(
         self,
@@ -1072,24 +1099,25 @@ class BackupCog(commands.Cog):
 
     @grupo_backup.command(
         name="banco-painel",
-        description="Painel ephemeral: exportar, listar, verificar e importar o "
-        "banco (JSON)",
+        description=(
+            "Painel ephemeral do cofre do banco (exportar, listar, "
+            "verificar, importar)"
+        ),
     )
     @apenas_administrador()
     async def banco_painel(self, interacao: discord.Interaction):
         """
-        Abre controles privados para administrar o cofre JSON do banco.
+        Abre controles privados para administrar o cofre ZIP do banco.
 
-        Cria uma view vinculada ao identificador de quem executou o comando e a
-        envia de modo efêmero. Essa vinculação impede que outro membro use botões
-        capazes de exportar, conferir ou importar dados do banco.
+        Só quem abriu o painel usa os botões. Listar e verificar ficam só
+        aqui (não há mais slash solto para isso).
         """
         view = PainelBancoBackupView(self.bot, interacao.user.id)
         await responder_view(interacao, view, ephemeral=True)
 
     @grupo_backup.command(
         name="banco-exportar",
-        description="Exporta o Postgres em JSON e posta no canal LOG_BACKUP",
+        description="Exporta o Postgres em ZIP e posta no canal LOG_BACKUP",
     )
     @app_commands.describe(
         forcar="Se verdadeiro, posta mesmo quando o hash for igual ao último do canal"
@@ -1238,81 +1266,290 @@ class BackupCog(commands.Cog):
                 delay=25,
             )
 
-    @grupo_backup.command(
-        name="banco-verificar",
-        description="Compara o banco local com o último backup no LOG_BACKUP",
-    )
-    @apenas_administrador()
-    async def banco_verificar(self, interacao: discord.Interaction):
-        """
-        Compara o estado do banco com o último cofre publicado no canal de backup.
+    # ------------------------------------------------------------------
+    # /backup recuperar …  (antes era o grupo solto /recuperar)
+    # ------------------------------------------------------------------
 
-        Gera e confronta hashes sem modificar dados, exibindo o motivo, as contagens
-        e o link do anexo encontrado. Assim, a equipe pode decidir se deve exportar
-        ou importar antes de executar uma sincronização desnecessária.
+    async def _rodar_recuperacao_de_log(
+        self,
+        interacao: discord.Interaction,
+        *,
+        titulo: str,
+        chave_canal: str,
+        canal_id: int | None,
+        importador,
+        limite: int | None,
+        so_bot: bool,
+    ) -> None:
         """
-        await interacao.response.defer(ephemeral=True)
-        resultado = await verificar_banco_vs_canal(interacao.guild)
-        if resultado.get("igual"):
-            cor = COR_SUCESSO
-            titulo = "✅ Banco = último backup do canal"
-        else:
-            cor = COR_AVISO
-            titulo = "⚠️ Banco diferente do canal (ou sem backup)"
-        await enviar_card(
-            interacao,
-            titulo=titulo,
-            linhas=[
-                resultado.get("motivo") or "",
-                f"Hash local: `{str(resultado.get('hash_local') or '')[:24]}…`",
-                f"Hash canal: `{str(resultado.get('hash_canal') or 'nenhum')[:24]}…`",
-                f"Tabelas: **{resultado.get('tabelas')}** · "
-                f"Linhas: **{resultado.get('linhas')}**",
-                f"Link: {resultado.get('jump_url') or '—'}",
-            ],
-            cor=cor,
-            delay=30,
-        )
+        Lê um canal de LOG e importa o que der para o banco.
 
-    @grupo_backup.command(
-        name="banco-listar",
-        description="Lista os últimos backups JSON postados no LOG_BACKUP",
-    )
-    @apenas_administrador()
-    async def banco_listar(self, interacao: discord.Interaction):
+        Compartilhado por todos os subcomandos de /backup recuperar.
         """
-        Apresenta os últimos cofres JSON do banco com links de consulta e download.
+        await interacao.response.defer(thinking=True, ephemeral=True)
 
-        Busca até dez anexos no canal de backup e monta cards com o nome e o hash
-        curto de cada um. Ao informar a ausência de anexos, evita que a equipe tente
-        conferir ou restaurar um cofre que ainda não foi criado.
-        """
-        await interacao.response.defer(ephemeral=True)
-        lista = await listar_backups_do_canal(interacao.guild, limite=10)
-        if not lista:
-            await enviar_card(
+        if not canal_id:
+            await responder_erro(
                 interacao,
-                titulo="Nenhum backup no canal",
-                linhas=[
-                    "Use `/backup banco-exportar` ou o painel para criar o primeiro."
-                ],
-                cor=COR_AVISO,
-                delay=15,
+                titulo="Canal não configurado",
+                linhas=[f"`CANAIS['{chave_canal}']` não está definido no config."],
             )
             return
-        linhas = []
-        for indice, item in enumerate(lista, start=1):
-            hash_curto = (item.get("hash") or "?")[:12]
-            linhas.append(
-                f"**{indice}.** `{item.get('arquivo')}` · `{hash_curto}…`\n"
-                f"[mensagem]({item.get('jump_url')}) · [download]({item.get('url')})"
+
+        canal = interacao.guild.get_channel(canal_id) if interacao.guild else None
+        if canal is None:
+            await responder_erro(
+                interacao,
+                titulo="Canal não encontrado",
+                linhas=[f"ID `{canal_id}` não existe nesta guilda."],
             )
-        await enviar_card(
+            return
+
+        await responder_sucesso(
             interacao,
-            titulo="📋 Backups do banco no LOG_BACKUP",
-            linhas=linhas,
-            cor=COR_INFO,
-            delay=60,
+            titulo=f"{titulo} — iniciada",
+            linhas=[
+                f"Lendo <#{canal_id}>…",
+                "Pode levar vários minutos. Não rode de novo até terminar.",
+            ],
+            delay=20,
+        )
+
+        apenas_bot = self.bot.user.id if so_bot and self.bot.user else None
+        try:
+            resultado = await importador(
+                canal,
+                limite=limite,
+                apenas_bot_id=apenas_bot,
+            )
+        except Exception as erro:
+            registrador.exception("%s: %s", titulo, erro)
+            await responder_erro(
+                interacao,
+                titulo="Falha na operação",
+                linhas=[f"Falha na importação: `{erro}`"],
+            )
+            return
+
+        resumo = (
+            f"**{titulo} concluída**\n"
+            f"• Mensagens lidas: **{resultado['lidas']}**\n"
+            f"• Criadas: **{resultado['importadas']}**\n"
+            f"• Atualizadas: **{resultado.get('atualizadas', 0)}**\n"
+            f"• Já existiam: **{resultado['ja_existiam']}**\n"
+            f"• Ignoradas (sem parse): **{resultado['ignoradas']}**\n"
+            f"• Erros: **{resultado['erros']}**"
+        )
+        try:
+            await responder_info(
+                interacao,
+                titulo="Importação concluída",
+                linhas=[resumo],
+            )
+        except discord.HTTPException:
+            if interacao.channel:
+                await interacao.channel.send(
+                    f"{interacao.user.mention}\n{resumo}"
+                )
+
+    @grupo_recuperar.command(name="plantao", description="LOG_PLANTAO → log_plantao")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_plantao(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_PLANTAO",
+            chave_canal="LOG_PLANTAO",
+            canal_id=id_canal_log_plantao(),
+            importador=importar_log_plantao_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(
+        name="recrutamentos", description="LOG_RECRUTAMENTOS → inícios"
+    )
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_recrutamentos(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_RECRUTAMENTOS",
+            chave_canal="LOG_RECRUTAMENTOS",
+            canal_id=id_canal_log("LOG_RECRUTAMENTOS"),
+            importador=importar_log_recrutamentos_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(
+        name="aprovacoes", description="LOG_APROVACOES → APROVADO + cargo + nota"
+    )
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_aprovacoes(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_APROVACOES",
+            chave_canal="LOG_APROVACOES",
+            canal_id=id_canal_log("LOG_APROVACOES"),
+            importador=importar_log_aprovacoes_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(
+        name="reprovacoes", description="LOG_REPROVACOES → REPROVADO + nota"
+    )
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_reprovacoes(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_REPROVACOES",
+            chave_canal="LOG_REPROVACOES",
+            canal_id=id_canal_log("LOG_REPROVACOES"),
+            importador=importar_log_reprovacoes_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(name="punicoes", description="LOG_PUNICOES → punicoes")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_punicoes(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_PUNICOES",
+            chave_canal="LOG_PUNICOES",
+            canal_id=id_canal_log("LOG_PUNICOES"),
+            importador=importar_log_punicoes_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(name="chamadas", description="LOG_CHAMADAS → chamadas")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_chamadas(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_CHAMADAS",
+            chave_canal="LOG_CHAMADAS",
+            canal_id=id_canal_log("LOG_CHAMADAS"),
+            importador=importar_log_chamadas_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(name="whitelist", description="LOG_WHITELIST → usuarios")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_whitelist(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_WHITELIST",
+            chave_canal="LOG_WHITELIST",
+            canal_id=id_canal_log("LOG_WHITELIST"),
+            importador=importar_log_whitelist_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(name="cargos", description="LOG_CARGOS → historico_cargos")
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_cargos(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_CARGOS",
+            chave_canal="LOG_CARGOS",
+            canal_id=id_canal_log("LOG_CARGOS"),
+            importador=importar_log_cargos_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(
+        name="laudos", description="LOG_LAUDO → consultas + laudos"
+    )
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_laudos(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_LAUDO",
+            chave_canal="LOG_LAUDO",
+            canal_id=id_canal_log("LOG_LAUDO"),
+            importador=importar_log_laudos_do_canal,
+            limite=limite,
+            so_bot=so_bot,
+        )
+
+    @grupo_recuperar.command(
+        name="promocoes", description="LOG_PROMOVIDOS → historico_promocoes"
+    )
+    @app_commands.describe(limite="Máximo de mensagens", so_bot="Só do bot")
+    @apenas_administrador()
+    async def recuperar_promocoes(
+        self,
+        interacao: discord.Interaction,
+        limite: int | None = None,
+        so_bot: bool = True,
+    ):
+        await self._rodar_recuperacao_de_log(
+            interacao,
+            titulo="Recuperação LOG_PROMOVIDOS",
+            chave_canal="LOG_PROMOVIDOS",
+            canal_id=id_canal_log("LOG_PROMOVIDOS"),
+            importador=importar_log_promocoes_do_canal,
+            limite=limite,
+            so_bot=so_bot,
         )
 
 

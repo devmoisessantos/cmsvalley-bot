@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import io
 import json
+import logging
+import os
 import re
 import zipfile
 from datetime import (
@@ -32,7 +34,9 @@ from src.backup.sincronizacao_api_service import (
     restaurar_faltantes_no_banco,
 )
 from src.config import (
+    BACKUP_DIR,
     CANAIS,
+    MAX_BACKUPS_PER_GUILD,
     MESES_ABREV,
 )
 from src.utils.error_handling import LoggingViewMixin
@@ -46,6 +50,8 @@ from src.utils.mensagens import (
     responder_sucesso,
 )
 
+registrador = logging.getLogger(__name__)
+
 MARCADOR_BACKUP_DB = "🗄️ DB_BACKUP"
 PADRAO_HASH = re.compile(r"hash=`([a-f0-9]{16,64})`", re.IGNORECASE)
 # Nome do anexo: db_backup_<hash16>_<timestamp>.zip (legado .json ainda aceito)
@@ -54,6 +60,9 @@ PADRAO_HASH_NO_ARQUIVO = re.compile(
     re.IGNORECASE,
 )
 NOME_JSON_DENTRO_DO_ZIP = "snapshot.json"
+# Limite seguro do Discord para anexo (bots normais: 25 MB).
+# Fica abaixo de propósito para não falhar no limite exato.
+LIMITE_ANEXO_DISCORD_BYTES = 24 * 1024 * 1024
 
 
 def _canal_log_backup(guilda: discord.Guild) -> discord.TextChannel | None:
@@ -281,6 +290,88 @@ async def ler_snapshot_do_anexo(anexo: discord.Attachment) -> dict[str, Any]:
     )
 
 
+def _pasta_cofre_local() -> str:
+    """
+    Pasta no disco do bot onde todo ZIP de backup do banco é gravado.
+
+    Esta cópia existe para não depender só do Discord: se o upload falhar,
+    o arquivo ainda fica no servidor (Fadehost) para importar depois.
+    """
+    caminho = os.path.join(BACKUP_DIR, "database")
+    os.makedirs(caminho, exist_ok=True)
+    return caminho
+
+
+def _limpar_zips_locais_antigos() -> None:
+    """Mantém só os N ZIPs mais recentes na pasta local do cofre."""
+    pasta = _pasta_cofre_local()
+    nomes = sorted(
+        (
+            nome
+            for nome in os.listdir(pasta)
+            if nome.startswith("db_backup_") and nome.endswith(".zip")
+        ),
+        reverse=True,
+    )
+    limite = max(1, int(MAX_BACKUPS_PER_GUILD or 10))
+    for nome_antigo in nomes[limite:]:
+        try:
+            os.remove(os.path.join(pasta, nome_antigo))
+        except OSError as erro_ao_apagar:
+            registrador.warning(
+                "[backup-db] não apaguei ZIP local antigo %s: %s",
+                nome_antigo,
+                erro_ao_apagar,
+            )
+
+
+def _gravar_zip_local(nome_arquivo: str, bytes_zip: bytes) -> str | None:
+    """
+    Grava o ZIP no disco e devolve o caminho absoluto.
+
+    Retorna None se o disco falhar — o fluxo ainda tenta o Discord.
+    """
+    try:
+        caminho = os.path.join(_pasta_cofre_local(), nome_arquivo)
+        with open(caminho, "wb") as arquivo_local:
+            arquivo_local.write(bytes_zip)
+        _limpar_zips_locais_antigos()
+        registrador.info(
+            "[backup-db] cópia local salva: %s (%s bytes)",
+            caminho,
+            len(bytes_zip),
+        )
+        return caminho
+    except OSError as erro_ao_gravar:
+        registrador.error(
+            "[backup-db] falha ao gravar ZIP local %s: %s",
+            nome_arquivo,
+            erro_ao_gravar,
+        )
+        return None
+
+
+def _montar_bytes_do_zip(snapshot: dict[str, Any]) -> tuple[bytes, bytes]:
+    """
+    Serializa o snapshot em JSON e compacta em ZIP.
+
+    Devolve (bytes_json, bytes_zip) para log de tamanho e upload.
+    """
+    # indent=None deixa o JSON bem menor que indent=2 (menos chance de
+    # estourar o limite do Discord depois de compactar).
+    conteudo_json = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+    bytes_json = conteudo_json.encode("utf-8")
+    buffer_zip = io.BytesIO()
+    with zipfile.ZipFile(
+        buffer_zip,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as arquivo_zip:
+        arquivo_zip.writestr(NOME_JSON_DENTRO_DO_ZIP, bytes_json)
+    return bytes_json, buffer_zip.getvalue()
+
+
 async def exportar_banco_para_canal(
     guilda: discord.Guild,
     *,
@@ -288,7 +379,14 @@ async def exportar_banco_para_canal(
     forcar: bool = False,
 ) -> dict[str, Any]:
     """
-    Gera snapshot e envia ao LOG_BACKUP.
+    Gera snapshot, grava ZIP no disco e envia ao LOG_BACKUP.
+
+    Regras anti-perda:
+      1. Sempre grava cópia local em BACKUP_DIR/database/ antes do Discord.
+      2. Envia o **arquivo primeiro**; só depois posta o card.
+      3. Só considera sucesso se a mensagem do arquivo tiver anexo de verdade.
+      4. Se o ZIP passar do limite seguro do Discord, não tenta upload mentiroso:
+         mantém o arquivo local e avisa no retorno.
 
     Se forcar=False e o hash for igual ao último do canal, não posta de novo.
     """
@@ -306,7 +404,6 @@ async def exportar_banco_para_canal(
         ultimo = await obter_ultimo_backup_mensagem(canal)
         if ultimo is not None:
             hash_canal = _extrair_hash_da_mensagem(ultimo) or ""
-            # Compara pelos 16 primeiros (nome do arquivo) ou hash completo (legado)
             if hash_canal and (
                 hash_canal == hash_local
                 or hash_canal == hash_local[:16]
@@ -323,66 +420,157 @@ async def exportar_banco_para_canal(
     carimbo = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     hash_curto = (hash_local or "semhash")[:16]
     nome_arquivo = f"db_backup_{hash_curto}_{carimbo}.zip"
-    conteudo_json = json.dumps(snapshot, ensure_ascii=False, indent=2)
-    bytes_json = conteudo_json.encode("utf-8")
 
-    # Compacta o JSON em ZIP para ocupar bem menos no canal e no disco.
-    buffer_zip = io.BytesIO()
-    with zipfile.ZipFile(
-        buffer_zip,
-        mode="w",
-        compression=zipfile.ZIP_DEFLATED,
-        compresslevel=9,
-    ) as arquivo_zip:
-        arquivo_zip.writestr(NOME_JSON_DENTRO_DO_ZIP, bytes_json)
-    bytes_zip = buffer_zip.getvalue()
+    bytes_json, bytes_zip = _montar_bytes_do_zip(snapshot)
     tamanho_bytes = len(bytes_zip)
+    tamanho_json = len(bytes_json)
 
-    # Components V2 não envia anexo na mesma mensagem do card.
-    # 1ª mensagem = card | 2ª = só o arquivo ZIP (sem texto)
-    view_card = _montar_card_backup_db(
-        guilda,
-        snapshot,
-        autor=autor,
-        nome_arquivo=nome_arquivo,
-        tamanho_bytes=tamanho_bytes,
+    registrador.info(
+        "[backup-db] snapshot pronto: %s tabelas, %s linhas, "
+        "json=%s bytes, zip=%s bytes",
+        quantidade_tabelas,
+        quantidade_linhas,
+        tamanho_json,
+        tamanho_bytes,
     )
-    mensagem_card = await canal.send(view=view_card)
 
-    arquivo = discord.File(
-        fp=io.BytesIO(bytes_zip),
-        filename=nome_arquivo,
-    )
-    mensagem_arquivo = await canal.send(file=arquivo)
+    # 1) Cópia local SEMPRE — independente do Discord.
+    caminho_local = _gravar_zip_local(nome_arquivo, bytes_zip)
+
+    if tamanho_bytes > LIMITE_ANEXO_DISCORD_BYTES:
+        motivo = (
+            f"ZIP com {tamanho_bytes} bytes passa do limite seguro do Discord "
+            f"({LIMITE_ANEXO_DISCORD_BYTES}). Cópia local: {caminho_local or 'falhou'}."
+        )
+        registrador.error("[backup-db] %s", motivo)
+        return {
+            "enviado": False,
+            "motivo": motivo,
+            "hash": hash_local,
+            "tabelas": quantidade_tabelas,
+            "linhas": quantidade_linhas,
+            "arquivo": nome_arquivo,
+            "caminho_local": caminho_local,
+            "tamanho_bytes": tamanho_bytes,
+        }
+
+    # 2) Arquivo PRIMEIRO — sem card órfão se o upload falhar.
+    mensagem_arquivo = None
+    try:
+        arquivo = discord.File(
+            fp=io.BytesIO(bytes_zip),
+            filename=nome_arquivo,
+        )
+        mensagem_arquivo = await canal.send(file=arquivo)
+    except discord.HTTPException as erro_http:
+        motivo = (
+            f"Discord recusou o anexo ({erro_http}). "
+            f"Cópia local: {caminho_local or 'falhou'}."
+        )
+        registrador.error("[backup-db] %s", motivo)
+        return {
+            "enviado": False,
+            "motivo": motivo,
+            "hash": hash_local,
+            "tabelas": quantidade_tabelas,
+            "linhas": quantidade_linhas,
+            "arquivo": nome_arquivo,
+            "caminho_local": caminho_local,
+            "tamanho_bytes": tamanho_bytes,
+        }
+    except Exception as erro_envio:
+        motivo = (
+            f"Falha ao enviar o ZIP ao canal: {erro_envio}. "
+            f"Cópia local: {caminho_local or 'falhou'}."
+        )
+        registrador.exception("[backup-db] %s", motivo)
+        return {
+            "enviado": False,
+            "motivo": motivo,
+            "hash": hash_local,
+            "tabelas": quantidade_tabelas,
+            "linhas": quantidade_linhas,
+            "arquivo": nome_arquivo,
+            "caminho_local": caminho_local,
+            "tamanho_bytes": tamanho_bytes,
+        }
+
+    # Confirma que a mensagem realmente tem o anexo (anti card sem arquivo).
+    if not mensagem_arquivo.attachments:
+        motivo = (
+            "Mensagem do backup foi criada SEM anexo. "
+            f"Cópia local: {caminho_local or 'falhou'}."
+        )
+        registrador.error("[backup-db] %s", motivo)
+        try:
+            await mensagem_arquivo.delete()
+        except discord.HTTPException:
+            pass
+        return {
+            "enviado": False,
+            "motivo": motivo,
+            "hash": hash_local,
+            "tabelas": quantidade_tabelas,
+            "linhas": quantidade_linhas,
+            "arquivo": nome_arquivo,
+            "caminho_local": caminho_local,
+            "tamanho_bytes": tamanho_bytes,
+        }
+
+    # 3) Card só depois do arquivo confirmado.
+    mensagem_card = None
+    try:
+        view_card = _montar_card_backup_db(
+            guilda,
+            snapshot,
+            autor=autor,
+            nome_arquivo=nome_arquivo,
+            tamanho_bytes=tamanho_bytes,
+        )
+        mensagem_card = await canal.send(view=view_card)
+    except Exception as erro_card:
+        # Arquivo já está no canal — backup não se perdeu. Só o card falhou.
+        registrador.warning(
+            "[backup-db] arquivo ok, mas o card falhou: %s",
+            erro_card,
+        )
 
     return {
         "enviado": True,
-        "motivo": "backup postado no LOG_BACKUP",
+        "motivo": "backup postado no LOG_BACKUP (arquivo + cópia local)",
         "hash": hash_local,
         "tabelas": quantidade_tabelas,
         "linhas": quantidade_linhas,
         "mensagem_id": mensagem_arquivo.id,
-        "mensagem_card_id": mensagem_card.id,
+        "mensagem_card_id": (
+            mensagem_card.id if mensagem_card is not None else None
+        ),
         "arquivo": nome_arquivo,
         "canal_id": canal.id,
         "tamanho_bytes": tamanho_bytes,
+        "caminho_local": caminho_local,
     }
 
 
 async def obter_ultimo_backup_mensagem(
     canal: discord.TextChannel,
 ) -> discord.Message | None:
-    """Última mensagem do canal que tem anexo .zip ou .json de backup."""
-    async for mensagem in canal.history(limit=50):
+    """
+    Última mensagem do canal que tem anexo .zip ou .json de backup de verdade.
+
+    Card sem arquivo NÃO conta — era exatamente o bug que fazia parecer
+    que havia backup quando o JSON não tinha sido enviado.
+    """
+    async for mensagem in canal.history(limit=80):
         anexo = _anexo_backup_da_mensagem(mensagem)
         if anexo is None:
             continue
+        # Exige anexo real com tamanho > 0
+        if (anexo.size or 0) <= 0:
+            continue
         nome = (anexo.filename or "").lower()
-        if nome.startswith("db_backup_") or MARCADOR_BACKUP_DB in (
-            mensagem.content or ""
-        ):
+        if nome.startswith("db_backup_"):
             return mensagem
-        # Qualquer .zip/.json no LOG_BACKUP conta (legado e atual)
         if nome.endswith(".zip") or nome.endswith(".json"):
             return mensagem
     return None
@@ -503,71 +691,84 @@ async def importar_snapshot_aditivo(snapshot: dict[str, Any]) -> dict[str, int]:
 
 
 class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
-    """Painel admin: exportar, listar, verificar, importar por anexo."""
+    """
+    Painel ephemeral admin do cofre do banco (Components V2).
+
+    Sem timeout: fica aberto até o admin descartar a mensagem ephemeral.
+    Sem custom_id global: painel é só desta mensagem (evita clique em
+    mensagem antiga após restart).
+    """
 
     def __init__(self, bot: discord.Client, membro_id: int):
-        super().__init__(timeout=300)
+        # timeout=None → painel admin não “morre” em 5 minutos
+        super().__init__(timeout=None)
         self.bot = bot
         self.membro_id = membro_id
 
         linha_principal = discord.ui.ActionRow()
         botao_exportar = discord.ui.Button(
-            label="Exportar para LOG_BACKUP",
+            label="Exportar (se mudou)",
             style=discord.ButtonStyle.success,
             emoji="📤",
-            custom_id="backup_db:exportar",
         )
         botao_exportar.callback = self._ao_exportar
+        botao_forcar = discord.ui.Button(
+            label="Exportar forçado",
+            style=discord.ButtonStyle.success,
+            emoji="📦",
+        )
+        botao_forcar.callback = self._ao_exportar_forcado
+        linha_principal.add_item(botao_exportar)
+        linha_principal.add_item(botao_forcar)
+
+        linha_secundaria = discord.ui.ActionRow()
         botao_verificar = discord.ui.Button(
             label="Verificar",
             style=discord.ButtonStyle.primary,
             emoji="🔍",
-            custom_id="backup_db:verificar",
         )
         botao_verificar.callback = self._ao_verificar
-        linha_principal.add_item(botao_exportar)
-        linha_principal.add_item(botao_verificar)
-
-        linha_secundaria = discord.ui.ActionRow()
         botao_listar = discord.ui.Button(
-            label="Listar no canal",
+            label="Listar",
             style=discord.ButtonStyle.secondary,
             emoji="📋",
-            custom_id="backup_db:listar",
         )
         botao_listar.callback = self._ao_listar
+        linha_secundaria.add_item(botao_verificar)
+        linha_secundaria.add_item(botao_listar)
+
+        linha_importar = discord.ui.ActionRow()
         botao_importar = discord.ui.Button(
-            label="Importar ZIP (anexo)",
+            label="Importar ZIP (próxima msg)",
             style=discord.ButtonStyle.danger,
             emoji="📥",
-            custom_id="backup_db:importar",
         )
         botao_importar.callback = self._ao_importar
-        linha_secundaria.add_item(botao_listar)
-        linha_secundaria.add_item(botao_importar)
+        linha_importar.add_item(botao_importar)
 
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# 🗄️ Painel — Backup do banco\n"
-                    "Cofre = canal **LOG_BACKUP** (arquivo `.zip` anexado).\n"
-                    "Horários automáticos (Brasília): **00:00**, **11:00** e "
-                    "**17:00**.\n"
-                    "Edição: baixe o ZIP → extraia o JSON → edite → reenvie "
-                    "(só adiciona linhas)."
+                    "Só **você** vê esta mensagem (ephemeral).\n"
+                    "Cofre = canal **LOG_BACKUP** + cópia local em disco.\n"
+                    "Agenda automática (Brasília): **00:00**, **11:00**, **17:00**.\n"
+                    "Formato: **`.zip`** (JSON compactado). Import é **só aditivo**."
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 discord.ui.TextDisplay(
                     "## Ações\n"
-                    "• **Exportar** — posta snapshot atual no canal (se hash mudou).\n"
-                    "• **Verificar** — compara banco local × último do canal.\n"
-                    "• **Listar** — últimos backups com link de download.\n"
-                    "• **Importar** — envie o `.zip` (ou `.json` legado) em 90s.\n"
-                    "• Atalho slash: `/backup banco-importar` com anexo."
+                    "• **Exportar (se mudou)** — só posta se o hash mudou.\n"
+                    "• **Exportar forçado** — posta mesmo com hash igual.\n"
+                    "• **Verificar** — banco local × último ZIP do canal.\n"
+                    "• **Listar** — últimos arquivos com link de download.\n"
+                    "• **Importar** — envie o `.zip`/`.json` em até 90s.\n"
+                    "• Atalho com anexo: `/backup banco-importar`"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha_principal,
                 linha_secundaria,
+                linha_importar,
                 accent_color=discord.Color.dark_teal(),
             )
         )
@@ -575,7 +776,13 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
     def _autor_ok(self, interacao: discord.Interaction) -> bool:
         return interacao.user.id == self.membro_id
 
-    async def _ao_exportar(self, interacao: discord.Interaction):
+    async def _exportar_interno(
+        self,
+        interacao: discord.Interaction,
+        *,
+        forcar: bool,
+    ) -> None:
+        """Exporta o snapshot; usado pelos dois botões de exportar."""
         if not self._autor_ok(interacao):
             await responder_erro(
                 interacao,
@@ -583,7 +790,8 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Só quem abriu o painel pode usar os botões."],
             )
             return
-        await interacao.response.defer(ephemeral=True)
+        # Ephemeral + thinking: a geração do snapshot passa dos 3s fácil.
+        await interacao.response.defer(thinking=True, ephemeral=True)
         guilda = interacao.guild
         if guilda is None:
             await responder_erro(
@@ -596,9 +804,10 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
             resultado = await exportar_banco_para_canal(
                 guilda,
                 autor=str(interacao.user),
-                forcar=False,
+                forcar=forcar,
             )
             if resultado.get("enviado"):
+                caminho_local = resultado.get("caminho_local") or "—"
                 await responder_sucesso(
                     interacao,
                     titulo="Backup enviado ao canal",
@@ -608,6 +817,7 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
                         f"Tabelas: **{resultado.get('tabelas')}** · "
                         f"Linhas: **{resultado.get('linhas')}**",
                         f"Canal: <#{resultado.get('canal_id')}>",
+                        f"Cópia local: `{caminho_local}`",
                     ],
                     delay=30,
                 )
@@ -628,6 +838,12 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=[str(erro)[:300]],
             )
 
+    async def _ao_exportar(self, interacao: discord.Interaction):
+        await self._exportar_interno(interacao, forcar=False)
+
+    async def _ao_exportar_forcado(self, interacao: discord.Interaction):
+        await self._exportar_interno(interacao, forcar=True)
+
     async def _ao_verificar(self, interacao: discord.Interaction):
         if not self._autor_ok(interacao):
             await responder_erro(
@@ -636,7 +852,7 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Só quem abriu o painel pode usar os botões."],
             )
             return
-        await interacao.response.defer(ephemeral=True)
+        await interacao.response.defer(thinking=True, ephemeral=True)
         guilda = interacao.guild
         if guilda is None:
             await responder_erro(
@@ -701,7 +917,7 @@ class PainelBancoBackupView(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Só quem abriu o painel pode usar os botões."],
             )
             return
-        await interacao.response.defer(ephemeral=True)
+        await interacao.response.defer(thinking=True, ephemeral=True)
         guilda = interacao.guild
         if guilda is None:
             await responder_erro(
