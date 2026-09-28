@@ -32,6 +32,7 @@ from dataclasses import (
 
 import discord
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from src.config import (
     CARGOS,
@@ -271,7 +272,17 @@ async def _sincronizar_um_membro(
         if era_novo:
             usuario = Usuario(discord_id=membro.id)
             sessao.add(usuario)
-            resultado.criados += 1
+            try:
+                await sessao.flush()
+                resultado.criados += 1
+            except IntegrityError:
+                # Outro processo criou a linha no meio do caminho.
+                await sessao.rollback()
+                consulta = await sessao.execute(
+                    select(Usuario).where(Usuario.discord_id == membro.id)
+                )
+                usuario = consulta.scalar_one()
+                era_novo = False
         else:
             consulta = await sessao.execute(
                 select(Usuario).where(Usuario.discord_id == membro.id)
@@ -303,6 +314,10 @@ async def garantir_usuario_basico(membro: discord.Member) -> Usuario:
     """Garante uma linha mínima em ``usuarios`` (ex.: no on_member_join).
 
     Não faz a varredura completa — só cria se não existir e preenche o básico.
+
+    Em corrida (dois eventos ao mesmo tempo para o mesmo membro), o INSERT
+    pode bater em unique. Nesse caso faz rollback e lê a linha que o outro
+    processo já gravou — sem estourar UniqueViolationError.
     """
     async with async_session() as sessao:
         consulta = await sessao.execute(
@@ -324,6 +339,14 @@ async def garantir_usuario_basico(membro: discord.Member) -> Usuario:
             id_fivem=id_fivem,
         )
         sessao.add(usuario)
-        await sessao.commit()
-        await sessao.refresh(usuario)
-        return usuario
+        try:
+            await sessao.commit()
+            await sessao.refresh(usuario)
+            return usuario
+        except IntegrityError:
+            await sessao.rollback()
+            consulta_de_novo = await sessao.execute(
+                select(Usuario).where(Usuario.discord_id == membro.id)
+            )
+            usuario_existente = consulta_de_novo.scalar_one()
+            return usuario_existente
