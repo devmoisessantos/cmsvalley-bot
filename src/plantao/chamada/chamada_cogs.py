@@ -484,6 +484,58 @@ class ChamadaCog(commands.Cog):
             ],
         )
 
+    @grupo_chamada.command(
+        name="regularizar",
+        description=(
+            "[Admin] Zera advertências de chamada (pagamento/regularização)"
+        ),
+    )
+    @app_commands.describe(
+        membro="Membro que regularizou / pagou",
+        motivo="Motivo (ex.: pagamento da multa)",
+    )
+    @apenas_administrador()
+    async def chamada_regularizar(
+        self,
+        interacao: discord.Interaction,
+        membro: discord.Member,
+        motivo: str = "Regularização / pagamento",
+    ):
+        """
+        Remove cargos e registros de punição com origem CHAMADA e zera
+        o contador de faltas_chamada. Punições manuais não são tocadas.
+        """
+        from src.plantao.chamada.chamada_service import (
+            regularizar_advertencias_de_chamada,
+        )
+
+        if interacao.guild is None:
+            await responder_erro(
+                interacao,
+                titulo="Só no servidor",
+                linhas=["Este comando precisa ser usado dentro da guilda."],
+            )
+            return
+        await interacao.response.defer(ephemeral=True)
+        ok, mensagem = await regularizar_advertencias_de_chamada(
+            guild=interacao.guild,
+            alvo=membro,
+            executor=interacao.user,
+            motivo=motivo[:500],
+        )
+        if ok:
+            await responder_sucesso(
+                interacao,
+                titulo="Regularização concluída",
+                linhas=[mensagem],
+            )
+        else:
+            await responder_erro(
+                interacao,
+                titulo="Falha na regularização",
+                linhas=[mensagem],
+            )
+
 
 async def setup(bot: commands.Bot):
     """

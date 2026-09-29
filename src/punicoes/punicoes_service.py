@@ -47,13 +47,19 @@ async def aplicar_punicao(
     motivo: str,
     links_texto: str | None,
     arquivos_provas: list[tuple[bytes, str]] | None = None,
+    origem: str = "MANUAL",
+    expira_em=None,
 ) -> tuple[bool, str, Punicao | None]:
     """Aplica cargo, grava no banco, posta em CANAL_ADVERTENCIAS + LOG_PUNICOES.
 
+    Cargos de advertência são **acumulativos** (verbal + Adv 01 + Adv 02…).
     Se o cargo for Exonerado, ou se após a aplicação o membro atingir 3
     advertências formais (Adv 01/02/03), executa a exoneração completa
     (remove todos os cargos, deixa só Exonerado + Visitantes, limpa prefixo
     do nick e registra em CANAL_EXONERACOES).
+
+    ``origem``: MANUAL | CHAMADA | SISTEMA — usado na regularização.
+    ``expira_em``: data em que a punição some sozinha (ex.: verbal em 3 dias).
     """
     role = guild.get_role(cargo_id)
     if role is None:
@@ -66,6 +72,7 @@ async def aplicar_punicao(
     e_exoneracao_direta = e_cargo_exonerado(cargo_nome=cargo_nome, cargo_id=cargo_id)
 
     try:
+        # Acumulativo: só adiciona se ainda não tem; não remove os outros.
         if role not in alvo.roles:
             await alvo.add_roles(role, reason=f"Punição por {executor} — {motivo[:80]}")
     except discord.Forbidden:
@@ -89,6 +96,8 @@ async def aplicar_punicao(
             executor_id=executor.id,
             ativa=True,
             criada_em=agora(),
+            origem=(origem or "MANUAL")[:30],
+            expira_em=expira_em,
         )
         session.add(punicao_no_banco)
         await session.commit()
@@ -207,12 +216,14 @@ async def executar_exoneracao(
 ) -> tuple[bool, str]:
     """
     Exoneração completa:
-    1. Remove TODOS os cargos (exceto @everyone e cargos gerenciados)
-    2. Deixa apenas Exonerado + Visitantes
-    3. Remove o prefixo [ TAG ] do nick → fica Nome | ID
-    4. Registra em CANAL_EXONERACOES
-    5. Se ainda não tiver o cargo Exonerado / registro, adiciona
+    1. Guarda JSON dos cargos atuais (para recurso / revogação)
+    2. Remove TODOS os cargos (exceto @everyone e cargos gerenciados)
+    3. Deixa apenas Exonerado + Visitantes
+    4. Remove o prefixo [ TAG ] do nick → fica Nome | ID
+    5. Registra em CANAL_EXONERACOES
     """
+    import json
+
     id_exonerado = id_cargo_exonerado()
     id_visitantes = CARGOS.get("Visitantes")
 
@@ -228,6 +239,15 @@ async def executar_exoneracao(
     bot_member = guild.me
     if bot_member is None:
         return False, "❌ Bot sem contexto de membro na guilda."
+
+    # Snapshot dos cargos ANTES de tirar — usado se o recurso for aceito
+    cargos_antes_ids = [
+        cargo.id
+        for cargo in alvo.roles
+        if cargo.id != guild.default_role.id and not cargo.managed
+    ]
+    cargos_antes_json = json.dumps(cargos_antes_ids)
+    nick_antes = (alvo.nick or alvo.display_name or "")[:100]
 
     # Cargos que devem permanecer
     ids_para_manter: set[int] = {guild.default_role.id, id_exonerado}
@@ -269,9 +289,6 @@ async def executar_exoneracao(
         if nick_limpo and nick_limpo != nick_atual:
             await alvo.edit(nick=nick_limpo, reason=motivo_discord)
     except (discord.Forbidden, discord.HTTPException) as erro_em_executar_exoneracao:
-        # Nick não é crítico — segue a exoneração mesmo se falhar
-        # Enfeite que falhou: executar exoneracao.
-        # A acao principal ja tinha dado certo, entao so registro.
         ignorar_falha_cosmetica(
             erro_em_executar_exoneracao,
             o_que_falhou="executar exoneracao",
@@ -312,11 +329,36 @@ async def executar_exoneracao(
                 executor_id=executor.id,
                 ativa=True,
                 criada_em=agora(),
+                origem="SISTEMA" if automatica else "MANUAL",
+                cargos_antes_json=cargos_antes_json,
             )
             session.add(punicao_no_banco)
             await session.commit()
             await session.refresh(punicao_no_banco)
             id_do_registro = punicao_no_banco.id
+    elif punicao_id is not None:
+        # Já existia registro (veio de aplicar_punicao) — só grava o snapshot
+        async with async_session() as session:
+            resultado = await session.execute(
+                select(Punicao).where(Punicao.id == punicao_id)
+            )
+            row = resultado.scalar_one_or_none()
+            if row is not None:
+                row.cargos_antes_json = cargos_antes_json
+                await session.commit()
+
+    # Snapshot vivo também (rejoin / painel de membros)
+    try:
+        from src.backup.retrato_de_membros_service import salvar_snapshot_membro
+
+        # Guarda o estado PÓS-exoneração no snapshot contínuo; o recurso
+        # usa cargos_antes_json da punição, não este snapshot.
+        membro_pos = guild.get_member(alvo.id) or alvo
+        await salvar_snapshot_membro(membro_pos)
+    except Exception:
+        pass
+
+    _ = nick_antes  # reservado para evoluir o recurso com nick original
 
     msg_exo, _thread = await registrar_exoneracao(
         guild=guild,
@@ -365,43 +407,42 @@ async def remover_punicao(
     cargo_id: int | None = None,
     punicao_id: int | None = None,
     motivo_remocao: str | None = None,
+    apenas_origem: str | None = None,
 ) -> tuple[bool, str]:
-    """Remove cargo(s) de punição, marca registros inativos e loga em LOG_PUNICOES."""
+    """
+    Remove cargo(s) de punição, marca registros inativos e loga em LOG_PUNICOES.
+
+    Se a punição removida for **Exonerado** e houver ``cargos_antes_json``,
+    tenta devolver os cargos de produção gravados no momento da exoneração
+    (recurso / revogação).
+
+    ``apenas_origem``: se informado (ex.: ``CHAMADA``), só mexe nesses registros.
+    """
+    import json
+
     removidos: list[str] = []
     punicao_ids: list[int] = []
     id_fivem: str | None = None
     roles_a_remover: list[discord.Role] = []
+    snapshots_para_restaurar: list[list[int]] = []
 
     async with async_session() as session:
+        filtros = [
+            Punicao.discord_id == alvo.id,
+            Punicao.ativa.is_(True),
+        ]
         if punicao_id is not None:
-            resultado_da_consulta = await session.execute(
-                select(Punicao).where(
-                    Punicao.id == punicao_id,
-                    Punicao.discord_id == alvo.id,
-                    Punicao.ativa.is_(True),
-                )
-            )
-            rows = list(resultado_da_consulta.scalars().all())
+            filtros.append(Punicao.id == punicao_id)
         elif cargo_id is not None:
-            resultado_da_consulta = await session.execute(
-                select(Punicao).where(
-                    Punicao.discord_id == alvo.id,
-                    Punicao.ativa.is_(True),
-                    Punicao.cargo_id == cargo_id,
-                )
-            )
-            rows = list(resultado_da_consulta.scalars().all())
-        else:
-            resultado_da_consulta = await session.execute(
-                select(Punicao).where(
-                    Punicao.discord_id == alvo.id,
-                    Punicao.ativa.is_(True),
-                )
-            )
-            rows = list(resultado_da_consulta.scalars().all())
+            filtros.append(Punicao.cargo_id == cargo_id)
+        if apenas_origem is not None:
+            filtros.append(Punicao.origem == apenas_origem)
+
+        resultado_da_consulta = await session.execute(select(Punicao).where(*filtros))
+        rows = list(resultado_da_consulta.scalars().all())
 
         if not rows:
-            if cargo_id:
+            if cargo_id and apenas_origem is None:
                 role = guild.get_role(cargo_id)
                 if role and role in alvo.roles:
                     try:
@@ -426,7 +467,8 @@ async def remover_punicao(
                     )
                     return (
                         True,
-                        f"✅ Cargo de punição removido de {alvo.mention}: {role.mention}",
+                        f"✅ Cargo de punição removido de {alvo.mention}: "
+                        f"{role.mention}",
                     )
             return False, "❌ Este membro não possui punições ativas registradas."
 
@@ -441,6 +483,16 @@ async def remover_punicao(
             if row.id_fivem and not id_fivem:
                 id_fivem = row.id_fivem
             cargo_ids_marcados.add(row.cargo_id)
+            if e_cargo_exonerado(cargo_nome=row.cargo_nome, cargo_id=row.cargo_id):
+                if row.cargos_antes_json:
+                    try:
+                        lista_ids = json.loads(row.cargos_antes_json)
+                        if isinstance(lista_ids, list):
+                            snapshots_para_restaurar.append(
+                                [int(x) for x in lista_ids]
+                            )
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        pass
 
         await session.commit()
 
@@ -469,6 +521,44 @@ async def remover_punicao(
         except discord.Forbidden:
             return False, "❌ Sem permissão para remover os cargos de punição."
 
+    # Recurso de exoneração: devolve cargos de produção salvos no snapshot
+    if snapshots_para_restaurar:
+        ids_exonerado = {id_cargo_exonerado()} if id_cargo_exonerado() else set()
+        ids_punicao = set(CARGOS_PUNICOES.values())
+        ids_para_devolver: set[int] = set()
+        for lista in snapshots_para_restaurar:
+            for role_id in lista:
+                if role_id in ids_exonerado:
+                    continue
+                if role_id in ids_punicao:
+                    continue
+                ids_para_devolver.add(role_id)
+        cargos_para_devolver = []
+        for role_id in ids_para_devolver:
+            role = guild.get_role(role_id)
+            if role is not None and role not in alvo.roles:
+                cargos_para_devolver.append(role)
+        if cargos_para_devolver:
+            try:
+                await alvo.add_roles(
+                    *cargos_para_devolver,
+                    reason=(
+                        f"Recurso de exoneração aceito por {executor} — "
+                        f"{motivo_remocao or 'revogação'}"
+                    ),
+                )
+            except discord.Forbidden:
+                return (
+                    False,
+                    "❌ Punição removida, mas sem permissão para restaurar cargos.",
+                )
+            except discord.HTTPException as erro_restore:
+                return (
+                    False,
+                    f"❌ Punição removida, mas falha ao restaurar cargos: "
+                    f"{erro_restore}",
+                )
+
     await registrar_log_remocao(
         guild=guild,
         alvo=alvo,
@@ -489,7 +579,10 @@ async def remover_punicao(
     )
 
     lista = ", ".join(f"**{numero.strip()}**" for numero in removidos)
-    return True, f"✅ Punição removida de {alvo.mention}: {lista}"
+    extra = ""
+    if snapshots_para_restaurar:
+        extra = " Cargos de produção restaurados (recurso)."
+    return True, f"✅ Punição removida de {alvo.mention}: {lista}.{extra}"
 
 
 async def listar_punicoes_membro(

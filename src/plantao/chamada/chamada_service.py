@@ -55,12 +55,14 @@ MOTIVO_CANCEL_SAIU_GUILDA = "doutor_saiu_da_guilda"
 MOTIVO_CANCEL_ERRO = "erro_processamento"
 MOTIVO_CANCEL_ABANDONO = "abandono"
 
+# Escala por total de faltas (ímpar aplica, par só avisa).
+# Cargos são ACUMULATIVOS: verbal + Adv 01 + Adv 02… até Exonerado.
 ORDEM_PUNICOES = [
     "⛔┇ADV VERBAL ",  # falta 1 → verbal + (-1 moeda)
     "🚫┇Adv 01",  # falta 3 → Adv 01 + (-3 moedas); falta 2 = aviso na DM
     "🚫┇Adv 02",  # falta 5 → aplicado (falta 4 só avisa)
     "🚫┇Adv 03",  # falta 7 → aplicado (falta 6 só avisa)
-    "🚫┇Exonerado",  # falta 9 → aplicado (falta 8 só avisa)
+    "🚫┇Exonerado",  # falta 9 → Exonerado + Visitantes (falta 8 só avisa)
 ]
 
 # Débito de moedas ao aplicar cada tier (chave = nome em ORDEM_PUNICOES)
@@ -68,6 +70,10 @@ DEBITO_MOEDAS_POR_PUNICAO = {
     "⛔┇ADV VERBAL ": 1,
     "🚫┇Adv 01": 3,
 }
+
+# ADV VERBAL some sozinha após este prazo (ou no pagamento/regularização)
+DIAS_EXPIRACAO_VERBAL = 3
+ORIGEM_PUNICAO_CHAMADA = "CHAMADA"
 
 _PADRAO_LINHA_EMS = re.compile(r"(\d{3,7})\s*[:.\-]\s*(.+)")
 CONFIANCA_MINIMA_AUTOMATICA = (
@@ -364,16 +370,29 @@ async def _debitar_moedas_falta(discord_id: int, quantidade: int) -> int:
         return novo_saldo
 
 
+def _e_cargo_verbal(cargo_nome: str) -> bool:
+    return "verbal" in (cargo_nome or "").lower()
+
+
 async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) -> int:
     """
-    Registra falta e aplica escala de punição.
+    Registra falta e, se for o caso, aplica o próximo cargo de punição.
+
+    Só deve ser chamada no **Finalizar Chamada** (ou comando admin).
+    Não deve rodar no meio da chamada (OCR / EMS).
 
     Diretoria++ não registra falta, não perde moeda e não recebe advertência.
-    Escala (enfermeiro ~ instrutor):
-      1ª falta → ADV VERBAL + debita 1 moeda
-      2ª falta → aviso na DM (próxima = Adv 01)
-      3ª falta → Adv 01 + debita 3 moedas
-      depois continua o escalonamento ímpar/par existente
+
+    Escala (cargos ACUMULATIVOS no perfil):
+      1ª falta → ADV VERBAL (+ debita 1 moeda)
+      2ª falta → aviso na DM
+      3ª falta → Adv 01 (mantém verbal) + debita 3 moedas
+      5ª → Adv 02 (mantém os anteriores)
+      7ª → Adv 03
+      9ª → Exonerado + Visitantes
+
+    Toda aplicação grava linha em ``punicoes`` (origem=CHAMADA) para
+    poder revogar / regularizar pelo painel de punições.
     """
     membro = guild.get_member(discord_id) if guild is not None else None
     if membro is not None and e_diretoria(membro):
@@ -395,8 +414,13 @@ async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) 
     estado_punicao = _calcular_estado_punicao(total_faltas)
 
     if estado_punicao["aplicar"]:
-        await _aplicar_punicao(
-            guild, discord_id, total_faltas, estado_punicao["cargo_nome"]
+        await _aplicar_punicao_acumulativa(
+            guild,
+            discord_id,
+            total_faltas,
+            estado_punicao["cargo_nome"],
+            chamada_id=chamada_id,
+            motivo_falta=motivo,
         )
         debito = DEBITO_MOEDAS_POR_PUNICAO.get(estado_punicao["cargo_nome"], 0)
         if debito:
@@ -409,7 +433,27 @@ async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) 
     return total_faltas
 
 
-async def _aplicar_punicao(guild, discord_id: int, total_faltas: int, cargo_nome: str):
+async def _aplicar_punicao_acumulativa(
+    guild,
+    discord_id: int,
+    total_faltas: int,
+    cargo_nome: str,
+    *,
+    chamada_id: int,
+    motivo_falta: str,
+) -> None:
+    """
+    Adiciona o cargo NOVO sem tirar os anteriores (acumulativo).
+
+    Grava em ``punicoes`` via domínio de punições. Se o tier for Exonerado,
+    ou se após a aplicação o membro tiver 3 advs formais, roda a exoneração
+    completa (Exonerado + Visitantes).
+    """
+    from datetime import timedelta
+
+    from src.punicoes.punicoes_helpers import resolver_id_fivem
+    from src.punicoes.punicoes_service import aplicar_punicao
+
     membro = guild.get_member(discord_id)
     cargo_id = CARGOS_PUNICOES.get(cargo_nome)
     if membro is None or cargo_id is None:
@@ -417,67 +461,47 @@ async def _aplicar_punicao(guild, discord_id: int, total_faltas: int, cargo_nome
     if e_diretoria(membro):
         return
 
-    cargo = guild.get_role(cargo_id)
-    if cargo is None:
+    executor = guild.me
+    if executor is None:
         return
 
-    # Remove tiers anteriores de punição, pra não acumular vários cargos ao mesmo tempo
-    cargos_punicao_ids = set(CARGOS_PUNICOES.values())
-    cargos_antigos = [
-        cargo_de_punicao
-        for cargo_de_punicao in membro.roles
-        if cargo_de_punicao.id in cargos_punicao_ids and cargo_de_punicao.id != cargo.id
-    ]
-    if cargos_antigos:
-        try:
-            await membro.remove_roles(
-                *cargos_antigos, reason="Escalonamento de punição por faltas"
-            )
-        except discord.Forbidden as erro_em_aplicar_punicao:
-            # Enfeite que falhou: avisar o membro sobre a punicao.
-            # A acao principal ja tinha dado certo, entao so registro.
-            ignorar_falha_cosmetica(
-                erro_em_aplicar_punicao,
-                o_que_falhou="avisar o membro sobre a punicao",
-            )
+    id_fivem = await resolver_id_fivem(discord_id) or "—"
+    motivo_completo = (
+        f"[CHAMADA #{chamada_id}] {total_faltas}ª falta — {motivo_falta}"
+    )[:1500]
 
-    try:
-        await membro.add_roles(cargo, reason=f"{total_faltas}ª falta em chamada")
-    except discord.Forbidden as erro_em_aplicar_punicao:
-        # Enfeite que falhou: avisar o membro sobre a punicao.
-        # A acao principal ja tinha dado certo, entao so registro.
-        ignorar_falha_cosmetica(
-            erro_em_aplicar_punicao,
-            o_que_falhou="avisar o membro sobre a punicao",
-        )
-
-    await log_mudanca_cargo(
-        guild,
-        candidato=membro,
-        executor=guild.me,
-        cargos_adicionados=[cargo.mention],
-        cargos_removidos=[
-            cargo_de_punicao.mention for cargo_de_punicao in cargos_antigos
-        ]
-        if cargos_antigos
-        else None,
+    ok, mensagem, punicao = await aplicar_punicao(
+        guild=guild,
+        alvo=membro,
+        executor=executor,
+        id_fivem=id_fivem,
+        cargo_nome=cargo_nome,
+        cargo_id=cargo_id,
+        motivo=motivo_completo,
+        links_texto=None,
+        origem=ORIGEM_PUNICAO_CHAMADA,
+        expira_em=(
+            datetime.now(timezone.utc) + timedelta(days=DIAS_EXPIRACAO_VERBAL)
+            if _e_cargo_verbal(cargo_nome)
+            else None
+        ),
     )
+    if not ok:
+        registrador.warning(
+            "[chamada] falha ao aplicar punição automática em %s: %s",
+            discord_id,
+            mensagem,
+        )
+        return
 
-    canal = guild.get_channel(CANAIS.get("CANAL_ADVERTENCIAS"))
-    if canal:
-        linhas = (
-            f"- **Membro:** {membro.mention} (`{membro.id}`)\n"
-            f"- **Total de Faltas:** {total_faltas}\n"
-            f"- **Punição Aplicada:** {cargo_nome.strip()}"
-        )
-        view = LogContainerView(
-            titulo="🚫 Punição Aplicada por Faltas em Chamada",
-            linhas=linhas,
-            guild=guild,
-            cor=discord.Color.red(),
-            avatar_url=membro.display_avatar.url,
-        )
-        await canal.send(view=view)
+    # Log de cargo + canal de advertências já são feitos por aplicar_punicao.
+    registrador.info(
+        "[chamada] punição aplicada em %s: %s (falta %s, registro #%s)",
+        discord_id,
+        cargo_nome.strip(),
+        total_faltas,
+        punicao.id if punicao is not None else "—",
+    )
 
 
 async def _avisar_proxima_punicao(
@@ -490,15 +514,82 @@ async def _avisar_proxima_punicao(
     try:
         await membro.send(
             f"⚠️ Você já soma **{total_faltas} faltas** em chamadas de plantão. "
-            f"Se faltar novamente, receberá **{cargo_aviso_nome.strip()}**."
+            f"Se faltar novamente, receberá **{cargo_aviso_nome.strip()}** "
+            f"(as advertências anteriores permanecem no perfil até regularizar)."
         )
     except discord.Forbidden as erro_em_avisar_proxima_punicao:
-        # Enfeite que falhou: avisar sobre a proxima punicao.
-        # A acao principal ja tinha dado certo, entao so registro.
         ignorar_falha_cosmetica(
             erro_em_avisar_proxima_punicao,
             o_que_falhou="avisar sobre a proxima punicao",
         )
+
+
+async def regularizar_advertencias_de_chamada(
+    *,
+    guild,
+    alvo: discord.Member,
+    executor: discord.Member,
+    motivo: str = "Regularização / pagamento",
+) -> tuple[bool, str]:
+    """
+    Zera advertências originadas de chamada: cargos + registros em punicoes
+    com origem=CHAMADA (ativas). Também remove as faltas em faltas_chamada
+    para o contador voltar a zero.
+
+    Não mexe em punições manuais (origem MANUAL).
+    """
+    from src.database.models import Punicao
+    from src.punicoes.punicoes_service import remover_punicao
+
+    async with async_session() as session:
+        resultado = await session.execute(
+            select(Punicao).where(
+                Punicao.discord_id == alvo.id,
+                Punicao.ativa.is_(True),
+                Punicao.origem == ORIGEM_PUNICAO_CHAMADA,
+            )
+        )
+        registros = list(resultado.scalars().all())
+        ids_para_remover = [row.id for row in registros]
+
+        # Apaga faltas para o contador zerar
+        faltas = await session.execute(
+            select(FaltaChamada).where(FaltaChamada.discord_id == alvo.id)
+        )
+        for falta in list(faltas.scalars().all()):
+            await session.delete(falta)
+        await session.commit()
+
+    if not ids_para_remover:
+        # Ainda pode haver cargo residual sem registro — tenta limpar cargos
+        # de punição que existam no membro (só os de CARGOS_PUNICOES)
+        cargos_ids = set(CARGOS_PUNICOES.values())
+        residuais = [c for c in alvo.roles if c.id in cargos_ids]
+        if residuais:
+            try:
+                await alvo.remove_roles(
+                    *residuais,
+                    reason=f"Regularização de chamada por {executor}",
+                )
+            except discord.Forbidden:
+                return False, "Sem permissão para remover cargos de punição."
+            return True, (
+                f"Sem registros CHAMADA ativos; cargos residuais removidos "
+                f"de {alvo.mention}."
+            )
+        return True, f"Nada a regularizar em {alvo.mention} (sem adv de chamada)."
+
+    ok, mensagem = await remover_punicao(
+        guild=guild,
+        alvo=alvo,
+        executor=executor,
+        punicao_id=None,
+        motivo_remocao=motivo,
+        apenas_origem=ORIGEM_PUNICAO_CHAMADA,
+    )
+    if ok:
+        return True, f"Regularização concluída: {mensagem}"
+    return False, mensagem
 
 
 # ---------------------------------------------------------------------------

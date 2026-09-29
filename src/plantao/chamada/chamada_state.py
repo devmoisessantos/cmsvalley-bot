@@ -69,6 +69,9 @@ class SessaoChamada:
     faltantes_ids: set[int] = field(
         default_factory=set
     )  # marcados na Etapa 3, ajustável até finalizar
+    # Quem tinha plantão ligado e não estava no /ems — a falta só é
+    # registrada no Finalizar (não no meio da chamada).
+    faltas_pendentes_ems: set[int] = field(default_factory=set)
     etapa_atual: int = 1
     # Trava o botão "Finalizar" pra não enviar a chamada duas vezes
     finalizando: bool = False

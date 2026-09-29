@@ -453,6 +453,14 @@ class Punicao(Base):
     )
     removida_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     motivo_remocao: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # MANUAL | CHAMADA | SISTEMA
+    origem: Mapped[str] = mapped_column(String(30), default="MANUAL")
+    # Verbal some sozinha após 3 dias (preenchido só em ADV VERBAL)
+    expira_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # JSON com IDs dos cargos antes da exoneração (para recurso / revogação)
+    cargos_antes_json: Mapped[str | None] = mapped_column(String(4000), nullable=True)
 
 
 # ---------------------------------------------------------------------------

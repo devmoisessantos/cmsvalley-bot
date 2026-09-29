@@ -33,7 +33,10 @@ from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.utils.error_handling import enviar_erro_para_log_erros
 from src.utils.mensagens import responder_erro, responder_sucesso
-from src.utils.permissions import apenas_administrador
+from src.utils.permissions import (
+    apenas_administrador,
+    esta_autorizado,
+)
 
 registrador = logging.getLogger(__name__)
 
@@ -84,7 +87,8 @@ class CursosCog(commands.Cog):
             "(agendamento e aprovar/reprovar)"
         ),
     )
-    @apenas_administrador()
+    # Diretoria / cargos em ADMIN_ROLE_NAMES também — não só Administrator.
+    @esta_autorizado()
     async def republicar_pendentes(self, interacao: discord.Interaction):
         """Apaga cards antigos de pedidos em aberto e publica de novo no fim.
 

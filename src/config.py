@@ -127,8 +127,10 @@ AUTO_BACKUP_INTERVAL_HOURS = _ler_numero_do_ambiente("AUTO_BACKUP_INTERVAL_HOURS
 # Não roda mais a cada minuto — só nesses três pontos do dia.
 HORARIOS_BACKUP_BANCO = (
     (0, 0),
+    (6, 0),
     (11, 0),
     (17, 0),
+    (22, 0),
 )
 # Mantido só para leitura de .env legado; a tarefa usa HORARIOS_BACKUP_BANCO.
 AUTO_BACKUP_DB_INTERVAL_MINUTES = _ler_numero_do_ambiente(
@@ -142,7 +144,14 @@ AUTO_BACKUP_DB_INTERVAL_MINUTES = _ler_numero_do_ambiente(
 
 ADMIN_ROLE_NAMES = _ler_lista_de_textos_do_ambiente(
     "ADMIN_ROLE_NAMES",
-    "Responsavel HP,[ CMS ]",
+    # Diretoria++ e staff que costuma republicar painéis / cursos
+    "Responsavel HP,[ CMS ],"
+    "👑 | RESPONSÁVEL GERAL,"
+    "👑 |  DIRETOR GERAL,"
+    "👑 |  VICE DIRETOR GERAL,"
+    "👑・DIRETOR,"
+    "👑・VICE DIRETOR,"
+    "🔍・COORDENADOR",
 )
 CONFIRMATION_TIMEOUT = _ler_numero_do_ambiente("CONFIRMATION_TIMEOUT", 30)
 

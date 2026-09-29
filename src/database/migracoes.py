@@ -190,6 +190,19 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "ON log_plantao (discord_id, criado_em)"
         ),
     ),
+    Migracao(
+        numero=12,
+        descricao=(
+            "punicoes: origem (MANUAL/CHAMADA), expira_em (verbal 3 dias) "
+            "e cargos_antes_json para recurso de exoneração."
+        ),
+        comando_sql=(
+            "ALTER TABLE punicoes "
+            "ADD COLUMN IF NOT EXISTS origem VARCHAR(30) NOT NULL DEFAULT 'MANUAL', "
+            "ADD COLUMN IF NOT EXISTS expira_em TIMESTAMPTZ, "
+            "ADD COLUMN IF NOT EXISTS cargos_antes_json TEXT"
+        ),
+    ),
 ]
 
 
