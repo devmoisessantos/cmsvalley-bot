@@ -67,6 +67,31 @@ async def obter_id_fivem_de_recrutamento(discord_id: int) -> str | None:
         return recrutamento.id_fivem if recrutamento else None
 
 
+async def _montar_campos_tempo_plantao(discord_id: int) -> dict[str, str]:
+    """
+    Ciclo atual + histórico para o card do LOG_PLANTAO.
+
+    - **Ciclo:** desde o último TOGGLE_ON (fechado + segmento aberto)
+    - **Total:** soma de todo o histórico fechado + segmento ainda aberto
+    """
+    from src.plantao.plantao_service import (
+        calcular_segundos_do_segmento_aberto,
+        calcular_segundos_historico_fechado,
+        calcular_segundos_plantao_atual,
+        consultar_estado_plantao,
+    )
+
+    estado = await consultar_estado_plantao(discord_id)
+    segundos_ciclo = await calcular_segundos_plantao_atual(discord_id, estado)
+    segundos_historico = await calcular_segundos_historico_fechado(discord_id)
+    segundos_abertos = calcular_segundos_do_segmento_aberto(estado)
+    segundos_total = segundos_historico + max(0, segundos_abertos)
+    return {
+        "Tempo no ciclo": formatar_hms(max(0, segundos_ciclo)),
+        "Tempo total (histórico)": formatar_hms(max(0, segundos_total)),
+    }
+
+
 async def registrar_evento_plantao(
     guild: discord.Guild,
     discord_id: int,
@@ -83,6 +108,9 @@ async def registrar_evento_plantao(
     O registro no banco acontece antes do envio ao Discord para não perder a evidência
     quando o canal está ausente ou indisponível. Campos extras permitem acrescentar
     contexto sem forçar cada evento a ter um formato novo no modelo de dados.
+
+    Em TOGGLE_ON / TOGGLE_OFF / ENTROU_CALL / SAIU_CALL o card mostra também
+    tempo do ciclo e tempo total (histórico).
     """
 
     async with async_session() as session:
@@ -117,8 +145,26 @@ async def registrar_evento_plantao(
     if duracao_segundos is not None:
         linhas += f"\n- **Duração:** {formatar_hms(duracao_segundos)}"
 
-    if campos_extra:  # 👈 novo
-        for chave, valor in campos_extra.items():
+    # Tempo ciclo + histórico nos eventos de entrada/saída de serviço e call
+    eventos_com_tempo = {
+        "TOGGLE_ON",
+        "TOGGLE_OFF",
+        "ENTROU_CALL",
+        "SAIU_CALL",
+        "CALL_ENCERRADA",
+    }
+    campos = dict(campos_extra or {})
+    if evento in eventos_com_tempo:
+        try:
+            tempos = await _montar_campos_tempo_plantao(discord_id)
+            for chave, valor in tempos.items():
+                campos.setdefault(chave, valor)
+        except Exception:
+            # Log visual não pode quebrar o fluxo principal
+            pass
+
+    if campos:
+        for chave, valor in campos.items():
             linhas += f"\n- **{chave}:** {valor}"
 
     if detalhes:

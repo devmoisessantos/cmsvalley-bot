@@ -234,11 +234,16 @@ async def buscar_horas_por_membro(
                 LogPlantao.criado_em >= inicio_utc,
                 LogPlantao.criado_em < fim_utc,
                 LogPlantao.duracao_segundos.is_not(None),
-                LogPlantao.duracao_segundos > 0,
+                # Inclui AJUSTE_ADMIN negativo: a soma precisa abater horas.
+                # Só descarta o membro no final se o total do período ficar <= 0.
             )
             .group_by(LogPlantao.discord_id)
         )
-        bruto = {int(did): int(segs) for did, segs in resultado.all() if int(segs) > 0}
+        bruto = {
+            int(did): int(segs)
+            for did, segs in resultado.all()
+            if int(segs) > 0
+        }
 
     # Contagem ao vivo: só no ranking tempo real (não mistura no semanal/mensal oficial)
     if incluir_ao_vivo:
@@ -291,17 +296,20 @@ def filtrar_participantes_ranking_horas(
 
 
 async def obter_segundos_plantao_totais(discord_id: int) -> int:
-    """Soma de todas as durações de plantão do membro (banco de horas)."""
+    """
+    Soma de todas as durações de plantão do membro (banco de horas).
+
+    Inclui AJUSTE_ADMIN negativo para o total bater com o painel de membros.
+    """
     async with async_session() as session:
         resultado = await session.execute(
             select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
                 LogPlantao.discord_id == int(discord_id),
                 LogPlantao.duracao_segundos.is_not(None),
-                LogPlantao.duracao_segundos > 0,
             )
         )
         valor = resultado.scalar_one()
-        return int(valor or 0)
+        return max(0, int(valor or 0))
 
 
 # ── Montagem de ranking genérico (valor numérico decrescente) ─────────────

@@ -575,6 +575,8 @@ async def calcular_segundos_historico_fechado(discord_id: int) -> int:
 
     Não inclui o trecho ainda aberto em call. O total sobe a cada minuto
     (evento CICLO_MINUTO) e também ao sair da call ou encerrar o serviço.
+
+    Inclui AJUSTE_ADMIN (positivo e negativo) para bater com o painel admin.
     """
     from sqlalchemy import func
 
@@ -585,10 +587,9 @@ async def calcular_segundos_historico_fechado(discord_id: int) -> int:
             select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
                 LogPlantao.discord_id == discord_id,
                 LogPlantao.duracao_segundos.is_not(None),
-                LogPlantao.duracao_segundos > 0,
             )
         )
-        return int(resultado.scalar_one() or 0)
+        return max(0, int(resultado.scalar_one() or 0))
 
 
 async def calcular_segundos_plantao_atual(

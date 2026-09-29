@@ -265,7 +265,11 @@ async def listar_chamadas_como_doutor(
 
 
 async def tempo_total_segundos_plantao(discord_id: int) -> int:
-    """Soma apenas durações concluídas para não contar plantões ainda abertos."""
+    """
+    Soma do banco de horas (log_plantao), incluindo AJUSTE_ADMIN.
+
+    Valores negativos de ajuste abatem o total; o resultado nunca fica abaixo de 0.
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)).where(
@@ -273,7 +277,7 @@ async def tempo_total_segundos_plantao(discord_id: int) -> int:
                 LogPlantao.duracao_segundos.is_not(None),
             )
         )
-        return int(resultado.scalar_one() or 0)
+        return max(0, int(resultado.scalar_one() or 0))
 
 
 async def ultimos_logs_plantao(discord_id: int, limite: int = 8) -> list[LogPlantao]:

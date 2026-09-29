@@ -155,24 +155,38 @@ async def _t_resumo(membro, estado):
     c = await contagens_resumo_ficha(membro.id, fid)
     online = bool(estado and estado.toggle_ligado)
     saldo = estado.saldo_moedas if estado else 0
+    total_horas = await tempo_total_segundos_plantao(membro.id)
     alertas = []
     for k, label in [
-        ("punicoes_ativas", "punicoes"),
-        ("ausencias_abertas", "ausencias"),
-        ("demissoes_pendentes", "demissoes"),
-        ("casos_bau_abertos", "bau"),
-        ("promocoes_pendentes", "promocoes"),
+        ("punicoes_ativas", "punições"),
+        ("ausencias_abertas", "ausências"),
+        ("demissoes_pendentes", "demissões"),
+        ("casos_bau_abertos", "baú"),
+        ("promocoes_pendentes", "promoções"),
         ("tickets_abertos", "tickets"),
     ]:
         if c.get(k):
             alertas.append(f"`{c[k]}` {label}")
-    al = ", ".join(alertas) if alertas else "nenhum"
+    bloco_alertas = (
+        "\n".join(f"> • {item}" for item in alertas)
+        if alertas
+        else "> • nenhum"
+    )
+    status_plantao = "**em serviço**" if online else "_fora de serviço_"
     return (
-        f"## Resumo\n**Plantao:** {'em servico' if online else 'fora'} · **Moedas:** `{saldo}`\n"
-        f"**FiveM:** `{fid or '—'}`\n**Alertas:** {al}\n"
-        f"**Faltas/chamadas doutor:** `{c['faltas_chamada']}` / `{c['chamadas_doutor']}`\n"
-        f"**Recrutamentos:** `{c['recrutamentos']}` · **Laudos pac/psi:** "
-        f"`{c['laudos_paciente']}`/`{c['laudos_psicologo']}` · **Hist cargos:** `{c['historico_cargos']}`"
+        f"### Resumo\n"
+        f"**Plantão:** {status_plantao}\n"
+        f"**Moedas:** `{saldo}`\n"
+        f"**Horas (total):** `{formatar_hms(total_horas)}`\n"
+        f"**FiveM:** `{fid or '—'}`\n\n"
+        f"**Alertas**\n{bloco_alertas}\n\n"
+        f"**Atividade**\n"
+        f"> Faltas em chamada: `{c['faltas_chamada']}`\n"
+        f"> Chamadas como doutor: `{c['chamadas_doutor']}`\n"
+        f"> Recrutamentos: `{c['recrutamentos']}`\n"
+        f"> Laudos (pac / psi): `{c['laudos_paciente']}` / "
+        f"`{c['laudos_psicologo']}`\n"
+        f"> Histórico de cargos: `{c['historico_cargos']}`"
     )
 
 
@@ -440,29 +454,50 @@ async def _t_snap(membro):
     )
 
 
-def _prefixo_emoji_do_cargo(nome_do_cargo: str) -> str:
+def _extrair_so_emoji(texto: str) -> str:
     """
-    Pega o emoji (ou trecho inicial) do nome do cargo.
+    Devolve apenas caracteres emoji de um texto (sem letras/números/símbolos).
 
-    No CMS os cargos usam emoji no começo do nome (ex.: 👑・DIRETOR).
+    Usado nos nomes de cargo do CMS (ex.: ``👑・DIRETOR`` → ``👑``).
     """
-    nome = (nome_do_cargo or "").strip()
-    if not nome or nome == "@everyone":
+    import re
+
+    if not texto:
         return ""
-    # unicode_emoji da role às vezes não vem no nome; o prefixo do nome basta
-    primeiro_pedaco = nome.replace("|", "・").split("・")[0].strip()
-    if not primeiro_pedaco:
+    # Sequências emoji (incluindo ZWJ e variation selectors)
+    padrao = re.compile(
+        "["
+        "\U0001f300-\U0001faff"
+        "\U00002700-\U000027bf"
+        "\U0001f1e0-\U0001f1ff"
+        "\U00002600-\U000026ff"
+        "\U0000fe00-\U0000fe0f"
+        "\U0000200d"
+        "]+",
+        flags=re.UNICODE,
+    )
+    partes = padrao.findall(texto)
+    if not partes:
         return ""
-    # Limita para não estourar o cabeçalho com nomes longos sem emoji
-    if len(primeiro_pedaco) > 8 and primeiro_pedaco.isalnum():
-        return ""
-    return primeiro_pedaco
+    return partes[0]
+
+
+def _emoji_do_cargo(cargo: discord.Role) -> str:
+    """
+    Insignia do cargo: só o emoji, nunca o nome.
+
+    Ordem: unicode_emoji da role → emoji no nome do cargo.
+    """
+    emoji_role = getattr(cargo, "unicode_emoji", None)
+    if emoji_role:
+        return str(emoji_role)
+    return _extrair_so_emoji(cargo.name or "")
 
 
 def _texto_emblemas(membro) -> str:
-    """Monta a linha de emblemas a partir dos cargos do membro."""
+    """Linha de insignias: só emojis dos cargos, separados por ·."""
     if not membro_esta_no_servidor(membro):
-        return "fora do servidor"
+        return "_fora do servidor_"
     cargos = [
         cargo
         for cargo in sorted(
@@ -473,22 +508,18 @@ def _texto_emblemas(membro) -> str:
         if cargo.name != "@everyone"
     ]
     if not cargos:
-        return "nenhum"
+        return "_nenhum_"
     vistos: set[str] = set()
     emblemas: list[str] = []
     for cargo in cargos:
-        emoji_role = getattr(cargo, "unicode_emoji", None)
-        if emoji_role:
-            marca = str(emoji_role)
-        else:
-            marca = _prefixo_emoji_do_cargo(cargo.name)
+        marca = _emoji_do_cargo(cargo)
         if not marca or marca in vistos:
             continue
         vistos.add(marca)
         emblemas.append(marca)
-        if len(emblemas) >= 10:
+        if len(emblemas) >= 12:
             break
-    return " ".join(emblemas) if emblemas else "nenhum"
+    return " · ".join(emblemas) if emblemas else "_nenhum_"
 
 
 def e_admin_ou_responsavel_hp(membro: discord.Member) -> bool:
@@ -527,15 +558,17 @@ async def _cabecalho(membro, estado):
         ("tickets_abertos", "tk"),
     ]:
         if c.get(k):
-            alertas.append(f"{lab}:{c[k]}")
+            alertas.append(f"`{lab}` `{c[k]}`")
     linha_alertas = ""
     if alertas:
         linha_alertas = f"\n**Alertas:** {' · '.join(alertas)}"
     emblemas = _texto_emblemas(membro)
+    status_plantao = "**em serviço**" if online else "_fora_"
     return (
-        f"# {membro.display_name}\n{membro.mention} · `{membro.id}`\n"
-        f"**FiveM:** `{fid or '—'}` · **Status:** `{st}` · **Plantao:** "
-        f"{'em servico' if online else 'fora'}\n"
+        f"# {membro.display_name}\n"
+        f"{membro.mention} · `{membro.id}`\n"
+        f"**FiveM:** `{fid or '—'}` · **Status:** `{st}` · "
+        f"**Plantão:** {status_plantao}\n"
         f"**Emblemas:** {emblemas}{linha_alertas}"
     )
 
