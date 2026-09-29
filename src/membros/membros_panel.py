@@ -126,6 +126,23 @@ class MembroProxy:
         self.guild = guild
 
 
+def _linha_bloco(emoji: str, rotulo: str, valor: str) -> str:
+    """Uma linha no padrão: > `emoji` · **Rotulo:** valor"""
+    return f"> `{emoji}` · **{rotulo}:** {valor}"
+
+
+def _titulo_bloco(emoji: str, titulo: str) -> str:
+    return f"# {emoji} {titulo}"
+
+
+def _secao_bloco(emoji: str, titulo: str) -> str:
+    return f"## {emoji} {titulo}"
+
+
+def _vazio_bloco(mensagem: str = "nenhum registro") -> str:
+    return f"> `📭` · _{mensagem}_"
+
+
 async def _montar_texto_bloco(chave, membro, estado):
     fn = {
         BLOCO_RESUMO: lambda: _t_resumo(membro, estado),
@@ -156,8 +173,14 @@ async def _t_resumo(membro, estado):
     online = bool(estado and estado.toggle_ligado)
     saldo = estado.saldo_moedas if estado else 0
     total_horas = await tempo_total_segundos_plantao(membro.id)
+
+    if online:
+        status_plantao = "✅ `em serviço`"
+    else:
+        status_plantao = "⛔ `fora de serviço`"
+
     alertas = []
-    for k, label in [
+    for chave_alerta, label in [
         ("punicoes_ativas", "punições"),
         ("ausencias_abertas", "ausências"),
         ("demissoes_pendentes", "demissões"),
@@ -165,28 +188,40 @@ async def _t_resumo(membro, estado):
         ("promocoes_pendentes", "promoções"),
         ("tickets_abertos", "tickets"),
     ]:
-        if c.get(k):
-            alertas.append(f"`{c[k]}` {label}")
-    bloco_alertas = (
-        "\n".join(f"> • {item}" for item in alertas)
-        if alertas
-        else "> • nenhum"
-    )
-    status_plantao = "**em serviço**" if online else "_fora de serviço_"
-    return (
-        f"### Resumo\n"
-        f"**Plantão:** {status_plantao}\n"
-        f"**Moedas:** `{saldo}`\n"
-        f"**Horas (total):** `{formatar_hms(total_horas)}`\n"
-        f"**FiveM:** `{fid or '—'}`\n\n"
-        f"**Alertas**\n{bloco_alertas}\n\n"
-        f"**Atividade**\n"
-        f"> Faltas em chamada: `{c['faltas_chamada']}`\n"
-        f"> Chamadas como doutor: `{c['chamadas_doutor']}`\n"
-        f"> Recrutamentos: `{c['recrutamentos']}`\n"
-        f"> Laudos (pac / psi): `{c['laudos_paciente']}` / "
-        f"`{c['laudos_psicologo']}`\n"
-        f"> Histórico de cargos: `{c['historico_cargos']}`"
+        if c.get(chave_alerta):
+            alertas.append(f"`{c[chave_alerta]}` {label}")
+    if alertas:
+        texto_alertas = " · ".join(alertas)
+    else:
+        texto_alertas = "`nenhum`"
+
+    return "\n".join(
+        [
+            _titulo_bloco("🔰", "Resumo"),
+            "",
+            _secao_bloco("📌", "Informações Gerais"),
+            _linha_bloco("🥼", "Plantão", status_plantao),
+            _linha_bloco("💰", "Moedas", f"`{saldo}`"),
+            _linha_bloco("⏱️", "Horas (total)", f"`{formatar_hms(total_horas)}`"),
+            _linha_bloco("🎮", "FiveM", f"`{fid or '—'}`"),
+            "",
+            _secao_bloco("🚨", "Alertas"),
+            _linha_bloco("🔕", "Alertas", texto_alertas),
+            "",
+            _secao_bloco("📊", "Atividade"),
+            _linha_bloco("📋", "Faltas em chamada", f"`{c['faltas_chamada']}`"),
+            _linha_bloco("🩺", "Chamadas como doutor", f"`{c['chamadas_doutor']}`"),
+            _linha_bloco("🧑‍🏫", "Recrutamentos", f"`{c['recrutamentos']}`"),
+            _linha_bloco(
+                "📄",
+                "Laudos",
+                (
+                    f"\n> - **Como paciente:** `{c['laudos_paciente']}`\n"
+                    f"> - **Como psicólogo:** `{c['laudos_psicologo']}`"
+                ),
+            ),
+            _linha_bloco("🎖️", "Histórico de cargos", f"`{c['historico_cargos']}`"),
+        ]
     )
 
 
@@ -195,40 +230,83 @@ async def _t_id(membro):
     fid = await resolver_id_fivem_do_membro(membro.id)
     status = u.status if u else "—"
     nick = (u.nickname_atual if u and u.nickname_atual else None) or membro.display_name
-    ja = "sim" if (u and u.ja_foi_aprovado) else "nao"
+    ja = "`sim`" if (u and u.ja_foi_aprovado) else "`não`"
     entrou = (
         f"<t:{int(membro.joined_at.timestamp())}:f>"
         if getattr(membro, "joined_at", None)
-        else "—"
+        else "`—`"
     )
-    return (
-        f"## Identidade\n**Nick:** {membro.display_name} · **DB:** {nick}\n"
-        f"**FiveM:** `{fid or '—'}` · **Status:** `{status}` · **Aprovado:** `{ja}`\n"
-        f"**Entrou:** {entrou} · **No server:** `{'sim' if membro_esta_no_servidor(membro) else 'nao'}`\n"
-        f"**Cargos:**\n{formatar_cargos_do_membro(membro)}"
+    no_server = "`sim`" if membro_esta_no_servidor(membro) else "`não`"
+    cargos = formatar_cargos_do_membro(membro)
+    return "\n".join(
+        [
+            _titulo_bloco("🪪", "Identidade"),
+            "",
+            _secao_bloco("👤", "Dados"),
+            _linha_bloco("🏷️", "Nick Discord", f"**{membro.display_name}**"),
+            _linha_bloco("💾", "Nick no banco", f"`{nick}`"),
+            _linha_bloco("🎮", "FiveM", f"`{fid or '—'}`"),
+            _linha_bloco("📌", "Status", f"`{status}`"),
+            _linha_bloco("✅", "Já aprovado", ja),
+            _linha_bloco("📅", "Entrou no servidor", entrou),
+            _linha_bloco("🏠", "No servidor agora", no_server),
+            "",
+            _secao_bloco("🎖️", "Cargos atuais"),
+            f"> {cargos}" if cargos else _vazio_bloco("sem cargos"),
+        ]
     )
 
 
 async def _t_rec_cand(membro):
     lista = await listar_recrutamentos_candidato(membro.id)
+    linhas = [
+        _titulo_bloco("✈️", "Recrutamento"),
+        "",
+        _secao_bloco("📋", "Histórico como candidato"),
+    ]
     if not lista:
-        return "## Recrutamento\n_Nenhum._"
-    linhas = ["## Recrutamento"]
+        linhas.append(_vazio_bloco("nenhum recrutamento"))
+        return "\n".join(linhas)
     for i, r in enumerate(lista):
-        p = "**Atual**" if i == 0 else "•"
+        marca = "⭐ Atual" if i == 0 else "•"
         linhas.append(
-            f"{p} `#{r.id}` **{r.status}** `{r.cargo_final or '—'}` "
-            f"<@{r.discord_id_recrutador}> {formatar_timestamp(r.data_inicio)}"
+            _linha_bloco(
+                "🧾",
+                f"{marca} `#{r.id}`",
+                (
+                    f"**{r.status}** · `{r.cargo_final or '—'}` · "
+                    f"<@{r.discord_id_recrutador}> · "
+                    f"{formatar_timestamp(r.data_inicio)}"
+                ),
+            )
         )
     return "\n".join(linhas)
 
 
 async def _t_rec_feito(membro):
     total, sem, ult = await estatisticas_como_recrutador(membro.id)
-    linhas = [f"## Como recrutador\n**Total:** `{total}` · **Semana:** `{sem}`"]
+    linhas = [
+        _titulo_bloco("🎯", "Como recrutador"),
+        "",
+        _secao_bloco("📌", "Números"),
+        _linha_bloco("🔢", "Total", f"`{total}`"),
+        _linha_bloco("📅", "Nesta semana", f"`{sem}`"),
+        "",
+        _secao_bloco("📋", "Últimos aprovados"),
+    ]
+    if not ult:
+        linhas.append(_vazio_bloco("nenhum recente"))
+        return "\n".join(linhas)
     for r in ult:
         linhas.append(
-            f"`{r.id_fivem or '?'}` <@{r.discord_id_candidato}> {formatar_timestamp(r.data_fim)}"
+            _linha_bloco(
+                "✅",
+                f"`{r.id_fivem or '?'}`",
+                (
+                    f"<@{r.discord_id_candidato}> · "
+                    f"{formatar_timestamp(r.data_fim)}"
+                ),
+            )
         )
     return "\n".join(linhas)
 
@@ -238,6 +316,9 @@ async def _t_plantao(membro, estado):
     saldo = estado.saldo_moedas if estado else 0
     segs = estado.segundos_acumulados if estado else 0
     total = await tempo_total_segundos_plantao(membro.id)
+    cotacao = cotacao_moeda_do_membro(membro)
+    valor_reais = formatar_dinheiro(saldo * cotacao)
+
     if online and estado and estado.em_call_valida and estado.call_entrada_em:
         ciclo = int(
             (
@@ -245,64 +326,128 @@ async def _t_plantao(membro, estado):
             ).total_seconds()
         )
         nome = NOMES_CANAIS_PLANTAO.get(estado.canal_atual_id, "?")
-        st = f"em servico · call `{formatar_hms(ciclo)}` · {nome}"
+        status = f"✅ `em serviço` · call `{formatar_hms(ciclo)}` · `{nome}`"
     elif online:
-        st = "em servico · aguardando call"
+        status = "✅ `em serviço` · _aguardando call_"
     else:
-        st = "fora de servico"
-    cotacao = cotacao_moeda_do_membro(membro)
-    return (
-        f"## Plantao\n**{st}**\n"
-        f"**Moedas:** `{saldo}` ({formatar_dinheiro(saldo * cotacao)})\n"
-        f"**Ciclo:** `{segs}s` · **Total:** `{formatar_hms(total)}`"
+        status = "⛔ `fora de serviço`"
+
+    return "\n".join(
+        [
+            _titulo_bloco("🩺", "Plantão"),
+            "",
+            _secao_bloco("📌", "Status"),
+            _linha_bloco("🥼", "Situação", status),
+            _linha_bloco("💰", "Moedas", f"`{saldo}` ({valor_reais})"),
+            _linha_bloco("⏳", "Ciclo (segundos)", f"`{segs}`"),
+            _linha_bloco("⏱️", "Total (histórico)", f"`{formatar_hms(total)}`"),
+        ]
     )
 
 
 async def _t_chamadas(membro):
     faltas = await listar_faltas_chamada(membro.id)
     doutor = await listar_chamadas_como_doutor(membro.id)
-    linhas = ["## Chamadas"]
+    linhas = [
+        _titulo_bloco("📞", "Chamadas"),
+        "",
+        _secao_bloco("📋", "Faltas"),
+    ]
     if faltas:
-        linhas.append("**Faltas:**")
         for f in faltas:
             linhas.append(
-                f"• `#{f.chamada_id}` `{f.motivo}` {formatar_timestamp_relativo(f.criado_em)}"
+                _linha_bloco(
+                    "❌",
+                    f"`#{f.chamada_id}`",
+                    (
+                        f"`{f.motivo}` · "
+                        f"{formatar_timestamp_relativo(f.criado_em)}"
+                    ),
+                )
             )
     else:
-        linhas.append("**Faltas:** nenhuma")
+        linhas.append(_vazio_bloco("nenhuma falta"))
+
+    linhas.extend(["", _secao_bloco("🩺", "Como doutor")])
     if doutor:
-        linhas.append("**Como doutor:**")
         for c in doutor:
             linhas.append(
-                f"• `#{c.id}` p`{c.total_presentes}` a`{c.total_ausentes}` {formatar_timestamp(c.criada_em)}"
+                _linha_bloco(
+                    "🧾",
+                    f"`#{c.id}`",
+                    (
+                        f"presentes `{c.total_presentes}` · "
+                        f"ausentes `{c.total_ausentes}` · "
+                        f"{formatar_timestamp(c.criada_em)}"
+                    ),
+                )
             )
+    else:
+        linhas.append(_vazio_bloco("nenhuma chamada como doutor"))
     return "\n".join(linhas)
 
 
 async def _t_hist_p(membro):
     logs = await ultimos_logs_plantao(membro.id, 10)
+    linhas = [
+        _titulo_bloco("📜", "Histórico de plantão"),
+        "",
+        _secao_bloco("📋", "Últimos eventos"),
+    ]
     if not logs:
-        return "## Hist. plantao\n_Vazio._"
-    return "## Hist. plantao\n" + "\n".join(
-        f"`{l.evento}` {formatar_timestamp_relativo(l.criado_em)}" for l in logs
-    )
+        linhas.append(_vazio_bloco("sem eventos"))
+        return "\n".join(linhas)
+    for registro in logs:
+        duracao = ""
+        if registro.duracao_segundos is not None:
+            duracao = f" · `{formatar_hms(int(registro.duracao_segundos))}`"
+        linhas.append(
+            _linha_bloco(
+                "•",
+                f"`{registro.evento}`",
+                f"{formatar_timestamp_relativo(registro.criado_em)}{duracao}",
+            )
+        )
+    return "\n".join(linhas)
 
 
 async def _t_pun(membro):
     ativas = await listar_punicoes(membro.id, so_ativas=True, limite=8)
     recentes = await listar_punicoes(membro.id, so_ativas=None, limite=8)
-    linhas = ["## Punicoes", "**Ativas:**" if ativas else "**Ativas:** nenhuma"]
-    for p in ativas:
-        linhas.append(
-            f"• `#{p.id}` **{p.cargo_nome}** {formatar_timestamp(p.criada_em)} <@{p.executor_id}>"
-        )
+    linhas = [
+        _titulo_bloco("⚠️", "Punições"),
+        "",
+        _secao_bloco("🔴", "Ativas"),
+    ]
+    if ativas:
+        for p in ativas:
+            linhas.append(
+                _linha_bloco(
+                    "⛔",
+                    f"`#{p.id}`",
+                    (
+                        f"**{p.cargo_nome}** · "
+                        f"{formatar_timestamp(p.criada_em)} · "
+                        f"<@{p.executor_id}>"
+                    ),
+                )
+            )
+    else:
+        linhas.append(_vazio_bloco("nenhuma ativa"))
+
     ina = [p for p in recentes if not p.ativa][:5]
+    linhas.extend(["", _secao_bloco("📜", "Histórico recente")])
     if ina:
-        linhas.append("**Historico:**")
         for p in ina:
             linhas.append(
-                f"• `#{p.id}` ~~{p.cargo_nome}~~ {formatar_timestamp(p.criada_em)}"
+                _linha_bloco(
+                    "📝",
+                    f"`#{p.id}`",
+                    f"~~{p.cargo_nome}~~ · {formatar_timestamp(p.criada_em)}",
+                )
             )
+    else:
+        linhas.append(_vazio_bloco("sem histórico recente"))
     return "\n".join(linhas)
 
 
@@ -315,33 +460,64 @@ async def _t_bau(membro):
         discord_id=membro.id, id_fivem=fid, so_abertos=False, limite=4
     )
     verb = await listar_verbais_bau(discord_id=membro.id, id_fivem=fid, limite=6)
-    linhas = ["## Bau"]
+    linhas = [
+        _titulo_bloco("📦", "Baú"),
+        "",
+        _secao_bloco("🔓", "Casos abertos"),
+    ]
     if casos:
         for c in casos:
-            linhas.append(
-                f"• `#{c.id}` `{c.status}`\n{formatar_bloco_itens_yaml(ler_itens_do_caso(c))}"
-            )
+            itens = formatar_bloco_itens_yaml(ler_itens_do_caso(c))
+            linhas.append(_linha_bloco("📦", f"`#{c.id}`", f"`{c.status}`"))
+            if itens:
+                linhas.append(f"> ```\n{itens}\n```")
     else:
-        linhas.append("**Abertos:** nenhum")
+        linhas.append(_vazio_bloco("nenhum aberto"))
+
+    linhas.extend(["", _secao_bloco("📜", "Histórico")])
     if hist:
-        linhas.append(
-            "**Historico:** " + ", ".join(f"`#{c.id}` {c.status}" for c in hist[:4])
-        )
+        resumo = " · ".join(f"`#{c.id}` {c.status}" for c in hist[:4])
+        linhas.append(_linha_bloco("🧾", "Casos", resumo))
+    else:
+        linhas.append(_vazio_bloco("sem histórico"))
+
+    linhas.extend(["", _secao_bloco("🗣️", "Verbais")])
     if verb:
         for v in verb:
-            linhas.append(f"• verbal `{v.tipo}` {formatar_timestamp(v.criada_em)}")
+            linhas.append(
+                _linha_bloco(
+                    "💬",
+                    f"`{v.tipo}`",
+                    formatar_timestamp(v.criada_em),
+                )
+            )
+    else:
+        linhas.append(_vazio_bloco("nenhum verbal"))
     return "\n".join(linhas)
 
 
 async def _t_cargos(membro):
-    h = await listar_historico_cargos(membro.id)
-    if not h:
-        return "## Hist. cargos\n_Vazio._"
-    linhas = ["## Hist. cargos"]
-    for i in h:
-        s = "+" if i.acao == "ADICIONADO" else "-"
+    historico = await listar_historico_cargos(membro.id)
+    linhas = [
+        _titulo_bloco("🏷️", "Histórico de cargos"),
+        "",
+        _secao_bloco("📋", "Movimentações"),
+    ]
+    if not historico:
+        linhas.append(_vazio_bloco("sem movimentações"))
+        return "\n".join(linhas)
+    for item in historico:
+        sinal = "➕" if item.acao == "ADICIONADO" else "➖"
         linhas.append(
-            f"{s} **{i.cargo}** {i.acao} {formatar_timestamp_relativo(i.data_hora)} <@{i.executor_id}>"
+            _linha_bloco(
+                sinal,
+                f"**{item.cargo}**",
+                (
+                    f"`{item.acao}` · "
+                    f"{formatar_timestamp_relativo(item.data_hora)} · "
+                    f"<@{item.executor_id}>"
+                ),
+            )
         )
     return "\n".join(linhas)
 
@@ -349,109 +525,239 @@ async def _t_cargos(membro):
 async def _t_laudos(membro):
     pac = await listar_laudos_como_paciente(membro.id)
     psi = await listar_laudos_como_psicologo(membro.id)
-    linhas = ["## Laudos"]
-    linhas.append("**Paciente:**" if pac else "**Paciente:** nenhum")
-    for l in pac:
-        linhas.append(f"• `#{l.id}` **{l.parecer}** {formatar_timestamp(l.criado_em)}")
-    linhas.append("**Psicologo:**" if psi else "**Psicologo:** nenhum")
-    for l in psi:
-        linhas.append(f"• `#{l.id}` **{l.parecer}** <@{l.discord_id_paciente}>")
+    linhas = [
+        _titulo_bloco("📝", "Laudos"),
+        "",
+        _secao_bloco("🧍", "Como paciente"),
+    ]
+    if pac:
+        for laudo in pac:
+            linhas.append(
+                _linha_bloco(
+                    "📄",
+                    f"`#{laudo.id}`",
+                    f"**{laudo.parecer}** · {formatar_timestamp(laudo.criado_em)}",
+                )
+            )
+    else:
+        linhas.append(_vazio_bloco("nenhum como paciente"))
+
+    linhas.extend(["", _secao_bloco("🧠", "Como psicólogo")])
+    if psi:
+        for laudo in psi:
+            linhas.append(
+                _linha_bloco(
+                    "📄",
+                    f"`#{laudo.id}`",
+                    (
+                        f"**{laudo.parecer}** · "
+                        f"<@{laudo.discord_id_paciente}>"
+                    ),
+                )
+            )
+    else:
+        linhas.append(_vazio_bloco("nenhum como psicólogo"))
     return "\n".join(linhas)
 
 
 async def _t_aus(membro):
     aus = await listar_ausencias(membro.id)
     dem = await listar_demissoes(membro.id)
-    linhas = ["## Ausencia / Demissao"]
+    linhas = [
+        _titulo_bloco("🚫", "Ausência / Demissão"),
+        "",
+        _secao_bloco("🏖️", "Ausências"),
+    ]
     if aus:
         for a in aus:
             linhas.append(
-                f"• aus `#{a.id}` **{a.status}** `{a.tipo}` {a.periodo_rotulo}"
+                _linha_bloco(
+                    "📌",
+                    f"`#{a.id}`",
+                    f"**{a.status}** · `{a.tipo}` · {a.periodo_rotulo}",
+                )
             )
     else:
-        linhas.append("**Ausencias:** nenhuma")
+        linhas.append(_vazio_bloco("nenhuma ausência"))
+
+    linhas.extend(["", _secao_bloco("🚪", "Demissões")])
     if dem:
         for d in dem:
-            linhas.append(f"• dem `#{d.id}` **{d.status}** `{d.tipo_demissao}`")
+            linhas.append(
+                _linha_bloco(
+                    "📌",
+                    f"`#{d.id}`",
+                    f"**{d.status}** · `{d.tipo_demissao}`",
+                )
+            )
     else:
-        linhas.append("**Demissoes:** nenhuma")
+        linhas.append(_vazio_bloco("nenhuma demissão"))
     return "\n".join(linhas)
 
 
 async def _t_prom(membro):
-    s = await listar_solicitacoes_promocao(membro.id)
-    h = await listar_historico_promocoes(membro.id)
-    linhas = ["## Promocoes"]
-    if s:
-        for x in s:
+    solicitacoes = await listar_solicitacoes_promocao(membro.id)
+    historico = await listar_historico_promocoes(membro.id)
+    linhas = [
+        _titulo_bloco("⬆️", "Promoções"),
+        "",
+        _secao_bloco("📨", "Solicitações"),
+    ]
+    if solicitacoes:
+        for x in solicitacoes:
             linhas.append(
-                f"• sol `#{x.id}` **{x.status}** `{x.cargo_de}`→`{x.cargo_para}`"
+                _linha_bloco(
+                    "🧾",
+                    f"`#{x.id}`",
+                    f"**{x.status}** · `{x.cargo_de}` → `{x.cargo_para}`",
+                )
             )
     else:
-        linhas.append("**Solicitacoes:** nenhuma")
-    if h:
-        for x in h:
+        linhas.append(_vazio_bloco("nenhuma solicitação"))
+
+    linhas.extend(["", _secao_bloco("📜", "Histórico")])
+    if historico:
+        for x in historico:
             linhas.append(
-                f"• hist `{x.tipo}` `{x.cargo_de or '—'}`→`{x.cargo_para or '—'}`"
+                _linha_bloco(
+                    "🎖️",
+                    f"`{x.tipo}`",
+                    f"`{x.cargo_de or '—'}` → `{x.cargo_para or '—'}`",
+                )
             )
+    else:
+        linhas.append(_vazio_bloco("sem histórico"))
     return "\n".join(linhas)
 
 
 async def _t_moedas(membro, estado):
     saldo = estado.saldo_moedas if estado else 0
     movs = await listar_movimentacoes_moedas(membro.id)
-    linhas = [f"## Extrato moedas\n**Saldo:** `{saldo}`"]
+    linhas = [
+        _titulo_bloco("💰", "Extrato de moedas"),
+        "",
+        _secao_bloco("📌", "Saldo"),
+        _linha_bloco("💵", "Atual", f"`{saldo}`"),
+        "",
+        _secao_bloco("📋", "Movimentações"),
+    ]
+    if not movs:
+        linhas.append(_vazio_bloco("sem movimentações"))
+        return "\n".join(linhas)
     for m in movs:
         sinal = f"+{m.valor}" if m.valor >= 0 else str(m.valor)
         linhas.append(
-            f"• `{m.tipo}` **{sinal}** →`{m.saldo_apos}` {formatar_timestamp_relativo(m.criado_em)}"
+            _linha_bloco(
+                "💱",
+                f"`{m.tipo}`",
+                (
+                    f"**{sinal}** → saldo `{m.saldo_apos}` · "
+                    f"{formatar_timestamp_relativo(m.criado_em)}"
+                ),
+            )
         )
-    if not movs:
-        linhas.append("_Sem movimentacoes._")
     return "\n".join(linhas)
 
 
 async def _t_gate(membro):
     itens = await listar_presencas_gate(membro.id)
+    linhas = [
+        _titulo_bloco("🛡️", "GATE"),
+        "",
+        _secao_bloco("📋", "Presenças"),
+    ]
     if not itens:
-        return "## GATE\n_Vazio._"
-    linhas = ["## GATE"]
+        linhas.append(_vazio_bloco("nenhuma presença"))
+        return "\n".join(linhas)
     for p, e in itens:
-        t = e.titulo if e else f"#{p.evento_id}"
+        titulo = e.titulo if e else f"#{p.evento_id}"
         linhas.append(
-            f"• **{t}** FiveM `{p.id_fivem}` {formatar_timestamp_relativo(p.confirmed_at)}"
+            _linha_bloco(
+                "✅",
+                f"**{titulo}**",
+                (
+                    f"FiveM `{p.id_fivem}` · "
+                    f"{formatar_timestamp_relativo(p.confirmed_at)}"
+                ),
+            )
         )
     return "\n".join(linhas)
 
 
 async def _t_tickets(membro):
-    ts = await listar_tickets_membro(membro.id)
-    if not ts:
-        return "## Tickets\n_Vazio._"
-    return "## Tickets\n" + "\n".join(
-        f"• `#{t.id}` **{t.status}** {t.categoria_rotulo} {formatar_timestamp(t.aberto_em)}"
-        for t in ts
-    )
+    tickets = await listar_tickets_membro(membro.id)
+    linhas = [
+        _titulo_bloco("🎫", "Tickets"),
+        "",
+        _secao_bloco("📋", "Registros"),
+    ]
+    if not tickets:
+        linhas.append(_vazio_bloco("nenhum ticket"))
+        return "\n".join(linhas)
+    for t in tickets:
+        linhas.append(
+            _linha_bloco(
+                "🎫",
+                f"`#{t.id}`",
+                (
+                    f"**{t.status}** · {t.categoria_rotulo} · "
+                    f"{formatar_timestamp(t.aberto_em)}"
+                ),
+            )
+        )
+    return "\n".join(linhas)
 
 
 async def _t_cursos(membro):
-    cs = await listar_cursos_membro(membro.id)
-    if not cs:
-        return "## Cursos\n_Vazio._"
-    return "## Cursos\n" + "\n".join(
-        f"• `#{c.id}` **{c.status}** `{c.chave_curso}` {formatar_timestamp(c.criado_em)}"
-        for c in cs
-    )
+    cursos = await listar_cursos_membro(membro.id)
+    linhas = [
+        _titulo_bloco("🎓", "Cursos"),
+        "",
+        _secao_bloco("📋", "Solicitações"),
+    ]
+    if not cursos:
+        linhas.append(_vazio_bloco("nenhum curso"))
+        return "\n".join(linhas)
+    for c in cursos:
+        linhas.append(
+            _linha_bloco(
+                "📘",
+                f"`#{c.id}`",
+                (
+                    f"**{c.status}** · `{c.chave_curso}` · "
+                    f"{formatar_timestamp(c.criado_em)}"
+                ),
+            )
+        )
+    return "\n".join(linhas)
 
 
 async def _t_snap(membro):
     s = await buscar_snapshot_cargos(membro.id)
+    linhas = [
+        _titulo_bloco("📷", "Snapshot de cargos"),
+        "",
+        _secao_bloco("📌", "Último registro"),
+    ]
     if not s:
-        return "## Snapshot\n_Vazio._"
-    return (
-        f"## Snapshot\n**Atualizado:** {formatar_timestamp_relativo(s.atualizado_em)}\n"
-        f"**Nick:** `{s.nickname or '—'}`\n**Cargos:** `{(s.role_names or '[]')[:300]}`"
+        linhas.append(_vazio_bloco("sem snapshot"))
+        return "\n".join(linhas)
+    linhas.extend(
+        [
+            _linha_bloco(
+                "🕒",
+                "Atualizado",
+                formatar_timestamp_relativo(s.atualizado_em),
+            ),
+            _linha_bloco("🏷️", "Nick", f"`{s.nickname or '—'}`"),
+            _linha_bloco(
+                "🎖️",
+                "Cargos",
+                f"`{(s.role_names or '[]')[:300]}`",
+            ),
+        ]
     )
+    return "\n".join(linhas)
 
 
 def _extrair_so_emoji(texto: str) -> str:
