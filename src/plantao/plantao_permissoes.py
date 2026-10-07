@@ -8,6 +8,7 @@ from src.config import (
     CARGOS,
     CARGOS_DIRETORIA,
     CARGOS_DOUTOR_OU_ACIMA,
+    CARGOS_GESTAO_GATE,
 )
 
 
@@ -28,6 +29,11 @@ def membro_tem_cargo(membro: discord.Member, nomes: list[str]) -> bool:
 def e_diretoria(membro: discord.Member) -> bool:
     """Diretoria++ — acesso a #gerenciar-membros e ações admin."""
     return membro_tem_cargo(membro, CARGOS_DIRETORIA)
+
+
+def e_gestao_gate(membro: discord.Member) -> bool:
+    """Alto Comando GATE - acesso #enviar-aviso"""
+    return membro_tem_cargo(membro, CARGOS_GESTAO_GATE)
 
 
 def e_doutor_ou_acima(membro: discord.Member) -> bool:

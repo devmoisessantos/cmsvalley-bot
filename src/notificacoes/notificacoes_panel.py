@@ -24,6 +24,7 @@ from src.notificacoes.notificacoes_service import (
 )
 from src.plantao.plantao_permissoes import (
     e_diretoria,
+    e_gestao_gate,
     mensagem_sem_permissao,
 )
 from src.templates.templates_cogs import (
@@ -132,7 +133,11 @@ class PainelNotificacaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _ao_clicar_iniciar(self, interacao: discord.Interaction):
         membro = interacao.user
-        if not isinstance(membro, discord.Member) or not e_diretoria(membro):
+        if (
+            not isinstance(membro, discord.Member)
+            or not e_diretoria(membro)
+            or not e_gestao_gate(membro)
+        ):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
