@@ -48,16 +48,17 @@ from src.backup.retrato_de_membros_service import (
     sincronizar_todos_os_membros,
 )
 from src.config import (
-    AUTO_BACKUP_DB_INTERVAL_MINUTES,
     AUTO_BACKUP_INTERVAL_HOURS,
     BACKUP_DIR,
     CONFIRMATION_TIMEOUT,
+    HORARIOS_BACKUP_BANCO,
     MAX_BACKUPS_PER_GUILD,
 )
 from src.membros.sincronizar_usuarios_service import (
     garantir_usuario_basico,
     sincronizar_usuarios_do_servidor,
 )
+from src.utils.formatacao import agora_brasilia
 from src.utils.mensagens import (
     COR_AVISO,
     COR_ERRO,
@@ -89,9 +90,9 @@ class BackupCog(commands.Cog):
         self.logger = BackupLogger()
         self.tarefa_backup_automatico.change_interval(hours=AUTO_BACKUP_INTERVAL_HOURS)
         self.tarefa_backup_automatico.start()
-        # Banco: a cada N minutos, só posta no LOG_BACKUP se o hash mudou
-        minutos_banco = max(1, int(AUTO_BACKUP_DB_INTERVAL_MINUTES or 1))
-        self.tarefa_backup_banco.change_interval(minutes=minutos_banco)
+        # Banco: verifica a cada minuto, mas só roda nos horários de Brasília
+        self._ultimo_slot_backup_banco: str | None = None
+        self.tarefa_backup_banco.change_interval(minutes=1)
         self.tarefa_backup_banco.start()
 
     def cog_unload(self):
@@ -250,28 +251,37 @@ class BackupCog(commands.Cog):
     @tasks.loop(minutes=1)
     async def tarefa_backup_banco(self):
         """
-        A cada AUTO_BACKUP_DB_INTERVAL_MINUTES (padrão 1):
-          - calcula o snapshot do Postgres
-          - compara hash com o último JSON no LOG_BACKUP
-          - se igual → silêncio total
-          - se diferente → posta o novo arquivo no canal (sem spam de log extra)
+        Acorda a cada minuto e só executa nos horários de Brasília:
+
+        00:00, 06:00, 11:00, 17:00 e 22:00 (HORARIOS_BACKUP_BANCO).
+
+        Calcula o snapshot, compara o hash com o último ZIP no LOG_BACKUP
+        e posta só se houver mudança (ou se for a primeira vez).
         """
+        agora = agora_brasilia()
+        slot = (agora.hour, agora.minute)
+        if slot not in HORARIOS_BACKUP_BANCO:
+            return
+
+        # Evita rodar duas vezes no mesmo minuto do mesmo dia
+        chave_slot = f"{agora.date().isoformat()}-{agora.hour:02d}:{agora.minute:02d}"
+        if self._ultimo_slot_backup_banco == chave_slot:
+            return
+        self._ultimo_slot_backup_banco = chave_slot
+
         for guilda in self.bot.guilds:
             try:
                 resultado_banco = await exportar_banco_para_canal(
                     guilda,
-                    autor="Sistema (verificação automática)",
+                    autor=(f"Sistema (agendado {agora.hour:02d}:{agora.minute:02d})"),
                     forcar=False,
                 )
                 if resultado_banco.get("enviado"):
-                    # Só um print no console — o próprio anexo no LOG_BACKUP já é o
-                    # registro
                     registrador.info(
                         f"[backup-db] atualizado: {resultado_banco.get('arquivo')} "
                         f"hash={str(resultado_banco.get('hash') or '')[:12]} "
                         f"linhas={resultado_banco.get('linhas')}"
                     )
-                # Sem alteração → nada no console (silencioso)
             except Exception as erro:
                 registrador.error(f"[backup-db] erro em {guilda.name}: {erro}")
 

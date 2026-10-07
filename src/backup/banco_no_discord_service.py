@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import zipfile
 from datetime import (
     datetime,
     timezone,
@@ -47,7 +48,7 @@ from src.utils.mensagens import (
 
 MARCADOR_BACKUP_DB = "🗄️ DB_BACKUP"
 PADRAO_HASH = re.compile(r"hash=`([a-f0-9]{16,64})`", re.IGNORECASE)
-# Nome do anexo: db_backup_<hash16>_<timestamp>.json
+# Nome do anexo: db_backup_<hash16>_<timestamp>.zip (JSON dentro)
 PADRAO_HASH_NO_ARQUIVO = re.compile(
     r"db_backup_([a-f0-9]{16})_",
     re.IGNORECASE,
@@ -207,25 +208,38 @@ def _extrair_hash_da_mensagem(mensagem: discord.Message) -> str | None:
 
 
 def _anexo_json_da_mensagem(mensagem: discord.Message) -> discord.Attachment | None:
+    """Aceita .zip (preferido) ou .json (legado)."""
     for anexo in mensagem.attachments:
         nome = (anexo.filename or "").lower()
-        if nome.endswith(".json"):
+        if nome.endswith(".zip") or nome.endswith(".json"):
             return anexo
-        if "json" in (anexo.content_type or ""):
+        if "json" in (anexo.content_type or "") or "zip" in (anexo.content_type or ""):
             return anexo
     return None
 
 
 async def ler_snapshot_do_anexo(anexo: discord.Attachment) -> dict[str, Any]:
     """
-    Converte um anexo JSON em um retrato de banco pronto para importação.
+    Converte um anexo .zip (ou .json legado) em retrato de banco.
 
-    Lê os bytes enviados pelo Discord, decodifica UTF-8 e exige a chave `tabelas`,
-    estrutura mínima de uma exportação do bot. Em vez de aceitar qualquer JSON, gera
-    um erro claro para impedir que um arquivo incompatível alcance o banco.
+    No ZIP, lê o primeiro arquivo ``.json`` interno. Exige a chave ``tabelas``.
     """
     dados_brutos = await anexo.read()
-    texto = dados_brutos.decode("utf-8")
+    nome = (anexo.filename or "").lower()
+
+    if nome.endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(dados_brutos), "r") as arquivo_zip:
+            nomes_json = [
+                n for n in arquivo_zip.namelist() if n.lower().endswith(".json")
+            ]
+            if not nomes_json:
+                raise ValueError(
+                    "ZIP inválido: precisa conter um arquivo `.json` dentro."
+                )
+            texto = arquivo_zip.read(nomes_json[0]).decode("utf-8")
+    else:
+        texto = dados_brutos.decode("utf-8")
+
     snapshot = json.loads(texto)
     if not isinstance(snapshot, dict) or "tabelas" not in snapshot:
         raise ValueError(
@@ -275,13 +289,23 @@ async def exportar_banco_para_canal(
     quantidade_tabelas, quantidade_linhas = _contar_linhas(snapshot)
     carimbo = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     hash_curto = (hash_local or "semhash")[:16]
-    nome_arquivo = f"db_backup_{hash_curto}_{carimbo}.json"
+    nome_json = f"db_backup_{hash_curto}_{carimbo}.json"
+    nome_arquivo = f"db_backup_{hash_curto}_{carimbo}.zip"
     conteudo_json = json.dumps(snapshot, ensure_ascii=False, indent=2)
     bytes_json = conteudo_json.encode("utf-8")
-    tamanho_bytes = len(bytes_json)
+
+    buffer_zip = io.BytesIO()
+    with zipfile.ZipFile(
+        buffer_zip,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as arquivo_zip:
+        arquivo_zip.writestr(nome_json, bytes_json)
+    bytes_zip = buffer_zip.getvalue()
+    tamanho_bytes = len(bytes_zip)
 
     # Components V2 não envia anexo na mesma mensagem do card.
-    # 1ª mensagem = card | 2ª = só o arquivo JSON (sem texto)
+    # 1ª mensagem = card | 2ª = só o arquivo ZIP (sem texto)
     view_card = _montar_card_backup_db(
         guilda,
         snapshot,
@@ -292,7 +316,7 @@ async def exportar_banco_para_canal(
     mensagem_card = await canal.send(view=view_card)
 
     arquivo = discord.File(
-        fp=io.BytesIO(bytes_json),
+        fp=io.BytesIO(bytes_zip),
         filename=nome_arquivo,
     )
     mensagem_arquivo = await canal.send(file=arquivo)
@@ -324,8 +348,8 @@ async def obter_ultimo_backup_mensagem(
             mensagem.content or ""
         ):
             return mensagem
-        # Qualquer .json no LOG_BACKUP conta (legado)
-        if nome.endswith(".json"):
+        # Qualquer .json/.zip no LOG_BACKUP conta (legado)
+        if nome.endswith(".json") or nome.endswith(".zip"):
             return mensagem
     return None
 
@@ -357,6 +381,7 @@ async def listar_backups_do_canal(
             nome.startswith("db_backup_")
             or MARCADOR_BACKUP_DB in (mensagem.content or "")
             or nome.endswith(".json")
+            or nome.endswith(".zip")
         ):
             continue
         encontrados.append(

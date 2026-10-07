@@ -123,7 +123,16 @@ BACKUP_DIR = _ler_texto_do_ambiente("BACKUP_DIR", "src/data/backups")
 MAX_BACKUPS_PER_GUILD = _ler_numero_do_ambiente("MAX_BACKUPS_PER_GUILD", 10)
 # Backup estrutural do Discord (cargos/canais) — intervalo em horas
 AUTO_BACKUP_INTERVAL_HOURS = _ler_numero_do_ambiente("AUTO_BACKUP_INTERVAL_HOURS", 24)
-# Backup do banco (JSON no LOG_BACKUP) — verificação silenciosa em minutos
+# Backup do banco (ZIP no LOG_BACKUP) — horários de Brasília (hora, minuto).
+# Só nestes horários o bot verifica/envia o snapshot.
+HORARIOS_BACKUP_BANCO: list[tuple[int, int]] = [
+    (0, 0),
+    (6, 0),
+    (11, 0),
+    (17, 0),
+    (22, 0),
+]
+# Legado (env); a task automática usa HORARIOS_BACKUP_BANCO.
 AUTO_BACKUP_DB_INTERVAL_MINUTES = _ler_numero_do_ambiente(
     "AUTO_BACKUP_DB_INTERVAL_MINUTES",
     1,
@@ -1901,6 +1910,7 @@ PASTA_DOS_BACKUPS = BACKUP_DIR
 MAXIMO_DE_BACKUPS_POR_SERVIDOR = MAX_BACKUPS_PER_GUILD
 HORAS_ENTRE_BACKUPS_AUTOMATICOS = AUTO_BACKUP_INTERVAL_HOURS
 MINUTOS_ENTRE_BACKUPS_DO_BANCO = AUTO_BACKUP_DB_INTERVAL_MINUTES
+HORARIOS_BACKUP_DO_BANCO = HORARIOS_BACKUP_BANCO
 NOMES_DOS_CARGOS_DE_ADMINISTRADOR = ADMIN_ROLE_NAMES
 SEGUNDOS_PARA_EXPIRAR_CONFIRMACAO = CONFIRMATION_TIMEOUT
 FUSO_HORARIO_LOCAL = TIMEZONE_LOCAL
