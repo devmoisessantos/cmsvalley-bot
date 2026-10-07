@@ -123,16 +123,16 @@ BACKUP_DIR = _ler_texto_do_ambiente("BACKUP_DIR", "src/data/backups")
 MAX_BACKUPS_PER_GUILD = _ler_numero_do_ambiente("MAX_BACKUPS_PER_GUILD", 10)
 # Backup estrutural do Discord (cargos/canais) — intervalo em horas
 AUTO_BACKUP_INTERVAL_HOURS = _ler_numero_do_ambiente("AUTO_BACKUP_INTERVAL_HOURS", 24)
-# Backup do banco (ZIP no LOG_BACKUP) — horários de Brasília (hora, minuto).
-# Só nestes horários o bot verifica/envia o snapshot.
-HORARIOS_BACKUP_BANCO: list[tuple[int, int]] = [
+# Backup do banco no LOG_BACKUP: horários fixos em Brasília (hora, minuto).
+# Não roda mais a cada minuto — só nesses três pontos do dia.
+HORARIOS_BACKUP_BANCO = (
     (0, 0),
     (6, 0),
     (11, 0),
     (17, 0),
     (22, 0),
-]
-# Legado (env); a task automática usa HORARIOS_BACKUP_BANCO.
+)
+# Mantido só para leitura de .env legado; a tarefa usa HORARIOS_BACKUP_BANCO.
 AUTO_BACKUP_DB_INTERVAL_MINUTES = _ler_numero_do_ambiente(
     "AUTO_BACKUP_DB_INTERVAL_MINUTES",
     1,
@@ -144,7 +144,14 @@ AUTO_BACKUP_DB_INTERVAL_MINUTES = _ler_numero_do_ambiente(
 
 ADMIN_ROLE_NAMES = _ler_lista_de_textos_do_ambiente(
     "ADMIN_ROLE_NAMES",
-    "Responsavel HP,[ CMS ]",
+    # Diretoria++ e staff que costuma republicar painéis / cursos
+    "Responsavel HP,[ CMS ],"
+    "👑 | RESPONSÁVEL GERAL,"
+    "👑 |  DIRETOR GERAL,"
+    "👑 |  VICE DIRETOR GERAL,"
+    "👑・DIRETOR,"
+    "👑・VICE DIRETOR,"
+    "🔍・COORDENADOR",
 )
 CONFIRMATION_TIMEOUT = _ler_numero_do_ambiente("CONFIRMATION_TIMEOUT", 30)
 
@@ -536,7 +543,7 @@ CANAIS = {
     "CANAL_MARCAR_PRESENCA_GATE": 1533997231475261571,
     "CANAL_PAINEL_PLANTAO_ID": 1531543798293856376,  # #iniciar-plantao
     # Lista ao vivo de quem está com plantão ligado
-    "PAINEL_FIXO_PLANTAO_ATIVO": 1550216958190821507,
+    "PAINEL_FIXO_PLANTAO_ATIVO": 1556632909975134279,
     "CANAL_FAZER_CHAMADA": 1486369151952879848,  # #fazer-chamada
     # registro público das chamadas realizadas
     "CANAL_CHAMADAS_HP_SUL": 1486369153349582990,
@@ -619,6 +626,15 @@ CANAIS = {
     "CALL_AGUARDANDO_CURSO": 1486369072680669327,
     "SOLICITAR_CURSO_RESGATE": 1486369193787134064,
     "MATERIAL_CURSO_RESGATE": 1486369209419038891,
+    "MATERIAL_CURSO_DOUTOR": 1486369207875797052,
+    "MATERIAL_CURSO_PSICOLOGO": 1486369206550396999,
+    "MATERIAL_CURSO_RECRUTADOR": 1486369204168036463,
+    "MATERIAL_CURSO_INSTRUTOR": 1503326790729334875,
+    "MATERIAL_CURSO_DIRETORIA": 1486369202855219264,
+    "MATERIAL_CURSO_ARCANJO": 1486369210912473201,
+    "MATERIAL_CURSO_MERGULHADOR": 1486369212426621061,
+    "MATERIAL_CURSO_PARAQUEDISTA": 1486369213890302084,
+    "MATERIAL_CURSO_ALPINISTA": 1486369216008294561,
     "SOLICITAR_PROMOCAO_PARAMEDICO": 1486369195028517026,
     "AVALIACAO": 1486369066091282623,
     "APROVAR_REPROVAR": 1526595318974517340,
@@ -645,7 +661,7 @@ CANAIS = {
     "LOG_MEMBROS": 1545982177810845776,
     "LOG_AVATARES": 1540387918181572658,
     "LOG_MODERACAO": 1545982241983828119,
-    "LOG_HORAS": 1540388094858108938,  # plantão: início/fim/duração/ajustes
+    "LOG_HORAS": 1553969268620791838,  # plantão: início/fim/duração/ajustes
     "LOG_LAUDO": 1545982152406077586,
     "LOG_BAU": 1486369263479423047,  # logs do baú (servidor)
     "LOG_ERROS": 1545982165823520909,
@@ -1196,7 +1212,8 @@ ALIASES_ITENS_BAU = {
 }
 
 # ---------------------------------------------------------------------------
-# Cursos (cargo Discord = comprovante de conclusão)
+# Cursos (cargo_id = comprovante de conclusão;
+# cargo_cursando_id = libera só o material do curso aceito)
 # valor_ingame: preço em R$ in-game (obrigatório; moedas só descontam)
 # Desconto: até MOEDAS_DESCONTO_MAX_POR_PEDIDO moedas × cotação do aluno
 # ---------------------------------------------------------------------------
@@ -1206,6 +1223,7 @@ CURSOS = {
         "nome": "Curso Resgate",
         "emoji": "🚑",
         "cargo_id": 1522578759037747361,
+        "cargo_cursando_id": 1556370776515682455,
         "nivel": "1.0",
         "valor_ingame": 200_000,
         "pratico": True,
@@ -1214,6 +1232,7 @@ CURSOS = {
         "nome": "Curso Arcanjo",
         "emoji": "🚁",
         "cargo_id": 1486368775543590994,
+        "cargo_cursando_id": 1556371916267454569,
         "nivel": "1.0",
         "valor_ingame": 300_000,
         "pratico": True,
@@ -1222,6 +1241,7 @@ CURSOS = {
         "nome": "Curso Mergulhador",
         "emoji": "🤿",
         "cargo_id": 1522578825513275482,
+        "cargo_cursando_id": 1556372298230141039,
         "nivel": "1.0",
         "valor_ingame": 250_000,
         "pratico": True,
@@ -1230,6 +1250,7 @@ CURSOS = {
         "nome": "Curso Alpinista",
         "emoji": "🌄",
         "cargo_id": 1486368777728823468,
+        "cargo_cursando_id": 1556371669847769210,
         "nivel": "1.0",
         "valor_ingame": 250_000,
         "pratico": True,
@@ -1238,6 +1259,7 @@ CURSOS = {
         "nome": "Curso Paraquedista",
         "emoji": "🪂",
         "cargo_id": 1522578874234568814,
+        "cargo_cursando_id": 1556372531655475280,
         "nivel": "1.0",
         "valor_ingame": 300_000,
         "pratico": True,
@@ -1246,6 +1268,7 @@ CURSOS = {
         "nome": "Curso Arcanjo 2.0",
         "emoji": "🚁",
         "cargo_id": 1486368774582964394,
+        "cargo_cursando_id": 1556372056080121877,
         "nivel": "2.0",
         "valor_ingame": 450_000,
         "pratico": True,
@@ -1254,6 +1277,7 @@ CURSOS = {
         "nome": "Curso Mergulhador 2.0",
         "emoji": "🤿",
         "cargo_id": 1522578950323175424,
+        "cargo_cursando_id": 1556372180051173456,
         "nivel": "2.0",
         "valor_ingame": 350_000,
         "pratico": True,
@@ -1262,6 +1286,7 @@ CURSOS = {
         "nome": "Curso Alpinista 2.0",
         "emoji": "🌄",
         "cargo_id": 1486368776646561834,
+        "cargo_cursando_id": 1556371797279121413,
         "nivel": "2.0",
         "valor_ingame": 300_000,
         "pratico": True,
@@ -1270,6 +1295,7 @@ CURSOS = {
         "nome": "Curso Paraquedista 2.0",
         "emoji": "🪂",
         "cargo_id": 1522578990743683203,
+        "cargo_cursando_id": 1556372417792712745,
         "nivel": "2.0",
         "valor_ingame": 400_000,
         "pratico": True,
@@ -1278,6 +1304,7 @@ CURSOS = {
         "nome": "Curso Doutor",
         "emoji": "🩺",
         "cargo_id": 1486368771860856882,
+        "cargo_cursando_id": 1556371132666486804,
         "nivel": "funcao",
         "valor_ingame": 350_000,
         "pratico": False,
@@ -1286,6 +1313,7 @@ CURSOS = {
         "nome": "Curso Psicólogo",
         "emoji": "🧠",
         "cargo_id": 1486368771017805996,
+        "cargo_cursando_id": 1556370454665764874,
         "nivel": "funcao",
         "valor_ingame": 400_000,
         "pratico": False,
@@ -1294,6 +1322,7 @@ CURSOS = {
         "nome": "Curso Recrutador",
         "emoji": "🫂",
         "cargo_id": 1522579072197197966,
+        "cargo_cursando_id": 1556370213094563860,
         "nivel": "funcao",
         "valor_ingame": 550_000,
         "pratico": False,
@@ -1302,6 +1331,7 @@ CURSOS = {
         "nome": "Curso Instrutor",
         "emoji": "👨‍🏫",
         "cargo_id": 1522579028526239744,
+        "cargo_cursando_id": 1556369974790987896,
         "nivel": "funcao",
         "valor_ingame": 750_000,
         "pratico": False,
@@ -1310,6 +1340,7 @@ CURSOS = {
         "nome": "Curso Diretoria",
         "emoji": "💎",
         "cargo_id": 1486368756606304388,
+        "cargo_cursando_id": 1556369609051869376,
         "nivel": "diretoria",
         "valor_ingame": 2_000_000,
         "pratico": False,
@@ -1318,6 +1349,7 @@ CURSOS = {
         "nome": "Curso Diretoria Geral",
         "emoji": "👑",
         "cargo_id": 1496189276365258873,
+        "cargo_cursando_id": 1556368948432474112,
         "nivel": "diretoria",
         "valor_ingame": 5_000_000,
         "pratico": False,
@@ -1381,14 +1413,14 @@ METAS_POR_CARGO = {
         "segundos_minimos_plantao": 12 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
-        "meta_chamadas": 30,
+        "meta_chamadas": 10,
         "meta_cursos_aplicados": 0,
         "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_PSICOLOGO: {
         "segundos_minimos_plantao": 16 * 3600,
-        "meta_laudos": 25,
+        "meta_laudos": 10,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
         "meta_cursos_aplicados": 0,
@@ -1398,14 +1430,14 @@ METAS_POR_CARGO = {
     CARGO_RECRUTADOR: {
         "segundos_minimos_plantao": 18 * 3600,
         "meta_laudos": 0,
-        "meta_recrutamentos": 20,
+        "meta_recrutamentos": 10,
         "meta_chamadas": 0,
         "meta_cursos_aplicados": 0,
         "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_INSTRUTOR: {
-        "segundos_minimos_plantao": 22 * 3600,
+        "segundos_minimos_plantao": 18 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
@@ -1414,7 +1446,7 @@ METAS_POR_CARGO = {
         "exige_avaliacao_hp": False,
     },
     CARGO_INSTRUTOR_RESGATE: {
-        "segundos_minimos_plantao": 20 * 3600,
+        "segundos_minimos_plantao": 18 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,
         "meta_chamadas": 0,
@@ -1423,104 +1455,104 @@ METAS_POR_CARGO = {
         "exige_avaliacao_hp": False,
     },
     CARGO_SUPERVISOR: {
-        "segundos_minimos_plantao": 31 * 3600,
-        "meta_laudos": 15,
+        "segundos_minimos_plantao": 20 * 3600,
+        "meta_laudos": 12,
         "meta_recrutamentos": 12,
-        "meta_chamadas": 15,
-        "meta_cursos_aplicados": 8,
+        "meta_chamadas": 12,
+        "meta_cursos_aplicados": 12,
         # Tickets só na promoção Supervisor → Vice Diretor
         "meta_tickets": 0,
         "exige_avaliacao_hp": False,
     },
     CARGO_VICE_DIRETOR: {
-        "segundos_minimos_plantao": 45 * 3600,
-        "meta_laudos": 22,
-        "meta_recrutamentos": 18,
-        "meta_chamadas": 22,
-        "meta_cursos_aplicados": 12,
+        "segundos_minimos_plantao": 24 * 3600,
+        "meta_laudos": 14,
+        "meta_recrutamentos": 14,
+        "meta_chamadas": 14,
+        "meta_cursos_aplicados": 14,
         # Meta de tickets desta subida (Supervisor → Vice Diretor)
-        "meta_tickets": 15,
+        "meta_tickets": 5,
         "exige_avaliacao_hp": False,
     },
     CARGO_DIRETOR: {
-        "segundos_minimos_plantao": 60 * 3600,
-        "meta_laudos": 30,
-        "meta_recrutamentos": 24,
-        "meta_chamadas": 28,
-        "meta_cursos_aplicados": 16,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 30 * 3600,
+        "meta_laudos": 18,
+        "meta_recrutamentos": 18,
+        "meta_chamadas": 18,
+        "meta_cursos_aplicados": 18,
+        "meta_tickets": 10,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_DOUTOR: {
-        "segundos_minimos_plantao": 65 * 3600,
-        "meta_laudos": 12,
-        "meta_recrutamentos": 6,
-        "meta_chamadas": 40,
-        "meta_cursos_aplicados": 8,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 35 * 3600,
+        "meta_laudos": 18,
+        "meta_recrutamentos": 18,
+        "meta_chamadas": 20,
+        "meta_cursos_aplicados": 18,
+        "meta_tickets": 10,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_PSICOLOGO: {
-        "segundos_minimos_plantao": 65 * 3600,
-        "meta_laudos": 40,
-        "meta_recrutamentos": 6,
-        "meta_chamadas": 10,
-        "meta_cursos_aplicados": 8,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 35 * 3600,
+        "meta_laudos": 20,
+        "meta_recrutamentos": 18,
+        "meta_chamadas": 18,
+        "meta_cursos_aplicados": 18,
+        "meta_tickets": 10,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_RECRUTAMENTO: {
-        "segundos_minimos_plantao": 65 * 3600,
-        "meta_laudos": 8,
-        "meta_recrutamentos": 40,
-        "meta_chamadas": 10,
-        "meta_cursos_aplicados": 8,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 35 * 3600,
+        "meta_laudos": 18,
+        "meta_recrutamentos": 20,
+        "meta_chamadas": 18,
+        "meta_cursos_aplicados": 18,
+        "meta_tickets": 10,
         "exige_avaliacao_hp": False,
     },
     CARGO_RESP_INSTRUTOR: {
-        "segundos_minimos_plantao": 65 * 3600,
-        "meta_laudos": 8,
-        "meta_recrutamentos": 8,
-        "meta_chamadas": 10,
-        "meta_cursos_aplicados": 35,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 35 * 3600,
+        "meta_laudos": 18,
+        "meta_recrutamentos": 18,
+        "meta_chamadas": 18,
+        "meta_cursos_aplicados": 20,
+        "meta_tickets": 10,
         "exige_avaliacao_hp": False,
     },
     CARGO_COORDENADOR: {
-        "segundos_minimos_plantao": 70 * 3600,
-        "meta_laudos": 40,
-        "meta_recrutamentos": 30,
-        "meta_chamadas": 35,
-        "meta_cursos_aplicados": 22,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 40 * 3600,
+        "meta_laudos": 20,
+        "meta_recrutamentos": 20,
+        "meta_chamadas": 20,
+        "meta_cursos_aplicados": 20,
+        "meta_tickets": 20,
         "exige_avaliacao_hp": False,
     },
     CARGO_VICE_DIRETOR_GERAL: {
-        "segundos_minimos_plantao": 80 * 3600,
-        "meta_laudos": 45,
-        "meta_recrutamentos": 35,
-        "meta_chamadas": 40,
-        "meta_cursos_aplicados": 28,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 45 * 3600,
+        "meta_laudos": 22,
+        "meta_recrutamentos": 22,
+        "meta_chamadas": 22,
+        "meta_cursos_aplicados": 22,
+        "meta_tickets": 15,
         "exige_avaliacao_hp": True,
     },
     CARGO_DIRETOR_GERAL: {
-        "segundos_minimos_plantao": 90 * 3600,
-        "meta_laudos": 50,
-        "meta_recrutamentos": 40,
-        "meta_chamadas": 45,
-        "meta_cursos_aplicados": 35,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 50 * 3600,
+        "meta_laudos": 24,
+        "meta_recrutamentos": 24,
+        "meta_chamadas": 24,
+        "meta_cursos_aplicados": 24,
+        "meta_tickets": 10,
         "exige_avaliacao_hp": True,
     },
     CARGO_RESPONSAVEL_GERAL: {
-        "segundos_minimos_plantao": 100 * 3600,
-        "meta_laudos": 55,
-        "meta_recrutamentos": 45,
-        "meta_chamadas": 50,
-        "meta_cursos_aplicados": 40,
-        "meta_tickets": 0,
+        "segundos_minimos_plantao": 55 * 3600,
+        "meta_laudos": 25,
+        "meta_recrutamentos": 25,
+        "meta_chamadas": 25,
+        "meta_cursos_aplicados": 25,
+        "meta_tickets": 5,
         "exige_avaliacao_hp": True,
     },
 }
@@ -1910,7 +1942,6 @@ PASTA_DOS_BACKUPS = BACKUP_DIR
 MAXIMO_DE_BACKUPS_POR_SERVIDOR = MAX_BACKUPS_PER_GUILD
 HORAS_ENTRE_BACKUPS_AUTOMATICOS = AUTO_BACKUP_INTERVAL_HOURS
 MINUTOS_ENTRE_BACKUPS_DO_BANCO = AUTO_BACKUP_DB_INTERVAL_MINUTES
-HORARIOS_BACKUP_DO_BANCO = HORARIOS_BACKUP_BANCO
 NOMES_DOS_CARGOS_DE_ADMINISTRADOR = ADMIN_ROLE_NAMES
 SEGUNDOS_PARA_EXPIRAR_CONFIRMACAO = CONFIRMATION_TIMEOUT
 FUSO_HORARIO_LOCAL = TIMEZONE_LOCAL
