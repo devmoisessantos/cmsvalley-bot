@@ -133,11 +133,18 @@ class PainelNotificacaoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _ao_clicar_iniciar(self, interacao: discord.Interaction):
         membro = interacao.user
-        if (
-            not isinstance(membro, discord.Member)
-            or not e_diretoria(membro)
-            or not e_gestao_gate(membro)
-        ):
+        if not isinstance(membro, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    mensagem_sem_permissao("usar o painel de notificação"),
+                ],
+            )
+            return
+
+        tem_permissao = e_diretoria(membro) or e_gestao_gate(membro)
+        if not tem_permissao:
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
