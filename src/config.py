@@ -1561,10 +1561,10 @@ METAS_POR_CARGO = {
 # O total exigido no banco = horas já "pagas" nos degraus anteriores + etapa.
 # Ex.: Paramédico (6h) → Doutor (18h) exige 24h no total de plantão.
 HORAS_PRIMEIRA_AREA = {
-    CARGO_DOUTOR: 18 * 3600,
-    CARGO_PSICOLOGO: 22 * 3600,
-    CARGO_RECRUTADOR: 20 * 3600,
-    CARGO_INSTRUTOR: 26 * 3600,
+    CARGO_DOUTOR: 12 * 3600,
+    CARGO_PSICOLOGO: 16 * 3600,
+    CARGO_RECRUTADOR: 18 * 3600,
+    CARGO_INSTRUTOR: 18 * 3600,
 }
 
 # Etapa Enfermeiro → Paramédico (base da carreira)
@@ -1788,7 +1788,7 @@ TRILHAS_PROMOCAO.append(
             "Só sobe a Supervisor depois de passar pelas quatro áreas "
             "(Doutor, Psicólogo, Recrutador e Instrutor): cursos de cada "
             "uma, metas de produção de cada especialidade e plantão do "
-            "caminho completo. Sem meta de tickets nesta subida."
+            "caminho completo."
         ),
     )
 )
