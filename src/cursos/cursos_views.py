@@ -1489,8 +1489,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             )
             aprovados_formatados = (
                 "\n".join(
-                    f"> {rotulo_curso(chave_do_curso)}\n"
-                    for chave_do_curso in aprovadas
+                    f"> {rotulo_curso(chave_do_curso)}" for chave_do_curso in aprovadas
                 )
                 if aprovadas
                 else "> ———"
@@ -1498,8 +1497,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
 
             reprovados_formatados = (
                 "\n".join(
-                    f"> {rotulo_curso(chave_do_curso)}\n"
-                    for chave_do_curso in reprovadas
+                    f"> {rotulo_curso(chave_do_curso)}" for chave_do_curso in reprovadas
                 )
                 if reprovadas
                 else "> ———"
@@ -2738,21 +2736,34 @@ class ModalObservacaoDecisao(LoggingModalMixin, discord.ui.Modal):
             self.reprovadas,
             observacao_decisao=observacao,
         )
-        # Se a interação do modal não tinha a mensagem do card, edita
-        # pela referência guardada (mesmo uptime).
         if self.mensagem_decisao is not None:
+            linhas_aprovados = (
+                "\n".join(f"> {rotulo_curso(c)}" for c in self.aprovadas)
+                if self.aprovadas
+                else "> ———"
+            )
+
+            linhas_reprovados = (
+                "\n".join(f"> {rotulo_curso(c)}" for c in self.reprovadas)
+                if self.reprovadas
+                else "> ———"
+            )
+
+            observacao_formatada = (observacao or "").strip()
+
             resumo = (
-                f"Aprovados: "
-                f"{', '.join(rotulo_curso(c) for c in self.aprovadas) or '—'}\n"
-                f"Reprovados: "
-                f"{', '.join(rotulo_curso(c) for c in self.reprovadas) or '—'}\n"
-                f"Obs. decisão: {observacao}"
+                f"**📝 Observação da decisão:**\n"
+                f"> {observacao_formatada}\n\n"
+                f"**✅ Aprovados:**\n"
+                f"{linhas_aprovados}\n\n"
+                f"**❌ Reprovados:**\n"
+                f"{linhas_reprovados}"
             )
             try:
                 await self.mensagem_decisao.edit(
                     view=ViewDecisaoCurso(
                         titulo=self.titulo_card,
-                        corpo=self.corpo_card + f"\n\n-# **Decisão:**\n{resumo}",
+                        corpo=self.corpo_card + f"\n{resumo}",
                         guild=guilda,
                         solicitacao_id=self.solicitacao_id,
                         url_avatar=self.url_avatar,
