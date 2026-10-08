@@ -102,22 +102,37 @@ logger = logging.getLogger(__name__)
 class _ViewSessaoChamada(discord.ui.LayoutView):
     """LayoutView da sessão: ao expirar sem interação, cancela sem cooldown."""
 
-    def __init__(self, *, timeout: float | None = None):
+    def __init__(
+        self,
+        *,
+        timeout: float | None = None,
+        chamada_id: int | None = None,
+    ):
         if timeout is None:
             timeout = float(TIMEOUT_INTERACAO_POS_OCR_SEGUNDOS)
         super().__init__(timeout=timeout)
+        # Usado no on_timeout para não cancelar uma chamada mais nova
+        self.chamada_id_da_view = chamada_id
 
     async def on_timeout(self):
         """Cancela uma sessão abandonada para não manter a trava ocupada.
 
-        Limpa tanto o controle persistido quanto a sessão em memória, sem
-        registrar cooldown. Assim outro doutor consegue recomeçar depois do
-        tempo configurado em TIMEOUT_INTERACAO_POS_OCR_SEGUNDOS, em vez de o
-        sistema parecer ocupado por uma chamada esquecida.
+        Só cancela se a sessão em memória ainda for a desta view (mesmo doutor
+        e mesma chamada). View antiga expirando no meio de uma chamada nova
+        não pode apagar a sessão ativa.
         """
         try:
             sessao = obter_sessao()
             if sessao is None:
+                return
+            # Esta view guarda o id da chamada no momento em que foi montada,
+            # se existir; senão só cancela se não houver indício de sessão nova.
+            chamada_da_view = getattr(self, "chamada_id_da_view", None)
+            if chamada_da_view is not None and sessao.chamada_id != chamada_da_view:
+                registrador.info(
+                    "[chamada] on_timeout ignorado — sessão atual é outra "
+                    f"(view={chamada_da_view}, ativa={sessao.chamada_id})"
+                )
                 return
             await cancelar_chamada(motivo=MOTIVO_CANCEL_TIMEOUT_INTERACAO)
             definir_sessao(None)
@@ -466,7 +481,7 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
                 f"{sessao.print_ems_nome_arquivo})"
             )
 
-        await _processar_print_ems(interaction, anexo.url)
+        await _processar_print_ems(interaction, anexo.url, sessao)
 
 
 # ─────────────────────────────────────────────
@@ -474,14 +489,45 @@ class PainelChamadaView(LoggingViewMixin, discord.ui.LayoutView):
 # ─────────────────────────────────────────────
 
 
-async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str):
-    sessao = obter_sessao()
+async def _processar_print_ems(
+    interaction: discord.Interaction,
+    url_imagem: str,
+    sessao: SessaoChamada | None = None,
+):
+    """
+    Lê o print do /ems e monta a etapa 1.
+
+    ``sessao`` deve vir do fluxo que iniciou a chamada. Se o global em memória
+    foi limpo no meio do OCR (timeout de view antiga, outro fluxo, etc.),
+    ainda usamos a referência local passada pelo caller.
+    """
+    if sessao is None:
+        sessao = obter_sessao()
+    if sessao is None:
+        registrador.error("[chamada] _processar_print_ems sem sessão ativa — abortando")
+        await editar_mensagem_original(
+            interaction,
+            view=_construir_view_simples(
+                "❌ Chamada inválida",
+                "A sessão desta chamada não existe mais (expirou ou foi "
+                "cancelada). Abra a chamada de novo e envie o print.",
+                discord.Color.red(),
+            ),
+        )
+        return
+
+    # Garante que o guarda global aponta para esta sessão (pode ter sido
+    # limpo por on_timeout de uma view antiga enquanto o OCR rodava).
+    sessao_global = obter_sessao()
+    if sessao_global is None or sessao_global.chamada_id != sessao.chamada_id:
+        definir_sessao(sessao)
+
     guild = interaction.guild
 
     await editar_mensagem_original(
         interaction,
         view=_construir_view_processando(),
-    )  # 👈 edita
+    )
 
     try:
         resultado = await asyncio.wait_for(
@@ -527,6 +573,13 @@ async def _processar_print_ems(interaction: discord.Interaction, url_imagem: str
             ),
         )
         return
+
+    # OCR terminou — revalida sessão (outra view antiga pode ter limpado o global)
+    sessao_ainda = obter_sessao()
+    if sessao_ainda is not None and sessao_ainda.chamada_id == sessao.chamada_id:
+        sessao = sessao_ainda
+    else:
+        definir_sessao(sessao)
 
     medicos_ems = resultado["medicos"]
     sessao.total_medicos_ems = len(medicos_ems)
@@ -668,22 +721,17 @@ async def _processar_ausentes_do_ems(
                 "⚠️ Durante a chamada de auditoria, você estava com o plantão ativo no "
                 "Discord "
                 "mas não foi encontrado no `/ems` da cidade. Seu plantão foi encerrado "
-                "automaticamente."
+                "automaticamente. A falta (se confirmada) só é registrada ao "
+                "**finalizar** a chamada."
             )
         except discord.Forbidden as erro_em_processar_ausentes_do_ems:
-            # Enfeite que falhou: avisar quem faltou na chamada.
-            # A acao principal ja tinha dado certo, entao so registro.
             ignorar_falha_cosmetica(
                 erro_em_processar_ausentes_do_ems,
                 o_que_falhou="avisar quem faltou na chamada",
             )
         await desligar_servico(membro)
-        await registrar_falta(
-            membro.id,
-            sessao.chamada_id,
-            "Toggle ligado no Discord, ausente no /ems",
-            guild,
-        )
+        # Não aplica advertência aqui — só marca para o Finalizar.
+        sessao.faltas_pendentes_ems.add(membro.id)
 
 
 def _deduplicar_reconhecidos(sessao: SessaoChamada):
@@ -938,7 +986,7 @@ def _construir_etapa_1(
     row_continuar.add_item(botao_continuar)
     componentes.append(row_continuar)
 
-    layout = _ViewSessaoChamada()
+    layout = _ViewSessaoChamada(chamada_id=getattr(sessao, "chamada_id", None))
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -1387,7 +1435,7 @@ def _construir_etapa_2(
     row.add_item(botao_continuar)
     componentes.append(row)
 
-    layout = _ViewSessaoChamada()
+    layout = _ViewSessaoChamada(chamada_id=getattr(sessao, "chamada_id", None))
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -1502,7 +1550,7 @@ def _construir_etapa_3(
         row_botoes.add_item(botao_continuar)
         componentes.append(row_botoes)
 
-        layout = _ViewSessaoChamada()
+        layout = _ViewSessaoChamada(chamada_id=getattr(sessao, "chamada_id", None))
         layout.add_item(
             discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
         )
@@ -1548,7 +1596,7 @@ def _construir_etapa_3(
     row_botoes.add_item(botao_continuar)
     componentes.append(row_botoes)
 
-    layout = _ViewSessaoChamada()
+    layout = _ViewSessaoChamada(chamada_id=getattr(sessao, "chamada_id", None))
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -1642,7 +1690,7 @@ def _construir_etapa_4(
     row.add_item(botao_finalizar)
     componentes.append(row)
 
-    layout = _ViewSessaoChamada()
+    layout = _ViewSessaoChamada(chamada_id=getattr(sessao, "chamada_id", None))
     layout.add_item(
         discord.ui.Container(*componentes, accent_color=discord.Color.blurple())
     )
@@ -1723,31 +1771,39 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
         and medico_presente.discord_id != sessao.doutor_id
     ]
 
-    for medico in faltantes:
-        membro = guild.get_member(medico.discord_id) if guild else None
+    # Une faltas do select + quem estava com toggle e fora do /ems
+    ids_para_falta: set[int] = set(sessao.faltantes_ids) | set(
+        sessao.faltas_pendentes_ems
+    )
+    ids_para_falta.discard(sessao.doutor_id)
+
+    for discord_id_falta in ids_para_falta:
+        membro = guild.get_member(discord_id_falta) if guild else None
         if membro is None:
             continue
-        if membro.id == sessao.doutor_id:
-            continue
-        # Diretoria / bypass: nunca falta, nunca punição, nunca perde plantão por
-        # chamada
         if _tem_cargo_bypass(membro.id, guild):
             continue
+        if discord_id_falta in sessao.faltas_pendentes_ems:
+            motivo_falta = "Toggle ligado no Discord, ausente no /ems"
+        else:
+            motivo_falta = "Não respondeu à chamada (call/rádio)"
         await registrar_falta(
-            membro.id, sessao.chamada_id, "Não respondeu à chamada (call/rádio)", guild
+            membro.id,
+            sessao.chamada_id,
+            motivo_falta,
+            guild,
         )
         await desligar_servico(membro)
         try:
             await membro.send(
-                "🔴 Você foi desconectado e seu plantão encerrado por não responder "
-                "à chamada de auditoria."
+                "🔴 Você foi desconectado e seu plantão encerrado por ausência "
+                "na chamada de auditoria. A advertência (se aplicável) já consta "
+                "no seu histórico de punições."
             )
         except discord.Forbidden as erro_ao_finalizar_chamada:
-            # Enfeite que falhou: encerrar a mensagem da chamada.
-            # A acao principal ja tinha dado certo, entao so registro.
             ignorar_falha_cosmetica(
                 erro_ao_finalizar_chamada,
-                o_que_falhou="encerrar a mensagem da chamada",
+                o_que_falhou="avisar membro com falta no finalizar",
             )
 
     for medico in presentes:
