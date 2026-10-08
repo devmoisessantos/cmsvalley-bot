@@ -14,6 +14,7 @@ from src.cursos.cursos_service import (
     aceitar_agendamento,
     buscar_pedido_aberto,
     calcular_cobranca_pacote,
+    conceder_cargos_cursando,
     conceder_cargos_dos_cursos,
     creditar_moedas_instrutor,
     debitar_moedas_curso,
@@ -32,6 +33,7 @@ from src.cursos.cursos_service import (
     proximo_grupo_repasse_pendente,
     recusar_agendamento,
     registrar_solicitacao_pacote,
+    remover_cargos_cursando,
     rotulo_curso,
     soma_valor_ingame,
 )
@@ -1003,14 +1005,17 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                 await responder_erro(
                     interacao,
                     titulo="Pedido não encontrado",
-                    linhas=[f"ID `#{self.solicitacao_id}`."],
+                    linhas=_linhas_pedido_nao_encontrado(self.solicitacao_id),
                 )
                 return
             if registro.status != "ACEITO":
                 await responder_aviso(
                     interacao,
                     titulo="Já processado",
-                    linhas=[f"Status atual: `{registro.status}`."],
+                    linhas=[
+                        f"Pedido `#{registro.id}` — Status atual: `{registro.status}`.",
+                        "Só pedidos **AGENDADO** viram ACEITO ao clicar.",
+                    ],
                     delay=10,
                 )
                 return
@@ -1027,10 +1032,7 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                     f"{interacao.user.mention}\n> {obs}"
                 )
             else:
-                corpo += (
-                    f"\n\n### 📌 Observação do instrutor: "
-                    f"{interacao.user.mention}"
-                )
+                corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
 
             # Mantém o card no canal de agendamentos (histórico).
             # Só marca como aceito — o pedido não some da conversa.
@@ -1060,6 +1062,26 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                         usuario=interacao.user,
                     )
 
+            # Libera só o material dos cursos deste pedido (cargo por curso).
+            detalhe_material = "Sem aluno na guilda para liberar material."
+            if aluno is not None:
+                chaves_aceitas = parse_chaves_json(
+                    registro.chaves_cursos_json,
+                    registro.chave_curso,
+                )
+                ok_material, detalhe_material = await conceder_cargos_cursando(
+                    aluno,
+                    chaves_aceitas,
+                )
+                if not ok_material:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Pedido aceito mas falha ao liberar material do curso",
+                        RuntimeError(detalhe_material),
+                        contexto="ModalObservacaoInstrutor.material",
+                        usuario=interacao.user,
+                    )
+
             # Card de decisão novo no canal de aprovar/reprovar
             # (grava mensagem_id no banco para edições futuras).
             await publicar_para_decisao(guilda, registro=registro, aluno=aluno)
@@ -1073,6 +1095,7 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                         f"Seu pedido `#{registro.id}` foi **aceito**.",
                         f"Instrutor: {interacao.user.mention}",
                         f"Observação: {obs or '_Sem observação_'}",
+                        "O material do(s) curso(s) foi liberado no Discord.",
                         "Aguarde a **aprovação final** após a aplicação do curso.",
                     ],
                     cor=COR_SUCESSO,
@@ -1084,6 +1107,7 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                 titulo="Solicitação aceita",
                 linhas=[
                     f"Pedido `#{registro.id}` aceito.",
+                    f"Material: {detalhe_material}",
                     "O aluno foi notificado na DM (se aberta).",
                     "Card enviado ao canal de **aprovar/reprovar**.",
                 ],
@@ -1377,6 +1401,26 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             guilda = interacao.guild or self.guild_ref
             aluno = guilda.get_member(registro.discord_id) if guilda else None
 
+            # Tira o material de estudo de todos os cursos deste pedido.
+            # O comprovante de conclusão (cargo_id) fica só nos aprovados.
+            if aluno is not None:
+                chaves_do_pedido = parse_chaves_json(
+                    registro.chaves_cursos_json,
+                    registro.chave_curso,
+                )
+                ok_retirar, detalhe_retirar = await remover_cargos_cursando(
+                    aluno,
+                    chaves_do_pedido,
+                )
+                if not ok_retirar:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Curso finalizado mas falha ao retirar material",
+                        RuntimeError(detalhe_retirar),
+                        contexto="ViewDecisaoCurso.retirar_material",
+                        usuario=membro,
+                    )
+
             if aprovadas and aluno is not None:
                 ok, detalhe = await conceder_cargos_dos_cursos(aluno, aprovadas)
                 if not ok:
@@ -1390,10 +1434,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 # Pedidos legados pagos 100% em moedas: instrutor recebe
                 # a fatia proporcional. No fluxo novo (IN_GAME + desconto)
                 # a receita é in-game e não vira moeda para o instrutor.
-                if (
-                    registro.forma_pagamento == "MOEDAS"
-                    and registro.moedas_debitadas
-                ):
+                if registro.forma_pagamento == "MOEDAS" and registro.moedas_debitadas:
                     valor_total = soma_valor_ingame(
                         parse_chaves_json(
                             registro.chaves_cursos_json,
@@ -1404,11 +1445,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                     if valor_total > 0 and valor_aprov > 0:
                         moedas_credito = max(
                             1,
-                            int(
-                                registro.moedas_debitadas
-                                * valor_aprov
-                                / valor_total
-                            ),
+                            int(registro.moedas_debitadas * valor_aprov / valor_total),
                         )
                         await creditar_moedas_instrutor(
                             membro.id,
@@ -1446,13 +1483,33 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             )
 
             resumo = (
-                f"Aprovados: "
-                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in aprovadas) or '—'}\n"
-                f"Reprovados: "
-                f"{', '.join(rotulo_curso(chave_do_curso) for chave_do_curso in reprovadas) or '—'}"
+                f"**📝 Observação da decisão:**\n> {observacao_decisao}\n\n"
+                if observacao_decisao
+                else ""
             )
-            if observacao_decisao:
-                resumo += f"\nObs. decisão: {observacao_decisao}"
+            aprovados_formatados = (
+                "\n".join(
+                    f"> {rotulo_curso(chave_do_curso)}\\"
+                    for chave_do_curso in aprovadas
+                )
+                if aprovadas
+                else "> —"
+            )
+
+            reprovados_formatados = (
+                "\n".join(
+                    f"> {rotulo_curso(chave_do_curso)}\\"
+                    for chave_do_curso in reprovadas
+                )
+                if reprovadas
+                else "> —"
+            )
+            resumo += (
+                f"**✅ Aprovados:**\n\n"
+                f"{aprovados_formatados}\n\n\n"
+                f"**❌ Reprovados:**\n\n"
+                f"{reprovados_formatados}"
+            )
 
             # Mantém o card no canal de decisão (histórico), só trava os
             # botões. O resultado detalhado já foi para aprovados/reprovados.
@@ -1462,7 +1519,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                     await mensagem_para_editar.edit(
                         view=ViewDecisaoCurso(
                             titulo=self.titulo,
-                            corpo=self.corpo + f"\n\n-# **Decisão:**\n{resumo}",
+                            corpo=self.corpo + f"\n\n{resumo}",
                             guild=guilda,
                             solicitacao_id=registro.id,
                             url_avatar=self.url_avatar,
@@ -1542,8 +1599,7 @@ async def apagar_card_do_pedido(
                 ignorar_falha_cosmetica(
                     erro,
                     o_que_falhou=(
-                        "buscar mensagem do pedido no banco "
-                        f"(#{solicitacao_id})"
+                        f"Buscar mensagem do pedido no banco (`#{solicitacao_id}`)"
                     ),
                 )
                 # Mantém o fallback da interação se a busca falhou
@@ -1878,6 +1934,18 @@ async def montar_view_decisao_a_partir_do_banco(
     )
 
 
+def _linhas_pedido_nao_encontrado(solicitacao_id: int) -> list[str]:
+    """Texto padrão quando o pedido não existe mais no banco."""
+    return [
+        f"Não há pedido `#{solicitacao_id}` na tabela `solicitacoes_curso` "
+        f"(busca pela chave primária `id`).",
+        "No `/banco`, abra a linha e confira a coluna **`id`** "
+        "(a busca livre por `240` pode achar outra coluna).",
+        "Se o pedido existir com outro `id`, apague este card e rode "
+        "`/cursos republicar-pendentes`.",
+    ]
+
+
 async def processar_clique_aceitar_curso(
     interacao: discord.Interaction,
     solicitacao_id: int,
@@ -1889,6 +1957,7 @@ async def processar_clique_aceitar_curso(
             interacao,
             titulo="Sem permissão",
             linhas=["Apenas **Instrutor** ou **Diretoria** pode aceitar."],
+            delay=10,
         )
         return
     registro = await obter_solicitacao_curso(solicitacao_id)
@@ -1896,7 +1965,10 @@ async def processar_clique_aceitar_curso(
         await responder_aviso(
             interacao,
             titulo="Pedido indisponível",
-            linhas=[f"Status atual: `{registro.status}`."],
+            linhas=[
+                f"Pedido `#{solicitacao_id}` — Status atual: `{registro.status}`.",
+                "Só pedidos **AGENDADO** podem ser recusados.",
+            ],
             delay=10,
         )
         return
@@ -1927,14 +1999,17 @@ async def processar_clique_recusar_curso(
         await responder_erro(
             interacao,
             titulo="Pedido não encontrado",
-            linhas=[f"`#{solicitacao_id}`"],
+            linhas=_linhas_pedido_nao_encontrado(solicitacao_id),
         )
         return
     if registro.status != "AGENDADO":
         await responder_aviso(
             interacao,
             titulo="Pedido indisponível",
-            linhas=[f"Status atual: `{registro.status}`."],
+            linhas=[
+                f"Pedido `#{solicitacao_id}` — Status atual: `{registro.status}`.",
+                "Só pedidos **AGENDADO** podem ser recusados.",
+            ],
             delay=10,
         )
         return
@@ -2006,10 +2081,7 @@ class ModalRecusarAgendamento(LoggingModalMixin, discord.ui.Modal):
                 membro=aluno or interacao.user,  # type: ignore[arg-type]
                 registro=registro,
             )
-            corpo += (
-                f"\n\n### 📌 Observação do instrutor: "
-                f"{interacao.user.mention}"
-            )
+            corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
             if motivo:
                 corpo += f"\n> {motivo}"
             corpo += "\n\n-# ❌ **Solicitação recusada**"
@@ -2116,7 +2188,7 @@ async def processar_clique_abrir_decisao(
         await responder_erro(
             interacao,
             titulo="Pedido não encontrado",
-            linhas=[f"`#{solicitacao_id}`"],
+            linhas=_linhas_pedido_nao_encontrado(solicitacao_id),
         )
         return
 
@@ -2151,9 +2223,7 @@ async def processar_clique_abrir_decisao(
                 except discord.HTTPException as erro_edit:
                     ignorar_falha_cosmetica(
                         erro_edit,
-                        o_que_falhou=(
-                            "atualizar card com botão Registrar Pagamento"
-                        ),
+                        o_que_falhou=("atualizar card com botão Registrar Pagamento"),
                     )
             await responder_aviso(
                 interacao,
@@ -2178,7 +2248,7 @@ async def processar_clique_abrir_decisao(
         await responder_erro(
             interacao,
             titulo="Pedido não encontrado",
-            linhas=[f"`#{solicitacao_id}`"],
+            linhas=_linhas_pedido_nao_encontrado(solicitacao_id),
         )
         return
     await editar_mensagem_original(interacao, view=view)
@@ -2212,7 +2282,7 @@ async def processar_registrar_repasse_curso(
         await responder_erro(
             interacao,
             titulo="Pedido não encontrado",
-            linhas=[f"`#{solicitacao_id}`"],
+            linhas=_linhas_pedido_nao_encontrado(solicitacao_id),
         )
         return
 
@@ -2265,8 +2335,7 @@ async def processar_registrar_repasse_curso(
         titulo="Comprovante do repasse",
         linhas=[
             f"**Grupo:** {grupo['rotulo']}",
-            f"**Repasse ao hospital:** "
-            f"`{formatar_reais(int(grupo['repasse']))}`",
+            f"**Repasse ao hospital:** `{formatar_reais(int(grupo['repasse']))}`",
             f"**Valor pago in-game (grupo):** "
             f"`{formatar_reais(int(grupo['valor_pago']))}`",
             "Envie **neste canal** o print do comprovante.",
@@ -2399,9 +2468,7 @@ async def processar_registrar_repasse_curso(
     buffer_anexo.seek(0)
     arquivo = discord.File(fp=buffer_anexo, filename=nome_arquivo)
 
-    e_imagem = nome_arquivo.lower().endswith(
-        (".png", ".jpg", ".jpeg", ".webp", ".gif")
-    )
+    e_imagem = nome_arquivo.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
     componentes_card: list = [
         discord.ui.TextDisplay(texto_card),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
@@ -2416,15 +2483,11 @@ async def processar_registrar_repasse_curso(
     else:
         # PDF / outros: componente File no card
         try:
-            componentes_card.append(
-                discord.ui.File(f"attachment://{nome_arquivo}")
-            )
+            componentes_card.append(discord.ui.File(f"attachment://{nome_arquivo}"))
         except (TypeError, AttributeError):
             pass
     componentes_card.append(
-        discord.ui.TextDisplay(
-            f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>"
-        )
+        discord.ui.TextDisplay(f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>")
     )
 
     try:
@@ -2436,7 +2499,7 @@ async def processar_registrar_repasse_curso(
             )
         )
         await canal_destino.send(view=view_log, file=arquivo)
-    except discord.HTTPException as erro_envio:
+    except discord.HTTPException:
         # Fallback: mensagem clássica só com o arquivo + texto
         try:
             buffer_fallback = io.BytesIO(bytes_do_arquivo)
@@ -2506,18 +2569,15 @@ async def processar_registrar_repasse_curso(
 
     if completo:
         linhas_ok = [
-            f"Grupo **{grupo['rotulo']}** registrado "
-            f"(repasse `{repasse_txt}`).",
+            f"Grupo **{grupo['rotulo']}** registrado (repasse `{repasse_txt}`).",
             "Todos os comprovantes deste pedido estão ok.",
             "Aprovar e Reprovar estão **liberados**.",
         ]
     else:
         linhas_ok = [
-            f"Grupo **{grupo['rotulo']}** registrado "
-            f"(repasse `{repasse_txt}`).",
+            f"Grupo **{grupo['rotulo']}** registrado (repasse `{repasse_txt}`).",
             "Ainda há curso(s) de área pendente(s).",
-            "Clique de novo em **Registrar Pagamento** "
-            "para o próximo comprovante.",
+            "Clique de novo em **Registrar Pagamento** para o próximo comprovante.",
         ]
     await responder_sucesso(
         interacao,
@@ -2566,7 +2626,7 @@ async def processar_select_decisao_curso(
         await responder_erro(
             interacao,
             titulo="Pedido não encontrado",
-            linhas=[f"`#{solicitacao_id}`"],
+            linhas=_linhas_pedido_nao_encontrado(solicitacao_id),
         )
         return
     if not _pode_decidir_pedido(membro, registro):
@@ -2589,7 +2649,7 @@ async def processar_select_decisao_curso(
         await responder_erro(
             interacao,
             titulo="Pedido não encontrado",
-            linhas=[f"`#{solicitacao_id}`"],
+            linhas=_linhas_pedido_nao_encontrado(solicitacao_id),
         )
         return
 

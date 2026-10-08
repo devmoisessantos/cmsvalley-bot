@@ -98,9 +98,7 @@ def valores_pagos_por_chave(
         if indice == len(ordenadas) - 1:
             pagos[chave] = max(0, restante)
         else:
-            fatia = int(
-                valor_a_pagar_total * brutos[chave] / total_bruto
-            )
+            fatia = int(valor_a_pagar_total * brutos[chave] / total_bruto)
             pagos[chave] = fatia
             restante -= fatia
     return pagos
@@ -213,8 +211,8 @@ async def segundos_plantao_ciclo_atual(
     brutas do banco + call aberta.
     """
     from src.plantao.ranking_plantao_service import (
-        buscar_horas_por_membro,
         _periodos,
+        buscar_horas_por_membro,
     )
 
     inicio, fim, _ = _periodos(
@@ -317,8 +315,9 @@ async def calcular_cobranca_pacote(
 # Compatibilidade com trechos antigos que ainda importam estes nomes.
 def moedas_necessarias_para_valor(valor_ingame: int) -> int:
     """Legado: não use para cobrar curso. Preferir calcular_cobranca_pacote."""
-    from src.config import VALOR_MOEDA_INGAME
     import math
+
+    from src.config import VALOR_MOEDA_INGAME
 
     if valor_ingame <= 0:
         return 0
@@ -482,9 +481,7 @@ async def registrar_solicitacao_pacote(
     """
     valor_bruto = soma_valor_ingame(chaves)
     valor_gravar = (
-        int(valor_a_pagar_ingame)
-        if valor_a_pagar_ingame is not None
-        else valor_bruto
+        int(valor_a_pagar_ingame) if valor_a_pagar_ingame is not None else valor_bruto
     )
     chave_resumo = chaves[0] if len(chaves) == 1 else "pacote"
     async with async_session() as sessao:
@@ -510,11 +507,91 @@ async def registrar_solicitacao_pacote(
 
 async def obter_solicitacao_curso(solicitacao_id: int) -> SolicitacaoCurso | None:
     """Busca um pedido pelo identificador, retornando `None` se ele não existir."""
+    try:
+        identificador = int(solicitacao_id)
+    except (TypeError, ValueError):
+        return None
+    if identificador <= 0:
+        return None
+
     async with async_session() as sessao:
+        # session.get usa a PK direto (mais estável que WHERE em alguns pools)
+        registro = await sessao.get(SolicitacaoCurso, identificador)
+        if registro is not None:
+            return registro
+
         resultado = await sessao.execute(
-            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == identificador)
         )
         return resultado.scalar_one_or_none()
+
+
+async def obter_solicitacao_por_mensagem(
+    mensagem_id: int,
+) -> SolicitacaoCurso | None:
+    """
+    Busca pedido pela mensagem publicada no Discord.
+
+    Serve de rede de segurança quando o custom_id do botão ficou
+    dessincronizado do banco, mas a mensagem ainda está vinculada
+    em mensagem_id.
+    """
+    if not mensagem_id:
+        return None
+    try:
+        id_mensagem = int(mensagem_id)
+    except (TypeError, ValueError):
+        return None
+
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.mensagem_id == id_mensagem)
+        )
+        return resultado.scalar_one_or_none()
+
+
+async def resolver_solicitacao_curso(
+    solicitacao_id: int,
+    *,
+    mensagem_id: int | None = None,
+) -> SolicitacaoCurso | None:
+    """
+    Resolve o pedido pelo id do botão; se não achar, tenta pela mensagem.
+
+    Assim um card antigo com id errado no custom_id ainda pode
+    funcionar se mensagem_id estiver gravado no banco.
+    """
+    import logging
+
+    registrador_local = logging.getLogger(__name__)
+
+    try:
+        identificador = int(solicitacao_id)
+    except (TypeError, ValueError):
+        identificador = 0
+
+    registro = await obter_solicitacao_curso(identificador)
+    if registro is not None:
+        return registro
+
+    if mensagem_id is not None:
+        registro = await obter_solicitacao_por_mensagem(mensagem_id)
+        if registro is not None:
+            registrador_local.warning(
+                "Pedido de curso: custom_id apontava para #%s (sumiu), "
+                "mas a mensagem %s está ligada ao pedido #%s — usando este.",
+                identificador,
+                mensagem_id,
+                registro.id,
+            )
+            return registro
+
+    registrador_local.warning(
+        "Pedido de curso não encontrado: id=%s mensagem_id=%s",
+        identificador,
+        mensagem_id,
+    )
+    return None
 
 
 async def listar_solicitacoes_por_status(
@@ -826,6 +903,92 @@ async def conceder_cargos_dos_cursos(
     return True, "Cargos de curso concedidos."
 
 
+def _cargos_cursando_das_chaves(
+    guilda: discord.Guild,
+    chaves: list[str],
+) -> tuple[list[discord.Role], str | None]:
+    """
+    Resolve os cargos de material (cursando) das chaves pedidas.
+
+    Devolve a lista de cargos válidos e, se algum id estiver faltando na
+    guilda, uma mensagem de diagnóstico. Chaves sem cargo_cursando_id no
+    catálogo são ignoradas em silêncio.
+    """
+    cargos: list[discord.Role] = []
+    for chave in chaves:
+        dados = obter_curso(chave)
+        if not dados:
+            continue
+        cargo_cursando_id = dados.get("cargo_cursando_id")
+        if not cargo_cursando_id:
+            continue
+        cargo = guilda.get_role(int(cargo_cursando_id))
+        if cargo is None:
+            return [], (
+                f"Cargo de material do curso `{chave}` "
+                f"(id {cargo_cursando_id}) não encontrado na guilda."
+            )
+        if cargo not in cargos:
+            cargos.append(cargo)
+    return cargos, None
+
+
+async def conceder_cargos_cursando(
+    membro: discord.Member,
+    chaves: list[str],
+) -> tuple[bool, str]:
+    """Libera o material só dos cursos aceitos, pelo cargo de cada curso.
+
+    Antes existia um único cargo de cursante que abria todos os canais.
+    Agora cada curso tem o próprio cargo e o aluno só vê o material
+    correspondente ao pedido aceito.
+    """
+    cargos, erro = _cargos_cursando_das_chaves(membro.guild, chaves)
+    if erro:
+        return False, erro
+    cargos_para_adicionar = [cargo for cargo in cargos if cargo not in membro.roles]
+    if not cargos_para_adicionar:
+        return True, "Aluno já tinha o material dos cursos aceitos."
+    try:
+        await membro.add_roles(
+            *cargos_para_adicionar,
+            reason="Solicitação de curso aceita — liberar material",
+        )
+    except discord.Forbidden:
+        return False, "Sem permissão para conceder cargo de material do curso."
+    except discord.HTTPException as erro:
+        return False, f"Erro Discord ao conceder material do curso: {erro}"
+    return True, "Material do(s) curso(s) liberado."
+
+
+async def remover_cargos_cursando(
+    membro: discord.Member,
+    chaves: list[str],
+) -> tuple[bool, str]:
+    """Retira o cargo de material após a decisão final do pedido.
+
+    O material serve para estudar enquanto o curso está em andamento.
+    Depois da aprovação ou reprovação o comprovante (cargo_id) é o que
+    importa; o acesso ao canal de estudo deixa de ser necessário.
+    """
+    cargos, erro = _cargos_cursando_das_chaves(membro.guild, chaves)
+    if erro:
+        return False, erro
+    cargos_para_remover = [cargo for cargo in cargos if cargo in membro.roles]
+    if not cargos_para_remover:
+        return True, "Aluno não tinha cargo de material para remover."
+    try:
+        await membro.remove_roles(
+            *cargos_para_remover,
+            reason="Curso finalizado — retirar material de estudo",
+        )
+    except discord.Forbidden:
+        return False, "Sem permissão para retirar cargo de material do curso."
+    except discord.HTTPException as erro:
+        return False, f"Erro Discord ao retirar material do curso: {erro}"
+    return True, "Material do(s) curso(s) retirado."
+
+
 def montar_linhas_corpo_pedido(
     *,
     membro: discord.Member,
@@ -835,121 +998,173 @@ def montar_linhas_corpo_pedido(
     """
     Retorna (titulo, corpo_markdown) para o card de agendamento.
     """
+
     chaves = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
     forma = registro.forma_pagamento or "IN_GAME"
     observacao = registro.observacao_aluno
+
     valor_bruto = soma_valor_ingame(chaves)
     valor_a_pagar = int(registro.valor_ingame or 0)
     moedas = int(registro.moedas_debitadas or 0)
     cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
+
     desconto_reais = moedas * cotacao if moedas and cotacao else 0
-    # Se cotação antiga não gravada, deduz pelo que falta no total
+
+    # Se a cotação antiga não foi gravada, deduz pelo valor que falta no total.
     if moedas > 0 and desconto_reais == 0 and valor_bruto > valor_a_pagar:
         desconto_reais = valor_bruto - valor_a_pagar
+
+    # ==========================================================
+    # CURSO / PACOTE
+    # ==========================================================
 
     if len(chaves) <= 1:
         chave = chaves[0] if chaves else registro.chave_curso
         dados = obter_curso(chave) or {}
+
         emoji = dados.get("emoji") or "📚"
-        titulo = f"{emoji} {dados.get('nome', chave)} — Pedido de Curso"
+        nome_curso = dados.get("nome", chave)
+        valor_curso = int(dados.get("valor_ingame") or 0)
+
+        titulo = f"{emoji} {nome_curso} — Pedido de Curso"
+
         corpo_cursos = (
-            f"**Curso:** {menção_cargo_curso(chave)}\n"
-            f"**Valor catálogo:** "
-            f"`{formatar_reais(int(dados.get('valor_ingame') or 0))}`"
+            f"**🎓 Curso:** {menção_cargo_curso(chave)}\n"
+            f"**💵 Valor catálogo:** `{formatar_reais(valor_curso)}`"
         )
+
     else:
         titulo = "📚 Pacote de Cursos — Pedido de Curso"
+
         linhas_itens = []
+
         for chave in chaves:
             dados = obter_curso(chave) or {}
             valor = formatar_reais(int(dados.get("valor_ingame") or 0))
-            linhas_itens.append(f"> • {menção_cargo_curso(chave)} — `{valor}`")
+
+            linhas_itens.append(f"> {menção_cargo_curso(chave)} — `{valor}`")
+
         corpo_cursos = (
-            "## 🛒 Cursos Solicitados\n"
+            "### 🛒 Cursos Solicitados\n\n"
             + "\n".join(linhas_itens)
-            + f"\n\n**Subtotal catálogo:** `{formatar_reais(valor_bruto)}`"
+            + f"\n\n**💰 Subtotal catálogo:** `{formatar_reais(valor_bruto)}`"
         )
+
+    # ==========================================================
+    # INFORMAÇÕES DE PAGAMENTO
+    # ==========================================================
 
     if forma == "MOEDAS":
         nota_instrutor = (
             "> 🪙 **Pagamento legado em MOEDAS** (já debitado do aluno).\n"
             "> Após **aprovar**, as moedas podem ser creditadas a você."
         )
+
     elif forma == "IN_GAME_COM_DESCONTO":
         nota_instrutor = (
             "> 💵 **Pagamento IN-GAME com desconto em moedas.**\n"
-            "> Cobre o **valor a pagar** no jogo com o aluno.\n"
-            "> Use **Registrar Pagamento** para o comprovante do repasse "
-            "ao hospital antes de aprovar."
+            "> Cobre o **valor a pagar** diretamente com o aluno no jogo.\n"
+            "> Use **Registrar Pagamento** para gerar o comprovante do "
+            "repasse ao hospital antes de aprovar."
         )
+
     elif forma == "IN_GAME":
         nota_instrutor = (
             "> 💵 **Pagamento IN-GAME (jogo).**\n"
-            "> Confira o valor com o aluno **no jogo** antes da aula.\n"
-            "> Use **Registrar Pagamento** para o comprovante do repasse "
-            "ao hospital antes de aprovar."
-        )
-    elif forma == "GRATUITO":
-        nota_instrutor = (
-            "> 📋 **Pedido gratuito** (isenção). Sem cobrança in-game."
-        )
-    else:
-        nota_instrutor = (
-            "> 📋 Confira a forma de pagamento com o aluno antes da aula."
+            "> Confira o valor com o aluno **dentro do jogo antes de aplicar o curso**.\n"
+            "> Use **Registrar Pagamento** para gerar o comprovante do "
+            "repasse ao hospital antes de aprovar."
         )
 
+    elif forma == "GRATUITO":
+        nota_instrutor = "> 📋 **Pedido gratuito** (isenção).\n> Sem cobrança in-game."
+
+    else:
+        nota_instrutor = (
+            "> 📋 Confira a forma de pagamento com o aluno antes de aplicar o curso."
+        )
+
+    # ==========================================================
+    # OBSERVAÇÃO DO ALUNO
+    # ==========================================================
+
     bloco_obs = ""
+
     if observacao:
-        bloco_obs = f"\n### 📝 Observação do aluno\n> {observacao}\n"
+        bloco_obs = f"\n### 📝 Observação do aluno\n\n> {observacao}\n"
+
+    # ==========================================================
+    # CORPO PRINCIPAL
+    # ==========================================================
 
     corpo = (
         f"**👤 Aluno:** {membro.mention} (`{membro.id}`)\n"
         f"**📋 Pedido:** `#{registro.id}`\n"
         f"{bloco_obs}\n"
-        f"### 💰 Pagamento\n"
+        f"### 💰 Pagamento\n\n"
         f"{corpo_cursos}\n"
-        f"**Forma de pagamento:** `{forma}`\n"
+        f"**💳 Forma de pagamento:** `{forma}`\n"
     )
+
+    # ==========================================================
+    # VALOR A PAGAR
+    # ==========================================================
+
     if forma == "GRATUITO":
-        corpo += "**Valor a pagar in-game:** `R$ 0`\n"
+        corpo += "**💵 Valor a pagar in-game:** `R$ 0`\n"
+
     else:
         if moedas > 0:
             texto_cotacao = (
                 formatar_reais(cotacao) if cotacao > 0 else "cotação do aluno"
             )
-            corpo += (
-                f"**Desconto:** `{moedas}` moeda(s) "
-                f"({texto_cotacao} cada"
-            )
+
+            corpo += f"**🪙 Desconto:** `{moedas}` moeda(s) ({texto_cotacao} cada"
+
             if desconto_reais > 0:
                 corpo += f" · abate `{formatar_reais(desconto_reais)}`"
+
             corpo += ")\n"
-        corpo += (
-            f"**Valor a pagar in-game:** "
-            f"`{formatar_reais(valor_a_pagar)}`\n"
-        )
+
+        corpo += f"**💵 Valor a pagar in-game:** `{formatar_reais(valor_a_pagar)}`\n"
+
+    # ==========================================================
+    # REPASSE AO HOSPITAL
+    # ==========================================================
 
     if forma not in ("GRATUITO", "MOEDAS"):
         total_repasse = repasse_total_do_pedido(registro)
+
         status_repasse = (
             "registrado"
             if getattr(registro, "repasse_registrado", False)
             else "pendente"
         )
+
         corpo += (
-            f"**Repasse ao hospital:** "
+            f"**🏥 Repasse ao hospital:** "
             f"`{formatar_reais(total_repasse)}` · `{status_repasse}`\n"
         )
-        # Detalhe por grupo ainda pendente
+
+        # Detalhamento dos repasses ainda pendentes.
         if not getattr(registro, "repasse_registrado", False):
             feitos = ler_repasses_feitos(registro)
             grupos = montar_grupos_repasse(chaves, valor_a_pagar)
-            for grupo in grupos:
-                marca = "✓" if feitos.get(grupo["id"]) else "○"
-                corpo += (
-                    f"> {marca} {grupo['rotulo']}: "
-                    f"`{formatar_reais(int(grupo['repasse']))}`\n"
-                )
+
+            if grupos:
+                corpo += "\n**📋 Repasses por grupo:**\n"
+
+                for grupo in grupos:
+                    marca = "✓" if feitos.get(grupo["id"]) else "○"
+
+                    corpo += (
+                        f"> {marca} {grupo['rotulo']}: "
+                        f"`{formatar_reais(int(grupo['repasse']))}`\n"
+                    )
+
+    # ==========================================================
+    # ORIENTAÇÃO AO INSTRUTOR
+    # ==========================================================
 
     corpo += f"\n{nota_instrutor}"
 
