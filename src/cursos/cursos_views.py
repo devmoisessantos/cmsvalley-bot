@@ -417,7 +417,7 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
         observacao_aluno: str,
         cobranca: dict,
     ):
-        super().__init__(timeout=180)
+        super().__init__(timeout=60)
         self.chaves = chaves
         self.solicitante_id = solicitante_id
         self.observacao_aluno = observacao_aluno
@@ -1489,25 +1489,25 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
             )
             aprovados_formatados = (
                 "\n".join(
-                    f"> {rotulo_curso(chave_do_curso)}\\"
+                    f"> {rotulo_curso(chave_do_curso)}\n"
                     for chave_do_curso in aprovadas
                 )
                 if aprovadas
-                else "> —"
+                else "> ———"
             )
 
             reprovados_formatados = (
                 "\n".join(
-                    f"> {rotulo_curso(chave_do_curso)}\\"
+                    f"> {rotulo_curso(chave_do_curso)}\n"
                     for chave_do_curso in reprovadas
                 )
                 if reprovadas
-                else "> —"
+                else "> ———"
             )
             resumo += (
-                f"**✅ Aprovados:**\n\n"
-                f"{aprovados_formatados}\n\n\n"
-                f"**❌ Reprovados:**\n\n"
+                f"**✅ Aprovados:**\n"
+                f"{aprovados_formatados}\n\n"
+                f"**❌ Reprovados:**\n"
                 f"{reprovados_formatados}"
             )
 
@@ -1519,7 +1519,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                     await mensagem_para_editar.edit(
                         view=ViewDecisaoCurso(
                             titulo=self.titulo,
-                            corpo=self.corpo + f"\n\n{resumo}",
+                            corpo=self.corpo + f"\n{resumo}",
                             guild=guilda,
                             solicitacao_id=registro.id,
                             url_avatar=self.url_avatar,
@@ -1539,7 +1539,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Decisão registrada",
                 linhas=[resumo],
-                delay=15,
+                delay=10,
             )
         except Exception as erro:
             await enviar_erro_para_log_erros(
@@ -1553,6 +1553,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Erro inesperado",
                 linhas=["Falha na decisão. Veja LOG_ERROS."],
+                delay=10,
             )
 
 

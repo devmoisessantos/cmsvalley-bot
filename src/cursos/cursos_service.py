@@ -714,14 +714,32 @@ async def decidir_cursos_parciais(
         if registro.status not in ("ACEITO", "AGENDADO"):
             return registro
 
-        texto_aprovados = ", ".join(chaves_aprovadas) or "—"
-        texto_reprovados = ", ".join(chaves_reprovadas) or "—"
-        resumo = f"Aprovados: {texto_aprovados}\nReprovados: {texto_reprovados}"
-        nota = (observacao_decisao or "").strip()
-        if nota:
-            resumo = f"Decisão: {nota}\n{resumo}"
+        linhas_aprovados = (
+            "\n".join(f"> {chave}\n" for chave in chaves_aprovadas)
+            if chaves_aprovadas
+            else "> ———"
+        )
+
+        linhas_reprovados = (
+            "\n".join(f"> {chave}\n" for chave in chaves_reprovadas)
+            if chaves_reprovadas
+            else "> ———"
+        )
+
+        resumo = (
+            f"**📝 Observação da decisão:**\n> {nota}\n\n"
+            if (nota := (observacao_decisao or "").strip())
+            else ""
+        )
+
+        resumo += (
+            f"**✅ Aprovados:**\n"
+            f"{linhas_aprovados}\n\n"
+            f"**❌ Reprovados:**\n"
+            f"{linhas_reprovados}"
+        )
         # Substitui pela decisão final — não mantém só a obs. de aceitação
-        registro.observacao_instrutor = resumo[:500]
+        registro.observacao_instrutor = resumo[:700]
         registro.aplicado_por = instrutor_id
         registro.status = "APROVADO" if chaves_aprovadas else "REPROVADO"
         if chaves_aprovadas and chaves_reprovadas:
