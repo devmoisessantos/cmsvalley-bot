@@ -381,6 +381,7 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
             solicitante_id=self.solicitante_id,
             observacao_aluno=observacao,
             cobranca=cobranca,
+            interacao_origem=interacao,
         )
         # Uma única mensagem efêmera de confirmação (substitui o fluxo anterior)
         await responder_view(
@@ -403,21 +404,25 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
 
 
 async def _apagar_card_confirmacao_curso(
+    interacao_origem: discord.Interaction | None,
     mensagem: discord.Message | None,
     delay: float = 10,
 ) -> None:
-    """Apaga o card de confirmação após a resposta efêmera desaparecer."""
-    if mensagem is None:
+    """Apaga a resposta efêmera original que criou o card de confirmação."""
+    if interacao_origem is None or mensagem is None:
         return
 
     await asyncio.sleep(delay)
 
     try:
-        await mensagem.delete()
+        # O card "Confirmar pedido de curso" é a resposta original da
+        # interação que abriu essa confirmação. Para mensagens efêmeras,
+        # usamos a API de exclusão da resposta original.
+        await interacao_origem.delete_original_response()
     except (discord.NotFound, discord.HTTPException) as erro:
         ignorar_falha_cosmetica(
             erro,
-            o_que_falhou="apagar card de confirmação do pedido de curso",
+            o_que_falhou="apagar card efêmero de confirmação do pedido de curso",
         )
 
 
@@ -436,9 +441,11 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
         solicitante_id: int,
         observacao_aluno: str,
         cobranca: dict,
+        interacao_origem: discord.Interaction,
     ):
         super().__init__(timeout=60)
         self.chaves = chaves
+        self.interacao_origem = interacao_origem
         self.solicitante_id = solicitante_id
         self.observacao_aluno = observacao_aluno
         self.cobranca = cobranca
@@ -538,6 +545,7 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
             observacao_aluno=self.observacao_aluno,
             moedas_desconto=0,
             mensagem_confirmacao=mensagem_confirmacao,
+            interacao_origem=self.interacao_origem,
         )
 
     async def _ao_pagar_com_desconto(self, interacao: discord.Interaction):
@@ -552,6 +560,7 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
             cotacao=int(self.cobranca.get("cotacao") or 0),
             valor_bruto=int(self.cobranca.get("valor_bruto") or 0),
             mensagem_confirmacao=interacao.message,
+            interacao_origem=self.interacao_origem,
         )
         await interacao.response.send_modal(modal)
 
@@ -567,6 +576,7 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
             moedas_desconto=0,
             forcar_gratuito=True,
             mensagem_confirmacao=mensagem_confirmacao,
+            interacao_origem=self.interacao_origem,
         )
 
     async def _ao_cancelar(self, interacao: discord.Interaction):
@@ -579,7 +589,11 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
             delay=10,
         )
 
-        await _apagar_card_confirmacao_curso(mensagem_confirmacao, delay=0)
+        await _apagar_card_confirmacao_curso(
+            interacao_origem=self.interacao_origem,
+            mensagem=mensagem_confirmacao,
+            delay=0,
+        )
 
 
 class ModalDescontoMoedasCurso(LoggingModalMixin, discord.ui.Modal):
@@ -595,6 +609,7 @@ class ModalDescontoMoedasCurso(LoggingModalMixin, discord.ui.Modal):
         cotacao: int,
         valor_bruto: int,
         mensagem_confirmacao: discord.Message | None = None,
+        interacao_origem: discord.Interaction | None = None,
     ):
         super().__init__(title="Desconto em moedas")
         self.chaves = chaves
@@ -604,6 +619,7 @@ class ModalDescontoMoedasCurso(LoggingModalMixin, discord.ui.Modal):
         self.cotacao = int(cotacao)
         self.valor_bruto = int(valor_bruto)
         self.mensagem_confirmacao = mensagem_confirmacao
+        self.interacao_origem = interacao_origem
         self.campo_quantidade = discord.ui.TextInput(
             label=f"Moedas (0 a {self.teto_moedas})",
             placeholder=f"Máximo {self.teto_moedas}",
@@ -645,6 +661,7 @@ class ModalDescontoMoedasCurso(LoggingModalMixin, discord.ui.Modal):
             observacao_aluno=self.observacao_aluno,
             moedas_desconto=quantidade,
             mensagem_confirmacao=self.mensagem_confirmacao,
+            interacao_origem=self.interacao_origem,
         )
 
 
@@ -656,6 +673,7 @@ async def finalizar_pedido(
     moedas_desconto: int = 0,
     forcar_gratuito: bool = False,
     mensagem_confirmacao: discord.Message | None = None,
+    interacao_origem: discord.Interaction | None = None,
 ) -> None:
     """Cria ou amplia o pedido de cursos e o encaminha para agendamento.
 
@@ -859,7 +877,8 @@ async def finalizar_pedido(
         )
 
         await _apagar_card_confirmacao_curso(
-            mensagem_confirmacao or interacao.message,
+            interacao_origem=interacao_origem,
+            mensagem=mensagem_confirmacao or interacao.message,
             delay=0,
         )
     except Exception as erro:
