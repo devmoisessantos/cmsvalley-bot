@@ -20,6 +20,7 @@ from src.ausencia.ausencia_setup import garantir_painel_ausencia
 from src.config import CANAIS
 from src.database.conexao import async_session
 from src.database.models import PainelPostado
+from src.plantao.plantao_permissoes import mensagem_sem_permissao
 from src.utils.mensagens import (
     responder_erro,
     responder_sucesso,
@@ -51,7 +52,9 @@ class AusenciaCogs(commands.Cog):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
-                linhas=["Sem permissão."],
+                linhas=[
+                    mensagem_sem_permissao("republicar o painel no canal configurado."),
+                ],
             )
             return
         await interacao.response.defer(ephemeral=True)
@@ -72,7 +75,7 @@ class AusenciaCogs(commands.Cog):
             interacao,
             titulo="Painel de ausência",
             linhas=[
-                f"Publicado (ou tentado) em <#{canal_id}>."
+                f"Painel publicado verificar em <#{canal_id}>."
                 if canal_id
                 else "Configure `CANAL_REGISTRAR_AUSENCIA` no config.py."
             ],

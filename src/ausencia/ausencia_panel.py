@@ -131,9 +131,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
         else:
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(
             discord.ui.TextDisplay(
                 "## ⚙️ Regras Gerais:\n"
@@ -151,9 +149,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 "restaura seus cargos."
             )
         )
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
         linha = discord.ui.ActionRow()
         botao = discord.ui.Button(
@@ -187,6 +183,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Contexto inválido",
                 linhas=["Use este painel dentro do servidor."],
+                delay=10,
             )
             return
 
@@ -198,6 +195,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                     "Só membros da **hierarquia** / HP S・Valley podem solicitar "
                     "ausência.",
                 ],
+                delay=10,
             )
             return
 
@@ -217,7 +215,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                     f"Ausência `#{ativa.id}` está **ativa**.",
                     "Use **🔄 Solicitar Retorno** quando estiver pronto para voltar.",
                 ],
-                delay=15,
+                delay=10,
             )
             return
 
@@ -229,7 +227,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=[
                     f"Seu pedido de retorno `#{retorno.id}` já está com a Diretoria.",
                 ],
-                delay=15,
+                delay=10,
             )
             return
 
@@ -242,7 +240,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                     f"Você já tem a solicitação `#{pendente.id}` **pendente**.",
                     "Aguarde a decisão da diretoria antes de abrir outra.",
                 ],
-                delay=15,
+                delay=10,
             )
             return
 
@@ -260,6 +258,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Contexto inválido",
                 linhas=["Use este painel dentro do servidor."],
+                delay=10,
             )
             return
 
@@ -278,7 +277,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                     f"Pedido de retorno `#{retorno.id}` já está **em análise**.",
                     "Aguarde a decisão da Diretoria.",
                 ],
-                delay=15,
+                delay=10,
             )
             return
 
@@ -291,7 +290,7 @@ class PainelAusenciaLayout(LoggingViewMixin, discord.ui.LayoutView):
                     "Você não possui ausência **aprovada** em andamento.",
                     "Só quem está ausente pode solicitar o retorno.",
                 ],
-                delay=15,
+                delay=10,
             )
             return
 
@@ -446,6 +445,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                     interacao,
                     titulo="Sem permissão",
                     linhas=["Só quem abriu o pedido pode selecionar."],
+                    delay=10,
                 )
                 return
             self.tipo_selecionado = chave
@@ -464,6 +464,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                     interacao,
                     titulo="Sem permissão",
                     linhas=["Só quem abriu o pedido pode selecionar."],
+                    delay=10,
                 )
                 return
             self.periodo_selecionado = chave
@@ -481,6 +482,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Sem permissão",
                 linhas=["Só quem abriu o pedido pode alterar."],
+                delay=10,
             )
             return
         self.tipo_selecionado = None
@@ -496,6 +498,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Sem permissão",
                 linhas=["Só quem abriu o pedido pode alterar."],
+                delay=10,
             )
             return
         self.periodo_selecionado = None
@@ -511,6 +514,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Sem permissão",
                 linhas=["Só quem abriu o pedido pode cancelar."],
+                delay=10,
             )
             return
         await editar_mensagem_original(
@@ -531,6 +535,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Sem permissão",
                 linhas=["Só quem abriu o pedido pode enviar."],
+                delay=10,
             )
             return
         if not self.tipo_selecionado or not self.periodo_selecionado:
@@ -538,6 +543,7 @@ class ViewSelecaoAusencia(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Seleção incompleta",
                 linhas=["Escolha o **tipo** e o **período** antes de enviar."],
+                delay=10,
             )
             return
 
