@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import (
     datetime,
     timezone,
@@ -401,6 +402,25 @@ class ModalObservacaoAluno(LoggingModalMixin, discord.ui.Modal):
                 )
 
 
+async def _apagar_ephemeral_com_delay(
+    mensagem: discord.Message | None,
+    delay: float = 10,
+) -> None:
+    """Apaga uma mensagem efêmera após o atraso definido."""
+    if mensagem is None:
+        return
+
+    await asyncio.sleep(delay)
+
+    try:
+        await mensagem.delete()
+    except (discord.NotFound, discord.HTTPException) as erro:
+        ignorar_falha_cosmetica(
+            erro,
+            o_que_falhou="apagar mensagem efêmera do fluxo de cursos",
+        )
+
+
 class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
     """
     Confirma o pedido: pagamento sempre IN_GAME.
@@ -489,7 +509,7 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
                     "# Confirmar pedido de curso\n"
                     f"{lista}\n\n"
                     f"{texto_extra}"
-                    f"**Observação:** {obs_txt}"
+                    f"**Observação:** \n### > {obs_txt}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
                 linha,
@@ -510,11 +530,13 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_pagar_ingame(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
+        mensagem_confirmacao = interacao.message
         await finalizar_pedido(
             interacao,
             chaves=self.chaves,
             observacao_aluno=self.observacao_aluno,
             moedas_desconto=0,
+            mensagem_ephemeral=mensagem_confirmacao,
         )
 
     async def _ao_pagar_com_desconto(self, interacao: discord.Interaction):
@@ -528,18 +550,21 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
             teto_moedas=teto,
             cotacao=int(self.cobranca.get("cotacao") or 0),
             valor_bruto=int(self.cobranca.get("valor_bruto") or 0),
+            mensagem_confirmacao=interacao.message,
         )
         await interacao.response.send_modal(modal)
 
     async def _ao_gratuito(self, interacao: discord.Interaction):
         if not await self._garantir_dono(interacao):
             return
+        mensagem_confirmacao = interacao.message
         await finalizar_pedido(
             interacao,
             chaves=self.chaves,
             observacao_aluno=self.observacao_aluno,
             moedas_desconto=0,
             forcar_gratuito=True,
+            mensagem_ephemeral=mensagem_confirmacao,
         )
 
     async def _ao_cancelar(self, interacao: discord.Interaction):
@@ -563,6 +588,7 @@ class ModalDescontoMoedasCurso(LoggingModalMixin, discord.ui.Modal):
         teto_moedas: int,
         cotacao: int,
         valor_bruto: int,
+        mensagem_confirmacao: discord.Message | None = None,
     ):
         super().__init__(title="Desconto em moedas")
         self.chaves = chaves
@@ -571,6 +597,7 @@ class ModalDescontoMoedasCurso(LoggingModalMixin, discord.ui.Modal):
         self.teto_moedas = max(0, int(teto_moedas))
         self.cotacao = int(cotacao)
         self.valor_bruto = int(valor_bruto)
+        self.mensagem_confirmacao = mensagem_confirmacao
         self.campo_quantidade = discord.ui.TextInput(
             label=f"Moedas (0 a {self.teto_moedas})",
             placeholder=f"Máximo {self.teto_moedas}",
@@ -611,6 +638,7 @@ class ModalDescontoMoedasCurso(LoggingModalMixin, discord.ui.Modal):
             chaves=self.chaves,
             observacao_aluno=self.observacao_aluno,
             moedas_desconto=quantidade,
+            mensagem_ephemeral=self.mensagem_confirmacao,
         )
 
 
@@ -621,6 +649,7 @@ async def finalizar_pedido(
     observacao_aluno: str,
     moedas_desconto: int = 0,
     forcar_gratuito: bool = False,
+    mensagem_ephemeral: discord.Message | None = None,
 ) -> None:
     """Cria ou amplia o pedido de cursos e o encaminha para agendamento.
 
@@ -760,7 +789,7 @@ async def finalizar_pedido(
                 )
             titulo_ok = "Pedido atualizado"
             linhas_ok = [
-                f"Pedido `#{registro.id}` **atualizado** (sem segundo card).",
+                f"Pedido `#{registro.id}` **atualizado**.",
                 "Novos cursos: "
                 + ", ".join(
                     rotulo_curso(chave_do_curso)
@@ -826,19 +855,28 @@ async def finalizar_pedido(
                     )
                 )
                 await interacao.message.edit(view=view_final)
+                asyncio.create_task(
+                    _apagar_ephemeral_com_delay(interacao.message, delay=10)
+                )
             except discord.HTTPException:
                 await responder_sucesso(
                     interacao,
                     titulo=titulo_ok,
                     linhas=linhas_ok,
-                    delay=25,
+                    delay=10,
+                )
+                asyncio.create_task(
+                    _apagar_ephemeral_com_delay(mensagem_ephemeral, delay=10)
                 )
         else:
             await responder_sucesso(
                 interacao,
                 titulo=titulo_ok,
                 linhas=linhas_ok,
-                delay=25,
+                delay=10,
+            )
+            asyncio.create_task(
+                _apagar_ephemeral_com_delay(mensagem_ephemeral, delay=10)
             )
     except Exception as erro:
         await enviar_erro_para_log_erros(
