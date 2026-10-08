@@ -1235,35 +1235,37 @@ class EventosAuditoriaCog(commands.Cog):
         alvo = entrada.target
         executor = entrada.user
 
-        if acao == discord.AuditLogAction.member_update and entrada.changes:
-            for mudanca in entrada.changes:
-                if getattr(mudanca, "key", None) == "communication_disabled_until":
-                    antes_v = mudanca.old
-                    depois_v = mudanca.new
-                    if depois_v and not antes_v:
-                        await _publicar(
-                            guilda,
-                            "LOG_MODERACAO",
-                            titulo="⏳ Timeout aplicado",
-                            linhas=[
-                                f"**Membro:** {_mencao(alvo)}",
-                                f"**Até:** {_ts(depois_v)}",
-                                f"**Aplicado por:** {_mencao(executor)}",
-                                f"**Motivo:** {entrada.reason or '—'}",
-                            ],
-                            cor=COR_AVISO,
-                        )
-                    elif antes_v and not depois_v:
-                        await _publicar(
-                            guilda,
-                            "LOG_MODERACAO",
-                            titulo="✅ Timeout removido",
-                            linhas=[
-                                f"**Membro:** {_mencao(alvo)}",
-                                f"**Removido por:** {_mencao(executor)}",
-                            ],
-                            cor=COR_SUCESSO,
-                        )
+        if acao == discord.AuditLogAction.member_update:
+            # AuditLogChanges não é iterável nesta versão do discord.py.
+            # Usamos before/after e o atributo de timeout do membro.
+            antes = entrada.before
+            depois = entrada.after
+            antes_v = getattr(antes, "communication_disabled_until", None)
+            depois_v = getattr(depois, "communication_disabled_until", None)
+            if depois_v and not antes_v:
+                await _publicar(
+                    guilda,
+                    "LOG_MODERACAO",
+                    titulo="⏳ Timeout aplicado",
+                    linhas=[
+                        f"**Membro:** {_mencao(alvo)}",
+                        f"**Até:** {_ts(depois_v)}",
+                        f"**Aplicado por:** {_mencao(executor)}",
+                        f"**Motivo:** {entrada.reason or '—'}",
+                    ],
+                    cor=COR_AVISO,
+                )
+            elif antes_v and not depois_v:
+                await _publicar(
+                    guilda,
+                    "LOG_MODERACAO",
+                    titulo="✅ Timeout removido",
+                    linhas=[
+                        f"**Membro:** {_mencao(alvo)}",
+                        f"**Removido por:** {_mencao(executor)}",
+                    ],
+                    cor=COR_SUCESSO,
+                )
 
         if acao in (
             discord.AuditLogAction.role_update,

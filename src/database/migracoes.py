@@ -156,6 +156,19 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "ADD COLUMN IF NOT EXISTS repasses_json TEXT"
         ),
     ),
+    Migracao(
+        numero=9,
+        descricao=(
+            "Punições: origem (MANUAL/CHAMADA/SISTEMA) e expira_em "
+            "para baixar ADV VERBAL automaticamente após 3 dias."
+        ),
+        comando_sql=(
+            "ALTER TABLE punicoes "
+            "ADD COLUMN IF NOT EXISTS origem VARCHAR(30) "
+            "NOT NULL DEFAULT 'MANUAL', "
+            "ADD COLUMN IF NOT EXISTS expira_em TIMESTAMPTZ"
+        ),
+    ),
 ]
 
 

@@ -443,6 +443,12 @@ class Punicao(Base):
     )
     removida_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     motivo_remocao: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # MANUAL | CHAMADA | SISTEMA — de onde veio a punição
+    origem: Mapped[str] = mapped_column(String(30), default="MANUAL")
+    # Quando a punição some sozinha (ex.: verbal em 3 dias)
+    expira_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
 
 # ---------------------------------------------------------------------------
