@@ -30,6 +30,7 @@ from src.utils.mensagens import (
     editar_mensagem_original,
     responder_aviso,
     responder_erro,
+    responder_sucesso,
     responder_view,
 )
 
@@ -887,11 +888,11 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
         self.punicao_id = punicao_id
 
     async def on_submit(self, interaction: discord.Interaction):
-        """Solicita a remoção registrada de uma punição ativa e mostra o resultado.
+        """Remove a punição e limpa a ephemeral de escolha.
 
-        Delega ao serviço a alteração no banco e nos cargos, incluindo o motivo
-        opcional para auditoria. A resposta só é enviada após o defer para caber a
-        operação externa sem deixar o modal expirar no Discord.
+        Após o defer, apaga a mensagem do select de advertências (se ainda
+        existir) para sobrar só a ficha do membro. O resultado aparece num
+        card curto que some sozinho.
         """
         await interaction.response.defer(ephemeral=True)
         ok, mensagem = await remover_punicao(
@@ -901,21 +902,29 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
             punicao_id=self.punicao_id,
             motivo_remocao=self.motivo.value.strip() if self.motivo.value else None,
         )
-        cor = discord.Color.green() if ok else discord.Color.red()
-        view = discord.ui.LayoutView(timeout=120)
-        view.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"# {'✅' if ok else '❌'} Resultado\n{mensagem}"
-                ),
-                accent_color=cor,
+
+        # Apaga a ephemeral do select de punições ativas (não a ficha).
+        mensagem_do_painel = interaction.message
+        if mensagem_do_painel is not None:
+            try:
+                await mensagem_do_painel.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+
+        if ok:
+            await responder_sucesso(
+                interaction,
+                titulo="Punição removida",
+                linhas=[mensagem],
+                delay=8,
             )
-        )
-        await responder_view(
-            interaction,
-            view,
-            ephemeral=True,
-        )
+        else:
+            await responder_erro(
+                interaction,
+                titulo="Não foi possível remover",
+                linhas=[mensagem],
+                delay=12,
+            )
 
 
 class FluxoConsultarPunicaoView(LoggingViewMixin, discord.ui.LayoutView):

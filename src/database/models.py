@@ -449,6 +449,9 @@ class Punicao(Base):
     expira_em: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # JSON com os IDs dos cargos do membro ANTES da exoneração.
+    # Usado no recurso: ao remover o Exonerado, devolve esses cargos.
+    cargos_antes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # ---------------------------------------------------------------------------

@@ -55,6 +55,8 @@ from src.punicoes.punicoes_classes import limpar_sessao, obter_sessao
 from src.punicoes.punicoes_helpers import resolver_id_fivem
 from src.punicoes.punicoes_panel import (
     FluxoAplicarAdvertenciaView,
+    _montar_view_escolher_adv,
+    _view_sem_adv_ativas,
 )
 from src.punicoes.punicoes_service import executar_exoneracao
 from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
@@ -405,8 +407,9 @@ async def _t_hist_p(membro):
 
 
 async def _t_pun(membro):
-    ativas = await listar_punicoes(membro.id, so_ativas=True, limite=8)
-    recentes = await listar_punicoes(membro.id, so_ativas=None, limite=8)
+    """Bloco de punições na ficha: ativas com motivo e histórico recente."""
+    ativas = await listar_punicoes(membro.id, so_ativas=True, limite=10)
+    recentes = await listar_punicoes(membro.id, so_ativas=None, limite=12)
     linhas = [
         _titulo_bloco("⚠️", "Punições"),
         "",
@@ -414,6 +417,7 @@ async def _t_pun(membro):
     ]
     if ativas:
         for p in ativas:
+            motivo_curto = (p.motivo or "—")[:120]
             linhas.append(
                 _linha_bloco(
                     "⛔",
@@ -421,22 +425,32 @@ async def _t_pun(membro):
                     (
                         f"**{p.cargo_nome}** · "
                         f"{formatar_timestamp(p.criada_em)} · "
-                        f"<@{p.executor_id}>"
+                        f"<@{p.executor_id}>\n"
+                        f"-# Motivo: {motivo_curto}"
                     ),
                 )
             )
     else:
         linhas.append(_vazio_bloco("nenhuma ativa"))
 
-    ina = [p for p in recentes if not p.ativa][:5]
+    ina = [p for p in recentes if not p.ativa][:6]
     linhas.extend(["", _secao_bloco("📜", "Histórico recente")])
     if ina:
         for p in ina:
+            motivo_curto = (p.motivo or "—")[:80]
+            status_rem = ""
+            if p.motivo_remocao:
+                status_rem = f" · rem: {(p.motivo_remocao or '')[:60]}"
             linhas.append(
                 _linha_bloco(
                     "📝",
                     f"`#{p.id}`",
-                    f"~~{p.cargo_nome}~~ · {formatar_timestamp(p.criada_em)}",
+                    (
+                        f"~~{p.cargo_nome}~~ · "
+                        f"{formatar_timestamp(p.criada_em)}"
+                        f"{status_rem}\n"
+                        f"-# {motivo_curto}"
+                    ),
                 )
             )
     else:
@@ -1454,12 +1468,32 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
         await responder_view(i, FluxoAplicarAdvertenciaView(i.user.id), ephemeral=True)
 
     async def _ver_pun(self, i):
+        """
+        Abre ephemeral de remoção de punições ativas.
+
+        A ficha original não é editada. Depois de remover, a ephemeral
+        de escolha some e fica só a ficha.
+        """
         if not await self._perm_diretoria(i):
             return
-        # Já temos o alvo da ficha: abre o histórico direto, sem novo select
-        from src.punicoes.punicoes_panel import _exibir_historico_punicoes
+        if not isinstance(self.alvo, discord.Member):
+            await responder_erro(
+                i,
+                titulo="Alvo",
+                linhas=["O membro precisa estar no servidor para remover punições."],
+            )
+            return
 
-        await _exibir_historico_punicoes(i, self.alvo)
+        view_de_escolha = await _montar_view_escolher_adv(self.alvo)
+        if view_de_escolha is None:
+            await responder_view(
+                i,
+                _view_sem_adv_ativas(self.alvo),
+                ephemeral=True,
+            )
+            return
+
+        await responder_view(i, view_de_escolha, ephemeral=True)
 
     async def _exon(self, i):
         if not await self._perm_diretoria(i):

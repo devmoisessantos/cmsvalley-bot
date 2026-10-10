@@ -3,8 +3,9 @@
 Atualização em tempo real (mesmo padrão do ranking de moedas):
 
 1. ``loop_tempo_real_horas`` e ``loop_ranking_moedas`` rodam a cada 1 minuto.
-2. Cada ciclo monta o card de novo e **edita** a mensagem persistente
-   (ou cria se ainda não existir / se a mensagem sumiu).
+2. Cada ciclo monta o card de novo e **edita só as páginas cuja
+   contagem mudou** (assinatura por página). Página igual à anterior
+   não chama a API — evita rate limit no canal.
 3. O ID da mensagem fica em ``paineis_postados`` (nome do painel no config).
 4. Nas horas, a contagem do período ``tempo_real`` soma logs fechados **e**
    o trecho ainda aberto em call — espelhando o saldo vivo das moedas.
@@ -17,6 +18,7 @@ Agendamentos oficiais:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -44,6 +46,7 @@ from src.plantao.ranking_plantao_service import (
     gerar_view_ranking_horas,
     historico_ja_publicado,
     montar_lista_premiados,
+    ordenar_ranking_individual,
     salvar_historico_plantao,
 )
 from src.utils.formatacao import (
@@ -55,6 +58,10 @@ from src.utils.mensagens import COR_SUCESSO
 
 logger = logging.getLogger(__name__)
 
+# Mesmo padrão de montar_view_ranking_horas (entradas_por_card=25).
+# Usado só para calcular a assinatura de cada página sem remontar o card.
+ENTRADAS_POR_CARD_RANKING_HORAS = 25
+
 
 class RankingPlantaoTasks(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -62,6 +69,9 @@ class RankingPlantaoTasks(commands.Cog):
         self._post_semanal: set[str] = set()
         self._post_mensal: set[str] = set()
         self._reinicio_tempo_real: set[str] = set()
+        # Assinatura da última contagem enviada por página (índice 0, 1, …).
+        # Se a página não mudou, o loop não chama message.edit e evita 429.
+        self._assinaturas_paginas_horas: dict[int, str] = {}
         self.loop_rankings.start()
         self.loop_tempo_real_horas.start()
         self.loop_ranking_moedas.start()
@@ -180,6 +190,44 @@ class RankingPlantaoTasks(commands.Cog):
             return NOME_PAINEL_RANKING_HORAS_TEMPO_REAL
         return f"{NOME_PAINEL_RANKING_HORAS_TEMPO_REAL}_{pagina}"
 
+    def _assinaturas_por_pagina_horas(
+        self,
+        contagem: dict[int, int],
+    ) -> list[str]:
+        """
+        Uma assinatura por card do ranking, na mesma ordem das mensagens.
+
+        A assinatura usa quem aparece naquela página e os segundos de cada
+        um. Na última página entra também o total geral (o card mostra
+        esse total). O rodapé com horário relativo não entra: ele muda
+        todo minuto e forçaria edição sem o ranking ter mudado.
+        """
+        ordenados = ordenar_ranking_individual(contagem)
+        por_pagina = ENTRADAS_POR_CARD_RANKING_HORAS
+        if not ordenados:
+            return ["vazio"]
+
+        total_geral = sum(segundos for _, segundos in ordenados)
+        assinaturas: list[str] = []
+        total_paginas = (len(ordenados) + por_pagina - 1) // por_pagina
+        for indice_pagina in range(total_paginas):
+            inicio = indice_pagina * por_pagina
+            fim = inicio + por_pagina
+            pedaco = ordenados[inicio:fim]
+            partes = [f"{discord_id}:{segundos}" for discord_id, segundos in pedaco]
+            assinatura = (
+                f"{indice_pagina + 1}/{total_paginas}|" + "|".join(partes)
+            )
+            # Última página exibe o total da equipe — entra na assinatura
+            if indice_pagina == total_paginas - 1:
+                assinatura = f"{assinatura}|total:{total_geral}"
+            assinaturas.append(assinatura)
+        return assinaturas
+
+    def _limpar_assinaturas_paginas_horas(self) -> None:
+        """Zera o cache depois de republicar ou apagar os cards."""
+        self._assinaturas_paginas_horas = {}
+
     async def _listar_registros_tempo_real(self) -> list[PainelPostado]:
         """Todos os cards do ranking tempo real, ordenados por página."""
         async with async_session() as sessao:
@@ -235,6 +283,7 @@ class RankingPlantaoTasks(commands.Cog):
         """Remove todos os cards (página 1, 2, 3…) do tempo real."""
         registros = await self._listar_registros_tempo_real()
         if not registros:
+            self._limpar_assinaturas_paginas_horas()
             return
         async with async_session() as sessao:
             for registro in registros:
@@ -242,6 +291,7 @@ class RankingPlantaoTasks(commands.Cog):
                 if atual is not None:
                     await sessao.delete(atual)
             await sessao.commit()
+        self._limpar_assinaturas_paginas_horas()
 
     async def _apagar_registros_tempo_real_a_partir_de(self, pagina: int) -> None:
         """Apaga páginas >= pagina (quando o ranking encolheu)."""
@@ -348,23 +398,50 @@ class RankingPlantaoTasks(commands.Cog):
             views = [views]
 
         registros = await self._listar_registros_tempo_real()
+        assinaturas_novas = self._assinaturas_por_pagina_horas(contagem)
 
         # Nenhuma página registrada: posta tudo pela primeira vez
         if not registros:
             await self._republicar_todas_as_paginas_tempo_real(canal, views)
+            self._assinaturas_paginas_horas = {
+                indice: assinatura
+                for indice, assinatura in enumerate(assinaturas_novas)
+            }
             return
 
-        # Tenta só editar. Se alguma página sumiu, para e republica tudo.
+        # Tenta só editar as páginas cuja contagem mudou.
+        # Página igual à última enviada → não chama a API (evita 429).
         precisa_republicar = False
+        ja_editou_alguma = False
         for indice, view in enumerate(views):
             if indice >= len(registros):
                 # Ranking cresceu: páginas novas — só acrescenta no fim
                 # se as anteriores ainda existirem (editadas acima).
                 break
+
+            assinatura_nova = (
+                assinaturas_novas[indice]
+                if indice < len(assinaturas_novas)
+                else ""
+            )
+            assinatura_antiga = self._assinaturas_paginas_horas.get(indice)
+            if (
+                assinatura_antiga is not None
+                and assinatura_antiga == assinatura_nova
+            ):
+                continue
+
+            # Espaça edições entre páginas para não estourar o limite
+            # do canal (duas PATCHs no mesmo segundo geram 429).
+            if ja_editou_alguma:
+                await asyncio.sleep(1.5)
+
             registro = registros[indice]
             try:
                 mensagem = await canal.fetch_message(int(registro.message_id))
                 await mensagem.edit(view=view)
+                self._assinaturas_paginas_horas[indice] = assinatura_nova
+                ja_editou_alguma = True
             except discord.NotFound:
                 logger.warning(
                     "Card tempo real horas página %s sumiu — "
@@ -381,9 +458,14 @@ class RankingPlantaoTasks(commands.Cog):
                 )
                 # Não republica por erro transitório (rate limit etc.)
                 # para não floodar o canal. O próximo minuto tenta de novo.
+                # Não grava a assinatura: na próxima volta tenta de novo.
 
         if precisa_republicar:
             await self._republicar_todas_as_paginas_tempo_real(canal, views)
+            self._assinaturas_paginas_horas = {
+                indice: assinatura
+                for indice, assinatura in enumerate(assinaturas_novas)
+            }
             return
 
         # Páginas novas (ranking cresceu e as antigas ainda existem)
@@ -397,6 +479,10 @@ class RankingPlantaoTasks(commands.Cog):
                         canal.id,
                         mensagem.id,
                     )
+                    if indice < len(assinaturas_novas):
+                        self._assinaturas_paginas_horas[indice] = (
+                            assinaturas_novas[indice]
+                        )
                     logger.info(
                         "Ranking HORAS tempo real página %s/%s em #%s",
                         pagina,
@@ -419,6 +505,13 @@ class RankingPlantaoTasks(commands.Cog):
                 except (discord.NotFound, discord.HTTPException):
                     pass
             await self._apagar_registros_tempo_real_a_partir_de(len(views) + 1)
+            # Remove assinaturas das páginas que não existem mais
+            indices_validos = set(range(len(views)))
+            self._assinaturas_paginas_horas = {
+                indice: assinatura
+                for indice, assinatura in self._assinaturas_paginas_horas.items()
+                if indice in indices_validos
+            }
 
     async def _fechar_ciclo_semanal_horas(self, referencia: datetime) -> None:
         """

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import (
     datetime,
+    timedelta,
     timezone,
 )
 
 import discord
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.config import (
     CARGOS,
@@ -34,6 +38,11 @@ from src.punicoes.punicoes_logger import (
 )
 from src.utils.error_handling import ignorar_falha_cosmetica
 from src.utils.nickname import remover_prefixo_existente
+
+registrador = logging.getLogger(__name__)
+
+# Prazo padrão da ADV VERBAL quando o chamador não informa expira_em.
+DIAS_EXPIRACAO_VERBAL = 3
 
 
 async def aplicar_punicao(
@@ -85,23 +94,42 @@ async def aplicar_punicao(
     texto_provas = (links_texto or "").strip() or None
     links_join = "\n".join(links) if links else texto_provas
 
-    async with async_session() as session:
-        punicao_no_banco = Punicao(
-            discord_id=alvo.id,
-            id_fivem=id_fivem,
-            cargo_id=cargo_id,
-            cargo_nome=cargo_nome,
-            motivo=motivo[:1500],
-            links=links_join[:2000] if links_join else None,
-            executor_id=executor.id,
-            ativa=True,
-            criada_em=agora(),
-            origem=(origem or "MANUAL")[:30],
-            expira_em=expira_em,
+    # ADV VERBAL some sozinha após 3 dias. Se o chamador não passou
+    # expira_em, calcula aqui para o painel manual e a chamada ficarem iguais.
+    data_expiracao = expira_em
+    if data_expiracao is None and "verbal" in cargo_nome.lower():
+        data_expiracao = datetime.now(timezone.utc) + timedelta(
+            days=DIAS_EXPIRACAO_VERBAL
         )
-        session.add(punicao_no_banco)
-        await session.commit()
-        await session.refresh(punicao_no_banco)
+
+    try:
+        async with async_session() as session:
+            punicao_no_banco = Punicao(
+                discord_id=alvo.id,
+                id_fivem=id_fivem,
+                cargo_id=cargo_id,
+                cargo_nome=cargo_nome,
+                motivo=motivo[:1500],
+                links=links_join[:2000] if links_join else None,
+                executor_id=executor.id,
+                ativa=True,
+                criada_em=agora(),
+                origem=(origem or "MANUAL")[:30],
+                expira_em=data_expiracao,
+            )
+            session.add(punicao_no_banco)
+            await session.commit()
+            await session.refresh(punicao_no_banco)
+    except SQLAlchemyError as erro_do_banco:
+        registrador.exception(
+            "Falha ao gravar punição de %s: %s", alvo.id, erro_do_banco
+        )
+        return (
+            False,
+            "❌ Não consegui salvar a punição no banco agora. "
+            "O cargo pode ter sido aplicado; confira e tente de novo.",
+            None,
+        )
 
     # Exoneração direta: não usa CANAL_ADVERTENCIAS — só CANAL_EXONERACOES
     if e_exoneracao_direta:
@@ -149,16 +177,23 @@ async def aplicar_punicao(
     )
 
     if msg_adv:
-        async with async_session() as session:
-            resultado_da_consulta = await session.execute(
-                select(Punicao).where(Punicao.id == punicao_no_banco.id)
+        try:
+            async with async_session() as session:
+                resultado_da_consulta = await session.execute(
+                    select(Punicao).where(Punicao.id == punicao_no_banco.id)
+                )
+                row = resultado_da_consulta.scalar_one()
+                row.channel_id = msg_adv.channel.id
+                row.message_id = msg_adv.id
+                if thread:
+                    row.thread_id = thread.id
+                await session.commit()
+        except SQLAlchemyError as erro_do_banco:
+            registrador.warning(
+                "Punição #%s gravada, mas falhou ao salvar ids da mensagem: %s",
+                punicao_no_banco.id,
+                erro_do_banco,
             )
-            row = resultado_da_consulta.scalar_one()
-            row.channel_id = msg_adv.channel.id
-            row.message_id = msg_adv.id
-            if thread:
-                row.thread_id = thread.id
-            await session.commit()
 
     # 2) Log interno (LOG_PUNICOES)
     await registrar_log_advertencia(
@@ -180,6 +215,7 @@ async def aplicar_punicao(
 
     mensagem_extra = ""
     if automatica_por_limite:
+        # Sem reutilizar o ID da Adv 03: a exoneração cria registro próprio.
         ok_exo, msg_exo = await executar_exoneracao(
             guild=guild,
             alvo=membro_atualizado,
@@ -187,7 +223,7 @@ async def aplicar_punicao(
             id_fivem=id_fivem,
             motivo=motivo,
             links_texto=links_texto,
-            punicao_id=punicao_no_banco.id,
+            punicao_id=None,
             automatica=True,
         )
         if ok_exo:
@@ -222,8 +258,6 @@ async def executar_exoneracao(
     4. Remove o prefixo [ TAG ] do nick → fica Nome | ID
     5. Registra em CANAL_EXONERACOES
     """
-    import json
-
     id_exonerado = id_cargo_exonerado()
     id_visitantes = CARGOS.get("Visitantes")
 
@@ -302,50 +336,61 @@ async def executar_exoneracao(
     links_join = "\n".join(links) if links else texto_provas
 
     precisa_novo_registro = automatica or punicao_id is None
-    if precisa_novo_registro:
-        async with async_session() as session:
-            punicao_no_banco = Punicao(
-                discord_id=alvo.id,
-                id_fivem=id_fivem,
-                cargo_id=id_exonerado,
-                cargo_nome=next(
-                    (
-                        nome
-                        for nome, id_do_cargo in CARGOS_PUNICOES.items()
-                        if id_do_cargo == id_exonerado
+    try:
+        if precisa_novo_registro:
+            async with async_session() as session:
+                punicao_no_banco = Punicao(
+                    discord_id=alvo.id,
+                    id_fivem=id_fivem,
+                    cargo_id=id_exonerado,
+                    cargo_nome=next(
+                        (
+                            nome
+                            for nome, id_do_cargo in CARGOS_PUNICOES.items()
+                            if id_do_cargo == id_exonerado
+                        ),
+                        "🚫┇Exonerado",
                     ),
-                    "🚫┇Exonerado",
-                ),
-                motivo=(
-                    motivo[:1500]
-                    if motivo
-                    else (
-                        "Exoneração automática (3ª advertência)"
-                        if automatica
-                        else "Exoneração manual"
-                    )
-                ),
-                links=links_join[:2000] if links_join else None,
-                executor_id=executor.id,
-                ativa=True,
-                criada_em=agora(),
-                origem="SISTEMA" if automatica else "MANUAL",
-                cargos_antes_json=cargos_antes_json,
-            )
-            session.add(punicao_no_banco)
-            await session.commit()
-            await session.refresh(punicao_no_banco)
-            id_do_registro = punicao_no_banco.id
-    elif punicao_id is not None:
-        # Já existia registro (veio de aplicar_punicao) — só grava o snapshot
-        async with async_session() as session:
-            resultado = await session.execute(
-                select(Punicao).where(Punicao.id == punicao_id)
-            )
-            row = resultado.scalar_one_or_none()
-            if row is not None:
-                row.cargos_antes_json = cargos_antes_json
+                    motivo=(
+                        motivo[:1500]
+                        if motivo
+                        else (
+                            "Exoneração automática (3ª advertência)"
+                            if automatica
+                            else "Exoneração manual"
+                        )
+                    ),
+                    links=links_join[:2000] if links_join else None,
+                    executor_id=executor.id,
+                    ativa=True,
+                    criada_em=agora(),
+                    origem="SISTEMA" if automatica else "MANUAL",
+                    cargos_antes_json=cargos_antes_json,
+                )
+                session.add(punicao_no_banco)
                 await session.commit()
+                await session.refresh(punicao_no_banco)
+                id_do_registro = punicao_no_banco.id
+        elif punicao_id is not None:
+            # Já existia registro (veio de aplicar_punicao) — só grava o snapshot
+            async with async_session() as session:
+                resultado = await session.execute(
+                    select(Punicao).where(Punicao.id == punicao_id)
+                )
+                row = resultado.scalar_one_or_none()
+                if row is not None:
+                    row.cargos_antes_json = cargos_antes_json
+                    await session.commit()
+    except SQLAlchemyError as erro_do_banco:
+        registrador.exception(
+            "Falha ao gravar registro de exoneração de %s: %s",
+            alvo.id,
+            erro_do_banco,
+        )
+        return (
+            False,
+            "❌ Cargos ajustados, mas não consegui salvar a exoneração no banco.",
+        )
 
     # Snapshot vivo também (rejoin / painel de membros)
     try:
@@ -355,8 +400,12 @@ async def executar_exoneracao(
         # usa cargos_antes_json da punição, não este snapshot.
         membro_pos = guild.get_member(alvo.id) or alvo
         await salvar_snapshot_membro(membro_pos)
-    except Exception:
-        pass
+    except Exception as erro_do_snapshot:
+        registrador.warning(
+            "Falha ao salvar snapshot pós-exoneração de %s: %s",
+            alvo.id,
+            erro_do_snapshot,
+        )
 
     _ = nick_antes  # reservado para evoluir o recurso com nick original
 
@@ -418,8 +467,6 @@ async def remover_punicao(
 
     ``apenas_origem``: se informado (ex.: ``CHAMADA``), só mexe nesses registros.
     """
-    import json
-
     removidos: list[str] = []
     punicao_ids: list[int] = []
     id_fivem: str | None = None
@@ -488,11 +535,26 @@ async def remover_punicao(
                     try:
                         lista_ids = json.loads(row.cargos_antes_json)
                         if isinstance(lista_ids, list):
-                            snapshots_para_restaurar.append([int(x) for x in lista_ids])
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        pass
+                            snapshots_para_restaurar.append(
+                                [int(x) for x in lista_ids]
+                            )
+                    except (TypeError, ValueError, json.JSONDecodeError) as erro_json:
+                        registrador.warning(
+                            "JSON de cargos_antes inválido na punição #%s: %s",
+                            row.id,
+                            erro_json,
+                        )
 
-        await session.commit()
+        try:
+            await session.commit()
+        except SQLAlchemyError as erro_do_banco:
+            await session.rollback()
+            registrador.exception(
+                "Falha ao marcar punições inativas de %s: %s",
+                alvo.id,
+                erro_do_banco,
+            )
+            return False, "❌ Não consegui atualizar as punições no banco agora."
 
         for cid in cargo_ids_marcados:
             r2 = await session.execute(

@@ -169,6 +169,17 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "ADD COLUMN IF NOT EXISTS expira_em TIMESTAMPTZ"
         ),
     ),
+    Migracao(
+        numero=10,
+        descricao=(
+            "Punições: guarda os cargos do membro antes da exoneração "
+            "(JSON de IDs), para devolvê-los se o recurso for aceito."
+        ),
+        comando_sql=(
+            "ALTER TABLE punicoes "
+            "ADD COLUMN IF NOT EXISTS cargos_antes_json TEXT"
+        ),
+    ),
 ]
 
 

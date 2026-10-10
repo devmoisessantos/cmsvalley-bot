@@ -437,15 +437,21 @@ async def _finalizar_periodo_em_call(
             )
 
 
-async def pausar_cronometro_moeda(
+def pausar_cronometro_moeda(
     estado: EstadoPlantao,
     *,
     motivo: str = "Pausa (surdo / AFK)",
 ) -> int:
     """
     Para de contar tempo para moeda sem sair da call.
+
     Acumula o segmento aberto e limpa segmento_iniciado_em.
-    Retorna segundos fechados neste pause.
+    Retorna os segundos fechados neste pause.
+
+    A função é síncrona de propósito: só altera o estado em memória.
+    Quem chama grava o log e faz o commit depois.
+    O parâmetro motivo fica documentado para quem lê o código; o log
+    visual usa o texto passado em registrar_evento_plantao.
     """
     return _acumular_segmento_atual(estado)
 
