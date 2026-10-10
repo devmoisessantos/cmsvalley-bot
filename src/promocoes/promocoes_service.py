@@ -299,6 +299,26 @@ MAPA_CURSO_PARA_CARGO_AREA = {
     "instrutor": CARGO_INSTRUTOR,
 }
 
+# Práticos exigidos para liberar o cargo de área por curso já feito.
+# Instrutor: 1.0 + 2.0. Demais áreas: só 1.0.
+try:
+    from src.config import CURSOS_PRATICOS_1, CURSOS_PRATICOS_2
+except ImportError:
+    CURSOS_PRATICOS_1 = ["arcanjo", "alpinista", "paraquedista", "mergulhador"]
+    CURSOS_PRATICOS_2 = [
+        "arcanjo_2",
+        "alpinista_2",
+        "paraquedista_2",
+        "mergulhador_2",
+    ]
+
+CURSOS_PRATICOS_POR_AREA = {
+    "doutor": list(CURSOS_PRATICOS_1),
+    "psicologo": list(CURSOS_PRATICOS_1),
+    "recrutador": list(CURSOS_PRATICOS_1),
+    "instrutor": list(CURSOS_PRATICOS_1) + list(CURSOS_PRATICOS_2),
+}
+
 
 def membro_e_paramedico(membro: discord.Member) -> bool:
     """True se o membro tem o cargo de Paramédico."""
@@ -324,16 +344,45 @@ def trilha_eh_promocao_de_area(trilha: dict) -> bool:
     return cargo_para in CARGOS_DE_AREA
 
 
+def _cursos_exigidos_para_cargo_area(chave_curso: str) -> list[str]:
+    """
+    Cursos necessários para liberar o cargo de área por curso concluído.
+
+    - Doutor / Psicólogo / Recrutador: práticos 1.0 + curso da área
+    - Instrutor: práticos 1.0 + práticos 2.0 + curso Instrutor
+    """
+    praticos = list(CURSOS_PRATICOS_POR_AREA.get(chave_curso) or CURSOS_PRATICOS_1)
+    return praticos + [chave_curso]
+
+
+def membro_pode_receber_cargo_area_por_curso(
+    membro: discord.Member,
+    chave_curso: str,
+) -> tuple[bool, list[str]]:
+    """
+    Confere se o membro tem todos os cursos para o cargo de área.
+
+    Devolve (pode, chaves_que_faltam).
+    """
+    exigidos = _cursos_exigidos_para_cargo_area(chave_curso)
+    faltando = listar_cursos_que_faltam(membro, exigidos)
+    return (len(faltando) == 0, faltando)
+
+
 def listar_cargos_area_por_cursos_do_membro(
     membro: discord.Member,
     *,
     excluir_cargo: str | None = None,
 ) -> list[str]:
     """
-    Cargos de área que o membro pode receber porque já tem o curso.
+    Cargos de área que o membro pode receber por curso + práticos.
 
-    Não inclui cargos que ele já possui no Discord. Opcionalmente
-    exclui o cargo destino da promoção (para listar só os extras).
+    Regras:
+    - Doutor / Psicólogo / Recrutador: práticos 1.0 + curso da área
+    - Instrutor: práticos 1.0 + 2.0 + curso Instrutor
+
+    Não inclui cargos que ele já possui. Opcionalmente exclui o destino
+    da promoção (para listar só os extras).
     """
     nomes: list[str] = []
     for chave_curso, nome_cargo in MAPA_CURSO_PARA_CARGO_AREA.items():
@@ -341,10 +390,43 @@ def listar_cargos_area_por_cursos_do_membro(
             continue
         if membro_tem_cargo_nome(membro, nome_cargo):
             continue
-        if not membro_tem_curso(membro, chave_curso):
+        pode, _faltando = membro_pode_receber_cargo_area_por_curso(
+            membro, chave_curso
+        )
+        if not pode:
             continue
         nomes.append(nome_cargo)
     return nomes
+
+
+def listar_cargos_area_bloqueados_por_curso(
+    membro: discord.Member,
+    *,
+    excluir_cargo: str | None = None,
+) -> list[tuple[str, list[str]]]:
+    """
+    Áreas em que o membro tem o curso de função, mas faltam práticos.
+
+    Devolve lista de (nome_do_cargo, chaves_de_curso_faltando).
+    Serve para o checklist explicar por que Instrutor (ou outra área)
+    não será concedido agora.
+    """
+    bloqueados: list[tuple[str, list[str]]] = []
+    for chave_curso, nome_cargo in MAPA_CURSO_PARA_CARGO_AREA.items():
+        if excluir_cargo and _nomes_cargo_equivalentes(nome_cargo, excluir_cargo):
+            continue
+        if membro_tem_cargo_nome(membro, nome_cargo):
+            continue
+        # Só mostra bloqueio se já tem o curso de função (senão não tentou)
+        if not membro_tem_curso(membro, chave_curso):
+            continue
+        pode, faltando = membro_pode_receber_cargo_area_por_curso(
+            membro, chave_curso
+        )
+        if pode:
+            continue
+        bloqueados.append((nome_cargo, faltando))
+    return bloqueados
 
 
 def _cargo_mais_alto_entre(nomes_cargos: list[str]) -> str | None:
@@ -611,22 +693,42 @@ def montar_checklist_trilha(
             membro,
             excluir_cargo=cargo_para,
         )
+        bloqueados = listar_cargos_area_bloqueados_por_curso(
+            membro,
+            excluir_cargo=cargo_para,
+        )
         bloco_extras = ["## 🎁 Cargos extras por curso"]
         if cargos_extras:
             bloco_extras.append(
-                "- Na aprovação você também recebe estes cargos de área, "
-                "porque já concluiu o curso correspondente:"
+                "- Na aprovação você também recebe estes cargos de área "
+                "(curso da função + práticos exigidos concluídos):"
             )
             for nome_extra in cargos_extras:
-                bloco_extras.append(f"> `{nome_extra}`")
+                bloco_extras.append(f"> ✅ `{nome_extra}`")
             bloco_extras.append(
                 "- ℹ️ Metas de produção **não** são exigidas para esses "
                 "cargos neste momento (só a partir de Supervisor)."
             )
-        else:
+        if bloqueados:
+            bloco_extras.append(
+                "- ❌ **Não serão concedidos** (curso de função ok, "
+                "faltam práticos):"
+            )
+            for nome_bloqueado, chaves_faltando in bloqueados:
+                lista_faltando = "\n".join(
+                    f"> {menção_cargo_curso(chave)}" for chave in chaves_faltando
+                )
+                bloco_extras.append(f"- `{nome_bloqueado}` — pendentes:")
+                bloco_extras.append(lista_faltando)
+            bloco_extras.append(
+                "> Instrutor exige práticos **1.0 e 2.0** + curso Instrutor. "
+                "Demais áreas: práticos **1.0** + curso da área."
+            )
+        if not cargos_extras and not bloqueados:
             bloco_extras.append(
                 "- Nenhum cargo extra além do destino: ou você já os tem, "
-                "ou ainda não concluiu outros cursos de área."
+                "ou ainda não concluiu outros cursos de área com os "
+                "práticos exigidos."
             )
 
     # ── Resumo ─────────────────────────────────────────────────────

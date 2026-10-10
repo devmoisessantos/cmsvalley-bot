@@ -313,11 +313,7 @@ class ViewSelectTrilha(LoggingViewMixin, discord.ui.LayoutView):
         lista_de_trilhas = "\n".join(
             f"• **{trilha_disponivel['rotulo']}**" for trilha_disponivel in trilhas
         )
-        cabecalho = (
-            f"Cargo atual: **`{cargo_atual}`**\n"
-            if cargo_atual
-            else ""
-        )
+        cabecalho = f"Cargo atual: **`{cargo_atual}`**\n" if cargo_atual else ""
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
@@ -717,9 +713,7 @@ async def processar_escolha_trilha(
                 # Garante que Aprovar/Reprovar sobrevivem a reinício do bot
                 interacao.client.add_view(view_decisao_persistente(registro.id))
                 mensagem = await canal.send(view=view_pedido)
-                await atualizar_mensagem_solicitacao(
-                    registro.id, canal.id, mensagem.id
-                )
+                await atualizar_mensagem_solicitacao(registro.id, canal.id, mensagem.id)
             except discord.HTTPException as erro:
                 await enviar_erro_para_log_erros(
                     guilda,
@@ -900,20 +894,22 @@ async def _postar_resultado_publico(
     if aprovada:
         titulo = "🚨 Membro Promovido"
         cor = COR_SUCESSO
+        acao = "aprovação"
     else:
         titulo = "🚫 Promoção recusada"
         cor = COR_ERRO
+        acao = "reprovação"
 
     corpo = (
-        f"> - **👤 Membro:** {mencao_alvo}\n"
-        f"> - **📋 Solicitação:** `#{solicitacao_id}`\n"
-        f"> - **🎯 De:** `{cargo_de}` → **Para:** `{cargo_para}`\n"
-        f"> - **👮 Responsável pela {'aprovação' if aprovada else 'reprovação'}:** "
-        f"{staff.mention}"
+        f"> - **`👤` Membro:** {mencao_alvo}\n"
+        f"> - **`📋` Solicitação:** `#{solicitacao_id}`\n"
+        f"> - **`🎯` De:** `{cargo_de}` → **Para:** `{cargo_para}`\n"
+        f"> - **`👮` Responsável pela {acao}:** {staff.mention}\n"
     )
+    # Só lista cargos quando a promoção concedeu pelo menos um
     if aprovada and cargos_concedidos:
-        lista_cargos = ", ".join(f"`{nome}`" for nome in cargos_concedidos)
-        corpo += f"\n> - **🎁 Cargos concedidos:** {lista_cargos}"
+        corpo += "\n> - **─── 🎁 CARGOS CONCEDIDOS ───**\n"
+        corpo += "\n".join(f"• `{nome}`" for nome in cargos_concedidos)
 
     from datetime import (
         datetime,
