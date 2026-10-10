@@ -16,6 +16,8 @@ from datetime import (
 import discord
 from sqlalchemy import select
 
+import logging
+
 from src.config import (
     CARGO_BASE_GATE,
     CARGO_INGRESSO_GATE,
@@ -33,7 +35,13 @@ from src.cursos.cursos_service import (
 from src.database.conexao import async_session
 from src.database.models import SolicitacaoIngressoGate
 from src.gate.gate_service import membro_pertence_a_gate
+from src.utils.nickname import (
+    aplicar_prefixo,
+    escolher_cargo_do_prefixo,
+    nomes_de_cargos_com_prefixo_do_membro,
+)
 
+logger = logging.getLogger(__name__)
 
 def e_gestor_gate(membro: discord.Member) -> bool:
     """Comandante ou Subcomandante tático."""
@@ -159,13 +167,46 @@ async def buscar_solicitacao_por_id(
         return resultado.scalar_one_or_none()
 
 
+async def _aplicar_tag_pelo_cargo_mais_alto(
+    membro: discord.Member,
+    *,
+    motivo: str,
+    nomes_extras: list[str] | None = None,
+) -> None:
+    """
+    Atualiza o nick com a tag do cargo mais alto (GATE tem prioridade).
+
+    Nunca rebaixa a tag: se o membro já tem cargo mais alto, a tag permanece.
+    """
+    nomes = nomes_de_cargos_com_prefixo_do_membro(membro)
+    for nome in nomes_extras or []:
+        if nome not in nomes:
+            nomes.append(nome)
+    cargo_do_prefixo = escolher_cargo_do_prefixo(nomes)
+    if cargo_do_prefixo is None:
+        return
+    try:
+        nick_atual = membro.nick or membro.display_name or membro.name
+        novo_nick = aplicar_prefixo(nick_atual, cargo_do_prefixo)
+        if novo_nick and novo_nick != membro.nick:
+            await membro.edit(nick=novo_nick[:32], reason=motivo)
+    except discord.Forbidden:
+        logger.warning(
+            "Sem permissão para editar nick de %s (%s)", membro.id, motivo
+        )
+    except discord.HTTPException as erro:
+        logger.warning(
+            "Falha ao editar nick de %s (%s): %s", membro.id, motivo, erro
+        )
+
+
 async def aprovar_ingresso(
     guild: discord.Guild,
     solicitacao: SolicitacaoIngressoGate,
     aprovador: discord.Member,
 ) -> tuple[bool, str]:
     """
-    Aprova ingresso: aplica Guardião + base GATE e marca solicitação.
+    Aprova ingresso: aplica Guardião + base GATE, tag GATE e marca solicitação.
     """
     candidato = guild.get_member(solicitacao.discord_id_candidato)
     if candidato is None:
@@ -187,6 +228,13 @@ async def aprovar_ingresso(
             reason=f"Ingresso GATE aprovado por {aprovador}",
         )
 
+    # Tag GATE substitui a hospitalar (ex.: [ PAR ] → 【G · GATE】)
+    await _aplicar_tag_pelo_cargo_mais_alto(
+        candidato,
+        motivo=f"Prefixo GATE no ingresso por {aprovador}",
+        nomes_extras=[CARGO_INGRESSO_GATE],
+    )
+
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(SolicitacaoIngressoGate).where(
@@ -199,7 +247,7 @@ async def aprovar_ingresso(
         registro.decidido_em = datetime.now(timezone.utc)
         await sessao.commit()
 
-    return True, "Ingresso aprovado. Cargos GATE aplicados."
+    return True, "Ingresso aprovado. Cargos GATE e tag aplicados."
 
 
 async def reprovar_ingresso(
@@ -231,7 +279,13 @@ async def promover_membro_gate(
     alvo: discord.Member,
     executor: discord.Member,
 ) -> tuple[bool, str]:
-    """Sobe um degrau na HIERARQUIA_GATE (em direção ao Comandante)."""
+    """
+    Sobe um degrau na HIERARQUIA_GATE (em direção ao Comandante).
+
+    Não remove cargos anteriores. Garante o cargo novo e todos os cargos
+    abaixo dele (ex.: subir a Capitão também assegura Operador, Guardião
+    e base, se faltarem).
+    """
     atual = cargo_gate_atual(alvo)
     if atual is None:
         return False, "O membro não possui cargo GATE."
@@ -241,21 +295,46 @@ async def promover_membro_gate(
         return False, "O membro já está no topo da hierarquia GATE."
 
     nome_novo = HIERARQUIA_GATE[indice - 1]
-    cargo_novo = guild.get_role(CARGOS.get(nome_novo, 0) or 0)
-    cargo_antigo = guild.get_role(CARGOS.get(atual, 0) or 0)
-    if cargo_novo is None:
-        return False, f"Cargo `{nome_novo}` não encontrado no servidor."
+    indice_novo = indice - 1
 
-    if cargo_antigo is not None and cargo_antigo in alvo.roles:
-        await alvo.remove_roles(
-            cargo_antigo, reason=f"Promoção GATE por {executor}"
-        )
-    if cargo_novo not in alvo.roles:
+    # Cargo promovido + todos abaixo dele (índices maiores na lista)
+    nomes_desejados = list(HIERARQUIA_GATE[indice_novo:])
+    roles_para_adicionar: list[discord.Role] = []
+    nomes_adicionados: list[str] = []
+    for nome_cargo in nomes_desejados:
+        role = guild.get_role(CARGOS.get(nome_cargo, 0) or 0)
+        if role is None:
+            if nome_cargo == nome_novo:
+                return False, f"Cargo `{nome_novo}` não encontrado no servidor."
+            continue
+        if role not in alvo.roles and role not in roles_para_adicionar:
+            roles_para_adicionar.append(role)
+            nomes_adicionados.append(nome_cargo)
+
+    if roles_para_adicionar:
         await alvo.add_roles(
-            cargo_novo, reason=f"Promoção GATE por {executor}"
+            *roles_para_adicionar,
+            reason=f"Promoção GATE por {executor} (mantém cargos anteriores)",
         )
 
-    return True, f"Promovido de **{atual}** para **{nome_novo}**."
+    await _aplicar_tag_pelo_cargo_mais_alto(
+        alvo,
+        motivo=f"Prefixo GATE na promoção por {executor}",
+        nomes_extras=[nome_novo],
+    )
+
+    if nomes_adicionados:
+        lista = ", ".join(f"**{nome}**" for nome in nomes_adicionados)
+        return (
+            True,
+            f"Promovido de **{atual}** para **{nome_novo}**. "
+            f"Cargos adicionados/confirmados: {lista}.",
+        )
+    return (
+        True,
+        f"Promovido de **{atual}** para **{nome_novo}** "
+        "(já possuía os cargos da faixa).",
+    )
 
 
 async def rebaixar_membro_gate(
@@ -263,7 +342,12 @@ async def rebaixar_membro_gate(
     alvo: discord.Member,
     executor: discord.Member,
 ) -> tuple[bool, str]:
-    """Desce um degrau na HIERARQUIA_GATE."""
+    """
+    Desce um degrau na HIERARQUIA_GATE.
+
+    Remove só os cargos **acima** do novo nível. Mantém o cargo novo e
+    todos os de baixo (e completa os que faltarem). Atualiza a tag.
+    """
     atual = cargo_gate_atual(alvo)
     if atual is None:
         return False, "O membro não possui cargo GATE."
@@ -273,21 +357,55 @@ async def rebaixar_membro_gate(
         return False, "O membro já está no cargo GATE mais baixo."
 
     nome_novo = HIERARQUIA_GATE[indice + 1]
-    cargo_novo = guild.get_role(CARGOS.get(nome_novo, 0) or 0)
-    cargo_antigo = guild.get_role(CARGOS.get(atual, 0) or 0)
-    if cargo_novo is None:
-        return False, f"Cargo `{nome_novo}` não encontrado no servidor."
+    indice_novo = indice + 1
 
-    if cargo_antigo is not None and cargo_antigo in alvo.roles:
+    # Tudo acima do novo nível sai
+    roles_para_remover: list[discord.Role] = []
+    nomes_removidos: list[str] = []
+    for nome_acima in HIERARQUIA_GATE[:indice_novo]:
+        role = guild.get_role(CARGOS.get(nome_acima, 0) or 0)
+        if role is not None and role in alvo.roles:
+            roles_para_remover.append(role)
+            nomes_removidos.append(nome_acima)
+
+    # Novo nível + todos abaixo ficam (ou são adicionados se faltarem)
+    roles_para_adicionar: list[discord.Role] = []
+    nomes_adicionados: list[str] = []
+    for nome_abaixo in HIERARQUIA_GATE[indice_novo:]:
+        role = guild.get_role(CARGOS.get(nome_abaixo, 0) or 0)
+        if role is None:
+            if nome_abaixo == nome_novo:
+                return False, f"Cargo `{nome_novo}` não encontrado no servidor."
+            continue
+        if role not in alvo.roles and role not in roles_para_adicionar:
+            roles_para_adicionar.append(role)
+            nomes_adicionados.append(nome_abaixo)
+
+    if roles_para_remover:
         await alvo.remove_roles(
-            cargo_antigo, reason=f"Rebaixamento GATE por {executor}"
+            *roles_para_remover,
+            reason=f"Rebaixamento GATE por {executor}",
         )
-    if cargo_novo not in alvo.roles:
+    if roles_para_adicionar:
         await alvo.add_roles(
-            cargo_novo, reason=f"Rebaixamento GATE por {executor}"
+            *roles_para_adicionar,
+            reason=f"Rebaixamento GATE por {executor} (completa faixa)",
         )
 
-    return True, f"Rebaixado de **{atual}** para **{nome_novo}**."
+    await _aplicar_tag_pelo_cargo_mais_alto(
+        alvo,
+        motivo=f"Prefixo GATE no rebaixamento por {executor}",
+        nomes_extras=[nome_novo],
+    )
+
+    partes: list[str] = [f"Rebaixado de **{atual}** para **{nome_novo}**."]
+    if nomes_removidos:
+        lista_rem = ", ".join(f"**{nome}**" for nome in nomes_removidos)
+        partes.append(f"Removidos (acima): {lista_rem}.")
+    if nomes_adicionados:
+        lista_add = ", ".join(f"**{nome}**" for nome in nomes_adicionados)
+        partes.append(f"Completados (faixa): {lista_add}.")
+    return True, " ".join(partes)
 
 
 async def expulsar_membro_gate(
@@ -298,7 +416,8 @@ async def expulsar_membro_gate(
     """
     Remove todos os cargos GATE.
 
-    Os cargos hospitalares permanecem (último cargo do hospital fica intacto).
+    Os cargos hospitalares permanecem. A tag do nick volta para o cargo
+    hospitalar mais alto (ou some a tag GATE).
     """
     cargos_gate = []
     for nome in HIERARQUIA_GATE:
@@ -312,5 +431,12 @@ async def expulsar_membro_gate(
     await alvo.remove_roles(
         *cargos_gate, reason=f"Expulsão GATE por {executor}"
     )
+
+    # Tag: após sair da GATE, usa o cargo hospitalar mais alto
+    await _aplicar_tag_pelo_cargo_mais_alto(
+        alvo,
+        motivo=f"Prefixo após expulsão GATE por {executor}",
+    )
+
     nomes = ", ".join(cargo.name for cargo in cargos_gate)
     return True, f"Cargos GATE removidos: {nomes}."

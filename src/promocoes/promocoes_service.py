@@ -23,7 +23,11 @@ from src.database.models import (
 from src.plantao.ranking_plantao_service import obter_segundos_plantao_totais
 from src.utils.formatacao import formatar_hms
 from src.utils.logger import log_mudanca_cargo
-from src.utils.nickname import aplicar_prefixo
+from src.utils.nickname import (
+    aplicar_prefixo,
+    escolher_cargo_do_prefixo,
+    nomes_de_cargos_com_prefixo_do_membro,
+)
 
 try:
     from src.config import META_PROMOCAO_MARGEM, TRILHAS_PROMOCAO
@@ -1060,22 +1064,32 @@ async def aplicar_promocao_cargos(
     except discord.HTTPException as erro:
         return False, f"Erro Discord ao alterar cargos: {erro}", []
 
-    # Prefixo: o cargo mais alto entre destino + extras concedidos
-    nomes_para_prefixo = list(adicionados) if adicionados else [cargo_para_nome]
+    # Tag: sempre a do cargo mais alto que o membro tem (já tinha + novos).
+    # Nunca rebaixa a tag (ex.: Instrutor → Recrutador mantém [ INS ]).
+    nomes_para_prefixo = nomes_de_cargos_com_prefixo_do_membro(membro)
+    for nome_novo in adicionados:
+        if nome_novo not in nomes_para_prefixo:
+            nomes_para_prefixo.append(nome_novo)
     if cargo_para_nome not in nomes_para_prefixo:
         nomes_para_prefixo.append(cargo_para_nome)
-    cargo_do_prefixo = _cargo_mais_alto_entre(nomes_para_prefixo) or cargo_para_nome
-    try:
-        nick_atual = membro.nick or membro.display_name or membro.name
-        novo_nick = aplicar_prefixo(nick_atual, cargo_do_prefixo)
-        if novo_nick and novo_nick != membro.nick:
-            await membro.edit(nick=novo_nick[:32], reason="Prefixo após promoção")
-    except discord.Forbidden:
-        logger.warning(
-            "Promoção OK mas sem permissão para editar nick de %s", membro.id
-        )
-    except discord.HTTPException as erro:
-        logger.warning("Falha ao editar nick na promoção de %s: %s", membro.id, erro)
+    cargo_do_prefixo = escolher_cargo_do_prefixo(nomes_para_prefixo)
+    if cargo_do_prefixo is not None:
+        try:
+            nick_atual = membro.nick or membro.display_name or membro.name
+            novo_nick = aplicar_prefixo(nick_atual, cargo_do_prefixo)
+            if novo_nick and novo_nick != membro.nick:
+                await membro.edit(
+                    nick=novo_nick[:32],
+                    reason="Prefixo após promoção (cargo mais alto)",
+                )
+        except discord.Forbidden:
+            logger.warning(
+                "Promoção OK mas sem permissão para editar nick de %s", membro.id
+            )
+        except discord.HTTPException as erro:
+            logger.warning(
+                "Falha ao editar nick na promoção de %s: %s", membro.id, erro
+            )
 
     try:
         await log_mudanca_cargo(
