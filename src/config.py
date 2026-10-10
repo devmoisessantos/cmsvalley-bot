@@ -1741,20 +1741,20 @@ for cargo_de, chave_de, _cursos_de in AREAS_MEDICAS:
                 usar_metas_do_destino=False,
                 segundos_etapa=etapa,
                 observacao=(
-                    "Meta e etapa de plantão do cargo atual. "
-                    "O total no banco é acumulado + etapa "
-                    "(não desconta o que já foi usado nas promoções anteriores)."
+                    "Etapa de plantão do cargo de origem (total no banco = "
+                    "acumulado + etapa). Metas de produção NÃO são exigidas "
+                    "entre áreas — só a partir de Supervisor. Cursos de outras "
+                    "áreas já feitos liberam o cargo correspondente na aprovação."
                 ),
             )
         )
-        # Metas de produção vêm do cargo de origem (já batidas para pedir).
-        # Tickets nunca entram em área → área.
+        # Metas de produção ficam zeradas em área → área (só Supervisor+).
+        # Os valores de METAS_POR_CARGO continuam valendo na trilha de Supervisor.
         trilha_area = TRILHAS_PROMOCAO[-1]
-        metas_origem = _metas_do_cargo(cargo_de)
-        trilha_area["meta_laudos"] = metas_origem["meta_laudos"]
-        trilha_area["meta_recrutamentos"] = metas_origem["meta_recrutamentos"]
-        trilha_area["meta_chamadas"] = metas_origem["meta_chamadas"]
-        trilha_area["meta_cursos_aplicados"] = metas_origem["meta_cursos_aplicados"]
+        trilha_area["meta_laudos"] = 0
+        trilha_area["meta_recrutamentos"] = 0
+        trilha_area["meta_chamadas"] = 0
+        trilha_area["meta_cursos_aplicados"] = 0
         trilha_area["meta_tickets"] = 0
 
 # 4) Áreas completas → Supervisor
@@ -1785,10 +1785,11 @@ TRILHAS_PROMOCAO.append(
         usar_metas_do_destino=False,
         segundos_etapa=_segundos_total_ate_supervisor,
         observacao=(
-            "Só sobe a Supervisor depois de passar pelas quatro áreas "
+            "Só sobe a Supervisor depois de ter as quatro áreas "
             "(Doutor, Psicólogo, Recrutador e Instrutor): cursos de cada "
-            "uma, metas de produção de cada especialidade e plantão do "
-            "caminho completo."
+            "uma, metas de produção de cada especialidade (laudos, "
+            "chamadas, recrutamentos e cursos aplicados) e plantão do "
+            "caminho completo. Metas de área só são cobradas aqui."
         ),
     )
 )

@@ -44,6 +44,66 @@ registrador = logging.getLogger(__name__)
 # Prazo padrão da ADV VERBAL quando o chamador não informa expira_em.
 DIAS_EXPIRACAO_VERBAL = 3
 
+# Janela para revogar (recurso) a exoneração após ela ser aplicada.
+PRAZO_RECURSO_EXONERACAO_HORAS = 48
+
+
+def _montar_snapshot_exoneracao(
+    cargos_antes_ids: list[int],
+    nick_antes: str | None,
+) -> str:
+    """
+    Empacota cargos e nick do momento da exoneração em JSON.
+
+    Formato novo: {"cargos": [ids], "nick": "..."}.
+    Leitores antigos que esperavam só uma lista ainda são aceitos em
+    ``_ler_snapshot_exoneracao``.
+    """
+    return json.dumps(
+        {
+            "cargos": list(cargos_antes_ids),
+            "nick": (nick_antes or "")[:100],
+        }
+    )
+
+
+def _ler_snapshot_exoneracao(
+    texto: str | None,
+) -> tuple[list[int], str | None]:
+    """
+    Lê o snapshot gravado na exoneração.
+
+    Aceita lista pura (legado) ou objeto com cargos + nick.
+    """
+    if not texto:
+        return [], None
+    try:
+        dados = json.loads(texto)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return [], None
+    if isinstance(dados, list):
+        ids = []
+        for item in dados:
+            try:
+                ids.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return ids, None
+    if isinstance(dados, dict):
+        lista_bruta = dados.get("cargos") or []
+        ids = []
+        if isinstance(lista_bruta, list):
+            for item in lista_bruta:
+                try:
+                    ids.append(int(item))
+                except (TypeError, ValueError):
+                    continue
+        nick = dados.get("nick")
+        if nick is not None:
+            nick = str(nick)[:100]
+        return ids, nick
+    return [], None
+
 
 async def aplicar_punicao(
     *,
@@ -256,7 +316,8 @@ async def executar_exoneracao(
     2. Remove TODOS os cargos (exceto @everyone e cargos gerenciados)
     3. Deixa apenas Exonerado + Visitantes
     4. Remove o prefixo [ TAG ] do nick → fica Nome | ID
-    5. Registra em CANAL_EXONERACOES
+    5. Zera horas de plantão e saldo de moedas
+    6. Registra em CANAL_EXONERACOES
     """
     id_exonerado = id_cargo_exonerado()
     id_visitantes = CARGOS.get("Visitantes")
@@ -274,14 +335,17 @@ async def executar_exoneracao(
     if bot_member is None:
         return False, "❌ Bot sem contexto de membro na guilda."
 
-    # Snapshot dos cargos ANTES de tirar — usado se o recurso for aceito
+    # Snapshot dos cargos e do nick ANTES de tirar — usado no recurso
     cargos_antes_ids = [
         cargo.id
         for cargo in alvo.roles
         if cargo.id != guild.default_role.id and not cargo.managed
     ]
-    cargos_antes_json = json.dumps(cargos_antes_ids)
     nick_antes = (alvo.nick or alvo.display_name or "")[:100]
+    cargos_antes_json = _montar_snapshot_exoneracao(
+        cargos_antes_ids,
+        nick_antes,
+    )
 
     # Cargos que devem permanecer
     ids_para_manter: set[int] = {guild.default_role.id, id_exonerado}
@@ -326,6 +390,32 @@ async def executar_exoneracao(
         ignorar_falha_cosmetica(
             erro_em_executar_exoneracao,
             o_que_falhou="executar exoneracao",
+        )
+
+    # Zera plantão e moedas só na exoneração (na revogação eles permanecem).
+    try:
+        from src.membros.membros_service import (
+            ajustar_horas_plantao,
+            zerar_ciclo_plantao,
+        )
+        from src.plantao.carteira_service import zerar_saldo_moedas
+
+        await zerar_ciclo_plantao(alvo.id)
+        await ajustar_horas_plantao(
+            alvo.id,
+            segundos_absolutos=0,
+            executor_id=executor.id,
+            motivo="Zerar plantão na exoneração",
+        )
+        await zerar_saldo_moedas(
+            alvo.id,
+            motivo="Zerar moedas na exoneração",
+        )
+    except Exception as erro_reset_plantao:
+        registrador.exception(
+            "Exoneração de %s: falha ao zerar plantão/moedas: %s",
+            alvo.id,
+            erro_reset_plantao,
         )
 
     # Grava registro de Exonerado no banco quando ainda não veio de aplicar_punicao
@@ -407,8 +497,6 @@ async def executar_exoneracao(
             erro_do_snapshot,
         )
 
-    _ = nick_antes  # reservado para evoluir o recurso com nick original
-
     msg_exo, _thread = await registrar_exoneracao(
         guild=guild,
         alvo=alvo,
@@ -461,17 +549,24 @@ async def remover_punicao(
     """
     Remove cargo(s) de punição, marca registros inativos e loga em LOG_PUNICOES.
 
-    Se a punição removida for **Exonerado** e houver ``cargos_antes_json``,
-    tenta devolver os cargos de produção gravados no momento da exoneração
-    (recurso / revogação).
+    Se a punição removida for **Exonerado** (recurso / revogação):
+    - só é permitido em até ``PRAZO_RECURSO_EXONERACAO_HORAS`` após a
+      exoneração; fora do prazo a operação é recusada com aviso
+    - zera TODAS as advertências ativas no banco
+    - tira cargos de punição, Exonerado e Visitantes no Discord
+    - devolve os cargos de produção e o nick do snapshot
+    - plantão e moedas **não** são alterados (só zeravam na exoneração)
 
-    ``apenas_origem``: se informado (ex.: ``CHAMADA``), só mexe nesses registros.
+    ``apenas_origem``: se informado (ex.: ``CHAMADA``), só mexe nesses registros
+    (não aplica o pacote completo de recurso).
     """
     removidos: list[str] = []
     punicao_ids: list[int] = []
     id_fivem: str | None = None
     roles_a_remover: list[discord.Role] = []
-    snapshots_para_restaurar: list[list[int]] = []
+    ids_cargos_snapshot: list[int] = []
+    nick_para_restaurar: str | None = None
+    e_recurso_de_exoneracao = False
 
     async with async_session() as session:
         filtros = [
@@ -519,31 +614,74 @@ async def remover_punicao(
                     )
             return False, "❌ Este membro não possui punições ativas registradas."
 
+        # Revogar Exonerado = recurso completo, só dentro do prazo de 48h.
+        if apenas_origem is None:
+            registro_exonerado = None
+            for row in rows:
+                if e_cargo_exonerado(
+                    cargo_nome=row.cargo_nome,
+                    cargo_id=row.cargo_id,
+                ):
+                    e_recurso_de_exoneracao = True
+                    registro_exonerado = row
+                    lista_ids, nick_salvo = _ler_snapshot_exoneracao(
+                        row.cargos_antes_json
+                    )
+                    if lista_ids:
+                        ids_cargos_snapshot = lista_ids
+                    if nick_salvo:
+                        nick_para_restaurar = nick_salvo
+            if e_recurso_de_exoneracao and registro_exonerado is not None:
+                data_da_exoneracao = registro_exonerado.criada_em
+                if data_da_exoneracao is not None:
+                    if data_da_exoneracao.tzinfo is None:
+                        data_da_exoneracao = data_da_exoneracao.replace(
+                            tzinfo=timezone.utc
+                        )
+                    limite = data_da_exoneracao + timedelta(
+                        hours=PRAZO_RECURSO_EXONERACAO_HORAS
+                    )
+                    agora_utc = datetime.now(timezone.utc)
+                    if agora_utc > limite:
+                        horas = PRAZO_RECURSO_EXONERACAO_HORAS
+                        return (
+                            False,
+                            "❌ O prazo de recurso da exoneração expirou. "
+                            f"A revogação só é permitida em até **{horas} horas** "
+                            f"após a exoneração "
+                            f"(<t:{int(data_da_exoneracao.timestamp())}:f> → "
+                            f"<t:{int(limite.timestamp())}:f>).",
+                        )
+                resultado_todas = await session.execute(
+                    select(Punicao).where(
+                        Punicao.discord_id == alvo.id,
+                        Punicao.ativa.is_(True),
+                    )
+                )
+                rows = list(resultado_todas.scalars().all())
+
         cargo_ids_marcados: set[int] = set()
+        agora_utc = datetime.now(timezone.utc)
         for row in rows:
             row.ativa = False
-            row.removida_em = datetime.now(timezone.utc)
+            row.removida_em = agora_utc
             row.removida_por = executor.id
-            row.motivo_remocao = (motivo_remocao or "")[:500]
+            if e_recurso_de_exoneracao and not e_cargo_exonerado(
+                cargo_nome=row.cargo_nome,
+                cargo_id=row.cargo_id,
+            ):
+                texto_motivo = (
+                    motivo_remocao
+                    or "Reset automático na revogação da exoneração"
+                )
+            else:
+                texto_motivo = motivo_remocao or ""
+            row.motivo_remocao = texto_motivo[:500]
             removidos.append(row.cargo_nome)
             punicao_ids.append(row.id)
             if row.id_fivem and not id_fivem:
                 id_fivem = row.id_fivem
             cargo_ids_marcados.add(row.cargo_id)
-            if e_cargo_exonerado(cargo_nome=row.cargo_nome, cargo_id=row.cargo_id):
-                if row.cargos_antes_json:
-                    try:
-                        lista_ids = json.loads(row.cargos_antes_json)
-                        if isinstance(lista_ids, list):
-                            snapshots_para_restaurar.append(
-                                [int(x) for x in lista_ids]
-                            )
-                    except (TypeError, ValueError, json.JSONDecodeError) as erro_json:
-                        registrador.warning(
-                            "JSON de cargos_antes inválido na punição #%s: %s",
-                            row.id,
-                            erro_json,
-                        )
 
         try:
             await session.commit()
@@ -569,6 +707,22 @@ async def remover_punicao(
                 if role and role in alvo.roles:
                     roles_a_remover.append(role)
 
+    # No recurso, tira também Visitantes e qualquer cargo de punição residual.
+    if e_recurso_de_exoneracao:
+        id_visitantes = CARGOS.get("Visitantes")
+        ids_punicao = set(CARGOS_PUNICOES.values())
+        for role in list(alvo.roles):
+            if role.id == guild.default_role.id:
+                continue
+            if role.managed:
+                continue
+            if id_visitantes and role.id == id_visitantes:
+                if role not in roles_a_remover:
+                    roles_a_remover.append(role)
+                continue
+            if role.id in ids_punicao and role not in roles_a_remover:
+                roles_a_remover.append(role)
+
     if roles_a_remover:
         try:
             await alvo.remove_roles(
@@ -581,18 +735,20 @@ async def remover_punicao(
         except discord.Forbidden:
             return False, "❌ Sem permissão para remover os cargos de punição."
 
-    # Recurso de exoneração: devolve cargos de produção salvos no snapshot
-    if snapshots_para_restaurar:
+    # Recurso: devolve cargos de produção do snapshot (sem punição / Exonerado).
+    if e_recurso_de_exoneracao and ids_cargos_snapshot:
         ids_exonerado = {id_cargo_exonerado()} if id_cargo_exonerado() else set()
         ids_punicao = set(CARGOS_PUNICOES.values())
+        id_visitantes = CARGOS.get("Visitantes")
         ids_para_devolver: set[int] = set()
-        for lista in snapshots_para_restaurar:
-            for role_id in lista:
-                if role_id in ids_exonerado:
-                    continue
-                if role_id in ids_punicao:
-                    continue
-                ids_para_devolver.add(role_id)
+        for role_id in ids_cargos_snapshot:
+            if role_id in ids_exonerado:
+                continue
+            if role_id in ids_punicao:
+                continue
+            if id_visitantes and role_id == id_visitantes:
+                continue
+            ids_para_devolver.add(role_id)
         cargos_para_devolver = []
         for role_id in ids_para_devolver:
             role = guild.get_role(role_id)
@@ -619,6 +775,26 @@ async def remover_punicao(
                     f"{erro_restore}",
                 )
 
+    # Recurso: devolve o nick salvo no snapshot.
+    # Plantão e moedas não mudam aqui — só foram zerados na exoneração.
+    if e_recurso_de_exoneracao and nick_para_restaurar:
+        try:
+            nick_limpo = nick_para_restaurar[:32]
+            nick_atual = alvo.nick or alvo.display_name or ""
+            if nick_limpo and nick_limpo != nick_atual:
+                await alvo.edit(
+                    nick=nick_limpo,
+                    reason=(
+                        f"Recurso de exoneração — nick restaurado por "
+                        f"{executor}"
+                    ),
+                )
+        except (discord.Forbidden, discord.HTTPException) as erro_nick:
+            ignorar_falha_cosmetica(
+                erro_nick,
+                o_que_falhou="restaurar nick no recurso de exoneracao",
+            )
+
     await registrar_log_remocao(
         guild=guild,
         alvo=alvo,
@@ -638,10 +814,14 @@ async def remover_punicao(
         motivo_remocao=motivo_remocao,
     )
 
-    lista = ", ".join(f"**{numero.strip()}**" for numero in removidos)
+    lista = ", ".join(f"**{nome.strip()}**" for nome in removidos)
     extra = ""
-    if snapshots_para_restaurar:
-        extra = " Cargos de produção restaurados (recurso)."
+    if e_recurso_de_exoneracao:
+        extra = (
+            " Recurso aplicado: cargos de produção e nick restaurados, "
+            "advertências zeradas, Visitantes/Exonerado removidos. "
+            "Plantão e moedas permanecem como estavam após a exoneração."
+        )
     return True, f"✅ Punição removida de {alvo.mention}: {lista}.{extra}"
 
 

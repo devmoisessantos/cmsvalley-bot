@@ -10,7 +10,9 @@ from sqlalchemy import select
 from src.config import CARGOS, CARGOS_PUNICOES
 from src.cursos.cursos_service import (
     listar_cursos_que_faltam,
+    membro_tem_curso,
     menção_cargo_curso,
+    parse_chaves_json,
 )
 from src.database.conexao import async_session
 from src.database.models import (
@@ -285,6 +287,14 @@ CARGOS_DE_AREA = (
     CARGO_INSTRUTOR,
 )
 
+# Curso de função → cargo de área oficial (só as quatro áreas).
+MAPA_CURSO_PARA_CARGO_AREA = {
+    "doutor": CARGO_DOUTOR,
+    "psicologo": CARGO_PSICOLOGO,
+    "recrutador": CARGO_RECRUTADOR,
+    "instrutor": CARGO_INSTRUTOR,
+}
+
 
 def membro_e_paramedico(membro: discord.Member) -> bool:
     """True se o membro tem o cargo de Paramédico."""
@@ -297,6 +307,56 @@ def membro_ja_tem_area(membro: discord.Member) -> bool:
         if membro_tem_cargo_nome(membro, nome_cargo):
             return True
     return False
+
+
+def trilha_eh_promocao_de_area(trilha: dict) -> bool:
+    """
+    True se o destino da trilha é uma das quatro áreas oficiais.
+
+    Nessas promoções as metas de produção ficam dispensadas; elas só
+    passam a valer a partir de Supervisor (diretoria).
+    """
+    cargo_para = trilha.get("para_cargo") or ""
+    return cargo_para in CARGOS_DE_AREA
+
+
+def listar_cargos_area_por_cursos_do_membro(
+    membro: discord.Member,
+    *,
+    excluir_cargo: str | None = None,
+) -> list[str]:
+    """
+    Cargos de área que o membro pode receber porque já tem o curso.
+
+    Não inclui cargos que ele já possui no Discord. Opcionalmente
+    exclui o cargo destino da promoção (para listar só os extras).
+    """
+    nomes: list[str] = []
+    for chave_curso, nome_cargo in MAPA_CURSO_PARA_CARGO_AREA.items():
+        if excluir_cargo and _nomes_cargo_equivalentes(nome_cargo, excluir_cargo):
+            continue
+        if membro_tem_cargo_nome(membro, nome_cargo):
+            continue
+        if not membro_tem_curso(membro, chave_curso):
+            continue
+        nomes.append(nome_cargo)
+    return nomes
+
+
+def _cargo_mais_alto_entre(nomes_cargos: list[str]) -> str | None:
+    """
+    Entre os nomes informados, devolve o mais alto na hierarquia do hospital.
+
+    Usado para escolher o prefixo de nick quando vários cargos de área
+    são concedidos de uma vez.
+    """
+    if not nomes_cargos:
+        return None
+    conjunto = set(nomes_cargos)
+    for nome_cargo in _ordem_hierarquia():
+        if nome_cargo in conjunto:
+            return nome_cargo
+    return nomes_cargos[0]
 
 
 def montar_checklist_trilha(
@@ -314,13 +374,21 @@ def montar_checklist_trilha(
     Avalia requisitos e monta o corpo do CardView em seções.
 
     Modos:
-    - ``trilha`` (padrão): cargo de origem + cursos + plantão + metas.
+    - ``trilha`` (padrão): cargo de origem + cursos + plantão + metas
+      (metas só quando o destino não é área oficial).
     - ``primeira_area_paramedico``: cursos + plantão da área escolhida,
       sem metas de produção. Usado quando o Paramédico ainda não tem área.
+
+    Promoções para Doutor / Psicólogo / Recrutador / Instrutor nunca
+    exigem metas de produção. Metas entram só a partir de Supervisor.
     """
     pode_enviar = True
     pendencias: list[str] = []
     modo_primeira_area = modo == "primeira_area_paramedico"
+
+    # Área oficial: metas dispensadas (Supervisor+ continua exigindo).
+    if trilha_eh_promocao_de_area(trilha):
+        exigir_metas = False
 
     # ── Situação atual ─────────────────────────────────────────────
     bloco_situacao: list[str] = ["## 📌 Situação Atual"]
@@ -531,10 +599,41 @@ def montar_checklist_trilha(
             "(a diretoria confere com `/avaliacao-membro`)."
         )
 
+    # ── Cargos extras por curso já feito (só em promoção de área) ──
+    bloco_extras: list[str] = []
+    cargos_extras: list[str] = []
+    if trilha_eh_promocao_de_area(trilha):
+        cargos_extras = listar_cargos_area_por_cursos_do_membro(
+            membro,
+            excluir_cargo=cargo_para,
+        )
+        bloco_extras = ["## 🎁 Cargos extras por curso"]
+        if cargos_extras:
+            bloco_extras.append(
+                "- Na aprovação você também recebe estes cargos de área, "
+                "porque já concluiu o curso correspondente:"
+            )
+            for nome_extra in cargos_extras:
+                bloco_extras.append(f"> `{nome_extra}`")
+            bloco_extras.append(
+                "- ℹ️ Metas de produção **não** são exigidas para esses "
+                "cargos neste momento (só a partir de Supervisor)."
+            )
+        else:
+            bloco_extras.append(
+                "- Nenhum cargo extra além do destino: ou você já os tem, "
+                "ou ainda não concluiu outros cursos de área."
+            )
+
     # ── Resumo ─────────────────────────────────────────────────────
     bloco_resumo: list[str] = ["## 🎯 Resumo"]
     if pode_enviar:
         bloco_resumo.append("- ✅ **Todos os pré-requisitos foram atendidos.**")
+        if cargos_extras:
+            lista_extras = ", ".join(f"`{nome}`" for nome in cargos_extras)
+            bloco_resumo.append(
+                f"- 🎁 **Também serão concedidos:** {lista_extras}"
+            )
     else:
         bloco_resumo = ["## 🎯 Resumo das Pendências"]
         for indice, item in enumerate(pendencias, start=1):
@@ -551,8 +650,11 @@ def montar_checklist_trilha(
         bloco_cursos,
         bloco_plantao,
         bloco_metas,
+        bloco_extras,
         bloco_resumo,
     ):
+        if not bloco:
+            continue
         if linhas:
             linhas.append("")  # espaço entre seções
         linhas.extend(bloco)
@@ -568,6 +670,7 @@ def montar_checklist_trilha(
         "rotulo": trilha.get("rotulo") or trilha["chave"],
         "segundos_plantao": total_seg,
         "modo": modo,
+        "cargos_extras": cargos_extras,
         "titulo_card": (
             "📋 Requisitos completos" if pode_enviar else "📋 Requisitos incompletos"
         ),
@@ -630,16 +733,24 @@ async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
         )
         contagens["meta_chamadas"] = int(resultado.scalar_one() or 0)
 
-        # Cursos em que atuou como instrutor e concluiu
+        # Cursos em que atuou como instrutor e concluiu.
+        # Conta cada curso do pacote (chaves_cursos_json), não o pedido.
+        # Ex.: pacote com 6 cursos = 6 na meta, não 1.
         resultado = await sessao.execute(
-            select(func.count())
-            .select_from(SolicitacaoCurso)
-            .where(
+            select(SolicitacaoCurso).where(
                 SolicitacaoCurso.instrutor_id == discord_id,
                 SolicitacaoCurso.status.in_(["CONCLUIDO", "APROVADO", "FINALIZADO"]),
             )
         )
-        contagens["meta_cursos_aplicados"] = int(resultado.scalar_one() or 0)
+        registros_curso = resultado.scalars().all()
+        total_cursos_aplicados = 0
+        for registro_curso in registros_curso:
+            chaves_do_pacote = parse_chaves_json(
+                registro_curso.chaves_cursos_json,
+                registro_curso.chave_curso,
+            )
+            total_cursos_aplicados += len(chaves_do_pacote)
+        contagens["meta_cursos_aplicados"] = total_cursos_aplicados
 
         # Tickets assumidos e finalizados pela staff (diretoria / equipe ticket)
         from src.database.models import Ticket
@@ -666,7 +777,8 @@ async def montar_checklist_trilha_async(
     """
     Checklist completo.
 
-    - modo ``trilha``: cargo origem + cursos + plantão + metas.
+    - modo ``trilha``: cargo origem + cursos + plantão; metas só se o
+      destino não for área oficial (Supervisor+).
     - modo ``primeira_area_paramedico``: cursos + plantão da área, sem
       metas de produção (Paramédico ainda sem área).
     """
@@ -683,6 +795,8 @@ async def montar_checklist_trilha_async(
             exigir_metas=False,
             modo=modo,
         )
+    # Área oficial: sem metas. Supervisor e diretoria: com metas.
+    exige_metas = not trilha_eh_promocao_de_area(trilha)
     return montar_checklist_trilha(
         membro,
         trilha,
@@ -690,7 +804,7 @@ async def montar_checklist_trilha_async(
         contagens_extras=contagens,
         exigir_cargo_origem=True,
         exigir_plantao=True,
-        exigir_metas=True,
+        exigir_metas=exige_metas,
         modo="trilha",
     )
 
@@ -880,13 +994,15 @@ async def aplicar_promocao_cargos(
     cargo_para_nome: str,
     *,
     executor: discord.abc.User | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, list[str]]:
     """
     Adiciona o cargo de destino da promoção (não remove o cargo anterior).
-    Atualiza o prefixo do nick e registra log de cargos.
 
-    O parâmetro cargo_de_nome fica só para contexto/histórico — a regra
-    de toda a trilha é manter os cargos anteriores e só somar o novo.
+    Em promoção para área oficial, também concede os outros cargos de
+    área cujo curso o membro já concluiu (Doutor, Psicólogo, Recrutador,
+    Instrutor). Atualiza o prefixo do nick e registra log de cargos.
+
+    Retorna (ok, detalhe, nomes_dos_cargos_adicionados).
     """
     guilda = membro.guild
     cargo_para = resolver_cargo_na_guilda(guilda, cargo_para_nome)
@@ -894,29 +1010,64 @@ async def aplicar_promocao_cargos(
         return (
             False,
             f"Cargo destino `{cargo_para_nome}` não encontrado no config/guilda.",
+            [],
         )
+
+    nomes_para_adicionar: list[str] = []
+    if cargo_para not in membro.roles:
+        nomes_para_adicionar.append(cargo_para_nome)
+
+    # Extras: só quando o destino é área oficial.
+    if cargo_para_nome in CARGOS_DE_AREA:
+        extras = listar_cargos_area_por_cursos_do_membro(
+            membro,
+            excluir_cargo=cargo_para_nome,
+        )
+        for nome_extra in extras:
+            if nome_extra not in nomes_para_adicionar:
+                nomes_para_adicionar.append(nome_extra)
+
+    roles_para_adicionar: list[discord.Role] = []
+    for nome_cargo in nomes_para_adicionar:
+        role = resolver_cargo_na_guilda(guilda, nome_cargo)
+        if role is None:
+            return (
+                False,
+                f"Cargo `{nome_cargo}` não encontrado no config/guilda.",
+                [],
+            )
+        if role not in membro.roles and role not in roles_para_adicionar:
+            roles_para_adicionar.append(role)
 
     adicionados: list[str] = []
-
     try:
-        if cargo_para not in membro.roles:
+        if roles_para_adicionar:
             await membro.add_roles(
-                cargo_para,
-                reason="Promoção aprovada — adicionado novo cargo",
+                *roles_para_adicionar,
+                reason="Promoção aprovada — cargos de destino e extras por curso",
             )
-            adicionados.append(cargo_para_nome)
+            # Nomes oficiais do config (não o name cru do Discord)
+            adicionados = list(nomes_para_adicionar)
     except discord.Forbidden:
-        return False, (
-            "Sem permissão para alterar cargos deste membro "
-            "(hierarquia do bot abaixo do cargo?)."
+        return (
+            False,
+            (
+                "Sem permissão para alterar cargos deste membro "
+                "(hierarquia do bot abaixo do cargo?)."
+            ),
+            [],
         )
     except discord.HTTPException as erro:
-        return False, f"Erro Discord ao alterar cargos: {erro}"
+        return False, f"Erro Discord ao alterar cargos: {erro}", []
 
-    # Prefixo do nickname conforme PREFIXOS_NICKNAME (cargo novo)
+    # Prefixo: o cargo mais alto entre destino + extras concedidos
+    nomes_para_prefixo = list(adicionados) if adicionados else [cargo_para_nome]
+    if cargo_para_nome not in nomes_para_prefixo:
+        nomes_para_prefixo.append(cargo_para_nome)
+    cargo_do_prefixo = _cargo_mais_alto_entre(nomes_para_prefixo) or cargo_para_nome
     try:
         nick_atual = membro.nick or membro.display_name or membro.name
-        novo_nick = aplicar_prefixo(nick_atual, cargo_para_nome)
+        novo_nick = aplicar_prefixo(nick_atual, cargo_do_prefixo)
         if novo_nick and novo_nick != membro.nick:
             await membro.edit(nick=novo_nick[:32], reason="Prefixo após promoção")
     except discord.Forbidden:
@@ -926,7 +1077,6 @@ async def aplicar_promocao_cargos(
     except discord.HTTPException as erro:
         logger.warning("Falha ao editar nick na promoção de %s: %s", membro.id, erro)
 
-    # Log de mudança de cargo (somente adições)
     try:
         await log_mudanca_cargo(
             guilda,
@@ -939,8 +1089,17 @@ async def aplicar_promocao_cargos(
         logger.warning("Falha ao logar mudança de cargo na promoção: %s", erro)
 
     if adicionados:
+        lista = ", ".join(f"`{nome}`" for nome in adicionados)
         return (
             True,
-            f"Cargo `{cargo_para_nome}` adicionado (origem `{cargo_de_nome}` mantida).",
+            (
+                f"Cargos adicionados: {lista} "
+                f"(origem `{cargo_de_nome}` mantida)."
+            ),
+            adicionados,
         )
-    return True, f"Membro já possuía `{cargo_para_nome}`; nenhum cargo removido."
+    return (
+        True,
+        f"Membro já possuía `{cargo_para_nome}`; nenhum cargo removido.",
+        [],
+    )

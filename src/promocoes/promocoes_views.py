@@ -483,7 +483,7 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
             alvo = guilda.get_member(registro.discord_id) if guilda else None
 
             if aprovada and alvo is not None:
-                ok, detalhe = await aplicar_promocao_cargos(
+                ok, detalhe, cargos_concedidos = await aplicar_promocao_cargos(
                     alvo,
                     registro.cargo_de,
                     registro.cargo_para,
@@ -502,12 +502,20 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                         titulo="Aprovado no sistema, falha nos cargos",
                         linhas=[detalhe, "Ajuste os cargos manualmente se preciso."],
                     )
+                # Histórico: destino principal + todos os cargos concedidos
+                if cargos_concedidos:
+                    lista_cargos = ", ".join(cargos_concedidos)
+                    motivo_historico = (
+                        f"Aprovado pela diretoria. Cargos: {lista_cargos}"
+                    )
+                else:
+                    motivo_historico = "Aprovado pela diretoria"
                 await registrar_historico(
                     discord_id=registro.discord_id,
                     tipo="PROMOCAO",
                     cargo_de=registro.cargo_de,
                     cargo_para=registro.cargo_para,
-                    motivo="Aprovado pela diretoria",
+                    motivo=motivo_historico,
                     executado_por=membro.id,
                     solicitacao_id=registro.id,
                 )
@@ -519,6 +527,7 @@ class ViewDecisaoPromocao(LoggingViewMixin, discord.ui.LayoutView):
                     cargo_para=registro.cargo_para,
                     staff=membro,
                     solicitacao_id=registro.id,
+                    cargos_concedidos=cargos_concedidos,
                 )
             else:
                 await registrar_historico(
@@ -846,6 +855,7 @@ async def _postar_resultado_publico(
     cargo_para: str,
     staff: discord.Member,
     solicitacao_id: int,
+    cargos_concedidos: list[str] | None = None,
 ) -> None:
     """
     Publica o resultado em um único canal:
@@ -901,6 +911,9 @@ async def _postar_resultado_publico(
         f"> - **👮 Responsável pela {'aprovação' if aprovada else 'reprovação'}:** "
         f"{staff.mention}"
     )
+    if aprovada and cargos_concedidos:
+        lista_cargos = ", ".join(f"`{nome}`" for nome in cargos_concedidos)
+        corpo += f"\n> - **🎁 Cargos concedidos:** {lista_cargos}"
 
     from datetime import (
         datetime,
