@@ -60,7 +60,11 @@ from src.punicoes.punicoes_panel import (
 )
 from src.punicoes.punicoes_service import executar_exoneracao
 from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
-from src.utils.formatacao import formatar_dinheiro, formatar_hms
+from src.utils.formatacao import (
+    formatar_dinheiro,
+    formatar_hms,
+    parsear_tempo_para_segundos,
+)
 from src.utils.mensagens import (
     editar_mensagem_original,
     responder_aviso,
@@ -312,19 +316,28 @@ async def _t_rec_feito(membro):
 async def _t_plantao(membro, estado):
     online = bool(estado and estado.toggle_ligado)
     saldo = estado.saldo_moedas if estado else 0
-    segs = estado.segundos_acumulados if estado else 0
+    segundos_acumulados_moeda = estado.segundos_acumulados if estado else 0
     total = await tempo_total_segundos_plantao(membro.id)
+    # Mesma métrica do Resgate grátis / ranking tempo real (ciclo semanal).
+    from src.cursos.cursos_service import segundos_plantao_ciclo_atual
+
+    segundos_no_ciclo = await segundos_plantao_ciclo_atual(
+        membro.id,
+        guild=None,
+    )
     cotacao = cotacao_moeda_do_membro(membro)
     valor_reais = formatar_dinheiro(saldo * cotacao)
 
     if online and estado and estado.em_call_valida and estado.call_entrada_em:
-        ciclo = int(
+        segundos_na_call = int(
             (
                 datetime.now(timezone.utc) - garantir_aware(estado.call_entrada_em)
             ).total_seconds()
         )
         nome = NOMES_CANAIS_PLANTAO.get(estado.canal_atual_id, "?")
-        status = f"✅ `em serviço` · call `{formatar_hms(ciclo)}` · `{nome}`"
+        status = (
+            f"✅ `em serviço` · call `{formatar_hms(segundos_na_call)}` · `{nome}`"
+        )
     elif online:
         status = "✅ `em serviço` · _aguardando call_"
     else:
@@ -337,8 +350,17 @@ async def _t_plantao(membro, estado):
             _secao_bloco("📌", "Status"),
             _linha_bloco("🥼", "Situação", status),
             _linha_bloco("💰", "Moedas", f"`{saldo}` ({valor_reais})"),
-            _linha_bloco("⏳", "Ciclo (segundos)", f"`{segs}`"),
+            _linha_bloco(
+                "⏳",
+                "Tempo no ciclo",
+                f"`{formatar_hms(segundos_no_ciclo)}`",
+            ),
             _linha_bloco("⏱️", "Total (histórico)", f"`{formatar_hms(total)}`"),
+            _linha_bloco(
+                "🪙",
+                "Acumulado (moeda)",
+                f"`{int(segundos_acumulados_moeda or 0)}s`",
+            ),
         ]
     )
 
@@ -1522,9 +1544,10 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
         max_length=10,
     )
     valor = discord.ui.TextInput(
-        label="Horas (ex: 2.5 ou -1)",
+        label="Tempo (05:02 | 00:15 | 02:23:08 | 03)",
         required=True,
-        max_length=12,
+        max_length=16,
+        placeholder="Ex: 05:02  ou  -00:30  ou  02:23:08",
     )
     motivo = discord.ui.TextInput(
         label="Motivo",
@@ -1551,17 +1574,19 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
             )
             return
         modo = (self.modo.value or "DELTA").strip().upper()
-        bruto = (self.valor.value or "").strip().replace(",", ".")
         try:
-            horas = float(bruto)
-        except ValueError:
+            segundos = parsear_tempo_para_segundos(self.valor.value or "")
+        except ValueError as erro_valor:
             await responder_erro(
                 i,
                 titulo="Valor inválido",
-                linhas=["Use número de horas, ex: `2.5` ou `-1`."],
+                linhas=[
+                    str(erro_valor),
+                    "Exemplos: `05:02` (5h2m), `00:15` (15m), "
+                    "`02:23:08`, `03` (3s). Em DELTA use `-00:30`.",
+                ],
             )
             return
-        segundos = int(round(horas * 3600))
         await i.response.defer(ephemeral=True)
         try:
             if modo.startswith("ABS"):
@@ -1581,19 +1606,32 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
         except ValueError as erro_valor:
             await responder_erro(i, titulo="Recusado", linhas=[str(erro_valor)])
             return
+        from src.cursos.cursos_service import segundos_plantao_ciclo_atual
+
+        segundos_no_ciclo = await segundos_plantao_ciclo_atual(
+            self.alvo.id,
+            guild=None,
+        )
         await registrar_auditoria_admin(
             i.guild,
             executor=i.user,
             alvo=self.alvo,
             acao="AJUSTAR_HORAS",
-            detalhes=f"{antes}->{depois}",
+            detalhes=(
+                f"{antes}->{depois}; "
+                f"ciclo={segundos_no_ciclo}"
+            ),
             cor=discord.Color.green(),
         )
         await _abrir_ficha(
             i,
             self.alvo,
             bloco=self.bloco,
-            status=(f"Horas `{formatar_hms(antes)}` → `{formatar_hms(depois)}`"),
+            status=(
+                f"Histórico `{formatar_hms(antes)}` → "
+                f"`{formatar_hms(depois)}` · "
+                f"Ciclo `{formatar_hms(segundos_no_ciclo)}`"
+            ),
         )
 
 

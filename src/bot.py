@@ -83,7 +83,7 @@ from src.utils.deploy_logger import (
     separador,
     sucesso,
 )
-from src.utils.error_handling import enviar_erro_para_log_erros
+from src.utils.error_handling import capturar_erro_e_logar
 from src.utils.log_container import LogContainerView
 from src.utils.mensagens import (
     COR_AVISO,
@@ -345,25 +345,28 @@ class CmsValleyBot(commands.Bot):
         """
         Recebe qualquer erro que escapou de um comando de barra.
 
-        Reaproveita `enviar_erro_para_log_erros`, que ja monta o traceback e
-        ja tem protecao contra falha no proprio envio do log. Antes, este
-        handler mandava texto puro direto no canal e, se esse envio falhasse,
-        o erro original se perdia sem deixar rastro.
+        Se o Discord embrulhou a causa em CommandInvokeError, loga a causa
+        original (traceback real). Também tenta avisar quem usou o comando.
         """
         nome_do_comando = "?"
         if interacao.command is not None:
             nome_do_comando = interacao.command.name
 
+        erro_real: Exception = erro_do_comando
+        if isinstance(
+            erro_do_comando,
+            discord.app_commands.CommandInvokeError,
+        ) and erro_do_comando.original is not None:
+            erro_real = erro_do_comando.original
+
         try:
-            await enviar_erro_para_log_erros(
-                interacao.guild,
-                titulo="Erro em Slash Command",
-                erro=erro_do_comando,
+            await capturar_erro_e_logar(
+                erro_real,
                 contexto=f"/{nome_do_comando}",
-                usuario=interacao.user,
+                interacao=interacao,
+                avisar_o_membro=True,
             )
         except Exception:
-            # Se nem o log conseguiu ser enviado, ao menos o console registra.
             registrador.exception(
                 "Falha ao registrar no Discord o erro do comando /%s",
                 nome_do_comando,

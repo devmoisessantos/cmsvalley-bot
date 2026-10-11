@@ -56,6 +56,68 @@ def formatar_hms(segundos: int) -> str:
     return f"{horas:02d}:{minutos:02d}:{segundos_restantes:02d}"
 
 
+def parsear_tempo_para_segundos(texto: str) -> int:
+    """
+    Converte texto de duração em segundos totais.
+
+    Formatos aceitos (opcional sinal + ou - na frente):
+    - ``03`` → 3 segundos
+    - ``00:15`` → 0 horas e 15 minutos
+    - ``05:02`` → 5 horas e 2 minutos
+    - ``02:23:08`` → 2 horas, 23 minutos e 8 segundos
+
+    Dois campos são sempre horas:minutos (nunca minutos:segundos).
+    Minutos e segundos, quando existem, precisam estar entre 0 e 59.
+    """
+    bruto = (texto or "").strip()
+    if not bruto:
+        raise ValueError("Informe um tempo, ex: `05:02` ou `02:23:08`.")
+
+    negativo = False
+    if bruto.startswith("-"):
+        negativo = True
+        bruto = bruto[1:].strip()
+    elif bruto.startswith("+"):
+        bruto = bruto[1:].strip()
+
+    if not bruto:
+        raise ValueError("Informe um tempo, ex: `05:02` ou `02:23:08`.")
+
+    partes = bruto.split(":")
+    if len(partes) > 3:
+        raise ValueError(
+            "Use `SS`, `HH:MM` ou `HH:MM:SS` (ex: `03`, `05:02`, `02:23:08`)."
+        )
+
+    numeros: list[int] = []
+    for parte in partes:
+        parte_limpa = parte.strip()
+        if not parte_limpa.isdigit():
+            raise ValueError(
+                "Use só números e `:`. Ex: `03`, `05:02`, `02:23:08`."
+            )
+        numeros.append(int(parte_limpa))
+
+    if len(numeros) == 1:
+        total = numeros[0]
+    elif len(numeros) == 2:
+        horas, minutos = numeros
+        if minutos > 59:
+            raise ValueError("Minutos precisam estar entre 0 e 59.")
+        total = horas * 3600 + minutos * 60
+    else:
+        horas, minutos, segundos = numeros
+        if minutos > 59:
+            raise ValueError("Minutos precisam estar entre 0 e 59.")
+        if segundos > 59:
+            raise ValueError("Segundos precisam estar entre 0 e 59.")
+        total = horas * 3600 + minutos * 60 + segundos
+
+    if negativo:
+        return -total
+    return total
+
+
 def formatar_dinheiro(valor: int) -> str:
     """
     Formata número no padrão brasileiro com cifrão.

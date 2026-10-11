@@ -44,7 +44,7 @@ from src.plantao.carteira_service import (
 )
 from src.plantao.plantao_logger import registrar_evento_plantao
 from src.utils.error_handling import capturar_erro_e_logar
-from src.utils.formatacao import formatar_dinheiro, formatar_reais
+from src.utils.formatacao import formatar_dinheiro, formatar_hms, formatar_reais
 
 
 def garantir_aware(data_e_hora: datetime) -> datetime:
@@ -263,6 +263,8 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
         id_fivem_atual = estado.id_fivem
         saldo_atual = estado.saldo_moedas
 
+    tempo_total_segundos = await calcular_segundos_historico_fechado(membro.id)
+
     await registrar_evento_plantao(
         membro.guild,
         membro.id,
@@ -271,6 +273,8 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
         campos_extra={
             "Saldo Atual": f"{saldo_atual} moedas",
             "Já Conectou em Call": "Sim" if canal_atual is not None else "Não",
+            "Tempo no Ciclo": formatar_hms(0),
+            "Tempo Total": formatar_hms(tempo_total_segundos),
         },
     )
     if canal_atual is not None:
@@ -282,7 +286,10 @@ async def ligar_servico(membro: discord.Member, id_fivem: str) -> str:
             canal_id=canal_atual.id,
         )
 
-    return "✅ Você entrou em serviço! Conecte-se a uma das calls disponíveis para começar a contar tempo."
+    return (
+        "✅ Você entrou em serviço! Conecte-se a uma das calls "
+        "disponíveis para começar a contar tempo."
+    )
 
 
 async def desligar_servico(membro: discord.Member) -> str:
@@ -309,6 +316,13 @@ async def desligar_servico(membro: discord.Member) -> str:
                 motivo="Encerramento do plantão (saiu do serviço)",
             )
 
+        # Ainda com o toggle ligado: soma logs desde o último TOGGLE_ON
+        # (inclui o trecho que acabou de fechar em _finalizar_periodo_em_call).
+        tempo_ciclo_segundos = await calcular_segundos_plantao_atual(
+            membro.id,
+            estado,
+        )
+
         estado.toggle_ligado = False
         estado.ocioso_desde = None
         estado.lembrete_1_enviado = False
@@ -317,6 +331,8 @@ async def desligar_servico(membro: discord.Member) -> str:
         await session.commit()
         saldo_final = estado.saldo_moedas
         id_fivem_atual = estado.id_fivem
+
+    tempo_total_segundos = await calcular_segundos_historico_fechado(membro.id)
 
     if estava_ocioso_desde is not None:
         duracao = int(
@@ -343,7 +359,9 @@ async def desligar_servico(membro: discord.Member) -> str:
             "Saldo Final": (
                 f"{saldo_final} moedas "
                 f"({formatar_dinheiro(saldo_final * cotacao)})"
-            )
+            ),
+            "Tempo no Ciclo": formatar_hms(tempo_ciclo_segundos),
+            "Tempo Total": formatar_hms(tempo_total_segundos),
         },
     )
 
