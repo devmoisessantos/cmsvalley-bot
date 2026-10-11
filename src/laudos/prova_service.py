@@ -342,6 +342,66 @@ async def obter_resumo_prova_consulta(
         )
 
 
+LIMITE_TEXTO_CARD_RESULTADO = 3800
+
+
+def _partir_textos_em_cards(
+    titulo: str,
+    blocos: list[str],
+) -> list[str]:
+    """
+    Empilha blocos de texto em cards de até ~3800 caracteres.
+
+    O título entra só no primeiro card de cada série. Se um bloco sozinho
+    passar do limite, é cortado com reticências.
+    """
+    if not blocos:
+        return []
+
+    cards: list[str] = []
+    atual = titulo
+    for bloco in blocos:
+        bloco_limpo = bloco.strip()
+        if not bloco_limpo:
+            continue
+        if len(bloco_limpo) > LIMITE_TEXTO_CARD_RESULTADO - 50:
+            bloco_limpo = (
+                bloco_limpo[: LIMITE_TEXTO_CARD_RESULTADO - 60] + "…"
+            )
+
+        candidato = (
+            atual + chr(10) + chr(10) + bloco_limpo if atual else bloco_limpo
+        )
+        if len(candidato) <= LIMITE_TEXTO_CARD_RESULTADO:
+            atual = candidato
+            continue
+
+        if atual.strip():
+            cards.append(atual.strip())
+        atual = titulo + chr(10) + chr(10) + bloco_limpo
+
+    if atual.strip():
+        cards.append(atual.strip())
+    return cards
+
+
+async def _enviar_cards_resultado(
+    canal: discord.abc.Messageable,
+    textos: list[str],
+    cor: discord.Color,
+) -> None:
+    """Envia cada texto como um card Components V2 na cor indicada."""
+    for texto in textos:
+        layout = discord.ui.LayoutView(timeout=None)
+        layout.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(texto),
+                accent_color=cor,
+            )
+        )
+        await canal.send(view=layout)
+
+
 async def publicar_resultado_prova(
     *,
     guild: discord.Guild,
@@ -350,11 +410,12 @@ async def publicar_resultado_prova(
     parecer_sugerido: str,
 ) -> discord.Message | None:
     """
-    Publica o resultado no canal da equipe em mensagens curtas.
+    Publica o resultado no canal da equipe.
 
-    O Discord limita o texto displayable a 4000 caracteres por mensagem.
-    Por isso o cabeçalho vai sozinho e cada pergunta sai em um card
-    separado: verde se acertou, vermelho se errou.
+    Ordem:
+      1. Cabeçalho (resumo)
+      2. Card(s) verdes — perguntas corretas (empilha se passar de ~4000)
+      3. Card(s) vermelhos — perguntas erradas (mesmo critério)
     """
     canal_id = CANAIS.get("CANAL_RESULTADO_AVALIACAO") or 0
     canal = guild.get_channel(int(canal_id)) if canal_id else None
@@ -387,16 +448,17 @@ async def publicar_resultado_prova(
         paciente.display_avatar.url if paciente is not None else None
     )
 
+    nl = chr(10)
     linhas_cabecalho = (
         f"- **Paciente:** <@{consulta.discord_id_paciente}> "
-        f"(`{consulta.discord_id_paciente}`)\n"
-        f"- **Psicólogo:** <@{consulta.discord_id_psicologo}>\n"
-        f"- **Consulta:** `#{consulta.id}`\n"
-        f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
-        f"(`{percentual}%`)\n"
-        f"- **Perguntas erradas:** {texto_erros_cabecalho}\n"
-        f"- **Parecer sugerido:** `{parecer_sugerido}`\n"
-        f"- **Status:** {status_emoji}"
+        f"(`{consulta.discord_id_paciente}`)" + nl
+        + f"- **Psicólogo:** <@{consulta.discord_id_psicologo}>" + nl
+        + f"- **Consulta:** `#{consulta.id}`" + nl
+        + f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
+        f"(`{percentual}%`)" + nl
+        + f"- **Perguntas erradas:** {texto_erros_cabecalho}" + nl
+        + f"- **Parecer sugerido:** `{parecer_sugerido}`" + nl
+        + f"- **Status:** {status_emoji}"
     )
 
     componentes_cabeca: list = [
@@ -426,7 +488,9 @@ async def publicar_resultado_prova(
     )
     mensagem_principal = await canal.send(view=layout_cabeca)
 
-    # Uma mensagem por pergunta: evita estourar o limite de 4000.
+    blocos_corretas: list[str] = []
+    blocos_erradas: list[str] = []
+
     for numero in range(1, TOTAL_PERGUNTAS_PORTE + 1):
         pergunta = obter_pergunta(numero)
         resposta = mapa.get(numero)
@@ -434,43 +498,62 @@ async def publicar_resultado_prova(
             continue
 
         if resposta.correta:
-            # Só verde: escolha correta + feedback de acerto
-            texto = (
-                f"### ✅ Pergunta {numero} — correta\n"
-                f"{pergunta.enunciado}\n"
-                f"**Resposta:** `{resposta.resposta_escolhida}`) "
-                f"{texto_da_opcao(pergunta, resposta.resposta_escolhida)}\n"
-                f"**Feedback:** {pergunta.feedback_acerto}"
+            bloco = (
+                f"> **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                + f"✔ — **Sua escolha** `{resposta.resposta_escolhida}`: "
+                + texto_da_opcao(pergunta, resposta.resposta_escolhida)
+                + nl + nl
+                + f"**Feedback correta:** {pergunta.feedback_acerto}"
             )
-            cor_card = discord.Color.green()
+            blocos_corretas.append(bloco)
         else:
-            # Vermelho na escolha errada + verde na correta
-            texto = (
-                f"### ❌ Pergunta {numero} — incorreta\n"
-                f"{pergunta.enunciado}\n"
-                f"**✖ Escolheu:** `{resposta.resposta_escolhida}`) "
-                f"{texto_da_opcao(pergunta, resposta.resposta_escolhida)}\n"
-                f"**✔ Correta:** `{pergunta.resposta_correta}`) "
-                f"{texto_da_opcao(pergunta, pergunta.resposta_correta)}\n"
-                f"**Feedback errada:** {pergunta.feedback_erro}\n"
-                f"**Feedback correta:** {pergunta.feedback_acerto}"
+            bloco = (
+                f"> **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
+                + texto_da_opcao(pergunta, resposta.resposta_escolhida)
+                + nl
+                + f"✔ **Correta:** `{pergunta.resposta_correta}`: "
+                + texto_da_opcao(pergunta, pergunta.resposta_correta)
+                + nl + nl
+                + f"**Feedback errada:** {pergunta.feedback_erro}" + nl
+                + f"**Feedback correta:** {pergunta.feedback_acerto}"
             )
-            cor_card = discord.Color.red()
+            blocos_erradas.append(bloco)
 
-        # Garante margem abaixo de 4000
-        if len(texto) > 3800:
-            texto = texto[:3790] + "…"
+    cards_corretas = _partir_textos_em_cards(
+        "# 📝 Perguntas corretas:",
+        blocos_corretas,
+    )
+    cards_erradas = _partir_textos_em_cards(
+        "# 📝 Perguntas erradas:",
+        blocos_erradas,
+    )
 
-        layout_item = discord.ui.LayoutView(timeout=None)
-        layout_item.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(texto),
-                accent_color=cor_card,
-            )
-        )
-        await canal.send(view=layout_item)
+    if not cards_corretas and not cards_erradas:
+        cards_corretas = [
+            "# 📝 Perguntas corretas:" + nl + nl + "_Nenhuma resposta._"
+        ]
+    elif not cards_erradas:
+        cards_erradas = [
+            "# 📝 Perguntas erradas:"
+            + nl
+            + nl
+            + "_Nenhuma — todas corretas._"
+        ]
+    elif not cards_corretas:
+        cards_corretas = [
+            "# 📝 Perguntas corretas:" + nl + nl + "_Nenhuma._"
+        ]
+
+    await _enviar_cards_resultado(
+        canal, cards_corretas, discord.Color.green()
+    )
+    await _enviar_cards_resultado(
+        canal, cards_erradas, discord.Color.red()
+    )
 
     return mensagem_principal
+
 
 
 async def mapa_respostas_da_consulta(consulta_id: int) -> dict[int, str]:

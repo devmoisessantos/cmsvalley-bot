@@ -261,18 +261,36 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
     def _componentes_pergunta_travada(
         self, numero: int, letra_escolhida: str
     ) -> list:
-        """Texto da pergunta + A/B/C desabilitados (escolhida em destaque)."""
+        """
+        Texto da pergunta + A/B/C desabilitados com cor do resultado.
+
+        - Acertou: so a escolhida em verde (success).
+        - Errou: escolhida em vermelho (danger) e a correta em verde.
+        - Demais: cinza (secondary).
+        """
         pergunta = obter_pergunta(numero)
         if pergunta is None:
             return []
 
+        letra_correta = (pergunta.resposta_correta or "").upper()
+        letra_escolhida = (letra_escolhida or "").upper()
+        acertou = letra_escolhida == letra_correta
+
         linha = discord.ui.ActionRow()
         for letra in ("A", "B", "C"):
-            estilo = (
-                discord.ButtonStyle.success
-                if letra == letra_escolhida
-                else discord.ButtonStyle.secondary
-            )
+            if acertou:
+                if letra == letra_escolhida:
+                    estilo = discord.ButtonStyle.success
+                else:
+                    estilo = discord.ButtonStyle.secondary
+            else:
+                if letra == letra_escolhida:
+                    estilo = discord.ButtonStyle.danger
+                elif letra == letra_correta:
+                    estilo = discord.ButtonStyle.success
+                else:
+                    estilo = discord.ButtonStyle.secondary
+
             botao = discord.ui.Button(
                 label=letra,
                 style=estilo,
