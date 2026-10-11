@@ -157,6 +157,8 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
 
     respostas: mapa numero → letra escolhida das perguntas já gravadas
     neste bloco (e só neste bloco).
+
+    aguardando_envio: bloco 2 completo; mostra o botão Enviar avaliação.
     """
 
     def __init__(
@@ -167,6 +169,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
         respostas: dict[int, str],
         guild: discord.Guild | None,
         bloco_concluido: bool = False,
+        aguardando_envio: bool = False,
     ):
         super().__init__(timeout=None)
         self.consulta_id = consulta_id
@@ -174,20 +177,27 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
         self.respostas = dict(respostas)
         self.guild = guild
         self.bloco_concluido = bloco_concluido
+        self.aguardando_envio = aguardando_envio
 
         primeira, ultima = _intervalo_do_bloco(numero_atual)
         numero_bloco = _numero_do_bloco(numero_atual)
+        progresso = ultima if (bloco_concluido or aguardando_envio) else numero_atual
 
         componentes: list = [
             discord.ui.TextDisplay(
                 f"# 📝 Prova de Porte — Bloco {numero_bloco}\n"
-                f"-# {barra_progresso_porte(numero_atual if not bloco_concluido else ultima, TOTAL_PERGUNTAS_PORTE)}"
+                f"-# {barra_progresso_porte(progresso, TOTAL_PERGUNTAS_PORTE)}"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         ]
 
         # Perguntas já respondidas neste bloco (travadas)
-        for numero in range(primeira, numero_atual):
+        if bloco_concluido or aguardando_envio:
+            numeros_travados = range(primeira, ultima + 1)
+        else:
+            numeros_travados = range(primeira, numero_atual)
+
+        for numero in numeros_travados:
             letra = self.respostas.get(numero)
             if letra is None:
                 continue
@@ -195,28 +205,38 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
                 self._componentes_pergunta_travada(numero, letra)
             )
 
-        if bloco_concluido:
-            letra_ultima = self.respostas.get(ultima)
-            if letra_ultima is not None:
-                componentes.extend(
-                    self._componentes_pergunta_travada(ultima, letra_ultima)
+        if aguardando_envio:
+            componentes.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+            )
+            componentes.append(
+                discord.ui.TextDisplay(
+                    "# ✅ Bloco 2 concluído\n"
+                    "Revise se quiser. Clique em **Enviar avaliação** "
+                    "para finalizar."
                 )
+            )
+            linha_enviar = discord.ui.ActionRow()
+            botao_enviar = discord.ui.Button(
+                label="Enviar avaliação",
+                style=discord.ButtonStyle.success,
+                emoji="📨",
+                custom_id=f"laudos:enviar_prova:{consulta_id}",
+            )
+            botao_enviar.callback = self._ao_enviar_avaliacao
+            linha_enviar.add_item(botao_enviar)
+            componentes.append(linha_enviar)
+        elif bloco_concluido:
             componentes.append(
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
             )
             componentes.append(
                 discord.ui.TextDisplay(
                     f"# ✅ Bloco {numero_bloco} concluído\n"
-                    + (
-                        "O próximo bloco foi enviado em uma mensagem nova "
-                        "abaixo."
-                        if numero_bloco == 1
-                        else "Todas as perguntas foram respondidas."
-                    )
+                    "O próximo bloco foi enviado em uma mensagem nova abaixo."
                 )
             )
         else:
-            # Pergunta atual com botões ativos
             componentes.extend(
                 self._componentes_pergunta_ativa(numero_atual)
             )
@@ -227,6 +247,16 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
                 accent_color=discord.Color.blurple(),
             )
         )
+
+    async def _ao_enviar_avaliacao(self, interacao: discord.Interaction):
+        """Finaliza a prova quando o paciente confirma o envio."""
+        await editar_mensagem_original(
+            interacao,
+            view=ViewProvaEnviadaLayout(
+                respostas=self.respostas,
+            ),
+        )
+        await self._concluir_prova(interacao)
 
     def _componentes_pergunta_travada(
         self, numero: int, letra_escolhida: str
@@ -351,17 +381,16 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
-        # Fim da prova (questão 10)
+        # Fim da prova (questão 10) → card com botão Enviar avaliação
         if self.numero_atual >= TOTAL_PERGUNTAS_PORTE:
             view_final = BlocoProvaLayoutView(
                 consulta_id=self.consulta_id,
                 numero_atual=self.numero_atual,
                 respostas=novas_respostas,
                 guild=interacao.guild,
-                bloco_concluido=True,
+                aguardando_envio=True,
             )
             await editar_mensagem_original(interacao, view=view_final)
-            await self._concluir_prova(interacao)
             return
 
         # Continua no mesmo bloco: empilha a próxima
@@ -405,7 +434,6 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
                         erro_pub,
                     )
 
-        # Aviso curto ao paciente (followup, o card 2 já está travado)
         try:
             await interacao.followup.send(
                 content=(
@@ -416,4 +444,22 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
                 ephemeral=True,
             )
         except discord.HTTPException:
-            pass
+            return
+
+
+class ViewProvaEnviadaLayout(LoggingViewMixin, discord.ui.LayoutView):
+    """Card final do bloco 2 após o paciente enviar a avaliação."""
+
+    def __init__(self, *, respostas: dict[int, str]):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# ✅ Avaliação enviada\n"
+                    f"-# {barra_progresso_porte(TOTAL_PERGUNTAS_PORTE, TOTAL_PERGUNTAS_PORTE)}\n"
+                    "Suas respostas foram registradas. "
+                    "A equipe de Psicologia recebeu o resultado."
+                ),
+                accent_color=discord.Color.green(),
+            )
+        )

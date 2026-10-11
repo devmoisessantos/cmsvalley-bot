@@ -350,10 +350,11 @@ async def publicar_resultado_prova(
     parecer_sugerido: str,
 ) -> discord.Message | None:
     """
-    Publica no canal da equipe o desempenho no modelo do recrutamento.
+    Publica o resultado no canal da equipe em mensagens curtas.
 
-    Cabeçalho com acertos, lista de erros e, para cada pergunta errada,
-    enunciado, escolha, gabarito e os dois feedbacks.
+    O Discord limita o texto displayable a 4000 caracteres por mensagem.
+    Por isso o cabeçalho vai sozinho e cada pergunta sai em um card
+    separado: verde se acertou, vermelho se errou.
     """
     canal_id = CANAIS.get("CANAL_RESULTADO_AVALIACAO") or 0
     canal = guild.get_channel(int(canal_id)) if canal_id else None
@@ -364,35 +365,14 @@ async def publicar_resultado_prova(
         return None
 
     respostas = await listar_respostas_da_consulta(consulta.id)
-    numeros_errados: list[int] = []
-    detalhes_erros: list[dict] = []
-    for resposta in respostas:
-        if resposta.correta:
-            continue
-        pergunta = obter_pergunta(resposta.numero_pergunta)
-        if pergunta is None:
-            continue
-        numeros_errados.append(resposta.numero_pergunta)
-        detalhes_erros.append(
-            {
-                "numero": resposta.numero_pergunta,
-                "enunciado": pergunta.enunciado,
-                "resposta_dada": (
-                    f"`{resposta.resposta_escolhida}`: "
-                    f"{texto_da_opcao(pergunta, resposta.resposta_escolhida)}"
-                ),
-                "resposta_correta": (
-                    f"`{pergunta.resposta_correta}`: "
-                    f"{texto_da_opcao(pergunta, pergunta.resposta_correta)}"
-                ),
-                "feedback_erro": pergunta.feedback_erro,
-                "feedback_acerto": pergunta.feedback_acerto,
-            }
-        )
+    mapa = {r.numero_pergunta: r for r in respostas}
+    numeros_errados = [
+        r.numero_pergunta for r in respostas if not r.correta
+    ]
 
     percentual = round((acertos / TOTAL_PERGUNTAS_PORTE) * 100, 1)
     apto = parecer_sugerido == "APROVADO"
-    cor = discord.Color.green() if apto else discord.Color.red()
+    cor_geral = discord.Color.green() if apto else discord.Color.red()
     status_emoji = (
         "✅ Apto na prova teórica"
         if apto
@@ -404,9 +384,7 @@ async def publicar_resultado_prova(
 
     paciente = guild.get_member(consulta.discord_id_paciente)
     url_avatar = (
-        paciente.display_avatar.url
-        if paciente is not None
-        else None
+        paciente.display_avatar.url if paciente is not None else None
     )
 
     linhas_cabecalho = (
@@ -421,65 +399,78 @@ async def publicar_resultado_prova(
         f"- **Status:** {status_emoji}"
     )
 
-    componentes: list = [
-        discord.ui.TextDisplay("# 📋 Resultado da Avaliação — Porte\n\n"),
+    componentes_cabeca: list = [
+        discord.ui.TextDisplay("# 📋 Resultado da Avaliação — Porte"),
     ]
     if url_avatar:
-        componentes.append(
+        componentes_cabeca.append(
             discord.ui.Section(
                 linhas_cabecalho,
                 accessory=discord.ui.Thumbnail(url_avatar),
             )
         )
     else:
-        componentes.append(discord.ui.TextDisplay(linhas_cabecalho))
-
-    if detalhes_erros:
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
-        bloco_erros = "# 📝 Perguntas erradas:\n\n"
-        for erro in detalhes_erros:
-            bloco_erros += (
-                f"> **Pergunta {erro['numero']}** ( {erro['enunciado']} )\n"
-                f"✖ — Escolheu {erro['resposta_dada']}\n"
-                f"✔ Correta: {erro['resposta_correta']}\n\n"
-                f"**Feedback errada:** {erro['feedback_erro']}\n"
-                f"**Feedback correta:** {erro['feedback_acerto']}\n\n"
-            )
-            if len(bloco_erros) > 1700:
-                componentes.append(
-                    discord.ui.TextDisplay(bloco_erros.strip())
-                )
-                bloco_erros = ""
-        if bloco_erros.strip():
-            componentes.append(discord.ui.TextDisplay(bloco_erros.strip()))
-    else:
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
-        componentes.append(
-            discord.ui.TextDisplay(
-                "_Nenhum erro — todas as respostas corretas._"
-            )
-        )
+        componentes_cabeca.append(discord.ui.TextDisplay(linhas_cabecalho))
 
     agora = int(datetime.now(timezone.utc).timestamp())
-    componentes.append(
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-    )
-    componentes.append(
+    componentes_cabeca.append(
         discord.ui.TextDisplay(f"-# {guild.name} • <t:{agora}:f>")
     )
 
-    layout = discord.ui.LayoutView(timeout=None)
-    layout.add_item(
+    layout_cabeca = discord.ui.LayoutView(timeout=None)
+    layout_cabeca.add_item(
         discord.ui.Container(
-            *componentes,
-            accent_color=cor,
+            *componentes_cabeca,
+            accent_color=cor_geral,
         )
     )
-    return await canal.send(view=layout)
+    mensagem_principal = await canal.send(view=layout_cabeca)
+
+    # Uma mensagem por pergunta: evita estourar o limite de 4000.
+    for numero in range(1, TOTAL_PERGUNTAS_PORTE + 1):
+        pergunta = obter_pergunta(numero)
+        resposta = mapa.get(numero)
+        if pergunta is None or resposta is None:
+            continue
+
+        if resposta.correta:
+            # Só verde: escolha correta + feedback de acerto
+            texto = (
+                f"### ✅ Pergunta {numero} — correta\n"
+                f"{pergunta.enunciado}\n"
+                f"**Resposta:** `{resposta.resposta_escolhida}`) "
+                f"{texto_da_opcao(pergunta, resposta.resposta_escolhida)}\n"
+                f"**Feedback:** {pergunta.feedback_acerto}"
+            )
+            cor_card = discord.Color.green()
+        else:
+            # Vermelho na escolha errada + verde na correta
+            texto = (
+                f"### ❌ Pergunta {numero} — incorreta\n"
+                f"{pergunta.enunciado}\n"
+                f"**✖ Escolheu:** `{resposta.resposta_escolhida}`) "
+                f"{texto_da_opcao(pergunta, resposta.resposta_escolhida)}\n"
+                f"**✔ Correta:** `{pergunta.resposta_correta}`) "
+                f"{texto_da_opcao(pergunta, pergunta.resposta_correta)}\n"
+                f"**Feedback errada:** {pergunta.feedback_erro}\n"
+                f"**Feedback correta:** {pergunta.feedback_acerto}"
+            )
+            cor_card = discord.Color.red()
+
+        # Garante margem abaixo de 4000
+        if len(texto) > 3800:
+            texto = texto[:3790] + "…"
+
+        layout_item = discord.ui.LayoutView(timeout=None)
+        layout_item.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(texto),
+                accent_color=cor_card,
+            )
+        )
+        await canal.send(view=layout_item)
+
+    return mensagem_principal
 
 
 async def mapa_respostas_da_consulta(consulta_id: int) -> dict[int, str]:
