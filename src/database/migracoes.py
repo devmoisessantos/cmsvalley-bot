@@ -152,8 +152,7 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "área um a um) em repasses_json."
         ),
         comando_sql=(
-            "ALTER TABLE solicitacoes_curso "
-            "ADD COLUMN IF NOT EXISTS repasses_json TEXT"
+            "ALTER TABLE solicitacoes_curso ADD COLUMN IF NOT EXISTS repasses_json TEXT"
         ),
     ),
     Migracao(
@@ -176,16 +175,16 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "(JSON de IDs), para devolvê-los se o recurso for aceito."
         ),
         comando_sql=(
-            "ALTER TABLE punicoes "
-            "ADD COLUMN IF NOT EXISTS cargos_antes_json TEXT"
+            "ALTER TABLE punicoes ADD COLUMN IF NOT EXISTS cargos_antes_json TEXT"
         ),
     ),
     Migracao(
         numero=11,
         descricao=(
-            "Laudos: prova teórica de porte (status e nota na consulta) "
-            "e tabela de respostas da prova."
+            "Laudos: colunas da prova teórica de porte na consulta "
+            "(status, datas, acertos e parecer sugerido)."
         ),
+        # Um único ALTER — asyncpg não executa vários comandos no mesmo execute.
         comando_sql=(
             "ALTER TABLE consultas_laudo "
             "ADD COLUMN IF NOT EXISTS status_prova VARCHAR(20) "
@@ -196,15 +195,27 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "ADD COLUMN IF NOT EXISTS pergunta_atual INTEGER "
             "NOT NULL DEFAULT 0, "
             "ADD COLUMN IF NOT EXISTS acertos_prova INTEGER, "
-            "ADD COLUMN IF NOT EXISTS parecer_sugerido VARCHAR(20); "
-            "CREATE TABLE IF NOT EXISTS respostas_prova_laudo ("
-            "id SERIAL PRIMARY KEY, "
-            "consulta_id INTEGER NOT NULL, "
-            "numero_pergunta INTEGER NOT NULL, "
-            "resposta_escolhida VARCHAR(1) NOT NULL, "
-            "correta BOOLEAN NOT NULL DEFAULT FALSE, "
-            "respondida_em TIMESTAMPTZ NOT NULL DEFAULT NOW()"
-            "); "
+            "ADD COLUMN IF NOT EXISTS parecer_sugerido VARCHAR(20)"
+        ),
+    ),
+    Migracao(
+        numero=12,
+        descricao=("Laudos: tabela de respostas da prova teórica de porte."),
+        comando_sql="""
+CREATE TABLE IF NOT EXISTS respostas_prova_laudo (
+    id SERIAL PRIMARY KEY,
+    consulta_id INTEGER NOT NULL,
+    numero_pergunta INTEGER NOT NULL,
+    resposta_escolhida VARCHAR(1) NOT NULL,
+    correta BOOLEAN NOT NULL DEFAULT FALSE,
+    respondida_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+""",
+    ),
+    Migracao(
+        numero=13,
+        descricao=("Laudos: índice de consulta_id em respostas_prova_laudo."),
+        comando_sql=(
             "CREATE INDEX IF NOT EXISTS "
             "ix_respostas_prova_laudo_consulta_id "
             "ON respostas_prova_laudo (consulta_id)"
