@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import io
 import logging
+from datetime import (
+    datetime,
+    timezone,
+)
 
 import discord
 
+from src.config import (
+    CANAIS,
+    CARGOS,
+    CARGOS_HIERARQUIA,
+)
 from src.laudos.laudos_logger import publicar_laudo_nos_canais
 from src.laudos.laudos_service import (
     buscar_consulta_aberta,
@@ -14,15 +24,21 @@ from src.laudos.laudos_service import (
     iniciar_consulta,
     membro_e_psicologo,
 )
+from src.laudos.perguntas_porte import (
+    TOTAL_PERGUNTAS_PORTE,
+    obter_pergunta,
+    texto_da_opcao,
+)
 from src.laudos.prova_service import (
     liberar_prova_da_consulta,
-    montar_texto_dm_resultado_prova,
+    listar_respostas_da_consulta,
     obter_resumo_prova_consulta,
 )
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
 )
+from src.utils.formatacao import formatar_reais
 from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
@@ -764,6 +780,143 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
 
 
 PRAZO_COMPROVANTE_LAUDO_SEGUNDOS = 600  # 10 minutos
+# Valor cobrado do paciente (documento / DM)
+VALOR_PAGAMENTO_LAUDO_VISITANTE = 350_000
+VALOR_PAGAMENTO_LAUDO_HOSPITAL = 250_000
+# Parte registrada no canal de comprovantes
+REPASSE_LAUDO_VISITANTE = 100_000
+REPASSE_LAUDO_HOSPITAL = 50_000
+
+
+def _paciente_e_do_hospital(paciente: discord.Member | None) -> bool:
+    """True se o membro tem algum cargo da hierarquia hospitalar."""
+    if paciente is None:
+        return False
+    ids_hierarquia = {
+        CARGOS[nome] for nome in CARGOS_HIERARQUIA if nome in CARGOS
+    }
+    return any(cargo.id in ids_hierarquia for cargo in paciente.roles)
+
+
+def _valor_pagamento_laudo(paciente: discord.Member | None) -> int:
+    """350 mil visitante; 250 mil medico / hospital."""
+    if _paciente_e_do_hospital(paciente):
+        return VALOR_PAGAMENTO_LAUDO_HOSPITAL
+    return VALOR_PAGAMENTO_LAUDO_VISITANTE
+
+
+def _valor_repasse_laudo(paciente: discord.Member | None) -> int:
+    """100 mil visitante; 50 mil medico / hospital (canal de comprovante)."""
+    if _paciente_e_do_hospital(paciente):
+        return REPASSE_LAUDO_HOSPITAL
+    return REPASSE_LAUDO_VISITANTE
+
+
+def montar_texto_documento_laudo(
+    *,
+    laudo,
+    valor_pagamento: int | None = None,
+    valor_repasse: int | None = None,
+) -> str:
+    """Cabecalho padrao do laudo / comprovante."""
+    emoji_parecer = (
+        "✅ `APROVADO`" if laudo.parecer == "APROVADO" else "❌ `REPROVADO`"
+    )
+    linhas = [
+        "# 📋 Comprovante de repasse — LAUDO PSICOLÓGICO",
+        "> 📌 **Finalidade:** Avaliação para porte de arma de fogo.",
+        "`👤` **Identificação do Avaliado**",
+        (
+            f"• Nome: <@{laudo.discord_id_paciente}> "
+            f"• FID: `{laudo.id_fivem_paciente or '—'}`"
+        ),
+        (
+            f"- **Consulta:** `#{laudo.consulta_id}` — "
+            f"**Laudo:** `#{laudo.id}`"
+        ),
+        "`🥼` **Psicólogo Responsável**",
+        (
+            f"• Nome: <@{laudo.discord_id_psicologo}> "
+            f"• FID: `{laudo.id_fivem_psicologo or '—'}`"
+        ),
+        f"• Registro Profissional: `{laudo.registro_profissional}`",
+        f"• **Parecer Final:** {emoji_parecer}",
+    ]
+    if valor_pagamento is not None:
+        linhas.append(
+            f"• **Valor do pagamento:** `{formatar_reais(valor_pagamento)}`"
+        )
+    if valor_repasse is not None:
+        linhas.append(
+            f"• **Valor do repasse:** `{formatar_reais(valor_repasse)}`"
+        )
+    return chr(10).join(linhas)
+
+
+async def montar_texto_documento_prova(consulta_id: int) -> str:
+    """Resumo da prova + as 10 perguntas com escolha, gabarito e feedback."""
+    from src.laudos.perguntas_porte import NOTA_MINIMA_PORTE
+
+    respostas = await listar_respostas_da_consulta(consulta_id)
+    if not respostas:
+        return (
+            "# 📋 Resultado da Avaliação — Porte"
+            + chr(10)
+            + "_Prova não realizada nesta consulta._"
+        )
+
+    mapa = {r.numero_pergunta: r for r in respostas}
+    acertos = sum(1 for r in respostas if r.correta)
+    percentual = round((acertos / TOTAL_PERGUNTAS_PORTE) * 100, 1)
+    numeros_errados = [r.numero_pergunta for r in respostas if not r.correta]
+    apto = acertos >= NOTA_MINIMA_PORTE
+    parecer = "APROVADO" if apto else "REPROVADO"
+    status = (
+        "✅ Apto na prova teórica"
+        if apto
+        else "❌ Não apto na prova teórica"
+    )
+    texto_erros = str(numeros_errados) if numeros_errados else "Nenhuma"
+
+    linhas = [
+        "# 📋 Resultado da Avaliação — Porte",
+        (
+            f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
+            f"(`{percentual}%`)"
+        ),
+        f"- **Perguntas erradas:** {texto_erros}",
+        f"- **Parecer sugerido:** `{parecer}`",
+        f"- **Status:** {status}",
+        "---",
+        "# 📝 Perguntas e respostas",
+    ]
+    for numero in range(1, TOTAL_PERGUNTAS_PORTE + 1):
+        pergunta = obter_pergunta(numero)
+        if pergunta is None:
+            continue
+        resposta = mapa.get(numero)
+        if resposta is None:
+            linhas.append(f"### Pergunta {numero}")
+            linhas.append("_Sem resposta registrada._")
+            continue
+        marca = "✔" if resposta.correta else "✖"
+        escolhida = texto_da_opcao(pergunta, resposta.resposta_escolhida)
+        correta = texto_da_opcao(pergunta, pergunta.resposta_correta)
+        feedback = (
+            pergunta.feedback_acerto
+            if resposta.correta
+            else pergunta.feedback_erro
+        )
+        linhas.append(f"### Pergunta {numero}")
+        linhas.append(pergunta.enunciado)
+        linhas.append(
+            f"{marca} Escolheu `{resposta.resposta_escolhida}`: {escolhida}"
+        )
+        linhas.append(
+            f"✔ Correta `{pergunta.resposta_correta}`: {correta}"
+        )
+        linhas.append(f"**Feedback:** {feedback}")
+    return chr(10).join(linhas)
 
 
 async def _enviar_laudo_na_dm_do_paciente(
@@ -772,31 +925,56 @@ async def _enviar_laudo_na_dm_do_paciente(
     laudo,
     paciente: discord.Member | None,
 ) -> None:
-    """Envia na DM do paciente o laudo e o resumo da prova teórica."""
+    """
+    DM com dois cards empilhados:
+    1) documento do laudo (identificacao + parecer + valor do pagamento)
+    2) resultado da prova + as 10 perguntas com feedback
+    """
     if paciente is None:
         return
 
-    acertos, parecer_sugerido, status_prova = await obter_resumo_prova_consulta(
-        laudo.consulta_id
+    valor_pagamento = _valor_pagamento_laudo(paciente)
+    texto_card1 = montar_texto_documento_laudo(
+        laudo=laudo,
+        valor_pagamento=valor_pagamento,
     )
-    texto = montar_texto_dm_resultado_prova(
-        acertos=acertos,
-        parecer_sugerido=parecer_sugerido,
-        status_prova=status_prova,
-        parecer_laudo=laudo.parecer,
-        motivo=laudo.motivo,
+    texto_card2 = await montar_texto_documento_prova(laudo.consulta_id)
+    cor = (
+        discord.Color.green()
+        if laudo.parecer == "APROVADO"
+        else discord.Color.red()
     )
+
     try:
         layout = discord.ui.LayoutView(timeout=None)
-        cor = (
-            discord.Color.green()
-            if laudo.parecer == "APROVADO"
-            else discord.Color.red()
-        )
         layout.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(texto),
+                discord.ui.TextDisplay(texto_card1),
                 accent_color=cor,
+            )
+        )
+        partes_prova: list[str] = []
+        atual = ""
+        for bloco in texto_card2.split(chr(10) + chr(10)):
+            candidato = f"{atual}{chr(10)}{chr(10)}{bloco}" if atual else bloco
+            if len(candidato) > 1800:
+                if atual:
+                    partes_prova.append(atual)
+                atual = bloco
+            else:
+                atual = candidato
+        if atual:
+            partes_prova.append(atual)
+        if not partes_prova:
+            partes_prova = [texto_card2]
+
+        componentes_prova: list = [
+            discord.ui.TextDisplay(parte) for parte in partes_prova
+        ]
+        layout.add_item(
+            discord.ui.Container(
+                *componentes_prova,
+                accent_color=discord.Color.blurple(),
             )
         )
         await paciente.send(view=layout)
@@ -838,6 +1016,15 @@ def _primeiro_anexo_comprovante(
     return None
 
 
+async def _apagar_mensagem_segura(mensagem: discord.Message | None) -> None:
+    if mensagem is None:
+        return
+    try:
+        await mensagem.delete()
+    except (discord.NotFound, discord.HTTPException):
+        return
+
+
 async def _solicitar_comprovante_repasse_laudo(
     *,
     interacao: discord.Interaction,
@@ -845,24 +1032,33 @@ async def _solicitar_comprovante_repasse_laudo(
     paciente: discord.Member | None,
 ) -> None:
     """
-    Pede ao psicólogo o print do repasse (10 min) e reenvia ao canal configurado.
-    """
-    from src.config import CANAIS
+    Pede o print do repasse (10 min), publica no canal e só então apaga o print.
 
+    Valor: 100.000 (visitante) ou 50.000 (membro do hospital).
+    """
     minutos = PRAZO_COMPROVANTE_LAUDO_SEGUNDOS // 60
+    valor_repasse = _valor_repasse_laudo(paciente)
     mencao_paciente = (
         paciente.mention if paciente else f"<@{laudo.discord_id_paciente}>"
     )
+    tipo_paciente = (
+        "membro do hospital"
+        if _paciente_e_do_hospital(paciente)
+        else "visitante"
+    )
 
-    await responder_info(
+    mensagem_pedido = await responder_info(
         interacao,
         titulo="Comprovante de repasse",
         linhas=[
             f"Envie **neste canal** o print do comprovante do repasse "
-            f"referente ao laudo **#{laudo.id}** ({mencao_paciente}).",
+            f"do laudo **#{laudo.id}** ({mencao_paciente}).",
+            f"**Valor esperado:** `{formatar_reais(valor_repasse)}` "
+            f"({tipo_paciente}).",
             "Formatos: **PNG, JPG, WEBP, GIF ou PDF**.",
             f"Prazo: **{minutos} minutos**.",
             "Só conta mensagem **sua** com **anexo válido**.",
+            "O print some **depois** de ser registrado no canal.",
         ],
         delay=None,
     )
@@ -902,6 +1098,7 @@ async def _solicitar_comprovante_repasse_laudo(
     if anexo is None:
         return
 
+    # 1) Baixa os bytes ANTES de apagar qualquer mensagem
     try:
         bytes_do_arquivo = await anexo.read()
     except (discord.HTTPException, OSError) as erro_leitura:
@@ -940,26 +1137,55 @@ async def _solicitar_comprovante_repasse_laudo(
         return
 
     nome_arquivo = anexo.filename or "comprovante_laudo.png"
-    arquivo = discord.File(
-        fp=__import__("io").BytesIO(bytes_do_arquivo),
-        filename=nome_arquivo,
+    texto_card = montar_texto_documento_laudo(
+        laudo=laudo,
+        valor_pagamento=_valor_pagamento_laudo(paciente),
+        valor_repasse=valor_repasse,
     )
-    layout = discord.ui.LayoutView(timeout=None)
-    texto_comprovante = (
-        "# Comprovante de repasse — Laudo\n"
-        f"- **Laudo:** `#{laudo.id}`\n"
-        f"- **Consulta:** `#{laudo.consulta_id}`\n"
-        f"- **Paciente:** {mencao_paciente}\n"
-        f"- **Psicologo:** {interacao.user.mention}\n"
-        f"- **Parecer:** `{laudo.parecer}`"
+    texto_card += (
+        f"\n• **Registrado por:** {interacao.user.mention}"
     )
-    layout.add_item(
-        discord.ui.Container(
-            discord.ui.TextDisplay(texto_comprovante),
-            accent_color=discord.Color.gold(),
+    momento = int(datetime.now(timezone.utc).timestamp())
+
+    buffer_anexo = io.BytesIO(bytes_do_arquivo)
+    buffer_anexo.seek(0)
+    arquivo = discord.File(fp=buffer_anexo, filename=nome_arquivo)
+
+    e_imagem = nome_arquivo.lower().endswith(
+        (".png", ".jpg", ".jpeg", ".webp", ".gif")
+    )
+    componentes_card: list = [
+        discord.ui.TextDisplay(texto_card),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+    ]
+    if e_imagem:
+        componentes_card.append(
+            discord.ui.MediaGallery(
+                discord.MediaGalleryItem(f"attachment://{nome_arquivo}")
+            )
+        )
+    else:
+        try:
+            componentes_card.append(
+                discord.ui.File(f"attachment://{nome_arquivo}")
+            )
+        except (TypeError, AttributeError):
+            pass
+    componentes_card.append(
+        discord.ui.TextDisplay(
+            f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>"
         )
     )
+
+    # 2) Publica no canal de comprovantes
     try:
+        layout = discord.ui.LayoutView(timeout=None)
+        layout.add_item(
+            discord.ui.Container(
+                *componentes_card,
+                accent_color=discord.Color.gold(),
+            )
+        )
         await canal_destino.send(view=layout, file=arquivo)
     except Exception as erro_envio:
         registrador.exception(
@@ -970,15 +1196,23 @@ async def _solicitar_comprovante_repasse_laudo(
         await responder_erro(
             interacao,
             titulo="Não enviei o comprovante",
-            linhas=["O arquivo foi recebido, mas a publicação no canal falhou."],
+            linhas=[
+                "O arquivo foi lido, mas a publicação no canal falhou. "
+                "O print **não** foi apagado.",
+            ],
         )
         return
+
+    # 3) Só depois de registrado: apaga o print e o pedido
+    await _apagar_mensagem_segura(mensagem_comprovante)
+    await _apagar_mensagem_segura(mensagem_pedido)
 
     await responder_sucesso(
         interacao,
         titulo="Comprovante registrado",
         linhas=[
-            f"Comprovante do laudo **#{laudo.id}** enviado ao canal de repasses.",
+            f"Comprovante do laudo **#{laudo.id}** enviado ao canal de "
+            f"repasses (`{formatar_reais(valor_repasse)}`).",
         ],
         delay=20,
     )

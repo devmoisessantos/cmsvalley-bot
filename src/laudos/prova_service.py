@@ -350,9 +350,10 @@ async def publicar_resultado_prova(
     parecer_sugerido: str,
 ) -> discord.Message | None:
     """
-    Publica no canal da equipe o desempenho e o feedback de cada erro.
+    Publica no canal da equipe o desempenho no modelo do recrutamento.
 
-    O paciente não recebe gabarito durante a prova; só a equipe vê os erros.
+    Cabeçalho com acertos, lista de erros e, para cada pergunta errada,
+    enunciado, escolha, gabarito e os dois feedbacks.
     """
     canal_id = CANAIS.get("CANAL_RESULTADO_AVALIACAO") or 0
     canal = guild.get_channel(int(canal_id)) if canal_id else None
@@ -363,68 +364,113 @@ async def publicar_resultado_prova(
         return None
 
     respostas = await listar_respostas_da_consulta(consulta.id)
-    linhas_erros: list[str] = []
+    numeros_errados: list[int] = []
+    detalhes_erros: list[dict] = []
     for resposta in respostas:
         if resposta.correta:
             continue
         pergunta = obter_pergunta(resposta.numero_pergunta)
         if pergunta is None:
             continue
-        escolhida = texto_da_opcao(pergunta, resposta.resposta_escolhida)
-        correta = texto_da_opcao(pergunta, pergunta.resposta_correta)
-        linhas_erros.append(
-            f"**Q{resposta.numero_pergunta}** — escolheu "
-            f"`{resposta.resposta_escolhida}`) {escolhida}\n"
-            f"- Correta: `{pergunta.resposta_correta}`) {correta}\n"
-            f"- {pergunta.feedback_erro}"
+        numeros_errados.append(resposta.numero_pergunta)
+        detalhes_erros.append(
+            {
+                "numero": resposta.numero_pergunta,
+                "enunciado": pergunta.enunciado,
+                "resposta_dada": (
+                    f"`{resposta.resposta_escolhida}`: "
+                    f"{texto_da_opcao(pergunta, resposta.resposta_escolhida)}"
+                ),
+                "resposta_correta": (
+                    f"`{pergunta.resposta_correta}`: "
+                    f"{texto_da_opcao(pergunta, pergunta.resposta_correta)}"
+                ),
+                "feedback_erro": pergunta.feedback_erro,
+                "feedback_acerto": pergunta.feedback_acerto,
+            }
         )
 
+    percentual = round((acertos / TOTAL_PERGUNTAS_PORTE) * 100, 1)
     apto = parecer_sugerido == "APROVADO"
     cor = discord.Color.green() if apto else discord.Color.red()
-    titulo_resultado = (
+    status_emoji = (
         "✅ Apto na prova teórica"
         if apto
         else "❌ Não apto na prova teórica"
     )
+    texto_erros_cabecalho = (
+        str(numeros_errados) if numeros_errados else "Nenhuma"
+    )
 
-    corpo = (
+    paciente = guild.get_member(consulta.discord_id_paciente)
+    url_avatar = (
+        paciente.display_avatar.url
+        if paciente is not None
+        else None
+    )
+
+    linhas_cabecalho = (
         f"- **Paciente:** <@{consulta.discord_id_paciente}> "
         f"(`{consulta.discord_id_paciente}`)\n"
         f"- **Psicólogo:** <@{consulta.discord_id_psicologo}>\n"
         f"- **Consulta:** `#{consulta.id}`\n"
-        f"- **Acertos:** `{acertos}/{TOTAL_PERGUNTAS_PORTE}` "
-        f"(mínimo `{NOTA_MINIMA_PORTE}`)\n"
-        f"- **Parecer sugerido:** `{parecer_sugerido}`"
+        f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
+        f"(`{percentual}%`)\n"
+        f"- **Perguntas erradas:** {texto_erros_cabecalho}\n"
+        f"- **Parecer sugerido:** `{parecer_sugerido}`\n"
+        f"- **Status:** {status_emoji}"
     )
 
     componentes: list = [
-        discord.ui.TextDisplay(f"# 🧠 Resultado — Prova de Porte\n{titulo_resultado}"),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
-        discord.ui.TextDisplay(corpo),
+        discord.ui.TextDisplay("# 📋 Resultado da Avaliação — Porte\n\n"),
     ]
+    if url_avatar:
+        componentes.append(
+            discord.ui.Section(
+                linhas_cabecalho,
+                accessory=discord.ui.Thumbnail(url_avatar),
+            )
+        )
+    else:
+        componentes.append(discord.ui.TextDisplay(linhas_cabecalho))
 
-    if linhas_erros:
+    if detalhes_erros:
         componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-        componentes.append(
-            discord.ui.TextDisplay("### Respostas incorretas")
-        )
-        # Discord limita tamanho; empacota em blocos
-        bloco = ""
-        for linha in linhas_erros:
-            candidato = f"{bloco}\n\n{linha}" if bloco else linha
-            if len(candidato) > 1800:
-                componentes.append(discord.ui.TextDisplay(bloco))
-                bloco = linha
-            else:
-                bloco = candidato
-        if bloco:
-            componentes.append(discord.ui.TextDisplay(bloco))
+        bloco_erros = "# 📝 Perguntas erradas:\n\n"
+        for erro in detalhes_erros:
+            bloco_erros += (
+                f"> **Pergunta {erro['numero']}** ( {erro['enunciado']} )\n"
+                f"✖ — Escolheu {erro['resposta_dada']}\n"
+                f"✔ Correta: {erro['resposta_correta']}\n\n"
+                f"**Feedback errada:** {erro['feedback_erro']}\n"
+                f"**Feedback correta:** {erro['feedback_acerto']}\n\n"
+            )
+            if len(bloco_erros) > 1700:
+                componentes.append(
+                    discord.ui.TextDisplay(bloco_erros.strip())
+                )
+                bloco_erros = ""
+        if bloco_erros.strip():
+            componentes.append(discord.ui.TextDisplay(bloco_erros.strip()))
     else:
         componentes.append(
-            discord.ui.TextDisplay("_Nenhum erro — todas as respostas corretas._")
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
+        componentes.append(
+            discord.ui.TextDisplay(
+                "_Nenhum erro — todas as respostas corretas._"
+            )
+        )
+
+    agora = int(datetime.now(timezone.utc).timestamp())
+    componentes.append(
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+    )
+    componentes.append(
+        discord.ui.TextDisplay(f"-# {guild.name} • <t:{agora}:f>")
+    )
 
     layout = discord.ui.LayoutView(timeout=None)
     layout.add_item(
@@ -434,6 +480,15 @@ async def publicar_resultado_prova(
         )
     )
     return await canal.send(view=layout)
+
+
+async def mapa_respostas_da_consulta(consulta_id: int) -> dict[int, str]:
+    """Número da pergunta → letra escolhida (A/B/C)."""
+    respostas = await listar_respostas_da_consulta(consulta_id)
+    mapa: dict[int, str] = {}
+    for resposta in respostas:
+        mapa[resposta.numero_pergunta] = resposta.resposta_escolhida
+    return mapa
 
 
 def montar_texto_dm_resultado_prova(

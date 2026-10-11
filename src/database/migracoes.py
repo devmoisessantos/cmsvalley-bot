@@ -152,7 +152,8 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "área um a um) em repasses_json."
         ),
         comando_sql=(
-            "ALTER TABLE solicitacoes_curso ADD COLUMN IF NOT EXISTS repasses_json TEXT"
+            "ALTER TABLE solicitacoes_curso "
+            "ADD COLUMN IF NOT EXISTS repasses_json TEXT"
         ),
     ),
     Migracao(
@@ -175,7 +176,8 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "(JSON de IDs), para devolvê-los se o recurso for aceito."
         ),
         comando_sql=(
-            "ALTER TABLE punicoes ADD COLUMN IF NOT EXISTS cargos_antes_json TEXT"
+            "ALTER TABLE punicoes "
+            "ADD COLUMN IF NOT EXISTS cargos_antes_json TEXT"
         ),
     ),
     Migracao(
@@ -200,7 +202,9 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
     ),
     Migracao(
         numero=12,
-        descricao=("Laudos: tabela de respostas da prova teórica de porte."),
+        descricao=(
+            "Laudos: tabela de respostas da prova teórica de porte."
+        ),
         comando_sql="""
 CREATE TABLE IF NOT EXISTS respostas_prova_laudo (
     id SERIAL PRIMARY KEY,
@@ -214,7 +218,9 @@ CREATE TABLE IF NOT EXISTS respostas_prova_laudo (
     ),
     Migracao(
         numero=13,
-        descricao=("Laudos: índice de consulta_id em respostas_prova_laudo."),
+        descricao=(
+            "Laudos: índice de consulta_id em respostas_prova_laudo."
+        ),
         comando_sql=(
             "CREATE INDEX IF NOT EXISTS "
             "ix_respostas_prova_laudo_consulta_id "

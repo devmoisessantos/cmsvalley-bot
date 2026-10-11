@@ -161,7 +161,10 @@ _COMANDOS_ESTRUTURA_PROVA_LAUDO = (
         "ALTER TABLE consultas_laudo "
         "ADD COLUMN IF NOT EXISTS pergunta_atual INTEGER DEFAULT 0"
     ),
-    ("ALTER TABLE consultas_laudo ADD COLUMN IF NOT EXISTS acertos_prova INTEGER"),
+    (
+        "ALTER TABLE consultas_laudo "
+        "ADD COLUMN IF NOT EXISTS acertos_prova INTEGER"
+    ),
     (
         "ALTER TABLE consultas_laudo "
         "ADD COLUMN IF NOT EXISTS parecer_sugerido VARCHAR(20)"

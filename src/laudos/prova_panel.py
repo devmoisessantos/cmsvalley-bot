@@ -1,9 +1,11 @@
 """
-Painel do paciente e cards das perguntas da prova de porte.
+Painel do paciente e cards empilhados da prova de porte.
 
-- Painel fixo em CANAL_AVALIACAO_PSICOLOGICA (Iniciar avaliação).
-- Cada pergunta usa botões A/B/C; após a escolha o card avança.
-- Após a 5ª pergunta, um segundo card cobre as questões 6–10.
+Card 1 (questões 1–5): a cada resposta, a pergunta fica travada no card e
+a próxima é acrescentada embaixo — nada é apagado.
+
+Card 2 (questões 6–10): só abre quando o bloco 1 termina, em mensagem nova
+logo abaixo (empilhada).
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ import logging
 
 import discord
 
+from src.database.conexao import async_session
+from src.database.models import ConsultaLaudo
 from src.laudos.perguntas_porte import (
     TAMANHO_BLOCO_PORTE,
     TOTAL_PERGUNTAS_PORTE,
@@ -70,7 +74,7 @@ class PainelProvaLaudoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 f"- **{TOTAL_PERGUNTAS_PORTE} questões** de múltipla escolha "
                 f"(2 blocos de {TAMANHO_BLOCO_PORTE})\n"
                 "- **Uma única tentativa** por consulta\n"
-                "- Não feche a janela no meio da prova\n"
+                "- As perguntas ficam **empilhadas** no mesmo card\n"
                 "- Feedback e gabarito **somente para a equipe** no final\n"
                 f"- Critério: **7/{TOTAL_PERGUNTAS_PORTE}** acertos na prova "
                 "(o laudo final continua a cargo do psicólogo)"
@@ -99,7 +103,7 @@ class PainelProvaLaudoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
     async def _ao_iniciar(self, interacao: discord.Interaction):
-        """Valida liberação e mostra a primeira pergunta em mensagem efêmera."""
+        """Valida liberação e abre o card 1 (questão 1)."""
         try:
             ok, mensagem, consulta = await iniciar_prova_paciente(
                 interacao.user.id
@@ -112,14 +116,15 @@ class PainelProvaLaudoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 )
                 return
 
-            view_pergunta = montar_view_pergunta_porte(
-                numero=1,
+            view_bloco = BlocoProvaLayoutView(
                 consulta_id=consulta.id,
+                numero_atual=1,
+                respostas={},
                 guild=interacao.guild,
             )
             await responder_view(
                 interacao,
-                view_pergunta,
+                view_bloco,
                 ephemeral=True,
             )
         except discord.NotFound:
@@ -135,98 +140,163 @@ class PainelProvaLaudoLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
 
 
-def montar_view_pergunta_porte(
-    *,
-    numero: int,
-    consulta_id: int,
-    guild: discord.Guild | None,
-) -> "PerguntaPorteLayoutView":
-    """Monta o card de uma pergunta da prova de porte."""
-    return PerguntaPorteLayoutView(
-        numero=numero,
-        consulta_id=consulta_id,
-        guild=guild,
-    )
+def _intervalo_do_bloco(numero: int) -> tuple[int, int]:
+    """Retorna (primeira, última) pergunta do bloco que contém `numero`."""
+    if numero <= TAMANHO_BLOCO_PORTE:
+        return 1, TAMANHO_BLOCO_PORTE
+    return TAMANHO_BLOCO_PORTE + 1, TOTAL_PERGUNTAS_PORTE
 
 
-class PerguntaPorteLayoutView(LoggingViewMixin, discord.ui.LayoutView):
-    """Uma pergunta com botões A, B e C."""
+def _numero_do_bloco(numero: int) -> int:
+    return 1 if numero <= TAMANHO_BLOCO_PORTE else 2
+
+
+class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
+    """
+    Um card de bloco: perguntas já respondidas empilhadas + a atual ativa.
+
+    respostas: mapa numero → letra escolhida das perguntas já gravadas
+    neste bloco (e só neste bloco).
+    """
 
     def __init__(
         self,
         *,
-        numero: int,
         consulta_id: int,
+        numero_atual: int,
+        respostas: dict[int, str],
         guild: discord.Guild | None,
+        bloco_concluido: bool = False,
     ):
         super().__init__(timeout=None)
-        self.numero = numero
         self.consulta_id = consulta_id
+        self.numero_atual = numero_atual
+        self.respostas = dict(respostas)
         self.guild = guild
+        self.bloco_concluido = bloco_concluido
 
-        pergunta = obter_pergunta(numero)
-        if pergunta is None:
-            self.add_item(
-                discord.ui.Container(
-                    discord.ui.TextDisplay("Pergunta não encontrada."),
-                    accent_color=discord.Color.red(),
+        primeira, ultima = _intervalo_do_bloco(numero_atual)
+        numero_bloco = _numero_do_bloco(numero_atual)
+
+        componentes: list = [
+            discord.ui.TextDisplay(
+                f"# 📝 Prova de Porte — Bloco {numero_bloco}\n"
+                f"-# {barra_progresso_porte(numero_atual if not bloco_concluido else ultima, TOTAL_PERGUNTAS_PORTE)}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        ]
+
+        # Perguntas já respondidas neste bloco (travadas)
+        for numero in range(primeira, numero_atual):
+            letra = self.respostas.get(numero)
+            if letra is None:
+                continue
+            componentes.extend(
+                self._componentes_pergunta_travada(numero, letra)
+            )
+
+        if bloco_concluido:
+            letra_ultima = self.respostas.get(ultima)
+            if letra_ultima is not None:
+                componentes.extend(
+                    self._componentes_pergunta_travada(ultima, letra_ultima)
+                )
+            componentes.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+            )
+            componentes.append(
+                discord.ui.TextDisplay(
+                    f"# ✅ Bloco {numero_bloco} concluído\n"
+                    + (
+                        "O próximo bloco foi enviado em uma mensagem nova "
+                        "abaixo."
+                        if numero_bloco == 1
+                        else "Todas as perguntas foram respondidas."
+                    )
                 )
             )
-            return
-
-        total_no_bloco = TAMANHO_BLOCO_PORTE
-        if numero <= TAMANHO_BLOCO_PORTE:
-            indice_no_bloco = numero
-            titulo_bloco = (
-                f"Bloco 1 · Questão {indice_no_bloco}/{total_no_bloco}"
-            )
         else:
-            indice_no_bloco = numero - TAMANHO_BLOCO_PORTE
-            titulo_bloco = (
-                f"Bloco 2 · Questão {indice_no_bloco}/{total_no_bloco}"
+            # Pergunta atual com botões ativos
+            componentes.extend(
+                self._componentes_pergunta_ativa(numero_atual)
             )
 
-        linha_botoes = discord.ui.ActionRow()
-        for letra, texto in (
-            ("A", pergunta.opcao_a),
-            ("B", pergunta.opcao_b),
-            ("C", pergunta.opcao_c),
-        ):
+        self.add_item(
+            discord.ui.Container(
+                *componentes,
+                accent_color=discord.Color.blurple(),
+            )
+        )
+
+    def _componentes_pergunta_travada(
+        self, numero: int, letra_escolhida: str
+    ) -> list:
+        """Texto da pergunta + A/B/C desabilitados (escolhida em destaque)."""
+        pergunta = obter_pergunta(numero)
+        if pergunta is None:
+            return []
+
+        linha = discord.ui.ActionRow()
+        for letra in ("A", "B", "C"):
+            estilo = (
+                discord.ButtonStyle.success
+                if letra == letra_escolhida
+                else discord.ButtonStyle.secondary
+            )
+            botao = discord.ui.Button(
+                label=letra,
+                style=estilo,
+                disabled=True,
+                custom_id=(
+                    f"laudos:prova_lock:{self.consulta_id}:"
+                    f"{numero}:{letra}"
+                ),
+            )
+            linha.add_item(botao)
+
+        enunciado = (
+            f"### Questão {numero}/{TOTAL_PERGUNTAS_PORTE}\n"
+            f"{pergunta.enunciado}\n"
+            f"**A)** {pergunta.opcao_a}\n"
+            f"**B)** {pergunta.opcao_b}\n"
+            f"**C)** {pergunta.opcao_c}\n"
+            f"-# Resposta: **{letra_escolhida}**"
+        )
+        return [
+            discord.ui.TextDisplay(enunciado),
+            linha,
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        ]
+
+    def _componentes_pergunta_ativa(self, numero: int) -> list:
+        """Pergunta corrente com botões A/B/C clicáveis."""
+        pergunta = obter_pergunta(numero)
+        if pergunta is None:
+            return [discord.ui.TextDisplay("Pergunta não encontrada.")]
+
+        linha = discord.ui.ActionRow()
+        for letra in ("A", "B", "C"):
             botao = discord.ui.Button(
                 label=letra,
                 style=discord.ButtonStyle.primary,
                 custom_id=(
-                    f"laudos:prova:{consulta_id}:{numero}:{letra}"
+                    f"laudos:prova:{self.consulta_id}:{numero}:{letra}"
                 ),
             )
             botao.callback = self._fazer_callback(letra)
-            linha_botoes.add_item(botao)
+            linha.add_item(botao)
 
         enunciado = (
-            f"**{titulo_bloco}**\n\n"
-            f"{pergunta.enunciado}\n\n"
+            f"### Questão {numero}/{TOTAL_PERGUNTAS_PORTE}\n"
+            f"{pergunta.enunciado}\n"
             f"**A)** {pergunta.opcao_a}\n"
             f"**B)** {pergunta.opcao_b}\n"
             f"**C)** {pergunta.opcao_c}"
         )
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"# 📝 Prova de Porte — {numero}/"
-                    f"{TOTAL_PERGUNTAS_PORTE}"
-                ),
-                discord.ui.TextDisplay(
-                    f"-# {barra_progresso_porte(numero, TOTAL_PERGUNTAS_PORTE)}"
-                ),
-                discord.ui.Separator(
-                    spacing=discord.SeparatorSpacing.small
-                ),
-                discord.ui.TextDisplay(enunciado),
-                linha_botoes,
-                accent_color=discord.Color.blurple(),
-            )
-        )
+        return [
+            discord.ui.TextDisplay(enunciado),
+            linha,
+        ]
 
     def _fazer_callback(self, letra: str):
         async def _ao_escolher(interacao: discord.Interaction):
@@ -239,11 +309,11 @@ class PerguntaPorteLayoutView(LoggingViewMixin, discord.ui.LayoutView):
         interacao: discord.Interaction,
         letra: str,
     ):
-        """Grava a escolha e avança o card (ou abre o segundo bloco)."""
+        """Grava a escolha e reempilha o card com a próxima pergunta."""
         ok, mensagem, _correta = await gravar_resposta_prova(
             consulta_id=self.consulta_id,
             discord_id_paciente=interacao.user.id,
-            numero_pergunta=self.numero,
+            numero_pergunta=self.numero_atual,
             letra_escolhida=letra,
         )
         if not ok:
@@ -254,41 +324,57 @@ class PerguntaPorteLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
-        if self.numero == TAMANHO_BLOCO_PORTE:
-            # Fim do bloco 1: este card vira aviso; o bloco 2 vem em mensagem nova
-            view_transicao = BlocoConcluidoLayoutView(
-                bloco=1,
-                letra_escolhida=letra,
-                numero=self.numero,
-            )
-            await editar_mensagem_original(interacao, view=view_transicao)
-            view_proxima = montar_view_pergunta_porte(
-                numero=self.numero + 1,
+        novas_respostas = dict(self.respostas)
+        novas_respostas[self.numero_atual] = letra.upper()
+        primeira, ultima = _intervalo_do_bloco(self.numero_atual)
+
+        # Fim do bloco 1 → trava card 1 e abre card 2 embaixo
+        if self.numero_atual == TAMANHO_BLOCO_PORTE:
+            view_bloco1 = BlocoProvaLayoutView(
                 consulta_id=self.consulta_id,
+                numero_atual=self.numero_atual,
+                respostas=novas_respostas,
+                guild=interacao.guild,
+                bloco_concluido=True,
+            )
+            await editar_mensagem_original(interacao, view=view_bloco1)
+
+            view_bloco2 = BlocoProvaLayoutView(
+                consulta_id=self.consulta_id,
+                numero_atual=self.numero_atual + 1,
+                respostas={},
                 guild=interacao.guild,
             )
             await interacao.followup.send(
-                view=view_proxima,
+                view=view_bloco2,
                 ephemeral=True,
             )
             return
 
-        if self.numero >= TOTAL_PERGUNTAS_PORTE:
+        # Fim da prova (questão 10)
+        if self.numero_atual >= TOTAL_PERGUNTAS_PORTE:
+            view_final = BlocoProvaLayoutView(
+                consulta_id=self.consulta_id,
+                numero_atual=self.numero_atual,
+                respostas=novas_respostas,
+                guild=interacao.guild,
+                bloco_concluido=True,
+            )
+            await editar_mensagem_original(interacao, view=view_final)
             await self._concluir_prova(interacao)
             return
 
-        view_proxima = montar_view_pergunta_porte(
-            numero=self.numero + 1,
+        # Continua no mesmo bloco: empilha a próxima
+        view_proxima = BlocoProvaLayoutView(
             consulta_id=self.consulta_id,
+            numero_atual=self.numero_atual + 1,
+            respostas=novas_respostas,
             guild=interacao.guild,
         )
         await editar_mensagem_original(interacao, view=view_proxima)
 
     async def _concluir_prova(self, interacao: discord.Interaction):
-        """Fecha a prova, publica o resultado e avisa o paciente."""
-        from src.database.conexao import async_session
-        from src.database.models import ConsultaLaudo
-
+        """Fecha a prova no banco e publica o resultado para a equipe."""
         ok, mensagem, acertos, parecer = await finalizar_prova_paciente(
             consulta_id=self.consulta_id,
             discord_id_paciente=interacao.user.id,
@@ -319,95 +405,15 @@ class PerguntaPorteLayoutView(LoggingViewMixin, discord.ui.LayoutView):
                         erro_pub,
                     )
 
-        view_fim = ProvaEnviadaLayoutView(acertos=acertos, parecer=parecer)
-        await editar_mensagem_original(interacao, view=view_fim)
-
-
-class PerguntaRespondidaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
-    """Card curto após a escolha: botões desabilitados e letra marcada."""
-
-    def __init__(
-        self,
-        *,
-        numero: int,
-        consulta_id: int,
-        letra_escolhida: str,
-    ):
-        super().__init__(timeout=None)
-        linha = discord.ui.ActionRow()
-        for letra in ("A", "B", "C"):
-            estilo = (
-                discord.ButtonStyle.success
-                if letra == letra_escolhida
-                else discord.ButtonStyle.secondary
+        # Aviso curto ao paciente (followup, o card 2 já está travado)
+        try:
+            await interacao.followup.send(
+                content=(
+                    f"Avaliação enviada. Você acertou "
+                    f"**{acertos}/{TOTAL_PERGUNTAS_PORTE}**. "
+                    "O detalhamento foi para a equipe de Psicologia."
+                ),
+                ephemeral=True,
             )
-            botao = discord.ui.Button(
-                label=letra,
-                style=estilo,
-                disabled=True,
-                custom_id=(
-                    f"laudos:prova_done:{consulta_id}:{numero}:{letra}"
-                ),
-            )
-            linha.add_item(botao)
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"# Questão {numero}/{TOTAL_PERGUNTAS_PORTE}\n"
-                    f"Resposta registrada: **{letra_escolhida}**"
-                ),
-                discord.ui.TextDisplay(
-                    f"-# {barra_progresso_porte(numero, TOTAL_PERGUNTAS_PORTE)}"
-                ),
-                linha,
-                accent_color=discord.Color.dark_grey(),
-            )
-        )
-
-
-class BlocoConcluidoLayoutView(LoggingViewMixin, discord.ui.LayoutView):
-    """Aviso de fim do bloco 1; o bloco 2 chega em mensagem nova."""
-
-    def __init__(
-        self,
-        *,
-        bloco: int,
-        letra_escolhida: str,
-        numero: int,
-    ):
-        super().__init__(timeout=None)
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"# ✅ Bloco {bloco} concluído\n"
-                    f"Última resposta registrada: **{letra_escolhida}** "
-                    f"(questão {numero}).\n"
-                    "O próximo bloco foi enviado em uma mensagem nova abaixo."
-                ),
-                accent_color=discord.Color.green(),
-            )
-        )
-
-
-class ProvaEnviadaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
-    """Card final para o paciente após enviar todas as respostas."""
-
-    def __init__(self, *, acertos: int, parecer: str):
-        super().__init__(timeout=None)
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# ✅ Avaliação enviada\n"
-                    f"Você acertou **{acertos}/{TOTAL_PERGUNTAS_PORTE}**.\n"
-                    "O detalhamento foi encaminhado à equipe de Psicologia.\n"
-                    "O **parecer final do laudo** continua a cargo do "
-                    "psicólogo responsável."
-                ),
-                accent_color=(
-                    discord.Color.green()
-                    if parecer == "APROVADO"
-                    else discord.Color.orange()
-                ),
-            )
-        )
+        except discord.HTTPException:
+            pass
