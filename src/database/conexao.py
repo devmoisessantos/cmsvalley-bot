@@ -56,17 +56,35 @@ async def init_db():
     """
     Prepara o banco para o bot subir.
 
-    Faz duas coisas, nesta ordem:
+    Faz tres coisas, nesta ordem:
 
     1. Cria as tabelas que ainda nao existem, a partir de models.py. Nunca
        apaga nem altera tabela antiga.
     2. Aplica as mudancas de estrutura que ainda nao rodaram neste banco,
        lendo a lista de src/database/migracoes.py.
+    3. Garante as colunas da prova de laudo (IF NOT EXISTS), para o caso de
+       uma migracao ter sido marcada como aplicada sem ter criado a coluna.
     """
     async with engine.begin() as conexao:
         await conexao.run_sync(Base.metadata.create_all)
 
     await aplicar_as_migracoes_que_faltam()
+    await garantir_estrutura_prova_laudo()
+
+
+def _partir_comandos_sql(comando_sql: str) -> list[str]:
+    """
+    Separa um bloco SQL em comandos individuais.
+
+    O asyncpg so aceita um comando por execute. Migrações antigas às vezes
+    juntavam ALTER + CREATE no mesmo texto; cada pedaço roda sozinho.
+    """
+    partes: list[str] = []
+    for pedaco in comando_sql.split(";"):
+        texto = pedaco.strip()
+        if texto:
+            partes.append(texto)
+    return partes
 
 
 async def aplicar_as_migracoes_que_faltam() -> int:
@@ -100,7 +118,8 @@ async def aplicar_as_migracoes_que_faltam() -> int:
                 migracao.numero,
                 migracao.descricao,
             )
-            await conexao.execute(text(migracao.comando_sql))
+            for comando in _partir_comandos_sql(migracao.comando_sql):
+                await conexao.execute(text(comando))
             await conexao.execute(
                 text(COMANDO_PARA_REGISTRAR_A_MIGRACAO),
                 {"numero": migracao.numero, "descricao": migracao.descricao},
@@ -116,6 +135,76 @@ async def aplicar_as_migracoes_que_faltam() -> int:
         )
 
     return quantidade_aplicada_agora
+
+
+# Comandos idempotentes: rodam a cada startup. Cobre o caso em que a
+# migracao 11 foi registrada sem as colunas existirem de fato.
+_COMANDOS_ESTRUTURA_PROVA_LAUDO = (
+    (
+        "ALTER TABLE consultas_laudo "
+        "ADD COLUMN IF NOT EXISTS status_prova VARCHAR(20) "
+        "DEFAULT 'NAO_LIBERADA'"
+    ),
+    (
+        "ALTER TABLE consultas_laudo "
+        "ADD COLUMN IF NOT EXISTS prova_liberada_em TIMESTAMPTZ"
+    ),
+    (
+        "ALTER TABLE consultas_laudo "
+        "ADD COLUMN IF NOT EXISTS prova_iniciada_em TIMESTAMPTZ"
+    ),
+    (
+        "ALTER TABLE consultas_laudo "
+        "ADD COLUMN IF NOT EXISTS prova_finalizada_em TIMESTAMPTZ"
+    ),
+    (
+        "ALTER TABLE consultas_laudo "
+        "ADD COLUMN IF NOT EXISTS pergunta_atual INTEGER DEFAULT 0"
+    ),
+    ("ALTER TABLE consultas_laudo ADD COLUMN IF NOT EXISTS acertos_prova INTEGER"),
+    (
+        "ALTER TABLE consultas_laudo "
+        "ADD COLUMN IF NOT EXISTS parecer_sugerido VARCHAR(20)"
+    ),
+    """
+CREATE TABLE IF NOT EXISTS respostas_prova_laudo (
+    id SERIAL PRIMARY KEY,
+    consulta_id INTEGER NOT NULL,
+    numero_pergunta INTEGER NOT NULL,
+    resposta_escolhida VARCHAR(1) NOT NULL,
+    correta BOOLEAN NOT NULL DEFAULT FALSE,
+    respondida_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+""",
+    (
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_respostas_prova_laudo_consulta_id "
+        "ON respostas_prova_laudo (consulta_id)"
+    ),
+)
+
+
+async def garantir_estrutura_prova_laudo() -> None:
+    """
+    Garante colunas e tabela da prova de laudo, mesmo se a migracao falhou.
+
+    Cada comando e independente e usa IF NOT EXISTS. Se a estrutura ja
+    estiver correta, o Postgres so ignora. Se a migracao 11 ficou marcada
+    como aplicada sem criar as colunas, isto recupera o banco no proximo
+    restart sem precisar mexer em migracoes_aplicadas na mao.
+    """
+    async with engine.begin() as conexao:
+        for comando in _COMANDOS_ESTRUTURA_PROVA_LAUDO:
+            try:
+                await conexao.execute(text(comando))
+            except Exception as erro:
+                registrador.exception(
+                    "Falha ao garantir estrutura da prova de laudo: %s | %s",
+                    comando[:80],
+                    erro,
+                )
+                raise
+    registrador.info("Estrutura da prova de laudo conferida (IF NOT EXISTS).")
 
 
 async def reiniciar_pool_se_preciso():
