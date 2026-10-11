@@ -630,23 +630,163 @@ async def contagens_resumo_ficha(
 # ── Mutações administrativas ─────────────────────────────────────────────
 
 
+def _inicio_ciclo_semanal_atual() -> datetime:
+    """Início UTC do ciclo semanal usado no ranking tempo real."""
+    from src.plantao.ranking_plantao_service import _periodos
+
+    inicio, _fim, _rotulo = _periodos(
+        "horas",
+        "tempo_real",
+        None,
+        modo_postagem=False,
+    )
+    return inicio
+
+
+async def segundos_fechados_no_ciclo(discord_id: int) -> int:
+    """
+    Soma líquida de log_plantao no ciclo semanal atual (sem call ao vivo).
+
+    Inclui AJUSTE_ADMIN positivo e negativo para o admin poder zerar
+    ou definir o tempo do ciclo sem apagar o histórico.
+    """
+    inicio = _inicio_ciclo_semanal_atual()
+    agora = datetime.now(timezone.utc)
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(
+                func.coalesce(func.sum(LogPlantao.duracao_segundos), 0)
+            ).where(
+                LogPlantao.discord_id == int(discord_id),
+                LogPlantao.criado_em >= inicio,
+                LogPlantao.criado_em < agora,
+                LogPlantao.duracao_segundos.is_not(None),
+            )
+        )
+        return int(resultado.scalar_one() or 0)
+
+
 async def zerar_ciclo_plantao(discord_id: int) -> bool:
-    """Zera segundos_acumulados do ciclo atual. True se havia estado."""
-    async with async_session() as session:
-        resultado = await session.execute(
-            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+    """
+    Zera o Tempo no ciclo (ranking semanal), sem mexer no histórico
+    nem no acumulado de moeda (próxima moeda a cada 30 min).
+
+    Estratégia: log negativo no ciclo + log positivo fora do ciclo
+    (antes do início), para o total histórico ficar igual. Se o membro
+    estiver em call válida, reinicia call_entrada_em para o ao vivo
+    começar do zero.
+    """
+    inicio = _inicio_ciclo_semanal_atual()
+    fora_do_ciclo = inicio - timedelta(seconds=1)
+    agora = datetime.now(timezone.utc)
+    ciclo_fechado = await segundos_fechados_no_ciclo(discord_id)
+
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(EstadoPlantao).where(
+                EstadoPlantao.discord_id == int(discord_id)
+            )
         )
         estado = resultado.scalar_one_or_none()
-        if not estado:
+
+        if ciclo_fechado != 0:
+            sessao.add(
+                LogPlantao(
+                    discord_id=int(discord_id),
+                    evento="AJUSTE_ADMIN",
+                    duracao_segundos=-int(ciclo_fechado),
+                    detalhes=(
+                        "zerar_ciclo; dentro do ciclo; "
+                        f"compensacao={-int(ciclo_fechado)}"
+                    )[:300],
+                    criado_em=agora,
+                )
+            )
+            sessao.add(
+                LogPlantao(
+                    discord_id=int(discord_id),
+                    evento="AJUSTE_ADMIN",
+                    duracao_segundos=int(ciclo_fechado),
+                    detalhes=(
+                        "zerar_ciclo; fora do ciclo; "
+                        "restaura historico"
+                    )[:300],
+                    criado_em=fora_do_ciclo,
+                )
+            )
+
+        if estado is not None:
+            # Reinicia só o trecho ao vivo do ciclo; não toca
+            # segundos_acumulados (cronômetro da próxima moeda).
+            if estado.toggle_ligado and estado.em_call_valida:
+                estado.call_entrada_em = agora
+                estado.segmento_iniciado_em = agora
+
+        if ciclo_fechado == 0 and estado is None:
             return False
-        estado.segundos_acumulados = 0
-        estado.segmento_iniciado_em = (
-            datetime.now(timezone.utc)
-            if estado.toggle_ligado and estado.em_call_valida
-            else None
-        )
-        await session.commit()
+
+        await sessao.commit()
         return True
+
+
+async def ajustar_tempo_ciclo_plantao(
+    discord_id: int,
+    *,
+    segundos_absolutos: int,
+    executor_id: int | None = None,
+    motivo: str | None = None,
+) -> tuple[int, int]:
+    """
+    Define o Tempo no ciclo para o valor pedido, sem alterar o
+    Total (histórico).
+
+    Devolve (ciclo_antes_fechado, ciclo_depois_fechado).
+    """
+    if segundos_absolutos < 0:
+        raise ValueError("Tempo no ciclo não pode ser negativo.")
+
+    inicio = _inicio_ciclo_semanal_atual()
+    fora_do_ciclo = inicio - timedelta(seconds=1)
+    agora = datetime.now(timezone.utc)
+    ciclo_antes = await segundos_fechados_no_ciclo(discord_id)
+    diferenca = int(segundos_absolutos) - int(ciclo_antes)
+
+    if diferenca == 0:
+        return int(ciclo_antes), int(ciclo_antes)
+
+    texto_motivo = (motivo or "ajuste ciclo admin").strip()[:200]
+    async with async_session() as sessao:
+        # Dentro do ciclo: muda o que o ranking enxerga.
+        sessao.add(
+            LogPlantao(
+                discord_id=int(discord_id),
+                evento="AJUSTE_ADMIN",
+                duracao_segundos=int(diferenca),
+                detalhes=(
+                    f"ajuste_ciclo; executor={executor_id or 0}; "
+                    f"antes={ciclo_antes}; depois={segundos_absolutos}; "
+                    f"{texto_motivo}"
+                )[:300],
+                criado_em=agora,
+            )
+        )
+        # Fora do ciclo: cancela o efeito no histórico total.
+        sessao.add(
+            LogPlantao(
+                discord_id=int(discord_id),
+                evento="AJUSTE_ADMIN",
+                duracao_segundos=-int(diferenca),
+                detalhes=(
+                    f"ajuste_ciclo; fora do ciclo; "
+                    f"executor={executor_id or 0}; "
+                    "compensa historico"
+                )[:300],
+                criado_em=fora_do_ciclo,
+            )
+        )
+        await sessao.commit()
+
+    return int(ciclo_antes), int(segundos_absolutos)
 
 
 async def ajustar_horas_plantao(
@@ -658,10 +798,13 @@ async def ajustar_horas_plantao(
     motivo: str | None = None,
 ) -> tuple[int, int]:
     """
-    Ajusta o banco de horas (soma de log_plantao).
+    Ajusta só o Total (histórico) — soma de log_plantao.
 
-    ABSOLUTO: define o total desejado (insere log de ajuste com a diferença).
-    DELTA: soma ou subtrai segundos (log com duração positiva ou negativa).
+    O log de ajuste nasce fora do ciclo semanal atual, para não
+    alterar o Tempo no ciclo nem o ranking tempo real.
+
+    ABSOLUTO: define o total desejado.
+    DELTA: soma ou subtrai segundos.
 
     Devolve (total_antes, total_depois).
     """
@@ -685,6 +828,8 @@ async def ajustar_horas_plantao(
     if diferenca == 0:
         return int(total_antes), int(total_antes)
 
+    inicio = _inicio_ciclo_semanal_atual()
+    fora_do_ciclo = inicio - timedelta(seconds=1)
     texto_motivo = (motivo or "ajuste admin").strip()[:200]
     async with async_session() as session:
         session.add(
@@ -697,6 +842,8 @@ async def ajustar_horas_plantao(
                     f"antes={total_antes}; depois={total_depois}; "
                     f"{texto_motivo}"
                 )[:300],
+                # Fora do ciclo: só mexe no histórico, não no ranking.
+                criado_em=fora_do_ciclo,
             )
         )
         await session.commit()

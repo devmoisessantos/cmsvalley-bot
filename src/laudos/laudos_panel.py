@@ -14,6 +14,11 @@ from src.laudos.laudos_service import (
     iniciar_consulta,
     membro_e_psicologo,
 )
+from src.laudos.prova_service import (
+    liberar_prova_da_consulta,
+    montar_texto_dm_resultado_prova,
+    obter_resumo_prova_consulta,
+)
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
@@ -21,6 +26,7 @@ from src.utils.error_handling import (
 from src.utils.mensagens import (
     responder_aviso,
     responder_erro,
+    responder_info,
     responder_sucesso,
     responder_view,
 )
@@ -80,17 +86,20 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 "## 📌 Fluxo de trabalho\n"
                 "- 1️⃣ Clique em **Iniciar Consulta** e selecione o paciente\n"
-                "- 2️⃣ Realize a avaliação com base no **perfil emocional** e "
-                "**estabilidade psicológica**\n"
-                "- 3️⃣ Clique em **Gerar Laudo** e informe o parecer final: "
-                "**Aprovado** ou **Reprovado**"
+                "- 2️⃣ Clique em **Liberar Avaliação** para a prova teórica "
+                "de porte\n"
+                "- 3️⃣ Aguarde o paciente concluir a prova "
+                "(canal de avaliação)\n"
+                "- 4️⃣ Clique em **Gerar Laudo** e informe o parecer final: "
+                "**Aprovado** ou **Reprovado**\n"
+                "- 5️⃣ Após o laudo, envie o **comprovante de repasse** "
+                "(prazo de 10 minutos)"
             )
         )
 
         # Bloco 6: separador antes dos botões
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
-        # Botões (inalterados)
         linha_botoes = discord.ui.ActionRow()
         botao_iniciar = discord.ui.Button(
             label="Iniciar Consulta",
@@ -109,6 +118,15 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
         botao_laudo.callback = self._ao_gerar_laudo
         linha_botoes.add_item(botao_laudo)
+
+        botao_liberar = discord.ui.Button(
+            label="Liberar Avaliação",
+            style=discord.ButtonStyle.primary,
+            emoji="📝",
+            custom_id="laudos:liberar_avaliacao",
+        )
+        botao_liberar.callback = self._ao_liberar_avaliacao
+        linha_botoes.add_item(botao_liberar)
 
         botao_cancelar = discord.ui.Button(
             label="Cancelar Consulta",
@@ -197,18 +215,64 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
                 )
                 return
 
+            acertos, parecer_sugerido, status_prova = (
+                await obter_resumo_prova_consulta(consulta.id)
+            )
+            aviso_prova = None
+            if status_prova != "FINALIZADA":
+                aviso_prova = (
+                    "⚠️ **Aviso:** a prova teórica ainda **não foi concluída** "
+                    f"(status `{status_prova}`). O laudo foi permitido mesmo assim."
+                )
+            elif acertos is not None:
+                from src.laudos.perguntas_porte import TOTAL_PERGUNTAS_PORTE
+
+                aviso_prova = (
+                    f"📊 Prova: `{acertos}/{TOTAL_PERGUNTAS_PORTE}` · "
+                    f"parecer sugerido: `{parecer_sugerido or '—'}`"
+                )
+
             if interacao.response.is_done():
                 return
             await interacao.response.send_modal(
                 ModalGerarLaudo(
                     consulta_id=consulta.id,
                     paciente_id=consulta.discord_id_paciente,
+                    parecer_sugerido=parecer_sugerido,
+                    aviso_prova=aviso_prova,
                 )
             )
         except discord.NotFound:
             return
         except discord.HTTPException as erro_http:
             registrador.warning(f"⚠️ [laudos] gerar laudo HTTP: {erro_http}")
+
+    async def _ao_liberar_avaliacao(self, interacao: discord.Interaction):
+        """Libera a prova teórica para o paciente da consulta aberta."""
+        try:
+            if not await self._checar_psicologo(interacao):
+                return
+            ok, mensagem, _consulta = await liberar_prova_da_consulta(
+                interacao.user.id
+            )
+            if ok:
+                await responder_sucesso(
+                    interacao,
+                    titulo="Avaliação liberada",
+                    linhas=[mensagem],
+                )
+            else:
+                await responder_aviso(
+                    interacao,
+                    titulo="Não liberado",
+                    linhas=[mensagem],
+                )
+        except discord.NotFound:
+            return
+        except discord.HTTPException as erro_http:
+            registrador.warning(
+                f"⚠️ [laudos] liberar avaliação HTTP: {erro_http}"
+            )
 
     async def _ao_cancelar_consulta(self, interacao: discord.Interaction):
         try:
@@ -595,18 +659,23 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
         max_length=1500,
     )
 
-    def __init__(self, *, consulta_id: int, paciente_id: int):
+    def __init__(
+        self,
+        *,
+        consulta_id: int,
+        paciente_id: int,
+        parecer_sugerido: str | None = None,
+        aviso_prova: str | None = None,
+    ):
         super().__init__()
         self.consulta_id = consulta_id
         self.paciente_id = paciente_id
+        self.aviso_prova = aviso_prova
+        if parecer_sugerido in ("APROVADO", "REPROVADO"):
+            self.parecer_input.default = parecer_sugerido
 
     async def on_submit(self, interacao: discord.Interaction):
-        """Gera o laudo clínico da consulta e tenta publicá-lo nos canais.
-
-        O serviço valida o parecer e grava o resultado no banco antes da
-        publicação. Caso os canais falhem, avisa que o registro permaneceu
-        salvo; no sucesso, devolve um bloco pronto para copiar ao servidor.
-        """
+        """Gera o laudo, publica, envia DM ao paciente e pede o comprovante."""
         if not isinstance(interacao.user, discord.Member):
             await responder_erro(
                 interacao,
@@ -648,25 +717,268 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
                 linhas=[
                     mensagem,
                     f"O registro foi gravado, mas a publicação falhou: "
-                    f"`{type(erro_pub).__name__}"
-                    f"`.",
+                    f"`{type(erro_pub).__name__}`.",
                 ],
             )
             return
 
-        # Ephemeral: resumo + bloco para copiar no Valley Roleplay
+        # DM do laudo + resumo da prova ao paciente
+        await _enviar_laudo_na_dm_do_paciente(
+            interacao=interacao,
+            laudo=laudo,
+            paciente=paciente,
+        )
+
         bloco_copiar = (
-            f"```yaml\n{texto_yaml}\n```" if texto_yaml else "_Sem texto para copiar._"
+            f"```yaml\n{texto_yaml}\n```"
+            if texto_yaml
+            else "_Sem texto para copiar._"
+        )
+        linhas_sucesso = [
+            mensagem,
+            "O documento foi enviado ao canal de laudos e ao log interno.",
+        ]
+        if self.aviso_prova:
+            linhas_sucesso.append(self.aviso_prova)
+        linhas_sucesso.extend(
+            [
+                "—",
+                "**Copie o bloco abaixo** para colar no servidor Valley Roleplay:",
+                bloco_copiar,
+            ]
         )
         await responder_sucesso(
             interacao,
             titulo="Laudo publicado",
-            linhas=[
-                mensagem,
-                "O documento foi enviado ao canal de laudos e ao log interno.",
-                "—",
-                "**Copie o bloco abaixo** para colar no servidor Valley Roleplay:",
-                bloco_copiar,
-            ],
+            linhas=linhas_sucesso,
             delay=300,
         )
+
+        # Comprovante de repasse (10 minutos) — após o feedback do laudo
+        await _solicitar_comprovante_repasse_laudo(
+            interacao=interacao,
+            laudo=laudo,
+            paciente=paciente,
+        )
+
+
+
+PRAZO_COMPROVANTE_LAUDO_SEGUNDOS = 600  # 10 minutos
+
+
+async def _enviar_laudo_na_dm_do_paciente(
+    *,
+    interacao: discord.Interaction,
+    laudo,
+    paciente: discord.Member | None,
+) -> None:
+    """Envia na DM do paciente o laudo e o resumo da prova teórica."""
+    if paciente is None:
+        return
+
+    acertos, parecer_sugerido, status_prova = await obter_resumo_prova_consulta(
+        laudo.consulta_id
+    )
+    texto = montar_texto_dm_resultado_prova(
+        acertos=acertos,
+        parecer_sugerido=parecer_sugerido,
+        status_prova=status_prova,
+        parecer_laudo=laudo.parecer,
+        motivo=laudo.motivo,
+    )
+    try:
+        layout = discord.ui.LayoutView(timeout=None)
+        cor = (
+            discord.Color.green()
+            if laudo.parecer == "APROVADO"
+            else discord.Color.red()
+        )
+        layout.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(texto),
+                accent_color=cor,
+            )
+        )
+        await paciente.send(view=layout)
+    except discord.Forbidden:
+        registrador.info(
+            "[laudos] DM fechada para paciente %s (laudo #%s)",
+            paciente.id,
+            laudo.id,
+        )
+    except Exception as erro_dm:
+        registrador.warning(
+            "[laudos] falha ao enviar DM do laudo #%s: %s",
+            laudo.id,
+            erro_dm,
+        )
+
+
+def _anexo_comprovante_valido(anexo: discord.Attachment) -> bool:
+    """Aceita imagem comum ou PDF como comprovante de repasse."""
+    nome = (anexo.filename or "").lower()
+    if nome.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf")):
+        return True
+    tipo = (anexo.content_type or "").lower().split(";")[0].strip()
+    return tipo in {
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+        "application/pdf",
+    }
+
+
+def _primeiro_anexo_comprovante(
+    mensagem: discord.Message,
+) -> discord.Attachment | None:
+    for anexo in mensagem.attachments:
+        if _anexo_comprovante_valido(anexo):
+            return anexo
+    return None
+
+
+async def _solicitar_comprovante_repasse_laudo(
+    *,
+    interacao: discord.Interaction,
+    laudo,
+    paciente: discord.Member | None,
+) -> None:
+    """
+    Pede ao psicólogo o print do repasse (10 min) e reenvia ao canal configurado.
+    """
+    from src.config import CANAIS
+
+    minutos = PRAZO_COMPROVANTE_LAUDO_SEGUNDOS // 60
+    mencao_paciente = (
+        paciente.mention if paciente else f"<@{laudo.discord_id_paciente}>"
+    )
+
+    await responder_info(
+        interacao,
+        titulo="Comprovante de repasse",
+        linhas=[
+            f"Envie **neste canal** o print do comprovante do repasse "
+            f"referente ao laudo **#{laudo.id}** ({mencao_paciente}).",
+            "Formatos: **PNG, JPG, WEBP, GIF ou PDF**.",
+            f"Prazo: **{minutos} minutos**.",
+            "Só conta mensagem **sua** com **anexo válido**.",
+        ],
+        delay=None,
+    )
+
+    bot = interacao.client
+    canal_id = interacao.channel_id
+    autor_id = interacao.user.id
+
+    def checagem(mensagem: discord.Message) -> bool:
+        if mensagem.author.id != autor_id:
+            return False
+        if mensagem.channel.id != canal_id:
+            return False
+        return _primeiro_anexo_comprovante(mensagem) is not None
+
+    try:
+        mensagem_comprovante = await bot.wait_for(
+            "message",
+            timeout=PRAZO_COMPROVANTE_LAUDO_SEGUNDOS,
+            check=checagem,
+        )
+    except TimeoutError:
+        await responder_aviso(
+            interacao,
+            titulo="Prazo do comprovante esgotado",
+            linhas=[
+                f"Nenhum comprovante em **{minutos} minutos** para o "
+                f"laudo **#{laudo.id}**.",
+                "Se ainda precisar registrar, envie o print manualmente "
+                "ao canal de comprovantes.",
+            ],
+            delay=30,
+        )
+        return
+
+    anexo = _primeiro_anexo_comprovante(mensagem_comprovante)
+    if anexo is None:
+        return
+
+    try:
+        bytes_do_arquivo = await anexo.read()
+    except (discord.HTTPException, OSError) as erro_leitura:
+        registrador.warning(
+            "[laudos] falha ao ler comprovante do laudo #%s: %s",
+            laudo.id,
+            erro_leitura,
+        )
+        await responder_erro(
+            interacao,
+            titulo="Falha no comprovante",
+            linhas=["Não consegui ler o anexo. Envie de novo ao canal."],
+        )
+        return
+
+    if not bytes_do_arquivo:
+        await responder_erro(
+            interacao,
+            titulo="Arquivo vazio",
+            linhas=["O anexo veio sem conteúdo."],
+        )
+        return
+
+    guilda = interacao.guild
+    if guilda is None:
+        return
+
+    canal_destino_id = CANAIS.get("CANAL_COMPROVANTE_REPASSE_LAUDO") or 0
+    canal_destino = guilda.get_channel(int(canal_destino_id))
+    if canal_destino is None:
+        await responder_erro(
+            interacao,
+            titulo="Canal não configurado",
+            linhas=["`CANAL_COMPROVANTE_REPASSE_LAUDO` ausente ou inválido."],
+        )
+        return
+
+    nome_arquivo = anexo.filename or "comprovante_laudo.png"
+    arquivo = discord.File(
+        fp=__import__("io").BytesIO(bytes_do_arquivo),
+        filename=nome_arquivo,
+    )
+    layout = discord.ui.LayoutView(timeout=None)
+    texto_comprovante = (
+        "# Comprovante de repasse — Laudo\n"
+        f"- **Laudo:** `#{laudo.id}`\n"
+        f"- **Consulta:** `#{laudo.consulta_id}`\n"
+        f"- **Paciente:** {mencao_paciente}\n"
+        f"- **Psicologo:** {interacao.user.mention}\n"
+        f"- **Parecer:** `{laudo.parecer}`"
+    )
+    layout.add_item(
+        discord.ui.Container(
+            discord.ui.TextDisplay(texto_comprovante),
+            accent_color=discord.Color.gold(),
+        )
+    )
+    try:
+        await canal_destino.send(view=layout, file=arquivo)
+    except Exception as erro_envio:
+        registrador.exception(
+            "[laudos] falha ao enviar comprovante do laudo #%s: %s",
+            laudo.id,
+            erro_envio,
+        )
+        await responder_erro(
+            interacao,
+            titulo="Não enviei o comprovante",
+            linhas=["O arquivo foi recebido, mas a publicação no canal falhou."],
+        )
+        return
+
+    await responder_sucesso(
+        interacao,
+        titulo="Comprovante registrado",
+        linhas=[
+            f"Comprovante do laudo **#{laudo.id}** enviado ao canal de repasses.",
+        ],
+        delay=20,
+    )

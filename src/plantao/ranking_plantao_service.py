@@ -225,6 +225,8 @@ async def buscar_horas_por_membro(
     - mesma elegibilidade do ranking de moedas (no servidor + hierarquia)
     """
     async with async_session() as session:
+        # Soma líquida (positivos e negativos). AJUSTE_ADMIN negativo
+        # permite zerar ou reduzir o ciclo sem apagar o histórico.
         resultado = await session.execute(
             select(
                 LogPlantao.discord_id,
@@ -234,11 +236,14 @@ async def buscar_horas_por_membro(
                 LogPlantao.criado_em >= inicio_utc,
                 LogPlantao.criado_em < fim_utc,
                 LogPlantao.duracao_segundos.is_not(None),
-                LogPlantao.duracao_segundos > 0,
             )
             .group_by(LogPlantao.discord_id)
         )
-        bruto = {int(did): int(segs) for did, segs in resultado.all() if int(segs) > 0}
+        bruto = {
+            int(did): int(segs)
+            for did, segs in resultado.all()
+            if int(segs) > 0
+        }
 
     # Contagem ao vivo: só no ranking tempo real (não mistura no semanal/mensal oficial)
     if incluir_ao_vivo:

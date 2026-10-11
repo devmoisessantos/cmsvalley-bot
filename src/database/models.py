@@ -510,6 +510,38 @@ class ConsultaLaudo(Base):
     finalizada_em: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Prova teórica de porte: NAO_LIBERADA | LIBERADA | EM_ANDAMENTO | FINALIZADA
+    status_prova: Mapped[str] = mapped_column(
+        String(20), default="NAO_LIBERADA", index=True
+    )
+    prova_liberada_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    prova_iniciada_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    prova_finalizada_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    pergunta_atual: Mapped[int] = mapped_column(Integer, default=0)
+    acertos_prova: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Parecer sugerido pela nota da prova (APROVADO | REPROVADO)
+    parecer_sugerido: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+
+class RespostaProvaLaudo(Base):
+    """Uma resposta do paciente na prova teórica de porte de arma."""
+
+    __tablename__ = "respostas_prova_laudo"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    consulta_id: Mapped[int] = mapped_column(Integer, index=True)
+    numero_pergunta: Mapped[int] = mapped_column(Integer)
+    resposta_escolhida: Mapped[str] = mapped_column(String(1))
+    correta: Mapped[bool] = mapped_column(Boolean, default=False)
+    respondida_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
 
 
 class Laudo(Base):

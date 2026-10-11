@@ -48,7 +48,11 @@ from src.guia.guia_setup import (
 )
 from src.guia.tutoriais_panel import PainelTutoriaisLayout
 from src.laudos.laudos_panel import PainelLaudosLayout
-from src.laudos.laudos_setup import garantir_painel_laudos
+from src.laudos.laudos_setup import (
+    garantir_painel_laudos,
+    garantir_painel_prova_laudo,
+)
+from src.laudos.prova_panel import PainelProvaLaudoLayout
 from src.membros.cargos_panel import PainelGerenciarCargoLayout
 from src.membros.membros_panel import PainelGerenciarMembrosLayout
 from src.membros.membros_setup import (
@@ -232,6 +236,7 @@ class CmsValleyBot(commands.Bot):
         self.painel_gerenciar_cargos_view = None
         self.painel_plantao_view = None
         self.painel_laudos_view = None
+        self.painel_prova_laudo_view = None
         self.painel_bau_view = None
         self.painel_screenshare_view = None
         self.painel_eventos_gate_view = None
@@ -473,6 +478,7 @@ class CmsValleyBot(commands.Bot):
         )
         self.painel_punicoes_view = PainelPunicoesLayout(guild=servidor)
         self.painel_laudos_view = PainelLaudosLayout(servidor)
+        self.painel_prova_laudo_view = PainelProvaLaudoLayout(servidor)
         self.painel_bau_view = PainelBauLayout(servidor)
         self.painel_screenshare_view = PainelScreenshareLayout(servidor)
         self.painel_notificacao_view = PainelNotificacaoLayout(guilda=servidor)
@@ -496,6 +502,7 @@ class CmsValleyBot(commands.Bot):
             ("painel_gerenciar_cargos", self.painel_gerenciar_cargos_view),
             ("painel_plantao", self.painel_plantao_view),
             ("painel_laudos", self.painel_laudos_view),
+            ("painel_prova_laudo", self.painel_prova_laudo_view),
             ("painel_bau", self.painel_bau_view),
             ("painel_screenshare", self.painel_screenshare_view),
             ("painel_eventos_gate", self.painel_eventos_gate_view),
@@ -565,6 +572,7 @@ class CmsValleyBot(commands.Bot):
             garantir_painel_gerenciar_membros,
             garantir_painel_punicoes,
             garantir_painel_laudos,
+            garantir_painel_prova_laudo,
             garantir_painel_bau,
             garantir_painel_screenshare,
             garantir_painel_cursos,

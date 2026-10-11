@@ -13,6 +13,7 @@ from src.membros.membros_service import (
     STATUS_USUARIO_CANONICOS,
     ajustar_horas_plantao,
     ajustar_saldo_moedas,
+    ajustar_tempo_ciclo_plantao,
     buscar_estado_plantao,
     buscar_snapshot_cargos,
     buscar_usuario,
@@ -1539,15 +1540,21 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
 
 class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar horas"):
     modo = discord.ui.TextInput(
-        label="Modo ABSOLUTO ou DELTA",
+        label="Modo ABSOLUTO ou DELTA (histórico)",
         default="DELTA",
         max_length=10,
     )
     valor = discord.ui.TextInput(
-        label="Tempo (05:02 | 00:15 | 02:23:08 | 03)",
+        label="Total histórico (05:02 | -00:30)",
         required=True,
         max_length=16,
         placeholder="Ex: 05:02  ou  -00:30  ou  02:23:08",
+    )
+    tempo_ciclo = discord.ui.TextInput(
+        label="Tempo no ciclo (opcional, absoluto)",
+        required=False,
+        max_length=16,
+        placeholder="Deixe vazio para não mexer. Ex: 01:30:00",
     )
     motivo = discord.ui.TextInput(
         label="Motivo",
@@ -1587,6 +1594,31 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
                 ],
             )
             return
+
+        segundos_ciclo_alvo = None
+        texto_ciclo = (self.tempo_ciclo.value or "").strip()
+        if texto_ciclo:
+            try:
+                segundos_ciclo_alvo = parsear_tempo_para_segundos(texto_ciclo)
+            except ValueError as erro_valor:
+                await responder_erro(
+                    i,
+                    titulo="Tempo no ciclo inválido",
+                    linhas=[
+                        str(erro_valor),
+                        "Campo opcional. Exemplos: `00:00`, `01:30`, "
+                        "`02:23:08`.",
+                    ],
+                )
+                return
+            if segundos_ciclo_alvo < 0:
+                await responder_erro(
+                    i,
+                    titulo="Tempo no ciclo inválido",
+                    linhas=["Tempo no ciclo deve ser absoluto (≥ 0)."],
+                )
+                return
+
         await i.response.defer(ephemeral=True)
         try:
             if modo.startswith("ABS"):
@@ -1603,6 +1635,13 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
                     executor_id=i.user.id,
                     motivo=self.motivo.value or "delta",
                 )
+            if segundos_ciclo_alvo is not None:
+                await ajustar_tempo_ciclo_plantao(
+                    self.alvo.id,
+                    segundos_absolutos=int(segundos_ciclo_alvo),
+                    executor_id=i.user.id,
+                    motivo=self.motivo.value or "ciclo modal",
+                )
         except ValueError as erro_valor:
             await responder_erro(i, titulo="Recusado", linhas=[str(erro_valor)])
             return
@@ -1618,7 +1657,7 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
             alvo=self.alvo,
             acao="AJUSTAR_HORAS",
             detalhes=(
-                f"{antes}->{depois}; "
+                f"historico {antes}->{depois}; "
                 f"ciclo={segundos_no_ciclo}"
             ),
             cor=discord.Color.green(),

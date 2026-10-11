@@ -23,7 +23,10 @@ from src.guia.guia_setup import (
     garantir_painel_boas_vindas,
     garantir_painel_tutoriais,
 )
-from src.laudos.laudos_setup import garantir_painel_laudos
+from src.laudos.laudos_setup import (
+    garantir_painel_laudos,
+    garantir_painel_prova_laudo,
+)
 from src.membros.membros_setup import (
     garantir_painel_gerenciar_cargos,
     garantir_painel_gerenciar_membros,
@@ -58,6 +61,7 @@ FUNCOES_GARANTIR_PAINEL = {
     "gerenciar_membros": garantir_painel_gerenciar_membros,
     "punicoes": garantir_painel_punicoes,
     "laudos": garantir_painel_laudos,
+    "laudos_prova": garantir_painel_prova_laudo,
     "bau": garantir_painel_bau,
     "cursos": garantir_painel_cursos,
     "promocao": garantir_painel_promocao,
