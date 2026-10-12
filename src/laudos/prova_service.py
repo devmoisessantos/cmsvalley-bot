@@ -342,64 +342,99 @@ async def obter_resumo_prova_consulta(
         )
 
 
-LIMITE_TEXTO_CARD_RESULTADO = 3800
+LIMITE_TEXTO_CARD_RESULTADO = 3500
 
 
-def _partir_textos_em_cards(
+def _partir_blocos_em_textos(
     titulo: str,
     blocos: list[str],
+    *,
+    prefixo_primeiro: str | None = None,
+    sufixo_ultimo: str | None = None,
 ) -> list[str]:
     """
-    Empilha blocos de texto em cards de até ~3800 caracteres.
+    Empilha blocos em textos de até ~3500 caracteres.
 
-    O título entra só no primeiro card de cada série. Se um bloco sozinho
-    passar do limite, é cortado com reticências.
+    prefixo_primeiro: cabeçalho só no primeiro card (antes do título).
+    sufixo_ultimo: rodapé só no último card.
     """
+    nl = chr(10)
     if not blocos:
-        return []
+        corpo_vazio = titulo + nl + nl + "_Nenhuma._"
+        if prefixo_primeiro:
+            corpo_vazio = prefixo_primeiro + nl + nl + corpo_vazio
+        if sufixo_ultimo:
+            corpo_vazio = corpo_vazio + nl + nl + sufixo_ultimo
+        return [corpo_vazio]
 
     cards: list[str] = []
-    atual = titulo
+    titulo_e_corpo = titulo
+    atual = (prefixo_primeiro + nl + nl + titulo) if prefixo_primeiro else titulo
+
     for bloco in blocos:
         bloco_limpo = bloco.strip()
         if not bloco_limpo:
             continue
-        if len(bloco_limpo) > LIMITE_TEXTO_CARD_RESULTADO - 50:
+        if len(bloco_limpo) > LIMITE_TEXTO_CARD_RESULTADO - 80:
             bloco_limpo = (
-                bloco_limpo[: LIMITE_TEXTO_CARD_RESULTADO - 60] + "…"
+                bloco_limpo[: LIMITE_TEXTO_CARD_RESULTADO - 90] + "…"
             )
 
-        candidato = (
-            atual + chr(10) + chr(10) + bloco_limpo if atual else bloco_limpo
-        )
+        candidato = atual + nl + nl + bloco_limpo
         if len(candidato) <= LIMITE_TEXTO_CARD_RESULTADO:
             atual = candidato
             continue
 
         if atual.strip():
             cards.append(atual.strip())
-        atual = titulo + chr(10) + chr(10) + bloco_limpo
+        # cards seguintes: só título + bloco
+        atual = titulo + nl + nl + bloco_limpo
 
     if atual.strip():
         cards.append(atual.strip())
+
+    if sufixo_ultimo and cards:
+        ultimo = cards[-1] + nl + nl + sufixo_ultimo
+        if len(ultimo) <= LIMITE_TEXTO_CARD_RESULTADO + 200:
+            cards[-1] = ultimo
+        else:
+            cards.append(sufixo_ultimo)
+
     return cards
 
 
-async def _enviar_cards_resultado(
+async def _enviar_card_com_separadores(
     canal: discord.abc.Messageable,
-    textos: list[str],
+    *,
+    texto_topo: str | None,
+    texto_meio: str,
+    texto_rodape: str | None,
     cor: discord.Color,
-) -> None:
-    """Envia cada texto como um card Components V2 na cor indicada."""
-    for texto in textos:
-        layout = discord.ui.LayoutView(timeout=None)
-        layout.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(texto),
-                accent_color=cor,
-            )
+) -> discord.Message:
+    """
+    Card com separador.large entre topo/meio e meio/rodapé quando existirem.
+    """
+    componentes: list = []
+    if texto_topo:
+        componentes.append(discord.ui.TextDisplay(texto_topo))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-        await canal.send(view=layout)
+    componentes.append(discord.ui.TextDisplay(texto_meio))
+    if texto_rodape:
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        componentes.append(discord.ui.TextDisplay(texto_rodape))
+
+    layout = discord.ui.LayoutView(timeout=None)
+    layout.add_item(
+        discord.ui.Container(
+            *componentes,
+            accent_color=cor,
+        )
+    )
+    return await canal.send(view=layout)
 
 
 async def publicar_resultado_prova(
@@ -412,10 +447,10 @@ async def publicar_resultado_prova(
     """
     Publica o resultado no canal da equipe.
 
-    Ordem:
-      1. Cabeçalho (resumo)
-      2. Card(s) verdes — perguntas corretas (empilha se passar de ~4000)
-      3. Card(s) vermelhos — perguntas erradas (mesmo critério)
+    - Card verde: cabeçalho + separador + perguntas corretas
+      (empilha se passar do limite).
+    - Card vermelho: perguntas erradas + separador + rodapé no final
+      (empilha se precisar).
     """
     canal_id = CANAIS.get("CANAL_RESULTADO_AVALIACAO") or 0
     canal = guild.get_channel(int(canal_id)) if canal_id else None
@@ -433,7 +468,6 @@ async def publicar_resultado_prova(
 
     percentual = round((acertos / TOTAL_PERGUNTAS_PORTE) * 100, 1)
     apto = parecer_sugerido == "APROVADO"
-    cor_geral = discord.Color.green() if apto else discord.Color.red()
     status_emoji = (
         "✅ Apto na prova teórica"
         if apto
@@ -443,14 +477,10 @@ async def publicar_resultado_prova(
         str(numeros_errados) if numeros_errados else "Nenhuma"
     )
 
-    paciente = guild.get_member(consulta.discord_id_paciente)
-    url_avatar = (
-        paciente.display_avatar.url if paciente is not None else None
-    )
-
     nl = chr(10)
-    linhas_cabecalho = (
-        f"- **Paciente:** <@{consulta.discord_id_paciente}> "
+    cabecalho = (
+        "# 📋 Resultado da Avaliação — Laudo Psicológico" + nl
+        + f"- **Paciente:** <@{consulta.discord_id_paciente}> "
         f"(`{consulta.discord_id_paciente}`)" + nl
         + f"- **Psicólogo:** <@{consulta.discord_id_psicologo}>" + nl
         + f"- **Consulta:** `#{consulta.id}`" + nl
@@ -461,32 +491,8 @@ async def publicar_resultado_prova(
         + f"- **Status:** {status_emoji}"
     )
 
-    componentes_cabeca: list = [
-        discord.ui.TextDisplay("# 📋 Resultado da Avaliação — Porte"),
-    ]
-    if url_avatar:
-        componentes_cabeca.append(
-            discord.ui.Section(
-                linhas_cabecalho,
-                accessory=discord.ui.Thumbnail(url_avatar),
-            )
-        )
-    else:
-        componentes_cabeca.append(discord.ui.TextDisplay(linhas_cabecalho))
-
     agora = int(datetime.now(timezone.utc).timestamp())
-    componentes_cabeca.append(
-        discord.ui.TextDisplay(f"-# {guild.name} • <t:{agora}:f>")
-    )
-
-    layout_cabeca = discord.ui.LayoutView(timeout=None)
-    layout_cabeca.add_item(
-        discord.ui.Container(
-            *componentes_cabeca,
-            accent_color=cor_geral,
-        )
-    )
-    mensagem_principal = await canal.send(view=layout_cabeca)
+    rodape = f"-# {guild.name} • <t:{agora}:f>"
 
     blocos_corretas: list[str] = []
     blocos_erradas: list[str] = []
@@ -499,7 +505,7 @@ async def publicar_resultado_prova(
 
         if resposta.correta:
             bloco = (
-                f"> **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                f"> ## **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
                 + f"✔ — **Sua escolha** `{resposta.resposta_escolhida}`: "
                 + texto_da_opcao(pergunta, resposta.resposta_escolhida)
                 + nl + nl
@@ -508,7 +514,7 @@ async def publicar_resultado_prova(
             blocos_corretas.append(bloco)
         else:
             bloco = (
-                f"> **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                f"> ## **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
                 + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
                 + texto_da_opcao(pergunta, resposta.resposta_escolhida)
                 + nl
@@ -520,37 +526,40 @@ async def publicar_resultado_prova(
             )
             blocos_erradas.append(bloco)
 
-    cards_corretas = _partir_textos_em_cards(
+    # --- Cards verdes: cabeçalho + separador + corretas ---
+    textos_meio_corretas = _partir_blocos_em_textos(
         "# 📝 Perguntas corretas:",
-        blocos_corretas,
+        blocos_corretas if blocos_corretas else ["_Nenhuma._"],
     )
-    cards_erradas = _partir_textos_em_cards(
+
+    mensagem_principal = None
+    for indice, texto_meio in enumerate(textos_meio_corretas):
+        texto_topo = cabecalho if indice == 0 else None
+        mensagem = await _enviar_card_com_separadores(
+            canal,
+            texto_topo=texto_topo,
+            texto_meio=texto_meio,
+            texto_rodape=None,
+            cor=discord.Color.green(),
+        )
+        if mensagem_principal is None:
+            mensagem_principal = mensagem
+
+    # --- Cards vermelhos: erradas + separador + rodapé no último ---
+    textos_meio_erradas = _partir_blocos_em_textos(
         "# 📝 Perguntas erradas:",
-        blocos_erradas,
+        blocos_erradas if blocos_erradas else ["_Nenhuma — todas corretas._"],
     )
-
-    if not cards_corretas and not cards_erradas:
-        cards_corretas = [
-            "# 📝 Perguntas corretas:" + nl + nl + "_Nenhuma resposta._"
-        ]
-    elif not cards_erradas:
-        cards_erradas = [
-            "# 📝 Perguntas erradas:"
-            + nl
-            + nl
-            + "_Nenhuma — todas corretas._"
-        ]
-    elif not cards_corretas:
-        cards_corretas = [
-            "# 📝 Perguntas corretas:" + nl + nl + "_Nenhuma._"
-        ]
-
-    await _enviar_cards_resultado(
-        canal, cards_corretas, discord.Color.green()
-    )
-    await _enviar_cards_resultado(
-        canal, cards_erradas, discord.Color.red()
-    )
+    total_erradas = len(textos_meio_erradas)
+    for indice, texto_meio in enumerate(textos_meio_erradas):
+        e_ultimo = indice == total_erradas - 1
+        await _enviar_card_com_separadores(
+            canal,
+            texto_topo=None,
+            texto_meio=texto_meio,
+            texto_rodape=rodape if e_ultimo else None,
+            cor=discord.Color.red(),
+        )
 
     return mensagem_principal
 
