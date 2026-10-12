@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from datetime import (
@@ -394,6 +395,24 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
         )
 
 
+
+async def _apagar_card_iniciar_consulta(
+    interacao: discord.Interaction,
+    *,
+    delay: int = 8,
+) -> None:
+    """Apaga o card efêmero de seleção do paciente junto com o aviso de sucesso."""
+    mensagem = interacao.message
+    if mensagem is None:
+        return
+    try:
+        if delay and delay > 0:
+            await asyncio.sleep(delay)
+        await mensagem.delete()
+    except (discord.NotFound, discord.HTTPException):
+        return
+
+
 async def _finalizar_inicio_consulta_com_id(
     interacao: discord.Interaction,
     *,
@@ -459,7 +478,11 @@ async def _finalizar_inicio_consulta_com_id(
             interacao,
             titulo="Consulta iniciada",
             linhas=[mensagem],
-            delay=20,
+            delay=8,
+        )
+        # Some o card "Iniciar consulta" junto com o aviso de sucesso
+        asyncio.create_task(
+            _apagar_card_iniciar_consulta(interacao, delay=8)
         )
         return
 
@@ -650,7 +673,10 @@ class ModalInformarPassaportePaciente(
                 interacao,
                 titulo="Consulta iniciada",
                 linhas=[mensagem, f"Passaporte gravado: `{texto}`"],
-                delay=20,
+                delay=8,
+            )
+            asyncio.create_task(
+                _apagar_card_iniciar_consulta(interacao, delay=8)
             )
         else:
             await responder_erro(

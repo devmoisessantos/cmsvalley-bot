@@ -348,28 +348,20 @@ LIMITE_TEXTO_CARD_RESULTADO = 3500
 def _partir_blocos_em_textos(
     titulo: str,
     blocos: list[str],
-    *,
-    prefixo_primeiro: str | None = None,
-    sufixo_ultimo: str | None = None,
 ) -> list[str]:
     """
     Empilha blocos em textos de até ~3500 caracteres.
 
-    prefixo_primeiro: cabeçalho só no primeiro card (antes do título).
-    sufixo_ultimo: rodapé só no último card.
+    O título entra só no primeiro card. Cards seguintes recebem só o
+    restante das perguntas, sem repetir o título.
     """
     nl = chr(10)
     if not blocos:
-        corpo_vazio = titulo + nl + nl + "_Nenhuma._"
-        if prefixo_primeiro:
-            corpo_vazio = prefixo_primeiro + nl + nl + corpo_vazio
-        if sufixo_ultimo:
-            corpo_vazio = corpo_vazio + nl + nl + sufixo_ultimo
-        return [corpo_vazio]
+        return [titulo + nl + nl + "_Nenhuma._"]
 
     cards: list[str] = []
-    titulo_e_corpo = titulo
-    atual = (prefixo_primeiro + nl + nl + titulo) if prefixo_primeiro else titulo
+    atual = titulo
+    primeiro = True
 
     for bloco in blocos:
         bloco_limpo = bloco.strip()
@@ -387,36 +379,40 @@ def _partir_blocos_em_textos(
 
         if atual.strip():
             cards.append(atual.strip())
-        # cards seguintes: só título + bloco
-        atual = titulo + nl + nl + bloco_limpo
+        # card seguinte: só o bloco, sem título de novo
+        atual = bloco_limpo
+        primeiro = False
 
     if atual.strip():
         cards.append(atual.strip())
-
-    if sufixo_ultimo and cards:
-        ultimo = cards[-1] + nl + nl + sufixo_ultimo
-        if len(ultimo) <= LIMITE_TEXTO_CARD_RESULTADO + 200:
-            cards[-1] = ultimo
-        else:
-            cards.append(sufixo_ultimo)
-
     return cards
 
 
-async def _enviar_card_com_separadores(
+async def _enviar_card_resultado(
     canal: discord.abc.Messageable,
     *,
     texto_topo: str | None,
     texto_meio: str,
     texto_rodape: str | None,
     cor: discord.Color,
+    url_thumbnail: str | None = None,
 ) -> discord.Message:
     """
-    Card com separador.large entre topo/meio e meio/rodapé quando existirem.
+    Card com separador.large entre topo/meio e meio/rodapé.
+
+    Se houver url_thumbnail e texto_topo, o topo vira Section com a foto.
     """
     componentes: list = []
     if texto_topo:
-        componentes.append(discord.ui.TextDisplay(texto_topo))
+        if url_thumbnail:
+            componentes.append(
+                discord.ui.Section(
+                    texto_topo,
+                    accessory=discord.ui.Thumbnail(url_thumbnail),
+                )
+            )
+        else:
+            componentes.append(discord.ui.TextDisplay(texto_topo))
         componentes.append(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
@@ -447,10 +443,9 @@ async def publicar_resultado_prova(
     """
     Publica o resultado no canal da equipe.
 
-    - Card verde: cabeçalho + separador + perguntas corretas
-      (empilha se passar do limite).
+    - Card verde: cabeçalho (com thumbnail) + separador + perguntas corretas
     - Card vermelho: perguntas erradas + separador + rodapé no final
-      (empilha se precisar).
+    - Se estourar o limite, empilha sem repetir o título
     """
     canal_id = CANAIS.get("CANAL_RESULTADO_AVALIACAO") or 0
     canal = guild.get_channel(int(canal_id)) if canal_id else None
@@ -476,6 +471,11 @@ async def publicar_resultado_prova(
     texto_erros_cabecalho = (
         str(numeros_errados) if numeros_errados else "Nenhuma"
     )
+
+    paciente = guild.get_member(consulta.discord_id_paciente)
+    url_thumbnail = None
+    if paciente is not None and paciente.display_avatar is not None:
+        url_thumbnail = paciente.display_avatar.url
 
     nl = chr(10)
     cabecalho = (
@@ -505,7 +505,7 @@ async def publicar_resultado_prova(
 
         if resposta.correta:
             bloco = (
-                f"> ## **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
                 + f"✔ — **Sua escolha** `{resposta.resposta_escolhida}`: "
                 + texto_da_opcao(pergunta, resposta.resposta_escolhida)
                 + nl + nl
@@ -514,7 +514,7 @@ async def publicar_resultado_prova(
             blocos_corretas.append(bloco)
         else:
             bloco = (
-                f"> ## **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
                 + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
                 + texto_da_opcao(pergunta, resposta.resposta_escolhida)
                 + nl
@@ -526,34 +526,32 @@ async def publicar_resultado_prova(
             )
             blocos_erradas.append(bloco)
 
-    # --- Cards verdes: cabeçalho + separador + corretas ---
-    textos_meio_corretas = _partir_blocos_em_textos(
+    textos_corretas = _partir_blocos_em_textos(
         "# 📝 Perguntas corretas:",
         blocos_corretas if blocos_corretas else ["_Nenhuma._"],
     )
 
     mensagem_principal = None
-    for indice, texto_meio in enumerate(textos_meio_corretas):
-        texto_topo = cabecalho if indice == 0 else None
-        mensagem = await _enviar_card_com_separadores(
+    for indice, texto_meio in enumerate(textos_corretas):
+        mensagem = await _enviar_card_resultado(
             canal,
-            texto_topo=texto_topo,
+            texto_topo=cabecalho if indice == 0 else None,
             texto_meio=texto_meio,
             texto_rodape=None,
             cor=discord.Color.green(),
+            url_thumbnail=url_thumbnail if indice == 0 else None,
         )
         if mensagem_principal is None:
             mensagem_principal = mensagem
 
-    # --- Cards vermelhos: erradas + separador + rodapé no último ---
-    textos_meio_erradas = _partir_blocos_em_textos(
+    textos_erradas = _partir_blocos_em_textos(
         "# 📝 Perguntas erradas:",
         blocos_erradas if blocos_erradas else ["_Nenhuma — todas corretas._"],
     )
-    total_erradas = len(textos_meio_erradas)
-    for indice, texto_meio in enumerate(textos_meio_erradas):
+    total_erradas = len(textos_erradas)
+    for indice, texto_meio in enumerate(textos_erradas):
         e_ultimo = indice == total_erradas - 1
-        await _enviar_card_com_separadores(
+        await _enviar_card_resultado(
             canal,
             texto_topo=None,
             texto_meio=texto_meio,
