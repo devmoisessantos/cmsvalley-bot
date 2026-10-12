@@ -742,7 +742,16 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
             return
 
         guilda = interacao.guild
-        paciente = guilda.get_member(self.paciente_id) if guilda else None
+        paciente = None
+        if guilda is not None:
+            paciente = guilda.get_member(self.paciente_id)
+            if paciente is None:
+                try:
+                    paciente = await guilda.fetch_member(self.paciente_id)
+                except discord.HTTPException:
+                    paciente = None
+
+        aviso_publicacao = None
         try:
             if guilda is not None:
                 await publicar_laudo_nos_canais(
@@ -753,22 +762,22 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
                     paciente=paciente,
                 )
         except Exception as erro_pub:
-            await responder_aviso(
-                interacao,
-                titulo="Laudo salvo com aviso",
-                linhas=[
-                    mensagem,
-                    f"O registro foi gravado, mas a publicação falhou: "
-                    f"`{type(erro_pub).__name__}`.",
-                ],
+            registrador.exception(
+                "[laudos] falha ao publicar laudo #%s: %s",
+                laudo.id,
+                erro_pub,
             )
-            return
+            aviso_publicacao = (
+                f"O registro foi gravado, mas a publicação falhou: "
+                f"`{type(erro_pub).__name__}`."
+            )
 
-        # DM do laudo + resumo da prova ao paciente
+        # DM do laudo + resultado da prova (não depende da publicação)
         await _enviar_laudo_na_dm_do_paciente(
             interacao=interacao,
             laudo=laudo,
             paciente=paciente,
+            guild=guilda,
         )
 
         bloco_copiar = (
@@ -780,6 +789,8 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
             mensagem,
             "O documento foi enviado ao canal de laudos e ao log interno.",
         ]
+        if aviso_publicacao:
+            linhas_sucesso.append(aviso_publicacao)
         if self.aviso_prova:
             linhas_sucesso.append(self.aviso_prova)
         linhas_sucesso.extend(
@@ -843,29 +854,33 @@ def montar_texto_documento_laudo(
     laudo,
     valor_pagamento: int | None = None,
     valor_repasse: int | None = None,
+    titulo: str | None = None,
 ) -> str:
-    """Cabecalho padrao do laudo / comprovante."""
-    emoji_parecer = (
-        "✅ `APROVADO`" if laudo.parecer == "APROVADO" else "❌ `REPROVADO`"
-    )
+    """Documento do laudo (DM / comprovante)."""
+    nl = chr(10)
+    if laudo.parecer == "APROVADO":
+        emoji_parecer = "✅ **APROVADO**"
+    else:
+        emoji_parecer = "❌ **REPROVADO**"
+
+    titulo_final = titulo or "# 📋 CMS Valley — LAUDO PSICOLÓGICO"
     linhas = [
-        "# 📋 Comprovante de repasse — LAUDO PSICOLÓGICO",
+        titulo_final,
         "> 📌 **Finalidade:** Avaliação para porte de arma de fogo.",
-        "`👤` **Identificação do Avaliado**",
+        "",
+        "👤 **Identificação do Avaliado**",
         (
             f"• Nome: <@{laudo.discord_id_paciente}> "
             f"• FID: `{laudo.id_fivem_paciente or '—'}`"
         ),
-        (
-            f"- **Consulta:** `#{laudo.consulta_id}` — "
-            f"**Laudo:** `#{laudo.id}`"
-        ),
-        "`🥼` **Psicólogo Responsável**",
+        "",
+        "🥼 **Psicólogo Responsável**",
         (
             f"• Nome: <@{laudo.discord_id_psicologo}> "
             f"• FID: `{laudo.id_fivem_psicologo or '—'}`"
         ),
         f"• Registro Profissional: `{laudo.registro_profissional}`",
+        "📊 **Resultado da Avaliação**",
         f"• **Parecer Final:** {emoji_parecer}",
     ]
     if valor_pagamento is not None:
@@ -876,20 +891,27 @@ def montar_texto_documento_laudo(
         linhas.append(
             f"• **Valor do repasse:** `{formatar_reais(valor_repasse)}`"
         )
-    return chr(10).join(linhas)
+    return nl.join(linhas)
 
 
-async def montar_texto_documento_prova(consulta_id: int) -> str:
-    """Resumo da prova + as 10 perguntas com escolha, gabarito e feedback."""
+async def montar_partes_resultado_prova_dm(
+    consulta_id: int,
+) -> tuple[str, list[str], list[str]]:
+    """
+    Monta o resumo + blocos de corretas e erradas para a DM.
+
+    Retorna (texto_resumo, blocos_corretas, blocos_erradas).
+    """
     from src.laudos.perguntas_porte import NOTA_MINIMA_PORTE
 
+    nl = chr(10)
     respostas = await listar_respostas_da_consulta(consulta_id)
     if not respostas:
-        return (
-            "# 📋 Resultado da Avaliação — Porte"
-            + chr(10)
-            + "_Prova não realizada nesta consulta._"
+        resumo = (
+            "# 📋 Resultado da Avaliação — Laudo Psicológico" + nl
+            + "_Prova teórica não realizada nesta consulta._"
         )
+        return resumo, [], []
 
     mapa = {r.numero_pergunta: r for r in respostas}
     acertos = sum(1 for r in respostas if r.correta)
@@ -904,45 +926,71 @@ async def montar_texto_documento_prova(consulta_id: int) -> str:
     )
     texto_erros = str(numeros_errados) if numeros_errados else "Nenhuma"
 
-    linhas = [
-        "# 📋 Resultado da Avaliação — Porte",
-        (
-            f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
-            f"(`{percentual}%`)"
-        ),
-        f"- **Perguntas erradas:** {texto_erros}",
-        f"- **Parecer sugerido:** `{parecer}`",
-        f"- **Status:** {status}",
-        "---",
-        "# 📝 Perguntas e respostas",
-    ]
+    resumo = (
+        "# 📋 Resultado da Avaliação — Laudo Psicológico" + nl
+        + f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
+        f"(`{percentual}%`)" + nl
+        + f"- **Perguntas erradas:** {texto_erros}" + nl
+        + f"- **Parecer sugerido:** `{parecer}`" + nl
+        + f"- **Status:** {status}"
+    )
+
+    blocos_corretas: list[str] = []
+    blocos_erradas: list[str] = []
     for numero in range(1, TOTAL_PERGUNTAS_PORTE + 1):
         pergunta = obter_pergunta(numero)
-        if pergunta is None:
-            continue
         resposta = mapa.get(numero)
-        if resposta is None:
-            linhas.append(f"### Pergunta {numero}")
-            linhas.append("_Sem resposta registrada._")
+        if pergunta is None or resposta is None:
             continue
-        marca = "✔" if resposta.correta else "✖"
-        escolhida = texto_da_opcao(pergunta, resposta.resposta_escolhida)
-        correta = texto_da_opcao(pergunta, pergunta.resposta_correta)
-        feedback = (
-            pergunta.feedback_acerto
-            if resposta.correta
-            else pergunta.feedback_erro
-        )
-        linhas.append(f"### Pergunta {numero}")
-        linhas.append(pergunta.enunciado)
-        linhas.append(
-            f"{marca} Escolheu `{resposta.resposta_escolhida}`: {escolhida}"
-        )
-        linhas.append(
-            f"✔ Correta `{pergunta.resposta_correta}`: {correta}"
-        )
-        linhas.append(f"**Feedback:** {feedback}")
-    return chr(10).join(linhas)
+        if resposta.correta:
+            blocos_corretas.append(
+                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                + f"✔ — **Sua escolha** `{resposta.resposta_escolhida}`: "
+                + texto_da_opcao(pergunta, resposta.resposta_escolhida)
+                + nl + nl
+                + f"**Feedback correta:** {pergunta.feedback_acerto}"
+            )
+        else:
+            blocos_erradas.append(
+                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
+                + texto_da_opcao(pergunta, resposta.resposta_escolhida)
+                + nl
+                + f"✔ **Correta:** `{pergunta.resposta_correta}`: "
+                + texto_da_opcao(pergunta, pergunta.resposta_correta)
+                + nl + nl
+                + f"**Feedback errada:** {pergunta.feedback_erro}" + nl
+                + f"**Feedback correta:** {pergunta.feedback_acerto}"
+            )
+
+    return resumo, blocos_corretas, blocos_erradas
+
+
+def _empilhar_blocos_dm(titulo: str, blocos: list[str]) -> list[str]:
+    """Empilha blocos em textos < 3500 chars; título só no primeiro."""
+    nl = chr(10)
+    limite = 3500
+    if not blocos:
+        return [titulo + nl + nl + "_Nenhuma._"]
+
+    cards: list[str] = []
+    atual = titulo
+    for bloco in blocos:
+        bloco_limpo = bloco.strip()
+        if not bloco_limpo:
+            continue
+        if len(bloco_limpo) > limite - 80:
+            bloco_limpo = bloco_limpo[: limite - 90] + "…"
+        candidato = atual + nl + nl + bloco_limpo
+        if len(candidato) <= limite:
+            atual = candidato
+            continue
+        if atual.strip():
+            cards.append(atual.strip())
+        atual = bloco_limpo
+    if atual.strip():
+        cards.append(atual.strip())
+    return cards
 
 
 async def _enviar_laudo_na_dm_do_paciente(
@@ -950,21 +998,32 @@ async def _enviar_laudo_na_dm_do_paciente(
     interacao: discord.Interaction,
     laudo,
     paciente: discord.Member | None,
+    guild: discord.Guild | None = None,
 ) -> None:
     """
-    DM com dois cards empilhados:
-    1) documento do laudo (identificacao + parecer + valor do pagamento)
-    2) resultado da prova + as 10 perguntas com feedback
+    Envia na DM do paciente:
+
+    1) Documento do laudo (ícone do servidor + identificação + parecer)
+    2+) Resultado da avaliação: resumo, corretas (verde) e erradas (vermelho)
     """
     if paciente is None:
+        registrador.warning(
+            "[laudos] DM não enviada: paciente None (laudo #%s)",
+            laudo.id,
+        )
         return
+
+    guilda = guild or interacao.guild
+    url_icone = None
+    if guilda is not None and guilda.icon is not None:
+        url_icone = guilda.icon.url
 
     valor_pagamento = _valor_pagamento_laudo(paciente)
     texto_card1 = montar_texto_documento_laudo(
         laudo=laudo,
         valor_pagamento=valor_pagamento,
+        titulo="# 📋 CMS Valley — LAUDO PSICOLÓGICO",
     )
-    texto_card2 = await montar_texto_documento_prova(laudo.consulta_id)
     cor = (
         discord.Color.green()
         if laudo.parecer == "APROVADO"
@@ -972,38 +1031,72 @@ async def _enviar_laudo_na_dm_do_paciente(
     )
 
     try:
-        layout = discord.ui.LayoutView(timeout=None)
-        layout.add_item(
+        # Card 1 — documento do laudo
+        layout1 = discord.ui.LayoutView(timeout=None)
+        if url_icone:
+            componentes1 = [
+                discord.ui.Section(
+                    texto_card1,
+                    accessory=discord.ui.Thumbnail(url_icone),
+                )
+            ]
+        else:
+            componentes1 = [discord.ui.TextDisplay(texto_card1)]
+        layout1.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(texto_card1),
+                *componentes1,
                 accent_color=cor,
             )
         )
-        partes_prova: list[str] = []
-        atual = ""
-        for bloco in texto_card2.split(chr(10) + chr(10)):
-            candidato = f"{atual}{chr(10)}{chr(10)}{bloco}" if atual else bloco
-            if len(candidato) > 1800:
-                if atual:
-                    partes_prova.append(atual)
-                atual = bloco
-            else:
-                atual = candidato
-        if atual:
-            partes_prova.append(atual)
-        if not partes_prova:
-            partes_prova = [texto_card2]
+        await paciente.send(view=layout1)
 
-        componentes_prova: list = [
-            discord.ui.TextDisplay(parte) for parte in partes_prova
-        ]
-        layout.add_item(
+        resumo, blocos_corretas, blocos_erradas = (
+            await montar_partes_resultado_prova_dm(laudo.consulta_id)
+        )
+
+        # Card 2 — resumo
+        layout2 = discord.ui.LayoutView(timeout=None)
+        layout2.add_item(
             discord.ui.Container(
-                *componentes_prova,
+                discord.ui.TextDisplay(resumo),
                 accent_color=discord.Color.blurple(),
             )
         )
-        await paciente.send(view=layout)
+        await paciente.send(view=layout2)
+
+        # Cards verdes — corretas
+        for texto in _empilhar_blocos_dm(
+            "# 📝 Perguntas corretas:",
+            blocos_corretas,
+        ):
+            layout_ok = discord.ui.LayoutView(timeout=None)
+            layout_ok.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay(texto),
+                    accent_color=discord.Color.green(),
+                )
+            )
+            await paciente.send(view=layout_ok)
+
+        # Cards vermelhos — erradas
+        for texto in _empilhar_blocos_dm(
+            "# 📝 Perguntas erradas:",
+            blocos_erradas,
+        ):
+            layout_erro = discord.ui.LayoutView(timeout=None)
+            layout_erro.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay(texto),
+                    accent_color=discord.Color.red(),
+                )
+            )
+            await paciente.send(view=layout_erro)
+
+        registrador.info(
+            "[laudos] DM do laudo #%s enviada para %s",
+            laudo.id,
+            paciente.id,
+        )
     except discord.Forbidden:
         registrador.info(
             "[laudos] DM fechada para paciente %s (laudo #%s)",
@@ -1011,11 +1104,12 @@ async def _enviar_laudo_na_dm_do_paciente(
             laudo.id,
         )
     except Exception as erro_dm:
-        registrador.warning(
+        registrador.exception(
             "[laudos] falha ao enviar DM do laudo #%s: %s",
             laudo.id,
             erro_dm,
         )
+
 
 
 def _anexo_comprovante_valido(anexo: discord.Attachment) -> bool:
