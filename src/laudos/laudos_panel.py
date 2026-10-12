@@ -880,6 +880,7 @@ def montar_texto_documento_laudo(
             f"• FID: `{laudo.id_fivem_psicologo or '—'}`"
         ),
         f"• Registro Profissional: `{laudo.registro_profissional}`",
+        "",
         "📊 **Resultado da Avaliação**",
         f"• **Parecer Final:** {emoji_parecer}",
     ]
@@ -1257,14 +1258,7 @@ async def _solicitar_comprovante_repasse_laudo(
         return
 
     nome_arquivo = anexo.filename or "comprovante_laudo.png"
-    texto_card = montar_texto_documento_laudo(
-        laudo=laudo,
-        valor_pagamento=_valor_pagamento_laudo(paciente),
-        valor_repasse=valor_repasse,
-    )
-    texto_card += (
-        f"\n• **Registrado por:** {interacao.user.mention}"
-    )
+    valor_pagamento = _valor_pagamento_laudo(paciente)
     momento = int(datetime.now(timezone.utc).timestamp())
 
     buffer_anexo = io.BytesIO(bytes_do_arquivo)
@@ -1274,10 +1268,67 @@ async def _solicitar_comprovante_repasse_laudo(
     e_imagem = nome_arquivo.lower().endswith(
         (".png", ".jpg", ".jpeg", ".webp", ".gif")
     )
-    componentes_card: list = [
-        discord.ui.TextDisplay(texto_card),
-        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-    ]
+
+    if laudo.parecer == "APROVADO":
+        texto_parecer = "✅ **APROVADO**"
+    else:
+        texto_parecer = "❌ **REPROVADO**"
+
+    nl = chr(10)
+    titulo_comprovante = (
+        "# 📋 Comprovante de repasse"
+        + nl
+        + "### — LAUDO PSICOLÓGICO —"
+        + nl
+        + "> 📌 **Finalidade:** Avaliação para porte de arma."
+    )
+    corpo_comprovante = (
+        "`👤` **Identificação do Avaliado**"
+        + nl
+        + f"• Nome: <@{laudo.discord_id_paciente}> "
+        + f"• FID: `{laudo.id_fivem_paciente or '—'}`"
+        + nl
+        + nl
+        + "`🥼` **Psicólogo Responsável**"
+        + nl
+        + f"• Nome: <@{laudo.discord_id_psicologo}> "
+        + f"• FID: `{laudo.id_fivem_psicologo or '—'}`"
+        + nl
+        + f"• Registro Profissional: `{laudo.registro_profissional}`"
+        + nl
+        + nl
+        + "`📊` **Resultado da Avaliação**"
+        + nl
+        + f"• **Parecer Final:** {texto_parecer}"
+        + nl
+        + f"• **Valor do pagamento:** `{formatar_reais(valor_pagamento)}`"
+        + nl
+        + f"• **Valor do repasse:** `{formatar_reais(valor_repasse)}`"
+        + nl
+        + f"• **Registrado por:** {interacao.user.mention}"
+        + nl
+        + f"• **Consulta / Laudo:** `#{laudo.consulta_id}` / `#{laudo.id}`"
+    )
+
+    componentes_card: list = []
+    url_icone = guilda.icon.url if guilda.icon else None
+    if url_icone:
+        componentes_card.append(
+            discord.ui.Section(
+                titulo_comprovante,
+                accessory=discord.ui.Thumbnail(url_icone),
+            )
+        )
+    else:
+        componentes_card.append(
+            discord.ui.TextDisplay(titulo_comprovante)
+        )
+
+    componentes_card.append(discord.ui.TextDisplay(corpo_comprovante))
+    componentes_card.append(
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+    )
+
     if e_imagem:
         componentes_card.append(
             discord.ui.MediaGallery(
@@ -1291,19 +1342,20 @@ async def _solicitar_comprovante_repasse_laudo(
             )
         except (TypeError, AttributeError):
             pass
+
     componentes_card.append(
         discord.ui.TextDisplay(
             f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>"
         )
     )
 
-    # 2) Publica no canal de comprovantes
+    # 2) Publica no canal de comprovantes (card exclusivo deste canal)
     try:
         layout = discord.ui.LayoutView(timeout=None)
         layout.add_item(
             discord.ui.Container(
                 *componentes_card,
-                accent_color=discord.Color.gold(),
+                accent_color=discord.Color.orange(),
             )
         )
         await canal_destino.send(view=layout, file=arquivo)
