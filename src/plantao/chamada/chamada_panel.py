@@ -677,19 +677,54 @@ async def _processar_print_ems(
     _resgatar_nao_reconhecidos_pelo_servidor(sessao, guild)
     _limpar_nao_reconhecidos_ja_presentes(sessao)
 
-    ids_fivem_com_toggle = {
-        erro.id_fivem: erro.discord_id for erro in estados_ligados if erro.id_fivem
+    # Depois do resgate, o conjunto de quem está no /ems precisa refletir
+    # também os IDs dos reconhecidos (FID de banco + FID lido no print).
+    # Sem isso, um médico presente no print ainda caía em "ausente no /ems"
+    # quando o id_fivem do EstadoPlantao não batia no set antigo.
+    ids_no_ems_normalizados: set[str] = {
+        str(id_ems).strip() for id_ems in ids_no_ems if id_ems is not None
     }
-    ids_com_toggle_fora_do_ems = set(ids_fivem_com_toggle.keys()) - ids_no_ems
-    # Quem realiza a chamada não conta como ausente do EMS
+    for medico_reconhecido in sessao.reconhecidos:
+        if medico_reconhecido.id_fivem:
+            ids_no_ems_normalizados.add(str(medico_reconhecido.id_fivem).strip())
+        if medico_reconhecido.id_fivem_lido:
+            ids_no_ems_normalizados.add(str(medico_reconhecido.id_fivem_lido).strip())
+    ids_no_ems_normalizados.discard("")
+
+    discord_ids_reconhecidos = {
+        medico_reconhecido.discord_id
+        for medico_reconhecido in sessao.reconhecidos
+        if medico_reconhecido.discord_id is not None
+    }
+
+    ids_fivem_com_toggle: dict[str, int] = {}
+    for estado_ligado in estados_ligados:
+        if not estado_ligado.id_fivem:
+            continue
+        id_toggle_normalizado = str(estado_ligado.id_fivem).strip()
+        if not id_toggle_normalizado:
+            continue
+        ids_fivem_com_toggle[id_toggle_normalizado] = estado_ligado.discord_id
+
     doutor_id = sessao.doutor_id
-    sessao.toggle_ligado_mas_nao_no_ems = [
-        MedicoNaChamada(
-            id_fivem=id_fivem, discord_id=ids_fivem_com_toggle[id_fivem], nome_ems="—"
+    sessao.toggle_ligado_mas_nao_no_ems = []
+    for id_fivem_toggle, discord_id_toggle in ids_fivem_com_toggle.items():
+        # Quem faz a chamada nunca conta como ausente do EMS
+        if discord_id_toggle == doutor_id:
+            continue
+        # Já foi reconhecido no print (por FID ou resgate): está no /ems
+        if discord_id_toggle in discord_ids_reconhecidos:
+            continue
+        # FID do plantão aparece no /ems (comparação normalizada)
+        if id_fivem_toggle in ids_no_ems_normalizados:
+            continue
+        sessao.toggle_ligado_mas_nao_no_ems.append(
+            MedicoNaChamada(
+                id_fivem=id_fivem_toggle,
+                discord_id=discord_id_toggle,
+                nome_ems="—",
+            )
         )
-        for id_fivem in ids_com_toggle_fora_do_ems
-        if ids_fivem_com_toggle[id_fivem] != doutor_id
-    ]
 
     await _processar_ausentes_do_ems(interaction, sessao)
 
@@ -1513,6 +1548,13 @@ def _construir_etapa_3(
     # Garante que o doutor nunca fique marcado como faltante no select
     sessao.faltantes_ids.discard(sessao.doutor_id)
 
+    # Quem foi reconhecido no /ems não pode ficar como "ausente no /ems".
+    # Limpa a pendência automática — a etapa 3 decide falta só pelo select.
+    for medico_da_lista in sessao.presentes_no_ems_toggle_ligado:
+        sessao.faltas_pendentes_ems.discard(medico_da_lista.discord_id)
+    for medico_bypass in sessao.bypass_presenca:
+        sessao.faltas_pendentes_ems.discard(medico_bypass.discord_id)
+
     linha_bypass = (
         f"`🛡️` **{len(sessao.bypass_presenca)}** já contam como presentes "
         f"automaticamente (cargo com dispensa).\n"
@@ -1611,6 +1653,11 @@ async def _ao_atualizar_faltantes(interaction: discord.Interaction):
     todos_ids = {medico.discord_id for medico in sessao.presentes_no_ems_toggle_ligado}
     sessao.faltantes_ids = todos_ids - ids_selecionados  # quem foi desmarcado = falta
 
+    # Presença na etapa 3 anula falta automática de "toggle ligado / fora do /ems".
+    # Sem isso, o membro aparecia como presente e ainda levava advertência no finalizar.
+    for discord_id_presente in ids_selecionados:
+        sessao.faltas_pendentes_ems.discard(discord_id_presente)
+
     await interaction.response.defer(ephemeral=True)
     await editar_mensagem_original(
         interaction,
@@ -1647,6 +1694,18 @@ def _construir_etapa_4(
         for medico in sessao.presentes_no_ems_toggle_ligado
         if medico.discord_id in sessao.faltantes_ids
     ]
+    # Quem ainda está marcado por toggle ligado e fora do /ems (e não recebeu
+    # presença na etapa 3) precisa aparecer aqui — senão a advertência surpreende.
+    ids_ja_listados = {
+        medico.discord_id for medico in presentes + faltantes if medico.discord_id
+    }
+    ausentes_ems_pendentes = [
+        medico
+        for medico in sessao.toggle_ligado_mas_nao_no_ems
+        if medico.discord_id in sessao.faltas_pendentes_ems
+        and medico.discord_id not in ids_ja_listados
+        and medico.discord_id != sessao.doutor_id
+    ]
 
     linhas_presentes = (
         "\n".join(_linha_medico(medico) for medico in presentes) or "_(nenhum)_"
@@ -1654,15 +1713,23 @@ def _construir_etapa_4(
     linhas_faltantes = (
         "\n".join(_linha_medico(medico) for medico in faltantes) or "_(nenhum)_"
     )
+    linhas_ausentes_ems = (
+        "\n".join(_linha_medico(medico) for medico in ausentes_ems_pendentes)
+        or "_(nenhum)_"
+    )
     linhas_norte = (
         "\n".join(_linha_desconhecido(erro) for erro in sessao.medicos_norte)
         or "_(nenhum)_"
     )
 
+    total_faltas_visiveis = len(faltantes) + len(ausentes_ems_pendentes)
     resumo = (
         f"`✅` Presentes: **{len(presentes)}**\n"
-        f"`❌` Faltas: **{len(faltantes)}**\n"
+        f"`❌` Faltas (não respondeu): **{len(faltantes)}**\n"
+        f"`⚠️` Faltas (Plantão ligado, fora do /ems): "
+        f"**{len(ausentes_ems_pendentes)}**\n"
         f"`🏥` Hospital Norte: **{len(sessao.medicos_norte)}**\n\n"
+        f"Total que receberá falta ao finalizar: **{total_faltas_visiveis}**.\n"
         "Revise antes de finalizar — voltar ainda é possível."
     )
 
@@ -1671,7 +1738,10 @@ def _construir_etapa_4(
         discord.ui.TextDisplay(resumo),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
         discord.ui.TextDisplay(f"**✅ Presentes**\n{linhas_presentes}"),
-        discord.ui.TextDisplay(f"**❌ Faltas**\n{linhas_faltantes}"),
+        discord.ui.TextDisplay(f"**❌ Faltas (não respondeu)**\n{linhas_faltantes}"),
+        discord.ui.TextDisplay(
+            f"**⚠️ Faltas (Plantão ligado, fora do /ems)**\n{linhas_ausentes_ems}"
+        ),
         discord.ui.TextDisplay(f"**🏥 Hospital Norte**\n{linhas_norte}"),
         discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
     ]
@@ -1771,11 +1841,23 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
         and medico_presente.discord_id != sessao.doutor_id
     ]
 
-    # Une faltas do select + quem estava com toggle e fora do /ems
+    # Quem recebeu presença (select ou bypass) não pode levar falta automática
+    # de "toggle ligado / fora do /ems". Cobre o caso do print + presença ok
+    # e o cruzamento antigo ainda ter deixado o id em faltas_pendentes_ems.
+    ids_com_presenca = {
+        medico_presente.discord_id
+        for medico_presente in presentes
+        if medico_presente.discord_id is not None
+    }
+    for discord_id_presente in ids_com_presenca:
+        sessao.faltas_pendentes_ems.discard(discord_id_presente)
+
+    # Une faltas do select + quem continua pendente por toggle/EMS
     ids_para_falta: set[int] = set(sessao.faltantes_ids) | set(
         sessao.faltas_pendentes_ems
     )
     ids_para_falta.discard(sessao.doutor_id)
+    ids_para_falta -= ids_com_presenca
 
     for discord_id_falta in ids_para_falta:
         membro = guild.get_member(discord_id_falta) if guild else None
@@ -1837,12 +1919,20 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             select(Chamada).where(Chamada.id == sessao.chamada_id)
         )
         registro_chamada = resultado_chamada.scalar_one_or_none()
+        # Ausentes reais: select + pendências EMS que sobraram após presença
+        ausentes_ems_confirmados = [
+            medico
+            for medico in sessao.toggle_ligado_mas_nao_no_ems
+            if medico.discord_id in sessao.faltas_pendentes_ems
+            and medico.discord_id not in ids_com_presenca
+            and medico.discord_id != sessao.doutor_id
+        ]
         if registro_chamada:
             registro_chamada.total_medicos_ems = sessao.total_medicos_ems
             registro_chamada.total_toggle_ligado = sessao.total_toggle_ligado
             registro_chamada.total_presentes = len(presentes)
             registro_chamada.total_ausentes = len(faltantes) + len(
-                sessao.toggle_ligado_mas_nao_no_ems
+                ausentes_ems_confirmados
             )
             await session.commit()
 
@@ -2106,7 +2196,15 @@ async def _enviar_log_chamada_canal(
     canal_registro = guild.get_channel(CANAIS.get("CANAL_CHAMADAS_HP_SUL"))
     canal_log = guild.get_channel(CANAIS.get("LOG_CHAMADAS"))
 
-    total_ausentes_ems = len(sessao.toggle_ligado_mas_nao_no_ems)
+    # Só conta quem realmente ficou pendente após presença / reconhecimento
+    total_ausentes_ems = len(
+        [
+            medico
+            for medico in sessao.toggle_ligado_mas_nao_no_ems
+            if medico.discord_id in sessao.faltas_pendentes_ems
+            and medico.discord_id != sessao.doutor_id
+        ]
+    )
     total_norte = len(sessao.medicos_norte)
     total_toggle = sessao.total_toggle_ligado
 
