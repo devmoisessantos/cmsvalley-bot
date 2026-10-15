@@ -101,8 +101,7 @@ async def liberar_prova_da_consulta(
         if consulta is None:
             return (
                 False,
-                "Você precisa **Iniciar Consulta** antes de liberar a "
-                "avaliação.",
+                "Você precisa **Iniciar Consulta** antes de liberar a avaliação.",
                 None,
             )
 
@@ -293,9 +292,7 @@ async def finalizar_prova_paciente(
         )
         respostas = list(resultado.scalars().all())
         acertos = sum(1 for resposta in respostas if resposta.correta)
-        parecer = (
-            "APROVADO" if acertos >= NOTA_MINIMA_PORTE else "REPROVADO"
-        )
+        parecer = "APROVADO" if acertos >= NOTA_MINIMA_PORTE else "REPROVADO"
 
         consulta.acertos_prova = acertos
         consulta.parecer_sugerido = parecer
@@ -361,16 +358,13 @@ def _partir_blocos_em_textos(
 
     cards: list[str] = []
     atual = titulo
-    primeiro = True
 
     for bloco in blocos:
         bloco_limpo = bloco.strip()
         if not bloco_limpo:
             continue
         if len(bloco_limpo) > LIMITE_TEXTO_CARD_RESULTADO - 80:
-            bloco_limpo = (
-                bloco_limpo[: LIMITE_TEXTO_CARD_RESULTADO - 90] + "…"
-            )
+            bloco_limpo = bloco_limpo[: LIMITE_TEXTO_CARD_RESULTADO - 90] + "…"
 
         candidato = atual + nl + nl + bloco_limpo
         if len(candidato) <= LIMITE_TEXTO_CARD_RESULTADO:
@@ -381,7 +375,6 @@ def _partir_blocos_em_textos(
             cards.append(atual.strip())
         # card seguinte: só o bloco, sem título de novo
         atual = bloco_limpo
-        primeiro = False
 
     if atual.strip():
         cards.append(atual.strip())
@@ -413,14 +406,10 @@ async def _enviar_card_resultado(
             )
         else:
             componentes.append(discord.ui.TextDisplay(texto_topo))
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(texto_meio))
     if texto_rodape:
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(discord.ui.TextDisplay(texto_rodape))
 
     layout = discord.ui.LayoutView(timeout=None)
@@ -443,9 +432,8 @@ async def publicar_resultado_prova(
     """
     Publica o resultado no canal da equipe.
 
-    - Card verde: cabeçalho (com thumbnail) + separador + perguntas corretas
-    - Card vermelho: perguntas erradas + separador + rodapé no final
-    - Se estourar o limite, empilha sem repetir o título
+    Só as perguntas erradas: cabeçalho + separador + erros + separador + rodapé.
+    Se o texto passar do limite, empilha sem repetir o título.
     """
     canal_id = CANAIS.get("CANAL_RESULTADO_AVALIACAO") or 0
     canal = guild.get_channel(int(canal_id)) if canal_id else None
@@ -457,20 +445,14 @@ async def publicar_resultado_prova(
 
     respostas = await listar_respostas_da_consulta(consulta.id)
     mapa = {r.numero_pergunta: r for r in respostas}
-    numeros_errados = [
-        r.numero_pergunta for r in respostas if not r.correta
-    ]
+    numeros_errados = [r.numero_pergunta for r in respostas if not r.correta]
 
     percentual = round((acertos / TOTAL_PERGUNTAS_PORTE) * 100, 1)
     apto = parecer_sugerido == "APROVADO"
     status_emoji = (
-        "✅ Apto na prova teórica"
-        if apto
-        else "❌ Não apto na prova teórica"
+        "✅ Apto na prova teórica" if apto else "❌ Não apto na prova teórica"
     )
-    texto_erros_cabecalho = (
-        str(numeros_errados) if numeros_errados else "Nenhuma"
-    )
+    texto_erros_cabecalho = str(numeros_errados) if numeros_errados else "Nenhuma"
 
     paciente = guild.get_member(consulta.discord_id_paciente)
     url_thumbnail = None
@@ -479,88 +461,78 @@ async def publicar_resultado_prova(
 
     nl = chr(10)
     cabecalho = (
-        "# 📋 Resultado da Avaliação — Laudo Psicológico" + nl
+        "# 📋 Resultado da Avaliação — Laudo Psicológico"
+        + nl
         + f"- **Paciente:** <@{consulta.discord_id_paciente}> "
-        f"(`{consulta.discord_id_paciente}`)" + nl
-        + f"- **Psicólogo:** <@{consulta.discord_id_psicologo}>" + nl
-        + f"- **Consulta:** `#{consulta.id}`" + nl
+        f"(`{consulta.discord_id_paciente}`)"
+        + nl
+        + f"- **Psicólogo:** <@{consulta.discord_id_psicologo}>"
+        + nl
+        + f"- **Consulta:** `#{consulta.id}`"
+        + nl
         + f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
-        f"(`{percentual}%`)" + nl
-        + f"- **Perguntas erradas:** {texto_erros_cabecalho}" + nl
-        + f"- **Parecer sugerido:** `{parecer_sugerido}`" + nl
+        f"(`{percentual}%`)"
+        + nl
+        + f"- **Perguntas erradas:** {texto_erros_cabecalho}"
+        + nl
+        + f"- **Parecer sugerido:** `{parecer_sugerido}`"
+        + nl
         + f"- **Status:** {status_emoji}"
     )
 
     agora = int(datetime.now(timezone.utc).timestamp())
     rodape = f"-# {guild.name} • <t:{agora}:f>"
 
-    blocos_corretas: list[str] = []
     blocos_erradas: list[str] = []
-
     for numero in range(1, TOTAL_PERGUNTAS_PORTE + 1):
         pergunta = obter_pergunta(numero)
         resposta = mapa.get(numero)
         if pergunta is None or resposta is None:
             continue
-
         if resposta.correta:
-            bloco = (
-                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
-                + f"✔ — **Sua escolha** `{resposta.resposta_escolhida}`: "
-                + texto_da_opcao(pergunta, resposta.resposta_escolhida)
-                + nl + nl
-                + f"**Feedback correta:** {pergunta.feedback_acerto}"
-            )
-            blocos_corretas.append(bloco)
-        else:
-            bloco = (
-                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
-                + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
-                + texto_da_opcao(pergunta, resposta.resposta_escolhida)
-                + nl
-                + f"✔ **Correta:** `{pergunta.resposta_correta}`: "
-                + texto_da_opcao(pergunta, pergunta.resposta_correta)
-                + nl + nl
-                + f"**Feedback errada:** {pergunta.feedback_erro}" + nl
-                + f"**Feedback correta:** {pergunta.feedback_acerto}"
-            )
-            blocos_erradas.append(bloco)
+            continue
+        bloco = (
+            f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )"
+            + nl
+            + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
+            + texto_da_opcao(pergunta, resposta.resposta_escolhida)
+            + nl
+            + f"✔ **Correta:** `{pergunta.resposta_correta}`: "
+            + texto_da_opcao(pergunta, pergunta.resposta_correta)
+            + nl
+            + nl
+            + f"**Feedback errada:** {pergunta.feedback_erro}"
+            + nl
+            + nl
+            + f"**Feedback correta:** {pergunta.feedback_acerto}"
+        )
+        blocos_erradas.append(bloco)
 
-    textos_corretas = _partir_blocos_em_textos(
-        "# 📝 Perguntas corretas:",
-        blocos_corretas if blocos_corretas else ["_Nenhuma._"],
-    )
+    if blocos_erradas:
+        titulo_erros = "> # 📝 Perguntas erradas:"
+        textos_erradas = _partir_blocos_em_textos(titulo_erros, blocos_erradas)
+    else:
+        textos_erradas = [
+            "> # 📝 Perguntas erradas:" + nl + nl + "_Nenhuma — todas corretas._"
+        ]
 
     mensagem_principal = None
-    for indice, texto_meio in enumerate(textos_corretas):
+    total = len(textos_erradas)
+    for indice, texto_meio in enumerate(textos_erradas):
+        e_primeiro = indice == 0
+        e_ultimo = indice == total - 1
         mensagem = await _enviar_card_resultado(
             canal,
-            texto_topo=cabecalho if indice == 0 else None,
+            texto_topo=cabecalho if e_primeiro else None,
             texto_meio=texto_meio,
-            texto_rodape=None,
-            cor=discord.Color.green(),
-            url_thumbnail=url_thumbnail if indice == 0 else None,
+            texto_rodape=rodape if e_ultimo else None,
+            cor=discord.Color.red() if numeros_errados else discord.Color.green(),
+            url_thumbnail=url_thumbnail if e_primeiro else None,
         )
         if mensagem_principal is None:
             mensagem_principal = mensagem
 
-    textos_erradas = _partir_blocos_em_textos(
-        "# 📝 Perguntas erradas:",
-        blocos_erradas if blocos_erradas else ["_Nenhuma — todas corretas._"],
-    )
-    total_erradas = len(textos_erradas)
-    for indice, texto_meio in enumerate(textos_erradas):
-        e_ultimo = indice == total_erradas - 1
-        await _enviar_card_resultado(
-            canal,
-            texto_topo=None,
-            texto_meio=texto_meio,
-            texto_rodape=rodape if e_ultimo else None,
-            cor=discord.Color.red(),
-        )
-
     return mensagem_principal
-
 
 
 async def mapa_respostas_da_consulta(consulta_id: int) -> dict[int, str]:

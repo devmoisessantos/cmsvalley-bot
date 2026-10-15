@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from src.config import (
     CARGO_ENFERMEIRO,
+    CARGOS,
     CURSOS,
     DIVISOR_REPASSE_CURSO,
     HORAS_ISENCAO_RESGATE,
@@ -23,6 +24,7 @@ from src.database.models import (
     agora,
 )
 from src.plantao.carteira_service import cotacao_moeda_do_membro
+from src.plantao.plantao_permissoes import e_diretoria
 from src.utils.error_handling import ignorar_falha_cosmetica
 from src.utils.formatacao import formatar_reais
 
@@ -48,6 +50,176 @@ def curso_e_pratico(chave: str) -> bool:
     """True se o curso está marcado como prático no catálogo."""
     dados = obter_curso(chave) or {}
     return bool(dados.get("pratico"))
+
+
+def curso_e_area(chave: str) -> bool:
+    """Cursos de função (doutor, psicólogo, recrutador, instrutor)."""
+    return chave in ("doutor", "psicologo", "recrutador", "instrutor")
+
+
+def curso_e_diretoria(chave: str) -> bool:
+    """Cursos de diretoria (diretoria e diretoria geral)."""
+    return chave in ("diretoria", "diretoria_geral")
+
+
+def membro_e_instrutor(membro: discord.Member) -> bool:
+    """True se o membro tem algum cargo cujo nome contenha 'instrutor'."""
+    for cargo in membro.roles:
+        nome = (cargo.name or "").lower()
+        if "instrutor" in nome:
+            return True
+    return False
+
+
+def membro_e_equipe_diretoria(membro: discord.Member) -> bool:
+    """Equipe de diretoria (cargo de equipe ou cargos da lista CARGOS_DIRETORIA)."""
+    if e_diretoria(membro):
+        return True
+    id_equipe = CARGOS.get("EQUIPE_DIRETORIA")
+    if id_equipe is None:
+        return False
+    return any(cargo.id == int(id_equipe) for cargo in membro.roles)
+
+
+def membro_e_equipe_diretoria_geral(membro: discord.Member) -> bool:
+    """Só a equipe de diretoria geral (ou administrador do Discord)."""
+    if membro.guild_permissions.administrator:
+        return True
+    id_geral = CARGOS.get("EQUIPE_DIRETORIA_GERAL")
+    if id_geral is None:
+        return False
+    return any(cargo.id == int(id_geral) for cargo in membro.roles)
+
+
+# Cargo de responsável por cada curso de área (nome em CARGOS).
+CARGO_RESPONSAVEL_POR_AREA = {
+    "doutor": "👑・Responsável Doutor・🥼",
+    "psicologo": "👑・Responsável Psicólogo・🧠",
+    "recrutador": "👑・Responsável Recrutamento・🎯",
+    "instrutor": "👑・Responsável Instrutor・🎓",
+}
+
+# Prazo em horas para aceitar agendamento e para decidir / pagar.
+PRAZO_HORAS_CURSO = 48
+
+
+def membro_e_responsavel_da_area(
+    membro: discord.Member,
+    chave: str,
+) -> bool:
+    """True se o membro tem o cargo de responsável daquela área."""
+    nome_cargo = CARGO_RESPONSAVEL_POR_AREA.get(chave)
+    if not nome_cargo:
+        return False
+    id_cargo = CARGOS.get(nome_cargo)
+    if id_cargo is None:
+        return False
+    return any(cargo.id == int(id_cargo) for cargo in membro.roles)
+
+
+def membro_pode_aplicar_chave(
+    membro: discord.Member,
+    chave: str,
+) -> tuple[bool, str]:
+    """
+    Diz se o membro pode aplicar **um** curso.
+
+    - Práticos 1.0 e 2.0: Instrutor ou Diretoria
+    - Área: Equipe Diretoria **ou** responsável da área
+    - Diretoria / Diretoria Geral: só Equipe Diretoria Geral
+    """
+    if membro.guild_permissions.administrator:
+        return True, ""
+
+    tem_diretoria_geral = membro_e_equipe_diretoria_geral(membro)
+    tem_diretoria = membro_e_equipe_diretoria(membro) or tem_diretoria_geral
+    tem_instrutor = membro_e_instrutor(membro)
+    rotulo = rotulo_curso(chave)
+
+    if curso_e_diretoria(chave):
+        if tem_diretoria_geral:
+            return True, ""
+        return (
+            False,
+            f"O curso **{rotulo}** só pode ser aplicado pela "
+            f"**Equipe Diretoria Geral**.",
+        )
+
+    if curso_e_area(chave):
+        if tem_diretoria or membro_e_responsavel_da_area(membro, chave):
+            return True, ""
+        return (
+            False,
+            f"O curso **{rotulo}** só pode ser aplicado pela "
+            f"**Equipe Diretoria** ou pelo **responsável da área**.",
+        )
+
+    if curso_e_pratico(chave):
+        if tem_instrutor or tem_diretoria:
+            return True, ""
+        return (
+            False,
+            f"O curso **{rotulo}** só pode ser aplicado por "
+            f"**Instrutor** ou **Diretoria**.",
+        )
+
+    # Chave desconhecida: só diretoria
+    if tem_diretoria:
+        return True, ""
+    return (
+        False,
+        f"O curso **{rotulo}** exige **Equipe Diretoria**.",
+    )
+
+
+def separar_chaves_por_autorizacao(
+    membro: discord.Member,
+    chaves: list[str],
+) -> tuple[list[str], list[str]]:
+    """
+    Divide o pacote em (autorizadas, negadas) para este membro.
+
+    Instrutor em pacote misto fica só com os práticos; área e diretoria
+    vão para negadas e serão auto-reprovadas no aceite.
+    """
+    autorizadas: list[str] = []
+    negadas: list[str] = []
+    for chave in chaves:
+        pode, _motivo = membro_pode_aplicar_chave(membro, chave)
+        if pode:
+            autorizadas.append(chave)
+        else:
+            negadas.append(chave)
+    return autorizadas, negadas
+
+
+def membro_pode_aplicar_chaves(
+    membro: discord.Member,
+    chaves: list[str],
+) -> tuple[bool, str]:
+    """
+    Diz se o membro pode **aceitar** o pedido.
+
+    Basta ter autorização para **ao menos um** curso do pacote.
+    Os demais (ex.: doutor num pacote misto aceito por instrutor) são
+    auto-reprovados no aceite, sem exigir registro de pagamento.
+    """
+    if not chaves:
+        return False, "Este pedido não tem cursos."
+
+    if membro.guild_permissions.administrator:
+        return True, ""
+
+    autorizadas, negadas = separar_chaves_por_autorizacao(membro, chaves)
+    if autorizadas:
+        return True, ""
+
+    # Nenhum curso do pacote é aplicável por este membro
+    if negadas:
+        primeiro = negadas[0]
+        _pode, motivo = membro_pode_aplicar_chave(membro, primeiro)
+        return False, motivo
+    return False, "Apenas **Instrutor** ou **Diretoria** pode aceitar pedidos."
 
 
 def canal_repasse_da_chave(chave: str) -> str:
@@ -687,6 +859,136 @@ async def mesclar_cursos_no_pedido(
         await sessao.commit()
         await sessao.refresh(registro)
         return registro
+
+
+async def redefinir_chaves_do_pedido(
+    *,
+    solicitacao_id: int,
+    chaves_finais: list[str],
+    status_permitidos: tuple[str, ...] = ("AGENDADO",),
+) -> SolicitacaoCurso | None:
+    """
+    Troca a lista de cursos de um pedido aberto.
+
+    Recalcula o valor in-game com o desconto de moedas já debitado.
+    Se a lista ficar vazia e o status for AGENDADO, cancela o pedido.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return None
+        if registro.status not in status_permitidos:
+            return registro
+
+        unidas: list[str] = []
+        for chave in chaves_finais:
+            if chave not in unidas:
+                unidas.append(chave)
+
+        if not unidas:
+            if registro.status == "AGENDADO":
+                registro.status = "CANCELADO"
+            registro.chaves_cursos_json = json.dumps([], ensure_ascii=False)
+            registro.chave_curso = "pacote"
+            registro.valor_ingame = 0
+            registro.atualizado_em = agora()
+            await sessao.commit()
+            await sessao.refresh(registro)
+            return registro
+
+        registro.chaves_cursos_json = json.dumps(unidas, ensure_ascii=False)
+        registro.chave_curso = unidas[0] if len(unidas) == 1 else "pacote"
+        valor_bruto = soma_valor_ingame(unidas)
+        cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
+        desconto = int(registro.moedas_debitadas or 0) * cotacao
+        registro.valor_ingame = max(0, valor_bruto - desconto)
+        if int(registro.moedas_debitadas or 0) > 0:
+            registro.forma_pagamento = "IN_GAME_COM_DESCONTO"
+        elif (registro.forma_pagamento or "") == "GRATUITO":
+            registro.forma_pagamento = "GRATUITO"
+        else:
+            registro.forma_pagamento = "IN_GAME"
+        registro.atualizado_em = agora()
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
+async def listar_pedidos_expirados(
+    *,
+    prazo_horas: int = PRAZO_HORAS_CURSO,
+) -> list[SolicitacaoCurso]:
+    """
+    Pedidos AGENDADO ou ACEITO cujo prazo de 48h já passou.
+
+    - AGENDADO: conta a partir de ``criado_em`` (aceite).
+    - ACEITO: conta a partir de ``atualizado_em`` (decisão / pagamento).
+    """
+    from datetime import timedelta
+
+    limite = agora() - timedelta(hours=int(prazo_horas))
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(
+                SolicitacaoCurso.status.in_(("AGENDADO", "ACEITO"))
+            )
+        )
+        registros = list(resultado.scalars().all())
+
+    expirados: list[SolicitacaoCurso] = []
+    for registro in registros:
+        if registro.status == "AGENDADO":
+            referencia = registro.criado_em
+        else:
+            referencia = registro.atualizado_em or registro.criado_em
+        if referencia is None:
+            continue
+        # Normaliza para aware se o driver devolver naive
+        if referencia.tzinfo is None:
+            from datetime import timezone as fuso
+
+            referencia = referencia.replace(tzinfo=fuso.utc)
+        if referencia <= limite:
+            expirados.append(registro)
+    return expirados
+
+
+async def anular_e_apagar_pedido(solicitacao_id: int) -> SolicitacaoCurso | None:
+    """
+    Lê o pedido, devolve os dados e **apaga** a linha do banco.
+
+    Quem chama deve apagar a mensagem do Discord usando
+    ``mensagem_canal_id`` / ``mensagem_id`` antes ou depois.
+    Moedas de desconto, se houver, são devolvidas ao aluno.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return None
+
+        # Cópia dos campos que o caller precisa (mensagem, moedas, aluno)
+        class _CopiaPedido:
+            pass
+
+        copia = _CopiaPedido()
+        copia.id = registro.id
+        copia.discord_id = registro.discord_id
+        copia.status = registro.status
+        copia.moedas_debitadas = int(registro.moedas_debitadas or 0)
+        copia.mensagem_canal_id = registro.mensagem_canal_id
+        copia.mensagem_id = registro.mensagem_id
+        copia.chaves_cursos_json = registro.chaves_cursos_json
+        copia.chave_curso = registro.chave_curso
+
+        await sessao.delete(registro)
+        await sessao.commit()
+        return copia  # type: ignore[return-value]
 
 
 async def decidir_cursos_parciais(

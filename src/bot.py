@@ -198,6 +198,7 @@ CAMINHOS_DOS_COGS = [
     "src.screenshare.screenshare_tasks",
     "src.financas.financas_cogs",
     "src.cursos.cursos_cogs",
+    "src.cursos.cursos_tasks",
     "src.promocoes.promocoes_cogs",
     "src.promocoes.avaliacao_hp.avaliacao_hp_cogs",
     "src.demissao.demissao_cogs",

@@ -12,6 +12,7 @@ import discord
 
 from src.config import CANAIS
 from src.cursos.cursos_service import (
+    PRAZO_HORAS_CURSO,
     aceitar_agendamento,
     buscar_pedido_aberto,
     calcular_cobranca_pacote,
@@ -24,6 +25,7 @@ from src.cursos.cursos_service import (
     listar_cursos_ordenados,
     marcar_grupo_repasse,
     marcar_mensagem_solicitacao_curso,
+    membro_pode_aplicar_chaves,
     membro_tem_curso,
     menção_cargo_curso,
     mesclar_cursos_no_pedido,
@@ -33,9 +35,11 @@ from src.cursos.cursos_service import (
     parse_chaves_json,
     proximo_grupo_repasse_pendente,
     recusar_agendamento,
+    redefinir_chaves_do_pedido,
     registrar_solicitacao_pacote,
     remover_cargos_cursando,
     rotulo_curso,
+    separar_chaves_por_autorizacao,
     soma_valor_ingame,
 )
 from src.plantao.plantao_permissoes import e_diretoria
@@ -57,7 +61,11 @@ from src.utils.mensagens import (
 from src.utils.notificacao import enviar_dm_card
 
 CUSTOM_ID_BOTAO_SELECIONAR = "cursos:botao_selecionar"
+CUSTOM_ID_BOTAO_EDITAR_PEDIDO = "cursos:botao_editar_pedido"
 CUSTOM_ID_SELECT_MULTI = "cursos:select_multi"
+CUSTOM_ID_SELECT_REMOVER = "cursos:select_remover"
+CUSTOM_ID_BOTAO_ADD_EDITAR = "cursos:botao_add_editar"
+CUSTOM_ID_BOTAO_CANCELAR_PEDIDO = "cursos:botao_cancelar_pedido"
 CUSTOM_ID_ACEITAR = "cursos:aceitar:"
 CUSTOM_ID_RECUSAR = "cursos:recusar:"
 CUSTOM_ID_APROVAR = "cursos:aprovar:"
@@ -140,13 +148,22 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         linha_botoes = discord.ui.ActionRow()
         botao = discord.ui.Button(
-            label="Selecionar cursos",
+            label="Solicitar cursos",
             style=discord.ButtonStyle.success,
             emoji="📚",
             custom_id=CUSTOM_ID_BOTAO_SELECIONAR,
         )
         botao.callback = self._ao_abrir_selecao
         linha_botoes.add_item(botao)
+
+        botao_editar = discord.ui.Button(
+            label="Editar pedido",
+            style=discord.ButtonStyle.primary,
+            emoji="✏️",
+            custom_id=CUSTOM_ID_BOTAO_EDITAR_PEDIDO,
+        )
+        botao_editar.callback = self._ao_abrir_edicao
+        linha_botoes.add_item(botao_editar)
 
         url_icone = None
         if guild is not None and guild.icon is not None:
@@ -155,7 +172,12 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
         texto_titulo = (
             "Solicite um ou mais cursos do hospital.\n\n"
             "O pedido segue para **agendamentos**; um instrutor aceita, "
-            "aplica o curso e a diretoria/instrutor finaliza a aprovação."
+            "aplica o curso e a diretoria/instrutor finaliza a aprovação.\n"
+            "Com pedido **AGENDADO**, use **Editar pedido** para "
+            "adicionar ou remover cursos.\n"
+            f"Prazo: **{PRAZO_HORAS_CURSO}h** para aceite e "
+            f"**{PRAZO_HORAS_CURSO}h** para decisão/pagamento — "
+            "depois o pedido é anulado."
         )
         # Section + Thumbnail só com ícone — accessory=None quebra o LayoutView
         if url_icone:
@@ -211,6 +233,362 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
                 interacao,
                 titulo="Erro inesperado",
                 linhas=["Não foi possível abrir a seleção de cursos."],
+            )
+
+    async def _ao_abrir_edicao(self, interacao: discord.Interaction):
+        """Abre o painel de edição do pedido ainda agendado do membro."""
+        try:
+            pedido = await buscar_pedido_aberto(interacao.user.id)
+            if pedido is None:
+                await responder_aviso(
+                    interacao,
+                    titulo="Nenhum pedido aberto",
+                    linhas=[
+                        "Você não tem pedido **AGENDADO** ou **ACEITO**.",
+                        "Use **Solicitar cursos** para criar um novo.",
+                    ],
+                    delay=8,
+                )
+                return
+            if pedido.status != "AGENDADO":
+                await responder_aviso(
+                    interacao,
+                    titulo="Pedido já aceito",
+                    linhas=[
+                        f"Pedido `#{pedido.id}` está **{pedido.status}**.",
+                        "Só é possível editar enquanto estiver **AGENDADO**.",
+                        "Peça ao instrutor para recusar se precisar mudar.",
+                    ],
+                    delay=8,
+                )
+                return
+            chaves = parse_chaves_json(
+                pedido.chaves_cursos_json,
+                pedido.chave_curso,
+            )
+            await responder_view(
+                interacao,
+                EditorPedidoCursosView(
+                    solicitante_id=interacao.user.id,
+                    solicitacao_id=pedido.id,
+                    chaves_atuais=chaves,
+                ),
+                ephemeral=True,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao abrir edição de pedido de cursos",
+                erro,
+                contexto="PainelCursosLayout._ao_abrir_edicao",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Não foi possível abrir a edição do pedido."],
+            )
+
+
+class EditorPedidoCursosView(LoggingViewMixin, discord.ui.LayoutView):
+    """Edição efêmera: remover cursos, adicionar ou cancelar o pedido AGENDADO."""
+
+    def __init__(
+        self,
+        *,
+        solicitante_id: int,
+        solicitacao_id: int,
+        chaves_atuais: list[str],
+    ):
+        super().__init__(timeout=180)
+        self.solicitante_id = solicitante_id
+        self.solicitacao_id = solicitacao_id
+        self._chaves_atuais: list[str] = list(chaves_atuais)
+        self._montar_componentes(self._chaves_atuais)
+
+    async def _carregar_chaves(self) -> list[str]:
+        registro = await obter_solicitacao_curso(self.solicitacao_id)
+        if registro is None or registro.status != "AGENDADO":
+            return []
+        return parse_chaves_json(
+            registro.chaves_cursos_json,
+            registro.chave_curso,
+        )
+
+    async def _interaction_check(self, interacao: discord.Interaction) -> bool:
+        if interacao.user.id != self.solicitante_id:
+            await responder_erro(
+                interacao,
+                titulo="Não é seu pedido",
+                linhas=["Só quem abriu a edição pode usar estes botões."],
+            )
+            return False
+        return True
+
+    async def on_timeout(self):
+        return
+
+    def _montar_componentes(self, chaves: list[str]) -> None:
+        """Monta o container com a lista atual de cursos (só no __init__)."""
+        self._chaves_atuais = list(chaves)
+
+        if not chaves:
+            texto_lista = "_Nenhum curso no pedido (será cancelado)._"
+        else:
+            linhas = [f"• {rotulo_curso(chave)}" for chave in chaves]
+            texto_lista = "\n".join(linhas)
+
+        componentes: list = [
+            discord.ui.TextDisplay(
+                f"# Editar pedido `#{self.solicitacao_id}`\n"
+                "Remova cursos, adicione novos ou cancele o pedido inteiro.\n\n"
+                f"**Cursos atuais:**\n{texto_lista}"
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+        ]
+
+        if chaves:
+            opcoes = [
+                discord.SelectOption(
+                    label=rotulo_curso(chave)[:100],
+                    value=chave,
+                    description="Marque para remover",
+                )
+                for chave in chaves[:25]
+            ]
+            linha_select = discord.ui.ActionRow()
+            seletor = discord.ui.Select(
+                placeholder="Selecione cursos para remover…",
+                options=opcoes,
+                min_values=1,
+                max_values=len(opcoes),
+                custom_id=CUSTOM_ID_SELECT_REMOVER,
+            )
+            seletor.callback = self._ao_remover_cursos
+            linha_select.add_item(seletor)
+            componentes.append(linha_select)
+
+        linha_botoes = discord.ui.ActionRow()
+        botao_add = discord.ui.Button(
+            label="Adicionar cursos",
+            style=discord.ButtonStyle.success,
+            emoji="➕",
+            custom_id=CUSTOM_ID_BOTAO_ADD_EDITAR,
+        )
+        botao_add.callback = self._ao_adicionar_cursos
+        linha_botoes.add_item(botao_add)
+
+        botao_cancelar = discord.ui.Button(
+            label="Cancelar pedido",
+            style=discord.ButtonStyle.danger,
+            emoji="🗑️",
+            custom_id=CUSTOM_ID_BOTAO_CANCELAR_PEDIDO,
+        )
+        botao_cancelar.callback = self._ao_cancelar_pedido
+        linha_botoes.add_item(botao_cancelar)
+        componentes.append(linha_botoes)
+
+        self.add_item(
+            discord.ui.Container(
+                *componentes,
+                accent_color=discord.Color.dark_teal(),
+            )
+        )
+
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
+        return await self._interaction_check(interacao)
+
+    async def _ao_remover_cursos(self, interacao: discord.Interaction):
+        try:
+            valores = interacao.data.get("values") if interacao.data else None
+            if not valores:
+                await responder_erro(
+                    interacao,
+                    titulo="Nada selecionado",
+                    linhas=["Escolha ao menos um curso para remover."],
+                )
+                return
+
+            chaves_atuais = await self._carregar_chaves()
+            if not chaves_atuais:
+                await responder_aviso(
+                    interacao,
+                    titulo="Pedido indisponível",
+                    linhas=["Este pedido não está mais **AGENDADO**."],
+                    delay=12,
+                )
+                return
+
+            remover = set(valores)
+            chaves_finais = [c for c in chaves_atuais if c not in remover]
+
+            registro = await redefinir_chaves_do_pedido(
+                solicitacao_id=self.solicitacao_id,
+                chaves_finais=chaves_finais,
+            )
+            if registro is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Pedido não encontrado",
+                    linhas=["Não encontrei o pedido no banco."],
+                )
+                return
+
+            guilda = interacao.guild
+            membro = interacao.user
+            if registro.status == "CANCELADO":
+                moedas = int(registro.moedas_debitadas or 0)
+                if moedas > 0:
+                    await creditar_moedas_instrutor(membro.id, moedas)
+                if guilda is not None:
+                    await apagar_card_do_pedido(guilda, registro)
+                await responder_sucesso(
+                    interacao,
+                    titulo="Pedido cancelado",
+                    linhas=[
+                        f"Pedido `#{self.solicitacao_id}` ficou sem cursos e "
+                        f"foi **cancelado**.",
+                        *(
+                            [f"Devolvidas **{moedas}** moeda(s) de desconto."]
+                            if moedas > 0
+                            else []
+                        ),
+                    ],
+                    delay=18,
+                )
+                return
+
+            if guilda is not None and isinstance(membro, discord.Member):
+                await atualizar_ou_publicar_agendamento(
+                    guilda,
+                    membro=membro,
+                    registro=registro,
+                )
+
+            removidos = [rotulo_curso(c) for c in valores]
+            restam = [rotulo_curso(c) for c in chaves_finais]
+            await responder_sucesso(
+                interacao,
+                titulo="Cursos removidos",
+                linhas=[
+                    f"Pedido `#{self.solicitacao_id}` atualizado.",
+                    f"Removidos: {', '.join(removidos)}",
+                    f"Restam: {', '.join(restam) if restam else '—'}",
+                    "O card de agendamentos foi atualizado.",
+                    "Abra **Editar pedido** de novo se quiser mudar mais.",
+                ],
+                delay=18,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao remover cursos do pedido",
+                erro,
+                contexto="EditorPedidoCursosView._ao_remover_cursos",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Não consegui remover os cursos agora."],
+            )
+
+    async def _ao_adicionar_cursos(self, interacao: discord.Interaction):
+        try:
+            registro = await obter_solicitacao_curso(self.solicitacao_id)
+            if registro is None or registro.status != "AGENDADO":
+                await responder_aviso(
+                    interacao,
+                    titulo="Pedido indisponível",
+                    linhas=["Só pedidos **AGENDADO** podem receber cursos."],
+                    delay=12,
+                )
+                return
+            await responder_view(
+                interacao,
+                SeletorMultiCursosView(self.solicitante_id),
+                ephemeral=True,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao abrir adição de cursos na edição",
+                erro,
+                contexto="EditorPedidoCursosView._ao_adicionar_cursos",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Não foi possível abrir a seleção de cursos."],
+            )
+
+    async def _ao_cancelar_pedido(self, interacao: discord.Interaction):
+        try:
+            registro = await obter_solicitacao_curso(self.solicitacao_id)
+            if registro is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Pedido não encontrado",
+                    linhas=["Não encontrei o pedido no banco."],
+                )
+                return
+            if registro.status != "AGENDADO":
+                await responder_aviso(
+                    interacao,
+                    titulo="Pedido indisponível",
+                    linhas=[
+                        f"Status atual: **{registro.status}**.",
+                        "Só é possível cancelar enquanto estiver **AGENDADO**.",
+                    ],
+                    delay=12,
+                )
+                return
+
+            registro = await redefinir_chaves_do_pedido(
+                solicitacao_id=self.solicitacao_id,
+                chaves_finais=[],
+            )
+            if registro is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Falha ao cancelar",
+                    linhas=["Não consegui cancelar o pedido."],
+                )
+                return
+
+            moedas = int(registro.moedas_debitadas or 0)
+            if moedas > 0:
+                await creditar_moedas_instrutor(interacao.user.id, moedas)
+
+            if interacao.guild is not None:
+                await apagar_card_do_pedido(interacao.guild, registro)
+
+            await responder_sucesso(
+                interacao,
+                titulo="Pedido cancelado",
+                linhas=[
+                    f"Pedido `#{self.solicitacao_id}` foi **cancelado**.",
+                    *(
+                        [f"Devolvidas **{moedas}** moeda(s) de desconto."]
+                        if moedas > 0
+                        else []
+                    ),
+                ],
+                delay=18,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao cancelar pedido de cursos",
+                erro,
+                contexto="EditorPedidoCursosView._ao_cancelar_pedido",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Não consegui cancelar o pedido agora."],
             )
 
 
@@ -987,23 +1365,8 @@ class ViewAceitarAgendamento(LoggingViewMixin, discord.ui.LayoutView):
         )
 
     async def _ao_aceitar(self, interacao: discord.Interaction):
-        membro = interacao.user
-        if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(
-            membro
-        ):
-            await responder_erro(
-                interacao,
-                titulo="Sem permissão",
-                linhas=["Apenas **Instrutor** ou **Diretoria** pode aceitar."],
-            )
-            return
-        await interacao.response.send_modal(
-            ModalObservacaoInstrutor(
-                solicitacao_id=self.solicitacao_id,
-                instrutor_id=membro.id,
-                mensagem_agendamento=interacao.message,
-            )
-        )
+        # Clique persistente passa pelo cog; este callback cobre view em memória.
+        await processar_clique_aceitar_curso(interacao, self.solicitacao_id)
 
 
 class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
@@ -1037,6 +1400,43 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
         try:
             await interacao.response.defer(ephemeral=True)
             obs = (self.campo.value or "").strip()
+            membro_staff = interacao.user
+            if not isinstance(membro_staff, discord.Member):
+                await responder_erro(
+                    interacao,
+                    titulo="Apenas no servidor",
+                    linhas=["Aceite o pedido dentro do Discord do hospital."],
+                )
+                return
+
+            registro_antes = await obter_solicitacao_curso(self.solicitacao_id)
+            if registro_antes is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Pedido não encontrado",
+                    linhas=_linhas_pedido_nao_encontrado(self.solicitacao_id),
+                )
+                return
+            chaves_originais = parse_chaves_json(
+                registro_antes.chaves_cursos_json,
+                registro_antes.chave_curso,
+            )
+            autorizadas, negadas = separar_chaves_por_autorizacao(
+                membro_staff,
+                chaves_originais,
+            )
+            if not autorizadas:
+                await responder_erro(
+                    interacao,
+                    titulo="Sem permissão para este pacote",
+                    linhas=[
+                        "Você não pode aplicar nenhum curso deste pedido.",
+                        "Área e diretoria ficam com a equipe responsável.",
+                    ],
+                    delay=8,
+                )
+                return
+
             registro = await aceitar_agendamento(
                 solicitacao_id=self.solicitacao_id,
                 instrutor_id=self.instrutor_id,
@@ -1061,6 +1461,40 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                 )
                 return
 
+            # Pacote misto: remove cursos que este staff não pode aplicar.
+            # Ex.: instrutor aceita prático+doutor → doutor sai e o aluno
+            # precisa solicitar doutor de novo (sem registrar pagamento).
+            texto_auto_reprova = ""
+            if negadas:
+                rotulos_negados = ", ".join(rotulo_curso(c) for c in negadas)
+                texto_auto_reprova = (
+                    f"\n\n### ⚠️ Auto-reprovados (fora da sua alçada)\n"
+                    f"> {rotulos_negados}\n"
+                    f"> O aluno precisa **solicitar de novo** esses cursos."
+                )
+                nota_extra = (
+                    f"Auto-reprovados no aceite (sem pagamento): {rotulos_negados}"
+                )
+                if obs:
+                    obs = f"{obs}\n---\n{nota_extra}"
+                else:
+                    obs = nota_extra
+                registro = await redefinir_chaves_do_pedido(
+                    solicitacao_id=registro.id,
+                    chaves_finais=autorizadas,
+                    status_permitidos=("ACEITO",),
+                )
+                if registro is None or registro.status != "ACEITO":
+                    await responder_erro(
+                        interacao,
+                        titulo="Falha ao ajustar o pacote",
+                        linhas=[
+                            "O pedido foi aceito, mas não consegui remover "
+                            "os cursos fora da sua alçada.",
+                        ],
+                    )
+                    return
+
             guilda = interacao.guild
             aluno = guilda.get_member(registro.discord_id) if guilda else None
             titulo, corpo = montar_linhas_corpo_pedido(
@@ -1074,6 +1508,7 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                 )
             else:
                 corpo += f"\n\n### 📌 Observação do instrutor: {interacao.user.mention}"
+            corpo += texto_auto_reprova
 
             # Mantém o card no canal de agendamentos (histórico).
             # Só marca como aceito — o pedido não some da conversa.
@@ -1103,7 +1538,7 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
                         usuario=interacao.user,
                     )
 
-            # Libera só o material dos cursos deste pedido (cargo por curso).
+            # Libera só o material dos cursos que este staff pode aplicar.
             detalhe_material = "Sem aluno na guilda para liberar material."
             if aluno is not None:
                 chaves_aceitas = parse_chaves_json(
@@ -1129,30 +1564,44 @@ class ModalObservacaoInstrutor(LoggingModalMixin, discord.ui.Modal):
 
             # DM do aluno + log LOG_NOTIFICACOES_DM
             if aluno is not None:
+                linhas_dm = [
+                    f"Seu pedido `#{registro.id}` foi **aceito**.",
+                    f"Instrutor: {interacao.user.mention}",
+                    f"Observação: {obs or '_Sem observação_'}",
+                    "O material do(s) curso(s) autorizado(s) foi liberado.",
+                    "Aguarde a **aprovação final** após a aplicação do curso.",
+                ]
+                if negadas:
+                    linhas_dm.insert(
+                        1,
+                        "Auto-reprovados (solicite de novo, sem pagamento "
+                        "extra neste pedido): "
+                        + ", ".join(rotulo_curso(c) for c in negadas),
+                    )
                 await enviar_dm_card(
                     aluno,
                     titulo="Agendamento de curso aceito",
-                    linhas=[
-                        f"Seu pedido `#{registro.id}` foi **aceito**.",
-                        f"Instrutor: {interacao.user.mention}",
-                        f"Observação: {obs or '_Sem observação_'}",
-                        "O material do(s) curso(s) foi liberado no Discord.",
-                        "Aguarde a **aprovação final** após a aplicação do curso.",
-                    ],
+                    linhas=linhas_dm,
                     cor=COR_SUCESSO,
                     guilda=guilda,
                 )
 
+            linhas_sucesso = [
+                f"Pedido `#{registro.id}` aceito.",
+                f"Material: {detalhe_material}",
+                "O aluno foi notificado na DM (se aberta).",
+                "Card enviado ao canal de **aprovar/reprovar**.",
+            ]
+            if negadas:
+                linhas_sucesso.append(
+                    "Auto-reprovados (aluno deve solicitar de novo): "
+                    + ", ".join(rotulo_curso(c) for c in negadas)
+                )
             await responder_sucesso(
                 interacao,
                 titulo="Solicitação aceita",
-                linhas=[
-                    f"Pedido `#{registro.id}` aceito.",
-                    f"Material: {detalhe_material}",
-                    "O aluno foi notificado na DM (se aberta).",
-                    "Card enviado ao canal de **aprovar/reprovar**.",
-                ],
-                delay=15,
+                linhas=linhas_sucesso,
+                delay=18,
             )
         except Exception as erro:
             await enviar_erro_para_log_erros(
@@ -2001,15 +2450,35 @@ async def processar_clique_aceitar_curso(
         )
         return
     registro = await obter_solicitacao_curso(solicitacao_id)
-    if registro is not None and registro.status != "AGENDADO":
+    if registro is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=_linhas_pedido_nao_encontrado(solicitacao_id),
+        )
+        return
+    if registro.status != "AGENDADO":
         await responder_aviso(
             interacao,
             titulo="Pedido indisponível",
             linhas=[
                 f"Pedido `#{solicitacao_id}` — Status atual: `{registro.status}`.",
-                "Só pedidos **AGENDADO** podem ser recusados.",
+                "Só pedidos **AGENDADO** podem ser aceitos.",
             ],
             delay=10,
+        )
+        return
+    chaves = parse_chaves_json(
+        registro.chaves_cursos_json,
+        registro.chave_curso,
+    )
+    pode, motivo = membro_pode_aplicar_chaves(membro, chaves)
+    if not pode:
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão para este pacote",
+            linhas=[motivo],
+            delay=15,
         )
         return
     await interacao.response.send_modal(
@@ -2051,6 +2520,19 @@ async def processar_clique_recusar_curso(
                 "Só pedidos **AGENDADO** podem ser recusados.",
             ],
             delay=10,
+        )
+        return
+    chaves = parse_chaves_json(
+        registro.chaves_cursos_json,
+        registro.chave_curso,
+    )
+    pode, motivo = membro_pode_aplicar_chaves(membro, chaves)
+    if not pode:
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão para este pacote",
+            linhas=[motivo],
+            delay=15,
         )
         return
     await interacao.response.send_modal(

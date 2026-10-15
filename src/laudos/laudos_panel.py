@@ -232,8 +232,8 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
                 )
                 return
 
-            acertos, parecer_sugerido, status_prova = (
-                await obter_resumo_prova_consulta(consulta.id)
+            acertos, parecer_sugerido, status_prova = await obter_resumo_prova_consulta(
+                consulta.id
             )
             aviso_prova = None
             if status_prova != "FINALIZADA":
@@ -269,9 +269,7 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         try:
             if not await self._checar_psicologo(interacao):
                 return
-            ok, mensagem, _consulta = await liberar_prova_da_consulta(
-                interacao.user.id
-            )
+            ok, mensagem, _consulta = await liberar_prova_da_consulta(interacao.user.id)
             if ok:
                 await responder_sucesso(
                     interacao,
@@ -287,9 +285,7 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
         except discord.NotFound:
             return
         except discord.HTTPException as erro_http:
-            registrador.warning(
-                f"⚠️ [laudos] liberar avaliação HTTP: {erro_http}"
-            )
+            registrador.warning(f"⚠️ [laudos] liberar avaliação HTTP: {erro_http}")
 
     async def _ao_cancelar_consulta(self, interacao: discord.Interaction):
         try:
@@ -395,7 +391,6 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
         )
 
 
-
 async def _apagar_card_iniciar_consulta(
     interacao: discord.Interaction,
     *,
@@ -481,9 +476,7 @@ async def _finalizar_inicio_consulta_com_id(
             delay=8,
         )
         # Some o card "Iniciar consulta" junto com o aviso de sucesso
-        asyncio.create_task(
-            _apagar_card_iniciar_consulta(interacao, delay=8)
-        )
+        asyncio.create_task(_apagar_card_iniciar_consulta(interacao, delay=8))
         return
 
     # Visitante sem passaporte no banco/apelido → botão que abre modal do ID FiveM
@@ -675,9 +668,7 @@ class ModalInformarPassaportePaciente(
                 linhas=[mensagem, f"Passaporte gravado: `{texto}`"],
                 delay=8,
             )
-            asyncio.create_task(
-                _apagar_card_iniciar_consulta(interacao, delay=8)
-            )
+            asyncio.create_task(_apagar_card_iniciar_consulta(interacao, delay=8))
         else:
             await responder_erro(
                 interacao,
@@ -781,9 +772,7 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
         )
 
         bloco_copiar = (
-            f"```yaml\n{texto_yaml}\n```"
-            if texto_yaml
-            else "_Sem texto para copiar._"
+            f"```yaml\n{texto_yaml}\n```" if texto_yaml else "_Sem texto para copiar._"
         )
         linhas_sucesso = [
             mensagem,
@@ -807,13 +796,16 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
             delay=300,
         )
 
-        # Comprovante de repasse (10 minutos) — após o feedback do laudo
+        # Comprovante obrigatório para todo laudo gerado (com ou sem prova)
         await _solicitar_comprovante_repasse_laudo(
             interacao=interacao,
             laudo=laudo,
             paciente=paciente,
+            prova_foi_feita=(
+                self.aviso_prova is None
+                or "não foi concluída" not in (self.aviso_prova or "")
+            ),
         )
-
 
 
 PRAZO_COMPROVANTE_LAUDO_SEGUNDOS = 600  # 10 minutos
@@ -829,9 +821,7 @@ def _paciente_e_do_hospital(paciente: discord.Member | None) -> bool:
     """True se o membro tem algum cargo da hierarquia hospitalar."""
     if paciente is None:
         return False
-    ids_hierarquia = {
-        CARGOS[nome] for nome in CARGOS_HIERARQUIA if nome in CARGOS
-    }
+    ids_hierarquia = {CARGOS[nome] for nome in CARGOS_HIERARQUIA if nome in CARGOS}
     return any(cargo.id in ids_hierarquia for cargo in paciente.roles)
 
 
@@ -885,13 +875,9 @@ def montar_texto_documento_laudo(
         f"• **Parecer Final:** {emoji_parecer}",
     ]
     if valor_pagamento is not None:
-        linhas.append(
-            f"• **Valor do pagamento:** `{formatar_reais(valor_pagamento)}`"
-        )
+        linhas.append(f"• **Valor do pagamento:** `{formatar_reais(valor_pagamento)}`")
     if valor_repasse is not None:
-        linhas.append(
-            f"• **Valor do repasse:** `{formatar_reais(valor_repasse)}`"
-        )
+        linhas.append(f"• **Valor do repasse:** `{formatar_reais(valor_repasse)}`")
     return nl.join(linhas)
 
 
@@ -909,7 +895,8 @@ async def montar_partes_resultado_prova_dm(
     respostas = await listar_respostas_da_consulta(consulta_id)
     if not respostas:
         resumo = (
-            "# 📋 Resultado da Avaliação — Laudo Psicológico" + nl
+            "# 📋 Resultado da Avaliação — Laudo Psicológico"
+            + nl
             + "_Prova teórica não realizada nesta consulta._"
         )
         return resumo, [], []
@@ -920,19 +907,19 @@ async def montar_partes_resultado_prova_dm(
     numeros_errados = [r.numero_pergunta for r in respostas if not r.correta]
     apto = acertos >= NOTA_MINIMA_PORTE
     parecer = "APROVADO" if apto else "REPROVADO"
-    status = (
-        "✅ Apto na prova teórica"
-        if apto
-        else "❌ Não apto na prova teórica"
-    )
+    status = "✅ Apto na prova teórica" if apto else "❌ Não apto na prova teórica"
     texto_erros = str(numeros_errados) if numeros_errados else "Nenhuma"
 
     resumo = (
-        "# 📋 Resultado da Avaliação — Laudo Psicológico" + nl
+        "# 📋 Resultado da Avaliação — Laudo Psicológico"
+        + nl
         + f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
-        f"(`{percentual}%`)" + nl
-        + f"- **Perguntas erradas:** {texto_erros}" + nl
-        + f"- **Parecer sugerido:** `{parecer}`" + nl
+        f"(`{percentual}%`)"
+        + nl
+        + f"- **Perguntas erradas:** {texto_erros}"
+        + nl
+        + f"- **Parecer sugerido:** `{parecer}`"
+        + nl
         + f"- **Status:** {status}"
     )
 
@@ -945,22 +932,27 @@ async def montar_partes_resultado_prova_dm(
             continue
         if resposta.correta:
             blocos_corretas.append(
-                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )"
+                + nl
                 + f"✔ — **Sua escolha** `{resposta.resposta_escolhida}`: "
                 + texto_da_opcao(pergunta, resposta.resposta_escolhida)
-                + nl + nl
+                + nl
+                + nl
                 + f"**Feedback correta:** {pergunta.feedback_acerto}"
             )
         else:
             blocos_erradas.append(
-                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )" + nl
+                f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )"
+                + nl
                 + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
                 + texto_da_opcao(pergunta, resposta.resposta_escolhida)
                 + nl
                 + f"✔ **Correta:** `{pergunta.resposta_correta}`: "
                 + texto_da_opcao(pergunta, pergunta.resposta_correta)
-                + nl + nl
-                + f"**Feedback errada:** {pergunta.feedback_erro}" + nl
+                + nl
+                + nl
+                + f"**Feedback errada:** {pergunta.feedback_erro}"
+                + nl
                 + f"**Feedback correta:** {pergunta.feedback_acerto}"
             )
 
@@ -1025,11 +1017,7 @@ async def _enviar_laudo_na_dm_do_paciente(
         valor_pagamento=valor_pagamento,
         titulo="# 📋 CMS Valley — LAUDO PSICOLÓGICO",
     )
-    cor = (
-        discord.Color.green()
-        if laudo.parecer == "APROVADO"
-        else discord.Color.red()
-    )
+    cor = discord.Color.green() if laudo.parecer == "APROVADO" else discord.Color.red()
 
     try:
         # Card 1 — documento do laudo
@@ -1051,9 +1039,11 @@ async def _enviar_laudo_na_dm_do_paciente(
         )
         await paciente.send(view=layout1)
 
-        resumo, blocos_corretas, blocos_erradas = (
-            await montar_partes_resultado_prova_dm(laudo.consulta_id)
-        )
+        (
+            resumo,
+            blocos_corretas,
+            blocos_erradas,
+        ) = await montar_partes_resultado_prova_dm(laudo.consulta_id)
 
         # Card 2 — resumo
         layout2 = discord.ui.LayoutView(timeout=None)
@@ -1065,33 +1055,46 @@ async def _enviar_laudo_na_dm_do_paciente(
         )
         await paciente.send(view=layout2)
 
-        # Cards verdes — corretas
-        for texto in _empilhar_blocos_dm(
+        guild_nome = guilda.name if guilda is not None else "CMS Valley"
+        agora_dm = int(datetime.now(timezone.utc).timestamp())
+        rodape_dm = f"-# {guild_nome} • <t:{agora_dm}:f>"
+
+        textos_corretas_dm = _empilhar_blocos_dm(
             "# 📝 Perguntas corretas:",
             blocos_corretas,
-        ):
-            layout_ok = discord.ui.LayoutView(timeout=None)
-            layout_ok.add_item(
-                discord.ui.Container(
-                    discord.ui.TextDisplay(texto),
-                    accent_color=discord.Color.green(),
-                )
-            )
-            await paciente.send(view=layout_ok)
-
-        # Cards vermelhos — erradas
-        for texto in _empilhar_blocos_dm(
+        )
+        textos_erradas_dm = _empilhar_blocos_dm(
             "# 📝 Perguntas erradas:",
             blocos_erradas,
-        ):
-            layout_erro = discord.ui.LayoutView(timeout=None)
-            layout_erro.add_item(
+        )
+
+        # Lista de cards restantes (cor + texto); rodapé só no último
+        cards_finais: list[tuple[discord.Color, str]] = []
+        for texto in textos_corretas_dm:
+            cards_finais.append((discord.Color.green(), texto))
+        for texto in textos_erradas_dm:
+            cards_finais.append((discord.Color.red(), texto))
+
+        if not cards_finais:
+            cards_finais.append((discord.Color.blurple(), "_Sem detalhe da prova._"))
+
+        total_cards = len(cards_finais)
+        for indice, (cor_card, texto) in enumerate(cards_finais):
+            e_ultimo = indice == total_cards - 1
+            componentes_card: list = [discord.ui.TextDisplay(texto)]
+            if e_ultimo:
+                componentes_card.append(
+                    discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+                )
+                componentes_card.append(discord.ui.TextDisplay(rodape_dm))
+            layout_card = discord.ui.LayoutView(timeout=None)
+            layout_card.add_item(
                 discord.ui.Container(
-                    discord.ui.TextDisplay(texto),
-                    accent_color=discord.Color.red(),
+                    *componentes_card,
+                    accent_color=cor_card,
                 )
             )
-            await paciente.send(view=layout_erro)
+            await paciente.send(view=layout_card)
 
         registrador.info(
             "[laudos] DM do laudo #%s enviada para %s",
@@ -1110,7 +1113,6 @@ async def _enviar_laudo_na_dm_do_paciente(
             laudo.id,
             erro_dm,
         )
-
 
 
 def _anexo_comprovante_valido(anexo: discord.Attachment) -> bool:
@@ -1151,36 +1153,46 @@ async def _solicitar_comprovante_repasse_laudo(
     interacao: discord.Interaction,
     laudo,
     paciente: discord.Member | None,
+    prova_foi_feita: bool = True,
 ) -> None:
     """
     Pede o print do repasse (10 min), publica no canal e só então apaga o print.
 
-    Valor: 100.000 (visitante) ou 50.000 (membro do hospital).
+    Obrigatório em todo laudo — inclusive quando a prova não foi liberada
+    nem concluída. Valor: 100.000 (visitante) ou 50.000 (hospital).
     """
     minutos = PRAZO_COMPROVANTE_LAUDO_SEGUNDOS // 60
     valor_repasse = _valor_repasse_laudo(paciente)
+    valor_pagamento = _valor_pagamento_laudo(paciente)
     mencao_paciente = (
         paciente.mention if paciente else f"<@{laudo.discord_id_paciente}>"
     )
     tipo_paciente = (
-        "membro do hospital"
-        if _paciente_e_do_hospital(paciente)
-        else "visitante"
+        "membro do hospital" if _paciente_e_do_hospital(paciente) else "visitante"
     )
+
+    linhas_pedido = [
+        f"Envie **neste canal** o print do comprovante do repasse "
+        f"do laudo **#{laudo.id}** ({mencao_paciente}).",
+        f"**Valor do pagamento:** `{formatar_reais(valor_pagamento)}` "
+        f"· **Repasse:** `{formatar_reais(valor_repasse)}` "
+        f"({tipo_paciente}).",
+        "Formatos: **PNG, JPG, WEBP, GIF ou PDF**.",
+        f"Prazo: **{minutos} minutos**.",
+        "Só conta mensagem **sua** com **anexo válido**.",
+        "O print some **depois** de ser registrado no canal.",
+    ]
+    if not prova_foi_feita:
+        linhas_pedido.insert(
+            0,
+            "⚠️ Laudo gerado **sem prova teórica concluída** — "
+            "o comprovante de repasse **continua obrigatório**.",
+        )
 
     mensagem_pedido = await responder_info(
         interacao,
-        titulo="Comprovante de repasse",
-        linhas=[
-            f"Envie **neste canal** o print do comprovante do repasse "
-            f"do laudo **#{laudo.id}** ({mencao_paciente}).",
-            f"**Valor esperado:** `{formatar_reais(valor_repasse)}` "
-            f"({tipo_paciente}).",
-            "Formatos: **PNG, JPG, WEBP, GIF ou PDF**.",
-            f"Prazo: **{minutos} minutos**.",
-            "Só conta mensagem **sua** com **anexo válido**.",
-            "O print some **depois** de ser registrado no canal.",
-        ],
+        titulo="Comprovante de repasse (obrigatório)",
+        linhas=linhas_pedido,
         delay=None,
     )
 
@@ -1211,7 +1223,7 @@ async def _solicitar_comprovante_repasse_laudo(
                 "Se ainda precisar registrar, envie o print manualmente "
                 "ao canal de comprovantes.",
             ],
-            delay=30,
+            delay=12,
         )
         return
 
@@ -1265,9 +1277,7 @@ async def _solicitar_comprovante_repasse_laudo(
     buffer_anexo.seek(0)
     arquivo = discord.File(fp=buffer_anexo, filename=nome_arquivo)
 
-    e_imagem = nome_arquivo.lower().endswith(
-        (".png", ".jpg", ".jpeg", ".webp", ".gif")
-    )
+    e_imagem = nome_arquivo.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
 
     if laudo.parecer == "APROVADO":
         texto_parecer = "✅ **APROVADO**"
@@ -1307,7 +1317,7 @@ async def _solicitar_comprovante_repasse_laudo(
         + nl
         + f"• **Registrado por:** {interacao.user.mention}"
         + nl
-        + f"• **Consulta / Laudo:** `#{laudo.consulta_id}` / `#{laudo.id}`"
+        + f"• **Consulta**: `#{laudo.consulta_id}` | **Laudo:** `#{laudo.id}`"
     )
 
     componentes_card: list = []
@@ -1320,9 +1330,7 @@ async def _solicitar_comprovante_repasse_laudo(
             )
         )
     else:
-        componentes_card.append(
-            discord.ui.TextDisplay(titulo_comprovante)
-        )
+        componentes_card.append(discord.ui.TextDisplay(titulo_comprovante))
 
     componentes_card.append(discord.ui.TextDisplay(corpo_comprovante))
     componentes_card.append(
@@ -1337,16 +1345,12 @@ async def _solicitar_comprovante_repasse_laudo(
         )
     else:
         try:
-            componentes_card.append(
-                discord.ui.File(f"attachment://{nome_arquivo}")
-            )
+            componentes_card.append(discord.ui.File(f"attachment://{nome_arquivo}"))
         except (TypeError, AttributeError):
             pass
 
     componentes_card.append(
-        discord.ui.TextDisplay(
-            f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>"
-        )
+        discord.ui.TextDisplay(f"-# CENTRO MÉDICO SUL VALLEY • <t:{momento}:f>")
     )
 
     # 2) Publica no canal de comprovantes (card exclusivo deste canal)
@@ -1386,5 +1390,5 @@ async def _solicitar_comprovante_repasse_laudo(
             f"Comprovante do laudo **#{laudo.id}** enviado ao canal de "
             f"repasses (`{formatar_reais(valor_repasse)}`).",
         ],
-        delay=20,
+        delay=12,
     )
