@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 
 import discord
+from sqlalchemy import select
 
+from src.database.conexao import async_session
+from src.database.models import Punicao
 from src.punicoes.punicoes_classes import (
     limpar_sessao,
     obter_sessao,
@@ -17,6 +20,7 @@ from src.punicoes.punicoes_helpers import (
     proximo_cargo_punicao,
     resolver_id_fivem,
 )
+from src.punicoes.punicoes_logger import registrar_pagamento_advertencia
 from src.punicoes.punicoes_service import (
     aplicar_punicao,
     listar_punicoes_membro,
@@ -30,6 +34,7 @@ from src.utils.mensagens import (
     editar_mensagem_original,
     responder_aviso,
     responder_erro,
+    responder_info,
     responder_sucesso,
     responder_view,
 )
@@ -886,21 +891,114 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
         super().__init__()
         self.alvo = alvo
         self.punicao_id = punicao_id
+        self.comprovante_arquivo = None
+
+        # FileUpload (discord.py 2.6+) — comprovante obrigatório
+        if hasattr(discord.ui, "FileUpload") and hasattr(discord.ui, "Label"):
+            self.comprovante_arquivo = discord.ui.FileUpload(
+                min_values=1,
+                max_values=3,
+                required=True,
+            )
+            self.add_item(
+                discord.ui.Label(
+                    text="📎 Comprovante de pagamento",
+                    description="Print/PDF do pagamento (obrigatório)",
+                    component=self.comprovante_arquivo,
+                )
+            )
+
+    async def _coletar_comprovantes(self) -> list[tuple[bytes, str]]:
+        """Baixa todos os bytes dos anexos antes de qualquer publicação."""
+        arquivos: list[tuple[bytes, str]] = []
+        if self.comprovante_arquivo is None:
+            return arquivos
+
+        anexos = getattr(self.comprovante_arquivo, "values", None) or []
+        for anexo in anexos:
+            try:
+                dados = await anexo.read()
+            except Exception as erro:
+                registrador.warning(
+                    "⚠️ [punicoes] falha ao ler comprovante de pagamento: %s",
+                    erro,
+                )
+                continue
+            if not dados:
+                continue
+            nome = getattr(anexo, "filename", None) or "comprovante_pagamento.png"
+            arquivos.append((dados, nome))
+        return arquivos
 
     async def on_submit(self, interaction: discord.Interaction):
-        """Remove a punição e limpa a ephemeral de escolha.
+        """Remove a punição com comprovante e registra o pagamento no canal.
 
-        Após o defer, apaga a mensagem do select de advertências (se ainda
-        existir) para sobrar só a ficha do membro. O resultado aparece num
-        card curto que some sozinho.
+        Fluxo (igual ao laudo):
+        1. Baixa todos os bytes do comprovante
+        2. Mostra mensagem de processando
+        3. Remove a punição
+        4. Publica o pagamento em CANAL_PAGAMENTO_ADV
+        5. Só então envia a mensagem de sucesso
         """
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await responder_erro(
+                interaction,
+                titulo="Erro de contexto",
+                linhas=["Este comando só funciona dentro do servidor."],
+            )
+            return
+
+        # Defer cedo (limite de 3s do Discord); bytes vêm em seguida, antes de publicar
         await interaction.response.defer(ephemeral=True)
+
+        await responder_info(
+            interaction,
+            titulo="Processando remoção",
+            linhas=[
+                "Baixando o comprovante e removendo a punição…",
+            ],
+            delay=None,
+        )
+
+        # 1) Baixa todos os bytes ANTES de remover / publicar no canal
+        comprovantes = await self._coletar_comprovantes()
+        if not comprovantes:
+            await responder_erro(
+                interaction,
+                titulo="Comprovante obrigatório",
+                linhas=[
+                    "Anexe o print/PDF do pagamento para remover a advertência.",
+                ],
+                delay=12,
+            )
+            return
+
+        # Dados da punição antes de baixar (cargo, id, fivem)
+        cargo_id_adv = 0
+        cargo_nome_adv = "Advertência"
+        id_fivem: str | None = None
+        if self.punicao_id is not None:
+            async with async_session() as session:
+                resultado = await session.execute(
+                    select(Punicao).where(Punicao.id == self.punicao_id)
+                )
+                registro = resultado.scalar_one_or_none()
+                if registro is not None:
+                    cargo_id_adv = int(registro.cargo_id)
+                    cargo_nome_adv = registro.cargo_nome or cargo_nome_adv
+                    id_fivem = registro.id_fivem
+
+        if not id_fivem:
+            id_fivem = await resolver_id_fivem(self.alvo.id)
+
+        motivo_txt = self.motivo.value.strip() if self.motivo.value else None
+
         ok, mensagem = await remover_punicao(
             guild=interaction.guild,
             alvo=self.alvo,
             executor=interaction.user,
             punicao_id=self.punicao_id,
-            motivo_remocao=self.motivo.value.strip() if self.motivo.value else None,
+            motivo_remocao=motivo_txt,
         )
 
         # Apaga a ephemeral do select de punições ativas (não a ficha).
@@ -911,20 +1009,51 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 pass
 
-        if ok:
-            await responder_sucesso(
-                interaction,
-                titulo="Punição removida",
-                linhas=[mensagem],
-                delay=8,
-            )
-        else:
+        if not ok:
             await responder_erro(
                 interaction,
                 titulo="Não foi possível remover",
                 linhas=[mensagem],
                 delay=12,
             )
+            return
+
+        # 4) Publica comprovante(s) no canal de pagamento
+        mensagens_pagamento: list[discord.Message] = []
+        for bytes_arquivo, nome_arquivo in comprovantes:
+            msg_pag = await registrar_pagamento_advertencia(
+                guild=interaction.guild,
+                alvo=self.alvo,
+                executor=interaction.user,
+                cargo_id_advertencia=cargo_id_adv,
+                cargo_nome_advertencia=cargo_nome_adv,
+                punicao_id=self.punicao_id,
+                id_fivem=id_fivem,
+                motivo_remocao=motivo_txt,
+                bytes_comprovante=bytes_arquivo,
+                nome_arquivo=nome_arquivo,
+            )
+            if msg_pag is not None:
+                mensagens_pagamento.append(msg_pag)
+
+        linhas_sucesso = [mensagem]
+        if mensagens_pagamento:
+            linhas_sucesso.append(
+                f"Comprovante registrado no canal de pagamento "
+                f"({len(mensagens_pagamento)} arquivo(s))."
+            )
+        else:
+            linhas_sucesso.append(
+                "⚠️ Punição removida, mas não consegui publicar o comprovante "
+                "no canal de pagamento. Verifique `CANAL_PAGAMENTO_ADV`."
+            )
+
+        await responder_sucesso(
+            interaction,
+            titulo="Punição removida",
+            linhas=linhas_sucesso,
+            delay=10,
+        )
 
 
 class FluxoConsultarPunicaoView(LoggingViewMixin, discord.ui.LayoutView):

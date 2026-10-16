@@ -1,4 +1,4 @@
-"""Cog — painel de punições e tarefas (ex.: verbal que expira em 3 dias)."""
+"""Cog — painel de punições, comandos rápidos e tarefas (ex.: verbal que expira)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from datetime import (
 )
 
 import discord
+from discord import app_commands
 from discord.ext import (
     commands,
     tasks,
@@ -25,7 +26,25 @@ from src.database.models import (
     PainelPostado,
     Punicao,
 )
-from src.punicoes.punicoes_panel import PainelPunicoesLayout
+from src.punicoes.punicoes_classes import (
+    limpar_sessao,
+    obter_sessao,
+)
+from src.punicoes.punicoes_helpers import (
+    e_staff_punicao,
+    id_cargo_exonerado,
+    mensagem_sem_permissao,
+)
+from src.punicoes.punicoes_panel import (
+    FluxoAplicarAdvertenciaView,
+    FluxoConsultarPunicaoView,
+    FluxoRemoverPunicaoView,
+    PainelPunicoesLayout,
+)
+from src.utils.mensagens import (
+    responder_erro,
+    responder_view,
+)
 
 registrador = logging.getLogger(__name__)
 
@@ -149,6 +168,96 @@ class PunicoesCog(commands.Cog):
     def cog_unload(self):
         self.tarefa_expirar_verbais.cancel()
 
+    async def _garantir_staff(
+        self, interacao: discord.Interaction
+    ) -> bool:
+        """Bloqueia quem não é staff de punições e avisa no ephemeral."""
+        if not isinstance(interacao.user, discord.Member) or not e_staff_punicao(
+            interacao.user
+        ):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[mensagem_sem_permissao()],
+            )
+            return False
+        return True
+
+    @app_commands.command(
+        name="adv",
+        description="Abre o fluxo efêmero para aplicar advertência",
+    )
+    async def comando_adv(self, interacao: discord.Interaction):
+        """Abre o mesmo ephemeral do botão Aplicar Advertência do painel."""
+        if not await self._garantir_staff(interacao):
+            return
+        limpar_sessao(interacao.user.id)
+        obter_sessao(interacao.user.id)
+        await responder_view(
+            interacao,
+            FluxoAplicarAdvertenciaView(interacao.user.id),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="remover-adv",
+        description="Abre o fluxo efêmero para remover advertência",
+    )
+    async def comando_remover_adv(self, interacao: discord.Interaction):
+        """Abre o mesmo ephemeral do botão Remover Punição do painel."""
+        if not await self._garantir_staff(interacao):
+            return
+        await responder_view(
+            interacao,
+            FluxoRemoverPunicaoView(),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="exo",
+        description="Abre o fluxo efêmero para exonerar um membro",
+    )
+    async def comando_exo(self, interacao: discord.Interaction):
+        """Abre o fluxo de aplicação com o cargo Exonerado pré-selecionado."""
+        if not await self._garantir_staff(interacao):
+            return
+
+        limpar_sessao(interacao.user.id)
+        sessao = obter_sessao(interacao.user.id)
+
+        id_exonerado = id_cargo_exonerado()
+        if id_exonerado is not None:
+            nome_exonerado = next(
+                (
+                    nome
+                    for nome, cargo_id in CARGOS_PUNICOES.items()
+                    if cargo_id == id_exonerado
+                ),
+                "🚫┇Exonerado",
+            )
+            sessao.cargo_id = id_exonerado
+            sessao.cargo_nome = nome_exonerado
+
+        await responder_view(
+            interacao,
+            FluxoAplicarAdvertenciaView(interacao.user.id),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="punicoes",
+        description="Consulta as punições de um membro (abre o select)",
+    )
+    async def comando_punicoes(self, interacao: discord.Interaction):
+        """Abre o mesmo ephemeral do botão Consultar Punição do painel."""
+        if not await self._garantir_staff(interacao):
+            return
+        await responder_view(
+            interacao,
+            FluxoConsultarPunicaoView(),
+            ephemeral=True,
+        )
+
     @tasks.loop(minutes=30)
     async def tarefa_expirar_verbais(self):
         """A cada 30 min: baixa ADV VERBAL com prazo vencido."""
@@ -168,5 +277,5 @@ class PunicoesCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    """Registra o cog de punições (painel + expiração de verbal)."""
+    """Registra o cog de punições (painel + comandos rápidos + expiração)."""
     await bot.add_cog(PunicoesCog(bot))

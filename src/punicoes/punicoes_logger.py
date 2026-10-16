@@ -3,6 +3,7 @@
 Canais:
   - CANAL_ADVERTENCIAS → registro público da advertência + tópico de provas + DM
   - LOG_PUNICOES       → log interno (aplicação e remoção)
+  - CANAL_PAGAMENTO_ADV → comprovante de pagamento ao remover advertência
 """
 
 from __future__ import annotations
@@ -10,13 +11,78 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+from datetime import (
+    datetime,
+    timezone,
+)
 
 import discord
 
-from src.config import CANAIS
+from src.config import (
+    CANAIS,
+    CARGOS_PUNICOES,
+    MESES_ABREV,
+)
+from src.utils.formatacao import (
+    agora_brasilia,
+    para_horario_brasilia,
+)
 from src.utils.notificacao import notificar_dm_advertencia
 
 registrador = logging.getLogger(__name__)
+
+_DIAS_SEMANA = (
+    "segunda-feira",
+    "terça-feira",
+    "quarta-feira",
+    "quinta-feira",
+    "sexta-feira",
+    "sábado",
+    "domingo",
+)
+
+
+def _formatar_data_pagamento(data_hora: datetime | None = None) -> str:
+    """Ex.: sexta-feira, 16 de outubro de 2026 às 17:16"""
+    local = (
+        para_horario_brasilia(data_hora) if data_hora is not None else agora_brasilia()
+    )
+    assert local is not None
+    dia_semana = _DIAS_SEMANA[local.weekday()]
+    nome_mes = MESES_ABREV[local.month]
+    # MESES_ABREV costuma ser abreviado (Out); para o card usamos o nome completo
+    meses_completos = {
+        1: "janeiro",
+        2: "fevereiro",
+        3: "março",
+        4: "abril",
+        5: "maio",
+        6: "junho",
+        7: "julho",
+        8: "agosto",
+        9: "setembro",
+        10: "outubro",
+        11: "novembro",
+        12: "dezembro",
+    }
+    nome_mes = meses_completos.get(local.month, nome_mes)
+    return (
+        f"{dia_semana}, {local.day} de {nome_mes} de {local.year} "
+        f"às {local.strftime('%H:%M')}"
+    )
+
+
+def _cargo_destaque_do_membro(membro: discord.Member) -> discord.Role | None:
+    """Cargo mais alto do membro, ignorando @everyone e cargos de punição."""
+    ids_punicao = set(CARGOS_PUNICOES.values())
+    candidatos = [
+        cargo
+        for cargo in membro.roles
+        if cargo.is_default() is False and cargo.id not in ids_punicao
+    ]
+    if not candidatos:
+        return None
+    return max(candidatos, key=lambda cargo: cargo.position)
 
 
 def _canal(guild: discord.Guild, chave: str) -> discord.abc.GuildChannel | None:
@@ -266,6 +332,134 @@ async def registrar_log_remocao(
         return await canal.send(view=view)
     except discord.HTTPException as erro:
         registrador.warning(f"⚠️ [punicoes] Falha ao postar log de remoção: {erro}")
+        return None
+
+
+async def registrar_pagamento_advertencia(
+    *,
+    guild: discord.Guild,
+    alvo: discord.Member,
+    executor: discord.Member,
+    cargo_id_advertencia: int,
+    cargo_nome_advertencia: str,
+    punicao_id: int | None,
+    id_fivem: str | None,
+    motivo_remocao: str | None,
+    bytes_comprovante: bytes,
+    nome_arquivo: str,
+) -> discord.Message | None:
+    """
+    Publica o comprovante de pagamento da advertência em CANAL_PAGAMENTO_ADV.
+
+    Espera os bytes já baixados (mesmo padrão do laudo: ler arquivo antes de
+    qualquer publicação ou apagar mensagem).
+    """
+    canal = _canal(guild, "CANAL_PAGAMENTO_ADV")
+    if canal is None:
+        registrador.warning(
+            "⚠️ [punicoes] Canal CANAL_PAGAMENTO_ADV não encontrado."
+        )
+        return None
+
+    if not bytes_comprovante:
+        registrador.warning(
+            "⚠️ [punicoes] Comprovante vazio para punição #%s.",
+            punicao_id,
+        )
+        return None
+
+    agora = datetime.now(timezone.utc)
+    momento_unix = int(agora.timestamp())
+    data_pagamento = _formatar_data_pagamento(agora)
+
+    fivem_txt = id_fivem or "—"
+    registro_txt = f"`#{punicao_id}`" if punicao_id is not None else "—"
+    motivo_txt = (motivo_remocao or "Pagamento de advertência").strip()[:400]
+
+    cargo_membro = _cargo_destaque_do_membro(alvo)
+    cargo_membro_txt = (
+        cargo_membro.mention if cargo_membro is not None else "—"
+    )
+    adv_role = guild.get_role(cargo_id_advertencia)
+    adv_txt = (
+        adv_role.mention
+        if adv_role is not None
+        else f"**{cargo_nome_advertencia.strip()}**"
+    )
+
+    nome_arquivo_limpo = nome_arquivo or "comprovante_pagamento.png"
+    e_imagem = nome_arquivo_limpo.lower().endswith(
+        (".png", ".jpg", ".jpeg", ".webp", ".gif")
+    )
+
+    buffer = io.BytesIO(bytes_comprovante)
+    buffer.seek(0)
+    arquivo = discord.File(fp=buffer, filename=nome_arquivo_limpo)
+
+    nl = "\n"
+    titulo = "# 💳 Pagamento de Advertência"
+    corpo = (
+        f"> • `👤` **Nome:** {alvo.mention} • **ID:** `{fivem_txt}`"
+        + nl
+        + f"> • `🎖️` **Cargo:** {cargo_membro_txt}"
+        + nl
+        + f"> • `⚠️` **Advertência:** {adv_txt}"
+        + nl
+        + f"> • `📅` **Data do Pagamento:** `{data_pagamento}`"
+        + nl
+        + nl
+        + f"> • `🛡️` **Responsável pela remoção:** {executor.mention}"
+        + nl
+        + f"> • `🔢` **Nº do registro:** {registro_txt}"
+        + nl
+        + f"> • `📝` **Motivo:** {motivo_txt}"
+    )
+
+    componentes: list = [
+        discord.ui.Section(
+            titulo,
+            accessory=discord.ui.Thumbnail(alvo.display_avatar.url),
+        ),
+        discord.ui.TextDisplay(corpo),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+    ]
+
+    if e_imagem:
+        componentes.append(
+            discord.ui.MediaGallery(
+                discord.MediaGalleryItem(f"attachment://{nome_arquivo_limpo}")
+            )
+        )
+    else:
+        try:
+            componentes.append(
+                discord.ui.File(f"attachment://{nome_arquivo_limpo}")
+            )
+        except (TypeError, AttributeError):
+            pass
+
+    componentes.append(
+        discord.ui.TextDisplay(
+            f"-# CENTRO MÉDICO SUL VALLEY • Pagamento de ADV • <t:{momento_unix}:f>"
+        )
+    )
+
+    layout = discord.ui.LayoutView(timeout=None)
+    layout.add_item(
+        discord.ui.Container(
+            *componentes,
+            accent_color=discord.Color.green(),
+        )
+    )
+
+    try:
+        return await canal.send(view=layout, file=arquivo)
+    except discord.HTTPException as erro:
+        registrador.warning(
+            "⚠️ [punicoes] Falha ao postar pagamento de ADV (#%s): %s",
+            punicao_id,
+            erro,
+        )
         return None
 
 
