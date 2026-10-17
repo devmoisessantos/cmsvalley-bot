@@ -18,7 +18,6 @@ import discord
 from sqlalchemy import func, or_, select
 
 from src.config import CARGOS
-from src.cursos.cursos_service import parse_chaves_json
 from src.database.conexao import async_session
 from src.database.models import (
     Chamada,
@@ -28,6 +27,7 @@ from src.database.models import (
     Ticket,
 )
 from src.plantao.ranking_plantao_service import obter_segundos_plantao_totais
+from src.cursos.cursos_service import parse_chaves_json
 from src.promocoes.promocoes_service import (
     cargo_mais_alto_do_membro,
     id_cargo_por_nome,
@@ -35,9 +35,15 @@ from src.promocoes.promocoes_service import (
     membro_tem_cargo_nome,
     obter_trilha_por_destino_e_origem,
 )
-from src.utils.ephemeral_botoes import linha_ephemeral
-from src.utils.error_handling import LoggingViewMixin
+from src.membros.membros_service import resolver_discord_id_por_fivem
+from src.utils.ephemeral_botoes import botao_fechar, linha_ephemeral
+from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
 from src.utils.formatacao import formatar_hms
+from src.utils.mensagens import (
+    editar_mensagem_original,
+    responder_erro,
+)
+from src.utils.permissions import membro_tem_cargo
 
 try:
     from src.config import METAS_POR_CARGO
@@ -53,6 +59,29 @@ CARGO_PSICOLOGO = "🩺・Psicólogo"
 CARGO_RECRUTADOR = "✈️・Recrutador"
 CARGO_INSTRUTOR = "🥼・Instrutor"
 CARGO_INSTRUTOR_RESGATE = "🚑・Instrutor Resgate"
+
+# Quem pode abrir os relatórios de avaliação HP (igual ao cog)
+CARGOS_QUE_PODEM_AVALIAR = (
+    "Responsavel HP",
+    "👑 | RESPONSÁVEL GERAL",
+    "👑 |  DIRETOR GERAL",
+    "👑 |  VICE DIRETOR GERAL",
+)
+
+
+def pode_usar_avaliacao_hp(membro: discord.Member) -> bool:
+    """True se o membro é Responsável HP ou diretoria geral."""
+    if membro.guild_permissions.administrator:
+        return True
+    for nome_cargo in CARGOS_QUE_PODEM_AVALIAR:
+        if membro_tem_cargo(membro, nome_cargo):
+            return True
+        cargo_id = CARGOS.get(nome_cargo)
+        if cargo_id is not None and any(
+            cargo.id == int(cargo_id) for cargo in membro.roles
+        ):
+            return True
+    return False
 
 # Áreas usadas no ranking de destaque (Responsável de área)
 AREAS_PARA_DESTAQUE: list[tuple[str, str]] = [
@@ -133,7 +162,9 @@ async def contar_producao_do_membro(discord_id: int) -> dict[str, int]:
         # Mesma regra de promoções: conta chaves do pacote, não o pedido.
         resultado = await sessao.execute(
             select(SolicitacaoCurso).where(
-                SolicitacaoCurso.status.in_(["APROVADO", "CONCLUIDO", "FINALIZADO"]),
+                SolicitacaoCurso.status.in_(
+                    ["APROVADO", "CONCLUIDO", "FINALIZADO"]
+                ),
                 or_(
                     SolicitacaoCurso.instrutor_id == discord_id,
                     SolicitacaoCurso.aplicado_por == discord_id,
@@ -272,7 +303,9 @@ def _metas_para_cargo_referencia(
             "meta_laudos": int(trilha.get("meta_laudos") or 0),
             "meta_recrutamentos": int(trilha.get("meta_recrutamentos") or 0),
             "meta_chamadas": int(trilha.get("meta_chamadas") or 0),
-            "meta_cursos_aplicados": int(trilha.get("meta_cursos_aplicados") or 0),
+            "meta_cursos_aplicados": int(
+                trilha.get("meta_cursos_aplicados") or 0
+            ),
             "meta_tickets": int(trilha.get("meta_tickets") or 0),
             "fonte": "trilha",
             "trilha_rotulo": trilha.get("rotulo") or cargo_ref,
@@ -331,7 +364,9 @@ async def montar_relatorio_do_membro(
         "discord_id": membro.id,
         "nome": membro.display_name,
         "mencao": membro.mention,
-        "avatar_url": (membro.display_avatar.url if membro.display_avatar else None),
+        "avatar_url": (
+            membro.display_avatar.url if membro.display_avatar else None
+        ),
         "cargos": _nomes_cargo_do_membro(membro),
         "cargo_atual": cargo_atual,
         "cargo_referencia": cargo_ref,
@@ -341,13 +376,17 @@ async def montar_relatorio_do_membro(
         "segundos_plantao": producao["segundos_plantao"],
         "plantao_formatado": formatar_hms(producao["segundos_plantao"]),
         "laudos": _linha_meta("meta_laudos", producao["laudos"]),
-        "recrutamentos": _linha_meta("meta_recrutamentos", producao["recrutamentos"]),
+        "recrutamentos": _linha_meta(
+            "meta_recrutamentos", producao["recrutamentos"]
+        ),
         "chamadas": _linha_meta("meta_chamadas", producao["chamadas"]),
         "cursos_aplicados": _linha_meta(
             "meta_cursos_aplicados", producao["cursos_aplicados"]
         ),
         "tickets": _linha_meta("meta_tickets", producao["tickets"]),
-        "meta_plantao_segundos": int(metas.get("segundos_minimos_plantao") or 0),
+        "meta_plantao_segundos": int(
+            metas.get("segundos_minimos_plantao") or 0
+        ),
     }
 
 
@@ -385,9 +424,13 @@ def formatar_relatorio_membro_em_linhas(
 
     cargo_ref = relatorio.get("cargo_referencia")
     if cargo_ref:
-        linhas.append(f"**Cargo de referência (próximo / metas):** `{cargo_ref}`")
+        linhas.append(
+            f"**Cargo de referência (próximo / metas):** `{cargo_ref}`"
+        )
     else:
-        linhas.append("**Cargo de referência:** nenhum destino de promoção disponível")
+        linhas.append(
+            "**Cargo de referência:** nenhum destino de promoção disponível"
+        )
 
     meta_plantao = int(relatorio.get("meta_plantao_segundos") or 0)
     plantao = relatorio.get("plantao_formatado") or "0s"
@@ -396,7 +439,8 @@ def formatar_relatorio_membro_em_linhas(
         ok_plantao = segundos >= meta_plantao
         marca = "✅" if ok_plantao else "❌"
         linhas.append(
-            f"{marca} **Plantão:** `{plantao}` (meta `{formatar_hms(meta_plantao)}`)"
+            f"{marca} **Plantão:** `{plantao}` "
+            f"(meta `{formatar_hms(meta_plantao)}`)"
         )
     else:
         linhas.append(f"• **Plantão:** `{plantao}`")
@@ -455,9 +499,13 @@ def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
             extra = f" · trilha `{trilha_rotulo}`"
         elif fonte:
             extra = f" · metas `{fonte}`"
-        partes.append(f"`🎯` **Referência (próximo):** `{cargo_ref}`{extra}")
+        partes.append(
+            f"`🎯` **Referência (próximo):** `{cargo_ref}`{extra}"
+        )
     else:
-        partes.append("`🎯` **Referência:** _sem destino de promoção disponível_")
+        partes.append(
+            "`🎯` **Referência:** _sem destino de promoção disponível_"
+        )
 
     cargos = list(relatorio.get("cargos") or [])
     partes.append("`🏷️` **Cargos:**")
@@ -472,7 +520,8 @@ def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
     if meta_plantao > 0:
         marca = "✅" if segundos >= meta_plantao else "❌"
         partes.append(
-            f"{marca} **Plantão:** `{plantao}` / meta `{formatar_hms(meta_plantao)}`"
+            f"{marca} **Plantão:** `{plantao}` "
+            f"/ meta `{formatar_hms(meta_plantao)}`"
         )
     else:
         partes.append(f"• **Plantão:** `{plantao}`")
@@ -519,11 +568,14 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
         nome = rel.get("nome") or self.membro.display_name
         mencao = rel.get("mencao") or self.membro.mention
         avatar_url = rel.get("avatar_url") or (
-            self.membro.display_avatar.url if self.membro.display_avatar else None
+            self.membro.display_avatar.url
+            if self.membro.display_avatar
+            else None
         )
 
         cabecalho = (
-            f"# 📋 Avaliação HP — {nome}\n> {mencao} · `{rel.get('discord_id')}`"
+            f"# 📋 Avaliação HP — {nome}\n"
+            f"> {mencao} · `{rel.get('discord_id')}`"
         )
 
         componentes: list = []
@@ -537,9 +589,15 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
         else:
             componentes.append(discord.ui.TextDisplay(cabecalho))
 
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-        componentes.append(discord.ui.TextDisplay(montar_texto_corpo_relatorio(rel)))
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        componentes.append(
+            discord.ui.TextDisplay(montar_texto_corpo_relatorio(rel))
+        )
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+        )
 
         destinos = list(rel.get("cargos_referencia_disponiveis") or [])
         cargo_ref = rel.get("cargo_referencia")
@@ -578,8 +636,17 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
                 )
             )
 
-        # Fechar ephemeral (helper padrão)
-        componentes.append(linha_ephemeral(fechar=True))
+        # Nova busca (select / Discord ID / FiveM) + Fechar
+        linha_acoes = discord.ui.ActionRow()
+        botao_nova_busca = discord.ui.Button(
+            label="Nova busca",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔎",
+        )
+        botao_nova_busca.callback = self._ao_nova_busca
+        linha_acoes.add_item(botao_nova_busca)
+        linha_acoes.add_item(botao_fechar())
+        componentes.append(linha_acoes)
 
         self.add_item(
             discord.ui.Container(
@@ -587,6 +654,23 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
                 accent_color=discord.Color.blurple(),
             )
         )
+
+    async def _ao_nova_busca(self, interacao: discord.Interaction) -> None:
+        """Troca o card do relatório pelo seletor de membro."""
+        quem = interacao.user
+        if not isinstance(quem, discord.Member) or not pode_usar_avaliacao_hp(quem):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "Só o Responsável HP e a diretoria geral podem "
+                    "buscar membros neste relatório."
+                ],
+            )
+            return
+        await interacao.response.defer()
+        view_seletor = SeletorMembroAvaliacaoView()
+        await editar_mensagem_original(interacao, view=view_seletor)
 
     async def _trocar_referencia(self, interacao: discord.Interaction) -> None:
         """Recalcula o relatório com o cargo de referência escolhido."""
@@ -612,6 +696,295 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
                 erro,
             )
             # Mantém a view atual; não quebra a mensagem.
+
+
+async def abrir_relatorio_membro_na_mensagem(
+    interacao: discord.Interaction,
+    membro: discord.Member,
+) -> None:
+    """
+    Monta o relatório do membro e troca a mensagem atual pelo card.
+
+    Usado pelo seletor de nova busca (UserSelect e modais de ID).
+    A interação já deve estar respondida (defer) antes de chamar.
+    """
+    try:
+        relatorio = await montar_relatorio_do_membro(membro)
+        view = RelatorioMembroHpView(membro=membro, relatorio=relatorio)
+        await editar_mensagem_original(interacao, view=view)
+    except Exception as erro_capturado:
+        logger.exception(
+            "Falha ao abrir relatório HP de %s: %s",
+            membro.id,
+            erro_capturado,
+        )
+        await responder_erro(
+            interacao,
+            titulo="Não consegui montar o relatório",
+            linhas=[
+                "Houve um erro ao buscar a produção deste membro.",
+                "Tente de novo em instantes.",
+            ],
+        )
+
+
+class SeletorMembroAvaliacaoView(LoggingViewMixin, discord.ui.LayoutView):
+    """
+    Busca de membro para avaliação HP — mesmo padrão do gerenciar-membros.
+
+    - UserSelect (membro no servidor)
+    - Botão Discord ID (modal)
+    - Botão FiveM (modal)
+    """
+
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+
+        linha_usuario = discord.ui.ActionRow()
+        seletor_usuario = discord.ui.UserSelect(
+            placeholder="Selecione o membro…",
+            min_values=1,
+            max_values=1,
+        )
+        seletor_usuario.callback = self._ao_selecionar_membro
+        linha_usuario.add_item(seletor_usuario)
+
+        linha_ids = discord.ui.ActionRow()
+        botao_discord = discord.ui.Button(
+            label="Discord ID",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔍",
+        )
+        botao_discord.callback = self._ao_buscar_discord_id
+        botao_fivem = discord.ui.Button(
+            label="FiveM",
+            style=discord.ButtonStyle.secondary,
+            emoji="🪪",
+        )
+        botao_fivem.callback = self._ao_buscar_fivem
+        linha_ids.add_item(botao_discord)
+        linha_ids.add_item(botao_fivem)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# 🔎 Nova busca — Avaliação HP"),
+                discord.ui.TextDisplay(
+                    "Escolha o membro no select ou busque por "
+                    "**Discord ID** ou **ID FiveM**."
+                ),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                linha_usuario,
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                linha_ids,
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
+                linha_ephemeral(fechar=True),
+                accent_color=discord.Color.blurple(),
+            )
+        )
+
+    async def _ao_selecionar_membro(
+        self, interacao: discord.Interaction
+    ) -> None:
+        quem = interacao.user
+        if not isinstance(quem, discord.Member) or not pode_usar_avaliacao_hp(
+            quem
+        ):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "Só o Responsável HP e a diretoria geral podem "
+                    "abrir este relatório."
+                ],
+            )
+            return
+
+        valores = list(interacao.data.get("values") or []) if interacao.data else []
+        if not valores:
+            await responder_erro(
+                interacao,
+                titulo="Ninguém selecionado",
+                linhas=["Escolha um membro no select ou use busca por ID."],
+            )
+            return
+
+        membro = (
+            interacao.guild.get_member(int(valores[0]))
+            if interacao.guild
+            else None
+        )
+        if membro is None:
+            await responder_erro(
+                interacao,
+                titulo="Membro ausente",
+                linhas=[
+                    "Esse usuário não está no servidor.",
+                    "Tente buscar por Discord ID ou FiveM.",
+                ],
+            )
+            return
+
+        await interacao.response.defer()
+        await abrir_relatorio_membro_na_mensagem(interacao, membro)
+
+    async def _ao_buscar_discord_id(
+        self, interacao: discord.Interaction
+    ) -> None:
+        quem = interacao.user
+        if not isinstance(quem, discord.Member) or not pode_usar_avaliacao_hp(
+            quem
+        ):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "Só o Responsável HP e a diretoria geral podem "
+                    "buscar membros neste relatório."
+                ],
+            )
+            return
+        await interacao.response.send_modal(ModalBuscarDiscordIdAvaliacao())
+
+    async def _ao_buscar_fivem(self, interacao: discord.Interaction) -> None:
+        quem = interacao.user
+        if not isinstance(quem, discord.Member) or not pode_usar_avaliacao_hp(
+            quem
+        ):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "Só o Responsável HP e a diretoria geral podem "
+                    "buscar membros neste relatório."
+                ],
+            )
+            return
+        await interacao.response.send_modal(ModalBuscarFivemIdAvaliacao())
+
+
+class ModalBuscarDiscordIdAvaliacao(
+    LoggingModalMixin, discord.ui.Modal, title="Discord ID"
+):
+    """Modal: digita o Discord ID e abre o relatório do membro."""
+
+    campo_discord_id = discord.ui.TextInput(
+        label="Discord ID",
+        required=True,
+        max_length=20,
+        placeholder="Ex.: 123456789012345678",
+    )
+
+    async def on_submit(self, interacao: discord.Interaction) -> None:
+        quem = interacao.user
+        if not isinstance(quem, discord.Member) or not pode_usar_avaliacao_hp(
+            quem
+        ):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "Só o Responsável HP e a diretoria geral podem "
+                    "buscar membros neste relatório."
+                ],
+            )
+            return
+
+        texto_id = (self.campo_discord_id.value or "").strip()
+        if not texto_id.isdigit():
+            await responder_erro(
+                interacao,
+                titulo="ID inválido",
+                linhas=["Informe somente números no Discord ID."],
+            )
+            return
+
+        discord_id = int(texto_id)
+        await interacao.response.defer()
+
+        membro = (
+            interacao.guild.get_member(discord_id) if interacao.guild else None
+        )
+        if membro is None:
+            await responder_erro(
+                interacao,
+                titulo="Não encontrado no servidor",
+                linhas=[
+                    f"Não há membro com Discord ID `{discord_id}` "
+                    "neste servidor.",
+                    "O relatório precisa do membro presente na guilda "
+                    "(cargos e hierarquia).",
+                ],
+            )
+            return
+
+        await abrir_relatorio_membro_na_mensagem(interacao, membro)
+
+
+class ModalBuscarFivemIdAvaliacao(
+    LoggingModalMixin, discord.ui.Modal, title="ID FiveM"
+):
+    """Modal: digita o FID e abre o relatório do membro vinculado."""
+
+    campo_id_fivem = discord.ui.TextInput(
+        label="ID FiveM",
+        required=True,
+        max_length=20,
+        placeholder="Ex.: 42",
+    )
+
+    async def on_submit(self, interacao: discord.Interaction) -> None:
+        quem = interacao.user
+        if not isinstance(quem, discord.Member) or not pode_usar_avaliacao_hp(
+            quem
+        ):
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=[
+                    "Só o Responsável HP e a diretoria geral podem "
+                    "buscar membros neste relatório."
+                ],
+            )
+            return
+
+        texto_fid = (self.campo_id_fivem.value or "").strip()
+        if not texto_fid.isdigit():
+            await responder_erro(
+                interacao,
+                titulo="ID inválido",
+                linhas=["Informe somente números no ID FiveM."],
+            )
+            return
+
+        await interacao.response.defer()
+        discord_id = await resolver_discord_id_por_fivem(texto_fid)
+        if discord_id is None:
+            await responder_erro(
+                interacao,
+                titulo="FiveM não encontrado",
+                linhas=[
+                    f"Nenhum membro cadastrado com FID `{texto_fid}`.",
+                ],
+            )
+            return
+
+        membro = (
+            interacao.guild.get_member(int(discord_id))
+            if interacao.guild
+            else None
+        )
+        if membro is None:
+            await responder_erro(
+                interacao,
+                titulo="Não encontrado no servidor",
+                linhas=[
+                    f"FID `{texto_fid}` está ligado a <@{discord_id}>, "
+                    "mas essa pessoa não está no servidor agora.",
+                ],
+            )
+            return
+
+        await abrir_relatorio_membro_na_mensagem(interacao, membro)
 
 
 async def listar_membros_da_area(
@@ -658,7 +1031,7 @@ async def montar_relatorio_da_area(
         "segundos_plantao": 0,
     }
 
-    for membro in membros[:limite_membros]:
+    for membro in membros[: limite_membros]:
         producao = await contar_producao_do_membro(membro.id)
         totais["laudos"] += producao["laudos"]
         totais["recrutamentos"] += producao["recrutamentos"]
@@ -717,7 +1090,8 @@ def formatar_relatorio_area_em_linhas(
         f"plantão `{formatar_hms(int(totais.get('segundos_plantao') or 0))}`"
     )
     linhas.append(
-        f"**Ranking pela meta principal** (`{relatorio.get('meta_principal')}`):"
+        f"**Ranking pela meta principal** "
+        f"(`{relatorio.get('meta_principal')}`):"
     )
 
     ranking = list(relatorio.get("ranking") or [])[:top]

@@ -17,13 +17,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.config import CARGOS
 from src.promocoes.avaliacao_hp.avaliacao_hp_service import (
     RelatorioMembroHpView,
     formatar_destaques_em_linhas,
     formatar_relatorio_area_em_linhas,
     montar_relatorio_da_area,
     montar_relatorio_do_membro,
+    pode_usar_avaliacao_hp,
     sugerir_destaque_por_area,
 )
 from src.utils.mensagens import (
@@ -32,7 +32,6 @@ from src.utils.mensagens import (
     responder_info,
     responder_view,
 )
-from src.utils.permissions import membro_tem_cargo
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +40,6 @@ CARGO_DOUTOR = "🥼・Doutor"
 CARGO_PSICOLOGO = "🩺・Psicólogo"
 CARGO_RECRUTADOR = "✈️・Recrutador"
 CARGO_INSTRUTOR = "🥼・Instrutor"
-
-# Quem pode abrir os relatórios de avaliação HP
-CARGOS_QUE_PODEM_AVALIAR = (
-    "Responsavel HP",
-    "👑 | RESPONSÁVEL GERAL",
-    "👑 |  DIRETOR GERAL",
-    "👑 |  VICE DIRETOR GERAL",
-)
 
 OPCOES_AREA = [
     app_commands.Choice(name="Doutor", value="doutor"),
@@ -63,21 +54,6 @@ MAPA_AREA_PARA_CARGO = {
     "recrutador": CARGO_RECRUTADOR,
     "instrutor": CARGO_INSTRUTOR,
 }
-
-
-def _pode_usar_avaliacao(membro: discord.Member) -> bool:
-    """True se o membro é Responsável HP ou diretoria geral."""
-    if membro.guild_permissions.administrator:
-        return True
-    for nome_cargo in CARGOS_QUE_PODEM_AVALIAR:
-        if membro_tem_cargo(membro, nome_cargo):
-            return True
-        cargo_id = CARGOS.get(nome_cargo)
-        if cargo_id is not None and any(
-            cargo.id == int(cargo_id) for cargo in membro.roles
-        ):
-            return True
-    return False
 
 
 class AvaliacaoHpCog(commands.Cog):
@@ -110,7 +86,7 @@ class AvaliacaoHpCog(commands.Cog):
                 linhas=["Use o comando dentro do Discord do hospital."],
             )
             return
-        if not _pode_usar_avaliacao(quem_pediu):
+        if not pode_usar_avaliacao_hp(quem_pediu):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
@@ -163,7 +139,7 @@ class AvaliacaoHpCog(commands.Cog):
                 linhas=["Use o comando dentro do Discord do hospital."],
             )
             return
-        if not _pode_usar_avaliacao(quem_pediu):
+        if not pode_usar_avaliacao_hp(quem_pediu):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
@@ -245,7 +221,7 @@ class AvaliacaoHpCog(commands.Cog):
                 linhas=["Use o comando dentro do Discord do hospital."],
             )
             return
-        if not _pode_usar_avaliacao(quem_pediu):
+        if not pode_usar_avaliacao_hp(quem_pediu):
             await responder_erro(
                 interacao,
                 titulo="Sem permissão",
