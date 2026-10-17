@@ -22,12 +22,12 @@ from src.database.models import (
     Usuario,
 )
 from src.plantao.carteira_service import (
-    equivalente_em_reais,
     membro_elegivel_ranking_moedas,
     ranking_top_moedas,
     zerar_saldo_moedas,
 )
 from src.recrutamento.recrutamento_service import resolver_id_fivem
+from src.utils.formatacao import formatar_dinheiro
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +115,12 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
     linhas_rank: list[str] = []
 
     # Filtra só quem ainda faz parte da organização; zera saldo de quem saiu/exonerado
-    top: list[tuple[int, int]] = []
-    for discord_id, saldo in candidatos:
+    # candidatos: (discord_id, saldo_moedas, valor_ingame dos lotes)
+    top: list[tuple[int, int, int]] = []
+    for discord_id, saldo, valor_ingame in candidatos:
         membro = guilda.get_member(discord_id)
         if membro_elegivel_ranking_moedas(membro):
-            top.append((discord_id, saldo))
+            top.append((discord_id, saldo, valor_ingame))
             if len(top) >= 15:
                 break
         else:
@@ -140,23 +141,23 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
                 )
 
     ids_fora_cache = [
-        discord_id for discord_id, _ in top if guilda.get_member(discord_id) is None
+        discord_id for discord_id, _, _ in top if guilda.get_member(discord_id) is None
     ]
     nicknames = await _nicknames_do_banco(ids_fora_cache)
 
-    for posicao, (discord_id, saldo) in enumerate(top, start=1):
+    for posicao, (discord_id, saldo, valor_ingame) in enumerate(top, start=1):
         mencao = _rotulo_membro(guilda, discord_id, nicknames.get(discord_id))
         fid = await resolver_id_fivem(discord_id) or "—"
+        equiv = formatar_dinheiro(valor_ingame)
         prefixo = medalhas.get(posicao, f"`{posicao}.`")
         if posicao <= 3:
             linhas_rank.append(
                 f"{prefixo} **{posicao}.** {mencao} | FID `{fid}` · "
-                f"**{saldo}** · `{equivalente_em_reais(saldo)}`"
+                f"**{saldo}** · `{equiv}`"
             )
         else:
             linhas_rank.append(
-                f"`{posicao}.` {mencao} | FID `{fid}` · "
-                f"**{saldo}** · `{equivalente_em_reais(saldo)}`"
+                f"`{posicao}.` {mencao} | FID `{fid}` · **{saldo}** · `{equiv}`"
             )
 
     if not linhas_rank:
@@ -169,7 +170,8 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
 
     titulo = "# 🏆 Ranking de Moedas — Top 15"
     intro = (
-        "> Classificação por **saldo atual** · sem premiação · sem reset\n\n"
+        "> Classificação por **valor dos lotes**"
+        " · sem premiação · sem reset\n\n"
         f"## Ranking\n{corpo_rank}"
     )
     rodape = f"-# {guilda.name} • atualizado em tempo real · <t:{momento}:R>"

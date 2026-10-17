@@ -19,6 +19,7 @@ from src.plantao.carteira_service import (
     obter_valor_total_lotes,
     recusar_deposito,
     rotulo_tipo_movimentacao,
+    simular_valor_debito,
     transferir_moedas,
 )
 from src.recrutamento.recrutamento_service import resolver_id_fivem
@@ -217,6 +218,11 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
         await interacao.response.defer(ephemeral=True)
         movimentos = await listar_extrato(self.membro_id, limite=15)
         saldo = await obter_saldo(self.membro_id)
+        try:
+            valor_equiv = await obter_valor_total_lotes(self.membro_id)
+            texto_equiv = formatar_dinheiro(valor_equiv)
+        except Exception:
+            texto_equiv = equivalente_em_reais(saldo)
         linhas_mov: list[str] = []
         for mov in movimentos:
             momento = para_horario_brasilia(mov.criado_em)
@@ -233,7 +239,7 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
 
         corpo = (
             f"> `💰` * **Saldo atual:** `{saldo} moedas` · "
-            f"`{equivalente_em_reais(saldo)}`\n\n"
+            f"`{texto_equiv}`\n\n"
             "## Últimas movimentações\n"
             + "\n".join(linhas_mov)
             + "\n\n-# Mostrando as 15 mais recentes"
@@ -417,6 +423,11 @@ class ViewSelecionarDestinoTransferencia(LoggingViewMixin, discord.ui.LayoutView
 
         fid = await _fid(destino)
         cargo = cargo_principal_hierarquia(destino)
+        try:
+            valor_equiv = await obter_valor_total_lotes(self.remetente_id)
+            texto_equiv = formatar_dinheiro(valor_equiv)
+        except Exception:
+            texto_equiv = equivalente_em_reais(self.saldo)
         corpo = (
             "## Destinatário\n"
             f"> `👤` * **Nome:** {destino.mention}\n"
@@ -425,7 +436,7 @@ class ViewSelecionarDestinoTransferencia(LoggingViewMixin, discord.ui.LayoutView
             f"> `📅` * **Membro desde:** `{_membro_desde(destino)}`\n\n"
             "## Sua carteira\n"
             f"> `🪙` * **Saldo atual:** `{self.saldo} moedas`\n"
-            f"> `💵` * **Equivalente:** `{equivalente_em_reais(self.saldo)}`\n\n"
+            f"> `💵` * **Equivalente:** `{texto_equiv}`\n\n"
             "Confira se é a pessoa certa antes de continuar."
         )
         view = ViewConfirmarDestinoTransferencia(
@@ -599,9 +610,14 @@ class ModalQuantidadeTransferencia(
 
         fid_rem = await _fid(interacao.user)  # type: ignore[arg-type]
         saldo_apos = self.saldo - quantidade
+        try:
+            valor_qtd = await simular_valor_debito(self.remetente_id, quantidade)
+            texto_equiv_qtd = formatar_dinheiro(valor_qtd)
+        except Exception:
+            texto_equiv_qtd = equivalente_em_reais(quantidade)
         corpo = (
             f"> `🪙` * **Quantidade:** `{quantidade} moedas`\n"
-            f"> `💵` * **Equivalente:** `{equivalente_em_reais(quantidade)}`\n"
+            f"> `💵` * **Equivalente:** `{texto_equiv_qtd}`\n"
             f"> `📤` * **De:** {interacao.user.mention} | FID `{fid_rem}`\n"
             f"> `📥` * **Para:** {destino.mention} | FID `{self.fid_destino}`\n"
             f"> `🏷️` * **Cargo do destino:** `{self.cargo_destino}`\n"

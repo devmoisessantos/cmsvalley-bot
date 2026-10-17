@@ -523,8 +523,7 @@ async def transferir_moedas(
                 saldo_apos=saldo_rem_final,
                 outro_discord_id=destinatario.id,
                 referencia=(
-                    f"para {destinatario.id} · "
-                    f"{formatar_dinheiro(valor_movido)}"
+                    f"para {destinatario.id} · {formatar_dinheiro(valor_movido)}"
                 )[:200],
             )
         )
@@ -535,10 +534,9 @@ async def transferir_moedas(
                 valor=quantidade,
                 saldo_apos=saldo_dest_final,
                 outro_discord_id=remetente.id,
-                referencia=(
-                    f"de {remetente.id} · "
-                    f"{formatar_dinheiro(valor_movido)}"
-                )[:200],
+                referencia=(f"de {remetente.id} · {formatar_dinheiro(valor_movido)}")[
+                    :200
+                ],
             )
         )
         await sessao.commit()
@@ -631,10 +629,9 @@ async def aprovar_deposito(
                 tipo="DEPOSITO",
                 valor=qtd,
                 saldo_apos=saldo_apos,
-                referencia=(
-                    f"pedido #{pedido.id} · "
-                    f"{formatar_dinheiro(valor_pedido)}"
-                )[:200],
+                referencia=(f"pedido #{pedido.id} · {formatar_dinheiro(valor_pedido)}")[
+                    :200
+                ],
             )
         )
         await sessao.commit()
@@ -669,21 +666,76 @@ async def recusar_deposito(
         return True, "Pedido recusado.", pedido
 
 
-async def ranking_top_moedas(limite: int = 15) -> list[tuple[int, int]]:
+async def ranking_top_moedas(limite: int = 15) -> list[tuple[int, int, int]]:
     """
-    Lista (discord_id, saldo) ordenada por saldo desc.
+    Lista (discord_id, saldo_moedas, valor_ingame) ordenada por valor_ingame desc.
+
+    O valor in-game é a soma dos lotes (quantidade × cotação congelada no crédito).
+    Membros só com saldo legado (sem lotes) usam a cotação mínima (Enfermeiro).
+    Se lotes < saldo, completa a diferença na cotação mínima; se lotes > saldo,
+    o excesso é ignorado (saldo do estado é a fonte da verdade).
 
     Busca mais linhas do que o limite para o ranking filtrar quem
     ainda faz parte da organização (guild + hierarquia).
     """
+    buscar = max(limite * 5, 50)
     async with async_session() as sessao:
-        resultado = await sessao.execute(
-            select(EstadoPlantao.discord_id, EstadoPlantao.saldo_moedas)
-            .where(EstadoPlantao.saldo_moedas > 0)
-            .order_by(EstadoPlantao.saldo_moedas.desc())
-            .limit(max(limite * 5, 50))
+        resultado_lotes = await sessao.execute(
+            select(
+                LoteMoeda.discord_id,
+                LoteMoeda.cotacao,
+                LoteMoeda.quantidade,
+            ).where(LoteMoeda.quantidade > 0)
         )
-        return [(int(row[0]), int(row[1] or 0)) for row in resultado.all()]
+        # discord_id -> lista (cotacao, quantidade)
+        lotes_por_membro: dict[int, list[tuple[int, int]]] = {}
+        for row in resultado_lotes.all():
+            did = int(row[0])
+            cot = int(row[1])
+            qtd = int(row[2] or 0)
+            if qtd <= 0:
+                continue
+            lotes_por_membro.setdefault(did, []).append((cot, qtd))
+
+        resultado_estado = await sessao.execute(
+            select(EstadoPlantao.discord_id, EstadoPlantao.saldo_moedas).where(
+                EstadoPlantao.saldo_moedas > 0
+            )
+        )
+        cotacao_legado = int(VALOR_MOEDA_INGAME)
+        candidatos: list[tuple[int, int, int]] = []
+
+        for row in resultado_estado.all():
+            did = int(row[0])
+            saldo = int(row[1] or 0)
+            if saldo <= 0:
+                continue
+            pares = lotes_por_membro.get(did, [])
+            soma_lotes = sum(q for _, q in pares)
+            if soma_lotes == 0:
+                candidatos.append((did, saldo, saldo * cotacao_legado))
+                continue
+            if soma_lotes <= saldo:
+                valor = sum(c * q for c, q in pares)
+                falta = saldo - soma_lotes
+                if falta > 0:
+                    valor += falta * cotacao_legado
+                candidatos.append((did, saldo, valor))
+                continue
+            # Lotes > saldo: excesso seria cortado do maior cotação;
+            # o valor remanescente são as moedas de menor cotação primeiro.
+            restante = saldo
+            valor = 0
+            for cot, qtd in sorted(pares, key=lambda p: p[0]):
+                if restante <= 0:
+                    break
+                usar = min(qtd, restante)
+                valor += usar * cot
+                restante -= usar
+            candidatos.append((did, saldo, valor))
+
+        candidatos.sort(key=lambda item: item[2], reverse=True)
+        return candidatos[:buscar]
 
 
 async def zerar_saldo_moedas(
@@ -715,8 +767,7 @@ async def zerar_saldo_moedas(
                 valor=-saldo,
                 saldo_apos=0,
                 referencia=(
-                    f"{motivo or 'Saldo zerado'} · "
-                    f"{formatar_dinheiro(valor_zerado)}"
+                    f"{motivo or 'Saldo zerado'} · {formatar_dinheiro(valor_zerado)}"
                 )[:200],
             )
         )

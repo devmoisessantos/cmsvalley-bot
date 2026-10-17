@@ -42,6 +42,7 @@ from src.plantao.carteira_service import (
     cotacao_moeda_do_membro,
     creditar_lotes,
     debitar_lotes,
+    obter_valor_total_lotes,
     zerar_lotes,
 )
 from src.plantao.plantao_logger import registrar_evento_plantao
@@ -351,16 +352,23 @@ async def desligar_servico(membro: discord.Member) -> str:
             detalhes="Encerrado por saída manual do serviço",
         )
 
-    cotacao = cotacao_moeda_do_membro(membro)
+    try:
+        valor_lotes = await obter_valor_total_lotes(membro.id)
+        saldo_txt = (
+            f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
+        )
+    except Exception:
+        cotacao = cotacao_moeda_do_membro(membro)
+        saldo_txt = (
+            f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
+        )
     await registrar_evento_plantao(
         membro.guild,
         membro.id,
         "TOGGLE_OFF",
         id_fivem_atual,
         campos_extra={
-            "Saldo Final": (
-                f"{saldo_final} moedas ({formatar_dinheiro(saldo_final * cotacao)})"
-            ),
+            "Saldo Final": saldo_txt,
             "Tempo no Ciclo": formatar_hms(tempo_ciclo_segundos),
             "Tempo Total": formatar_hms(tempo_total_segundos),
         },
