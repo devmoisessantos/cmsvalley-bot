@@ -16,6 +16,7 @@ from src.plantao.carteira_service import (
     listar_extrato,
     membro_na_hierarquia,
     obter_saldo,
+    obter_valor_total_lotes,
     recusar_deposito,
     rotulo_tipo_movimentacao,
     transferir_moedas,
@@ -84,16 +85,21 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
         *,
         saldo: int,
         id_fivem: str,
+        valor_equivalente: int | None = None,
     ):
         super().__init__(timeout=300)
         self.membro_id = membro.id
         self.saldo = saldo
 
+        if valor_equivalente is not None:
+            texto_equiv = formatar_dinheiro(valor_equivalente)
+        else:
+            texto_equiv = equivalente_em_reais(saldo, membro=membro)
+
         corpo = (
             f"> `👤` * **Membro:** {membro.mention} | **FID:** `{id_fivem}`\n"
             f"> `🪙` * **Saldo:** `{saldo} moedas`\n"
-            f"> `💵` * **Equivalente:** "
-            f"`{equivalente_em_reais(saldo, membro=membro)}`\n"
+            f"> `💵` * **Equivalente:** `{texto_equiv}`\n"
             f"> `⏱️` * **Ganho:** `1 moeda / 30 min` (teto 14/dia, 84/semana)\n"
             f"> `📅` * **Domingo:** sem moeda · **Sábado:** moeda só até 12h\n\n"
             "## Ações\n"
@@ -292,7 +298,16 @@ async def abrir_carteira(interacao: discord.Interaction) -> None:
         return
     saldo = await obter_saldo(membro.id)
     id_fivem = await _fid(membro)
-    view = CarteiraHubView(membro, saldo=saldo, id_fivem=id_fivem)
+    try:
+        valor_equiv = await obter_valor_total_lotes(membro.id)
+    except Exception:
+        valor_equiv = None
+    view = CarteiraHubView(
+        membro,
+        saldo=saldo,
+        id_fivem=id_fivem,
+        valor_equivalente=valor_equiv,
+    )
     if interacao.response.is_done():
         await responder_view(
             interacao,

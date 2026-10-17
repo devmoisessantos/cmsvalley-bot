@@ -353,6 +353,8 @@ async def _debitar_moedas_falta(discord_id: int, quantidade: int) -> int:
     """Remove moedas do saldo de plantão (nunca fica negativo). Retorna saldo final."""
     if quantidade <= 0:
         return 0
+    from src.plantao.carteira_service import debitar_lotes
+
     async with async_session() as session:
         resultado = await session.execute(
             select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
@@ -361,7 +363,10 @@ async def _debitar_moedas_falta(discord_id: int, quantidade: int) -> int:
         if estado is None:
             return 0
         saldo_atual = int(estado.saldo_moedas or 0)
-        novo_saldo = max(0, saldo_atual - quantidade)
+        qtd = min(int(quantidade), saldo_atual)
+        if qtd > 0:
+            await debitar_lotes(session, discord_id, qtd, saldo_atual)
+        novo_saldo = max(0, saldo_atual - qtd)
         estado.saldo_moedas = novo_saldo
         await session.commit()
         return novo_saldo

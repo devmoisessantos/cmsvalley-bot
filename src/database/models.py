@@ -779,6 +779,33 @@ class MovimentacaoMoeda(Base):
     )
 
 
+class LoteMoeda(Base):
+    """
+    Lote de moedas com a cotação do momento em que foram creditadas.
+
+    Cada membro pode ter vários lotes (um por cotação distinta). Na troca
+    e no desconto consome-se do lote de menor cotação para o de maior.
+    """
+
+    __tablename__ = "lotes_moedas"
+    __table_args__ = (
+        UniqueConstraint(
+            "discord_id",
+            "cotacao",
+            name="uq_lotes_moedas_discord_cotacao",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # Valor in-game de 1 moeda neste lote (congelado no crédito)
+    cotacao: Mapped[int] = mapped_column(Integer)
+    quantidade: Mapped[int] = mapped_column(Integer, default=0)
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora, onupdate=agora
+    )
+
+
 class SolicitacaoDemissao(Base):
     """Pedido de demissão voluntária (hierarquia → Visitantes)."""
 

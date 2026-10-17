@@ -879,6 +879,13 @@ async def ajustar_saldo_moedas(
             session.add(estado)
             await session.flush()
 
+        from src.config import VALOR_MOEDA_INGAME
+        from src.plantao.carteira_service import (
+            creditar_lotes,
+            debitar_lotes,
+            zerar_lotes,
+        )
+
         antigo = int(estado.saldo_moedas or 0)
         if novo_saldo is not None:
             novo = int(novo_saldo)
@@ -886,6 +893,24 @@ async def ajustar_saldo_moedas(
             novo = antigo + int(delta or 0)
         if novo < 0:
             raise ValueError("Saldo resultante não pode ser negativo.")
+
+        diferenca = novo - antigo
+        if diferenca > 0:
+            await creditar_lotes(
+                session, discord_id, diferenca, int(VALOR_MOEDA_INGAME)
+            )
+        elif diferenca < 0:
+            ok, _valor = await debitar_lotes(
+                session, discord_id, -diferenca, antigo
+            )
+            if not ok:
+                await zerar_lotes(session, discord_id)
+                if novo > 0:
+                    await creditar_lotes(
+                        session, discord_id, novo, int(VALOR_MOEDA_INGAME)
+                    )
+        elif novo == 0:
+            await zerar_lotes(session, discord_id)
 
         estado.saldo_moedas = novo
         session.add(

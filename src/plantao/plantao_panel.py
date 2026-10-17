@@ -23,7 +23,6 @@ from sqlalchemy import select
 from src.config import (
     GUILD_ID,
     NOMES_CANAIS_PLANTAO,
-    VALOR_MOEDA_INGAME,
     obter_ids_canais_plantao_em_ordem,
 )
 from src.database.conexao import async_session
@@ -215,9 +214,7 @@ class ModalInformarIDFivem(discord.ui.Modal, title="Confirme seu ID FiveM"):
                 self.membro.id,
                 novo_estado,
             )
-            tempo_total = await calcular_segundos_historico_fechado(
-                self.membro.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(self.membro.id)
             nova_view = InformacoesPlantaoView(
                 self.membro,
                 novo_estado,
@@ -331,9 +328,7 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
         # Bloco 2: separador
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
         # Bloco 3: regras do plantão
         componentes.append(
@@ -349,9 +344,7 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 4: separador
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
         # Bloco 5: sistema de recompensas
         componentes.append(
@@ -367,9 +360,7 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         # Bloco 6: separador antes dos botões
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
         # Botões (inalterados)
         linha_botoes = discord.ui.ActionRow()
@@ -500,11 +491,18 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             estado,
         )
         tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
+        try:
+            from src.plantao.carteira_service import obter_valor_total_lotes
+
+            valor_equiv = await obter_valor_total_lotes(interaction.user.id)
+        except Exception:
+            valor_equiv = None
         view = InformacoesPlantaoView(
             interaction.user,
             estado,
             tempo_total_segundos=tempo_total,
             tempo_ciclo_segundos=tempo_ciclo,
+            valor_equivalente=valor_equiv,
         )
         # A mensagem efêmera do followup é o único alvo seguro de edição.
         # edit_original_response nessa interação reescreveria o painel público:
@@ -545,12 +543,14 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         estado: EstadoPlantao | None,
         tempo_total_segundos: int = 0,
         tempo_ciclo_segundos: int = 0,
+        valor_equivalente: int | None = None,
     ):
         super().__init__(timeout=300)
         self.membro = membro
         self.estado = estado
         self.tempo_total_segundos = int(tempo_total_segundos or 0)
         self.tempo_ciclo_segundos = int(tempo_ciclo_segundos or 0)
+        self.valor_equivalente = valor_equivalente
         self._tarefa_ao_vivo: asyncio.Task | None = None
         # Mensagem efêmera do card de informações — nunca a mensagem do painel.
         self._mensagem_ao_vivo: discord.Message | None = None
@@ -578,13 +578,9 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         if online and estado.em_call_valida:
             cronometro_rodando = estado.segmento_iniciado_em is not None
             if cronometro_rodando:
-                status_texto = (
-                    "🟢 Em Serviço (cronômetro rodando nesta call)"
-                )
+                status_texto = "🟢 Em Serviço (cronômetro rodando nesta call)"
             else:
-                status_texto = (
-                    "🟡 Em Serviço (cronômetro pausado — surdo / AFK)"
-                )
+                status_texto = "🟡 Em Serviço (cronômetro pausado — surdo / AFK)"
             nome_call = NOMES_CANAIS_PLANTAO.get(
                 estado.canal_atual_id,
                 "Desconhecida",
@@ -595,13 +591,16 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             linha_call = "`📍` Nenhuma call conectada — selecione uma abaixo"
         else:
             status_texto = (
-                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o '
-                "cronômetro)"
+                '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
             )
 
         from src.plantao.carteira_service import cotacao_moeda_do_membro
 
         cotacao = cotacao_moeda_do_membro(self.membro)
+        if self.valor_equivalente is not None:
+            valor_total = int(self.valor_equivalente)
+        else:
+            valor_total = saldo * cotacao
         linhas = (
             f"`⏱️` **Status:** {status_texto}\n"
             f"`⏳` **Tempo do ciclo:** "
@@ -609,8 +608,8 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             f"`🗓️` **Tempo total (histórico):** "
             f"`{formatar_hms(self.tempo_total_segundos)}`\n"
             f"`💰` **Moedas (saldo):** **{saldo}** "
-            f"({formatar_dinheiro(saldo * cotacao)})\n"
-            f"`💵` **Sua cotação:** "
+            f"({formatar_dinheiro(valor_total)})\n"
+            f"`💵` **Sua cotação atual:** "
             f"{formatar_dinheiro(cotacao)} por moeda · 1 / 30 min"
         )
         if linha_call:
@@ -697,9 +696,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         self._parar_atualizacao = False
         if self._tarefa_ao_vivo is not None and not self._tarefa_ao_vivo.done():
             self._tarefa_ao_vivo.cancel()
-        self._tarefa_ao_vivo = asyncio.create_task(
-            self._loop_atualizacao_ao_vivo()
-        )
+        self._tarefa_ao_vivo = asyncio.create_task(self._loop_atualizacao_ao_vivo())
 
     def _parar_loop_ao_vivo(self) -> None:
         self._parar_atualizacao = True
@@ -764,6 +761,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                         estado,
                         tempo_total_segundos=tempo_total,
                         tempo_ciclo_segundos=0,
+                        valor_equivalente=self.valor_equivalente,
                     )
                     nova_view._mensagem_ao_vivo = self._mensagem_ao_vivo
                     await self._republicar_card_ao_vivo(nova_view)
@@ -774,14 +772,13 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                     estado,
                 )
                 # Histórico só com segmentos fechados (não cresce no segundo)
-                tempo_total = await calcular_segundos_historico_fechado(
-                    self.membro.id
-                )
+                tempo_total = await calcular_segundos_historico_fechado(self.membro.id)
                 nova_view = InformacoesPlantaoView(
                     self.membro,
                     estado,
                     tempo_total_segundos=tempo_total,
                     tempo_ciclo_segundos=tempo_ciclo,
+                    valor_equivalente=self.valor_equivalente,
                 )
                 # Transfere o controle do loop para a view nova
                 nova_view._mensagem_ao_vivo = self._mensagem_ao_vivo
@@ -817,9 +814,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             self._parar_loop_ao_vivo()
             await desligar_servico(interaction.user)
             novo_estado = await _buscar_estado(interaction.user.id)
-            tempo_total = await calcular_segundos_historico_fechado(
-                interaction.user.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
             nova_view = InformacoesPlantaoView(
                 interaction.user,
                 novo_estado,
@@ -1035,9 +1030,7 @@ class ModalTrocarMoedasPlantao(
                 interaction.user.id,
                 novo_estado,
             )
-            tempo_total = await calcular_segundos_historico_fechado(
-                interaction.user.id
-            )
+            tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
             nova_view = InformacoesPlantaoView(
                 interaction.user,
                 novo_estado,

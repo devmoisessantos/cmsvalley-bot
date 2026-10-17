@@ -40,7 +40,9 @@ from src.database.conexao import async_session
 from src.database.models import EstadoPlantao
 from src.plantao.carteira_service import (
     cotacao_moeda_do_membro,
-    valor_ingame_de_moedas,
+    creditar_lotes,
+    debitar_lotes,
+    zerar_lotes,
 )
 from src.plantao.plantao_logger import registrar_evento_plantao
 from src.utils.error_handling import capturar_erro_e_logar
@@ -357,8 +359,7 @@ async def desligar_servico(membro: discord.Member) -> str:
         id_fivem_atual,
         campos_extra={
             "Saldo Final": (
-                f"{saldo_final} moedas "
-                f"({formatar_dinheiro(saldo_final * cotacao)})"
+                f"{saldo_final} moedas ({formatar_dinheiro(saldo_final * cotacao)})"
             ),
             "Tempo no Ciclo": formatar_hms(tempo_ciclo_segundos),
             "Tempo Total": formatar_hms(tempo_total_segundos),
@@ -396,6 +397,27 @@ async def _finalizar_periodo_em_call(
     decorrido_segmento = _acumular_segmento_atual(estado)
     moedas_ganhas = _creditar_moedas_de_acumulado(estado)
 
+    cotacao_ganho = int(VALOR_MOEDA_INGAME)
+    if moedas_ganhas > 0:
+        from sqlalchemy.ext.asyncio import async_object_session
+
+        membro = guild.get_member(discord_id)
+        cotacao_ganho = cotacao_moeda_do_membro(membro)
+        sessao_estado = async_object_session(estado)
+        if sessao_estado is not None:
+            try:
+                await creditar_lotes(
+                    sessao_estado, discord_id, moedas_ganhas, cotacao_ganho
+                )
+            except Exception as erro_lotes:
+                await capturar_erro_e_logar(
+                    erro_lotes,
+                    contexto=(
+                        "creditar lotes no ganho de plantão de "
+                        f"{moedas_ganhas} moedas do membro {discord_id}"
+                    ),
+                )
+
     estado.em_call_valida = False
     estado.call_entrada_em = None
     estado.segmento_iniciado_em = None
@@ -426,10 +448,8 @@ async def _finalizar_periodo_em_call(
             estado.id_fivem,
             campos_extra={
                 "Moedas Ganhas": str(moedas_ganhas),
-                "Saldo Total": (
-                    f"{estado.saldo_moedas} moedas "
-                    f"({formatar_dinheiro(estado.saldo_moedas * VALOR_MOEDA_INGAME)})"
-                ),
+                "Cotação": formatar_dinheiro(cotacao_ganho),
+                "Saldo Total": f"{estado.saldo_moedas} moedas",
             },
         )
         try:
@@ -440,7 +460,10 @@ async def _finalizar_periodo_em_call(
                 tipo="GANHO_PLANTAO",
                 valor=moedas_ganhas,
                 saldo_apos=int(estado.saldo_moedas),
-                referencia=f"+{moedas_ganhas} plantão",
+                referencia=(
+                    f"+{moedas_ganhas} plantão · "
+                    f"{formatar_dinheiro(cotacao_ganho)}/moeda"
+                )[:200],
             )
         except Exception as erro_ao_registrar_ganho:
             # ATENCAO: aqui as moedas JA foram creditadas ao membro. Se o
@@ -482,6 +505,7 @@ def retomar_cronometro_moeda(estado: EstadoPlantao) -> None:
 
 async def fechar_segmento_parcial_do_ciclo(
     discord_id: int,
+    cotacao: int | None = None,
 ) -> tuple[int, int]:
     """
     Fecha o trecho aberto em log sem tirar o membro de serviço.
@@ -493,10 +517,13 @@ async def fechar_segmento_parcial_do_ciclo(
     - Grava LogPlantao com a duração do trecho (sem postar no canal de log)
     - Soma em segundos_acumulados e credita moedas se completou fração
     - Reinicia segmento_iniciado_em para continuar contando
+    - Grava o lote com a cotação do cargo no momento do crédito
 
     Devolve (segundos_fechados, moedas_ganhas).
     """
     from src.database.models import LogPlantao
+
+    cotacao_usar = int(cotacao) if cotacao and cotacao > 0 else int(VALOR_MOEDA_INGAME)
 
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -517,10 +544,10 @@ async def fechar_segmento_parcial_do_ciclo(
         if decorrido < 1:
             return 0, 0
 
-        estado.segundos_acumulados = (
-            int(estado.segundos_acumulados or 0) + decorrido
-        )
+        estado.segundos_acumulados = int(estado.segundos_acumulados or 0) + decorrido
         moedas_ganhas = _creditar_moedas_de_acumulado(estado)
+        if moedas_ganhas > 0:
+            await creditar_lotes(sessao, discord_id, moedas_ganhas, cotacao_usar)
         estado.segmento_iniciado_em = agora
         estado.ultima_atualizacao = agora
 
@@ -547,7 +574,10 @@ async def fechar_segmento_parcial_do_ciclo(
                 tipo="GANHO_PLANTAO",
                 valor=moedas_ganhas,
                 saldo_apos=saldo_apos,
-                referencia=f"+{moedas_ganhas} plantão (ciclo minuto)",
+                referencia=(
+                    f"+{moedas_ganhas} plantão (ciclo minuto) · "
+                    f"{formatar_dinheiro(cotacao_usar)}/moeda"
+                )[:200],
             )
         except Exception as erro_extrato:
             await capturar_erro_e_logar(
@@ -680,20 +710,46 @@ async def listar_em_servico(limite: int = 40) -> list[EstadoPlantao]:
         return list(resultado.scalars().all())
 
 
-async def admin_definir_moedas(discord_id: int, novo_saldo: int) -> EstadoPlantao:
-    """Define o saldo de moedas (admin). Cria estado se não existir."""
+async def admin_definir_moedas(
+    discord_id: int,
+    novo_saldo: int,
+    cotacao: int | None = None,
+) -> EstadoPlantao:
+    """
+    Define o saldo de moedas (admin). Cria estado se não existir.
+
+    Ao aumentar o saldo, as moedas novas entram no lote da cotação informada
+    (ou mínima). Ao reduzir, consome dos lotes menor → maior.
+    """
+    cotacao_usar = int(cotacao) if cotacao and cotacao > 0 else int(VALOR_MOEDA_INGAME)
+
     async with async_session() as session:
         estado = await _obter_ou_criar_estado(session, discord_id)
         saldo_antes = int(estado.saldo_moedas or 0)
-        estado.saldo_moedas = max(0, int(novo_saldo))
+        saldo_depois = max(0, int(novo_saldo))
+        delta = saldo_depois - saldo_antes
+
+        if delta > 0:
+            await creditar_lotes(session, discord_id, delta, cotacao_usar)
+        elif delta < 0:
+            ok, _valor = await debitar_lotes(session, discord_id, -delta, saldo_antes)
+            if not ok:
+                # Força alinhamento: zera lotes e recria se sobrar
+                await zerar_lotes(session, discord_id)
+                if saldo_depois > 0:
+                    await creditar_lotes(
+                        session, discord_id, saldo_depois, cotacao_usar
+                    )
+        elif saldo_depois == 0:
+            await zerar_lotes(session, discord_id)
+
+        estado.saldo_moedas = saldo_depois
         await session.commit()
         await session.refresh(estado)
-        saldo_depois = int(estado.saldo_moedas)
 
     try:
         from src.plantao.carteira_service import registrar_movimentacao
 
-        delta = saldo_depois - saldo_antes
         if delta != 0:
             await registrar_movimentacao(
                 discord_id=discord_id,
@@ -739,12 +795,21 @@ async def solicitar_troca_moedas(
                 0,
             )
 
+        ok_lotes, valor_ingame = await debitar_lotes(
+            session, membro.id, quantidade_moedas, saldo_atual
+        )
+        if not ok_lotes:
+            return (
+                False,
+                f"Saldo insuficiente. Você tem **{saldo_atual}** moeda(s).",
+                saldo_atual,
+                0,
+            )
+
         estado.saldo_moedas = saldo_atual - quantidade_moedas
         await session.commit()
         saldo_restante = int(estado.saldo_moedas)
         id_fivem = estado.id_fivem
-
-    valor_ingame = valor_ingame_de_moedas(quantidade_moedas, membro=membro)
 
     try:
         from src.plantao.carteira_service import registrar_movimentacao
@@ -754,7 +819,9 @@ async def solicitar_troca_moedas(
             tipo="TROCA_INGAME",
             valor=-quantidade_moedas,
             saldo_apos=saldo_restante,
-            referencia=f"{quantidade_moedas} moedas → {formatar_dinheiro(valor_ingame)}",
+            referencia=(
+                f"{quantidade_moedas} moedas → {formatar_dinheiro(valor_ingame)}"
+            )[:200],
         )
     except Exception as erro_ao_registrar_troca:
         # ATENCAO: as moedas JA foram debitadas. Sem o extrato, o membro pode

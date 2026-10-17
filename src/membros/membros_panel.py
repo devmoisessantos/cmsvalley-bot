@@ -327,7 +327,12 @@ async def _t_plantao(membro, estado):
         guild=None,
     )
     cotacao = cotacao_moeda_do_membro(membro)
-    valor_reais = formatar_dinheiro(saldo * cotacao)
+    try:
+        from src.plantao.carteira_service import obter_valor_total_lotes
+
+        valor_reais = formatar_dinheiro(await obter_valor_total_lotes(membro.id))
+    except Exception:
+        valor_reais = formatar_dinheiro(saldo * cotacao)
 
     if online and estado and estado.em_call_valida and estado.call_entrada_em:
         segundos_na_call = int(

@@ -418,18 +418,24 @@ async def processar_demissao_por_abandono(
     motivo: str = "Saiu do Discord sem solicitar demissão formal.",
 ) -> SolicitacaoDemissao | None:
     """
-    Pipeline completo da saída informal de quem estava APROVADO.
+    Pipeline completo da saída informal de quem estava APROVADO
+    e tinha cargo da hierarquia (CARGOS_HIERARQUIA).
 
     1. Confere status APROVADO no banco
-    2. Marca DEMITIDO
-    3. Limpa plantão/moedas/horas
-    4. Snapshot vira Visitantes + Exonerado
-    5. Cria solicitação tipo abandono (aguarda botão do painel in-game)
+    2. Confere cargo da hierarquia (Visitante / sem cargo não entra)
+    3. Marca DEMITIDO
+    4. Limpa plantão/moedas/horas
+    5. Snapshot vira Visitantes + Exonerado
+    6. Cria solicitação tipo abandono (aguarda botão do painel in-game)
 
-    Devolve a solicitação criada, ou None se não era APROVADO.
+    Pedido voluntário pendente também segue para abandono se a pessoa sair.
+    Devolve a solicitação criada, ou None se não era APROVADO / sem hierarquia.
     """
     status_atual = await obter_status_usuario(membro.id)
     if status_atual != "APROVADO":
+        return None
+
+    if not membro_pode_solicitar_demissao(membro):
         return None
 
     cargo = cargo_atual_hierarquia(membro)

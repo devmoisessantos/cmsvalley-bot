@@ -3,8 +3,11 @@
 Regras da carteira de moedas (plantão).
 
 - Saldo vive em estado_plantao.saldo_moedas
+- Valor histórico vive em lotes_moedas (cotação congelada no crédito)
 - Extrato em movimentacoes_moedas
 - Depósito $ → moedas em pedidos_deposito_moedas
+
+Troca e desconto consomem lotes da menor cotação para a maior.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from datetime import (
 
 import discord
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import (
     CARGOS_HIERARQUIA,
@@ -25,6 +29,7 @@ from src.config import (
 from src.database.conexao import async_session
 from src.database.models import (
     EstadoPlantao,
+    LoteMoeda,
     MovimentacaoMoeda,
     PedidoDepositoMoeda,
 )
@@ -98,6 +103,287 @@ def valor_ingame_de_moedas(
     else:
         valor_unitario = int(VALOR_MOEDA_INGAME)
     return int(moedas) * valor_unitario
+
+
+# ---------------------------------------------------------------------------
+# Lotes de moedas (cotação congelada)
+# ---------------------------------------------------------------------------
+
+
+def _simular_debito_lotes(
+    lotes: list[tuple[int, int]],
+    quantidade: int,
+) -> int:
+    """
+    Calcula o valor in-game de debitar ``quantidade`` moedas dos lotes,
+    consumindo da menor cotação para a maior.
+
+    ``lotes`` = lista de (cotacao, quantidade), já ordenada por cotacao ASC.
+    Não altera nada — só simula.
+    """
+    restante = int(quantidade)
+    valor = 0
+    for cotacao, qtd in lotes:
+        if restante <= 0:
+            break
+        usar = min(int(qtd), restante)
+        valor += usar * int(cotacao)
+        restante -= usar
+    return valor
+
+
+async def _listar_lotes_ordenados(
+    sessao: AsyncSession,
+    discord_id: int,
+) -> list[LoteMoeda]:
+    """Lotes do membro ordenados da menor cotação para a maior."""
+    resultado = await sessao.execute(
+        select(LoteMoeda)
+        .where(LoteMoeda.discord_id == discord_id)
+        .where(LoteMoeda.quantidade > 0)
+        .order_by(LoteMoeda.cotacao.asc())
+    )
+    return list(resultado.scalars().all())
+
+
+async def _garantir_lotes_alinhados(
+    sessao: AsyncSession,
+    discord_id: int,
+    saldo_moedas: int,
+) -> list[LoteMoeda]:
+    """
+    Garante que a soma dos lotes bate com o saldo.
+
+    Saldo legado (sem lote) vira um lote na cotação mínima (Enfermeiro).
+    Se os lotes tiverem mais que o saldo, corta do maior para o menor.
+    """
+    lotes = await _listar_lotes_ordenados(sessao, discord_id)
+    soma = sum(int(lote.quantidade) for lote in lotes)
+    saldo = max(0, int(saldo_moedas))
+
+    if soma == saldo:
+        return lotes
+
+    if soma < saldo:
+        falta = saldo - soma
+        cotacao_legado = int(VALOR_MOEDA_INGAME)
+        lote_legado = None
+        for lote in lotes:
+            if int(lote.cotacao) == cotacao_legado:
+                lote_legado = lote
+                break
+        if lote_legado is None:
+            lote_legado = LoteMoeda(
+                discord_id=discord_id,
+                cotacao=cotacao_legado,
+                quantidade=falta,
+            )
+            sessao.add(lote_legado)
+            await sessao.flush()
+        else:
+            lote_legado.quantidade = int(lote_legado.quantidade) + falta
+        return await _listar_lotes_ordenados(sessao, discord_id)
+
+    # lotes > saldo: remove do maior cotação para o menor
+    excesso = soma - saldo
+    lotes_desc = sorted(lotes, key=lambda lote: int(lote.cotacao), reverse=True)
+    for lote in lotes_desc:
+        if excesso <= 0:
+            break
+        qtd = int(lote.quantidade)
+        tirar = min(qtd, excesso)
+        lote.quantidade = qtd - tirar
+        excesso -= tirar
+        if lote.quantidade <= 0:
+            await sessao.delete(lote)
+    await sessao.flush()
+    return await _listar_lotes_ordenados(sessao, discord_id)
+
+
+async def creditar_lotes(
+    sessao: AsyncSession,
+    discord_id: int,
+    quantidade: int,
+    cotacao: int,
+) -> None:
+    """
+    Soma moedas no lote da cotação informada (cria o lote se não existir).
+
+    Não mexe em ``estado_plantao.saldo_moedas`` — quem chama atualiza o saldo.
+    """
+    qtd = int(quantidade)
+    cot = int(cotacao)
+    if qtd <= 0 or cot <= 0:
+        return
+
+    resultado = await sessao.execute(
+        select(LoteMoeda)
+        .where(LoteMoeda.discord_id == discord_id)
+        .where(LoteMoeda.cotacao == cot)
+    )
+    lote = resultado.scalar_one_or_none()
+    if lote is None:
+        sessao.add(
+            LoteMoeda(
+                discord_id=discord_id,
+                cotacao=cot,
+                quantidade=qtd,
+            )
+        )
+    else:
+        lote.quantidade = int(lote.quantidade or 0) + qtd
+    await sessao.flush()
+
+
+async def debitar_lotes(
+    sessao: AsyncSession,
+    discord_id: int,
+    quantidade: int,
+    saldo_moedas: int,
+) -> tuple[bool, int]:
+    """
+    Consome moedas dos lotes da menor cotação para a maior.
+
+    Retorna (ok, valor_ingame_debitado).
+    Não mexe em ``estado_plantao.saldo_moedas`` — quem chama atualiza o saldo.
+    """
+    qtd = int(quantidade)
+    if qtd <= 0:
+        return True, 0
+
+    lotes = await _garantir_lotes_alinhados(sessao, discord_id, saldo_moedas)
+    soma = sum(int(lote.quantidade) for lote in lotes)
+    if soma < qtd:
+        return False, 0
+
+    restante = qtd
+    valor = 0
+    for lote in lotes:
+        if restante <= 0:
+            break
+        disponivel = int(lote.quantidade)
+        usar = min(disponivel, restante)
+        valor += usar * int(lote.cotacao)
+        lote.quantidade = disponivel - usar
+        restante -= usar
+        if lote.quantidade <= 0:
+            await sessao.delete(lote)
+
+    await sessao.flush()
+    return True, valor
+
+
+async def transferir_lotes(
+    sessao: AsyncSession,
+    origem_id: int,
+    destino_id: int,
+    quantidade: int,
+    saldo_origem: int,
+) -> tuple[bool, int]:
+    """
+    Move moedas entre membros preservando a cotação de cada lote.
+
+    Consome da origem (menor → maior) e credita no destino com a mesma cotação.
+    Retorna (ok, valor_ingame_movido).
+    """
+    qtd = int(quantidade)
+    if qtd <= 0:
+        return True, 0
+
+    lotes = await _garantir_lotes_alinhados(sessao, origem_id, saldo_origem)
+    soma = sum(int(lote.quantidade) for lote in lotes)
+    if soma < qtd:
+        return False, 0
+
+    restante = qtd
+    valor = 0
+    # (cotacao, quantidade) a creditar no destino
+    para_destino: list[tuple[int, int]] = []
+    for lote in lotes:
+        if restante <= 0:
+            break
+        disponivel = int(lote.quantidade)
+        usar = min(disponivel, restante)
+        valor += usar * int(lote.cotacao)
+        para_destino.append((int(lote.cotacao), usar))
+        lote.quantidade = disponivel - usar
+        restante -= usar
+        if lote.quantidade <= 0:
+            await sessao.delete(lote)
+
+    for cotacao, q in para_destino:
+        await creditar_lotes(sessao, destino_id, q, cotacao)
+
+    await sessao.flush()
+    return True, valor
+
+
+async def zerar_lotes(sessao: AsyncSession, discord_id: int) -> int:
+    """Apaga todos os lotes do membro. Retorna o valor in-game que existia."""
+    lotes = await _listar_lotes_ordenados(sessao, discord_id)
+    valor = sum(int(lote.quantidade) * int(lote.cotacao) for lote in lotes)
+    for lote in lotes:
+        await sessao.delete(lote)
+    await sessao.flush()
+    return valor
+
+
+async def obter_valor_total_lotes(discord_id: int) -> int:
+    """Soma quantidade × cotação de todos os lotes do membro (com alinhamento)."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(EstadoPlantao.saldo_moedas).where(
+                EstadoPlantao.discord_id == discord_id
+            )
+        )
+        saldo = int(resultado.scalar_one_or_none() or 0)
+        if saldo <= 0:
+            return 0
+        lotes = await _garantir_lotes_alinhados(sessao, discord_id, saldo)
+        valor = sum(int(lote.quantidade) * int(lote.cotacao) for lote in lotes)
+        await sessao.commit()
+        return valor
+
+
+async def simular_valor_debito(discord_id: int, quantidade: int) -> int:
+    """
+    Quanto em $ sairia se debitasse ``quantidade`` moedas agora
+    (menor cotação → maior), sem alterar o banco.
+    """
+    qtd = int(quantidade)
+    if qtd <= 0:
+        return 0
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(EstadoPlantao.saldo_moedas).where(
+                EstadoPlantao.discord_id == discord_id
+            )
+        )
+        saldo = int(resultado.scalar_one_or_none() or 0)
+        if saldo <= 0:
+            return 0
+        lotes = await _garantir_lotes_alinhados(sessao, discord_id, saldo)
+        await sessao.commit()
+        pares = [(int(lote.cotacao), int(lote.quantidade)) for lote in lotes]
+        return _simular_debito_lotes(pares, min(qtd, saldo))
+
+
+async def listar_resumo_lotes(
+    discord_id: int,
+) -> list[tuple[int, int]]:
+    """Lista (cotacao, quantidade) dos lotes do membro, menor → maior."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(EstadoPlantao.saldo_moedas).where(
+                EstadoPlantao.discord_id == discord_id
+            )
+        )
+        saldo = int(resultado.scalar_one_or_none() or 0)
+        if saldo <= 0:
+            return []
+        lotes = await _garantir_lotes_alinhados(sessao, discord_id, saldo)
+        await sessao.commit()
+        return [(int(lote.cotacao), int(lote.quantidade)) for lote in lotes]
 
 
 async def obter_saldo(discord_id: int) -> int:
@@ -209,6 +495,21 @@ async def transferir_moedas(
             sessao.add(estado_dest)
             await sessao.flush()
 
+        ok_lotes, valor_movido = await transferir_lotes(
+            sessao,
+            remetente.id,
+            destinatario.id,
+            quantidade,
+            saldo_rem,
+        )
+        if not ok_lotes:
+            return (
+                False,
+                f"Saldo insuficiente. Você tem **{saldo_rem}** moeda(s).",
+                saldo_rem,
+                0,
+            )
+
         estado_rem.saldo_moedas = saldo_rem - quantidade
         estado_dest.saldo_moedas = int(estado_dest.saldo_moedas or 0) + quantidade
         saldo_rem_final = int(estado_rem.saldo_moedas)
@@ -221,7 +522,10 @@ async def transferir_moedas(
                 valor=-quantidade,
                 saldo_apos=saldo_rem_final,
                 outro_discord_id=destinatario.id,
-                referencia=f"para {destinatario.id}",
+                referencia=(
+                    f"para {destinatario.id} · "
+                    f"{formatar_dinheiro(valor_movido)}"
+                )[:200],
             )
         )
         sessao.add(
@@ -231,7 +535,10 @@ async def transferir_moedas(
                 valor=quantidade,
                 saldo_apos=saldo_dest_final,
                 outro_discord_id=remetente.id,
-                referencia=f"de {remetente.id}",
+                referencia=(
+                    f"de {remetente.id} · "
+                    f"{formatar_dinheiro(valor_movido)}"
+                )[:200],
             )
         )
         await sessao.commit()
@@ -305,9 +612,14 @@ async def aprovar_deposito(
             sessao.add(estado)
             await sessao.flush()
 
-        estado.saldo_moedas = int(estado.saldo_moedas or 0) + int(
-            pedido.quantidade_moedas
+        qtd = int(pedido.quantidade_moedas)
+        valor_pedido = int(pedido.valor_ingame or 0)
+        # Cotação efetiva do depósito (valor já calculado no pedido)
+        cotacao_deposito = (
+            max(1, valor_pedido // qtd) if qtd > 0 else int(VALOR_MOEDA_INGAME)
         )
+        await creditar_lotes(sessao, pedido.discord_id, qtd, cotacao_deposito)
+        estado.saldo_moedas = int(estado.saldo_moedas or 0) + qtd
         saldo_apos = int(estado.saldo_moedas)
         pedido.status = "APROVADO"
         pedido.analisado_por = staff.id
@@ -317,9 +629,12 @@ async def aprovar_deposito(
             MovimentacaoMoeda(
                 discord_id=pedido.discord_id,
                 tipo="DEPOSITO",
-                valor=int(pedido.quantidade_moedas),
+                valor=qtd,
                 saldo_apos=saldo_apos,
-                referencia=f"pedido #{pedido.id}",
+                referencia=(
+                    f"pedido #{pedido.id} · "
+                    f"{formatar_dinheiro(valor_pedido)}"
+                )[:200],
             )
         )
         await sessao.commit()
@@ -390,6 +705,7 @@ async def zerar_saldo_moedas(
         saldo = int(estado.saldo_moedas or 0)
         if saldo <= 0:
             return 0
+        valor_zerado = await zerar_lotes(sessao, discord_id)
         estado.saldo_moedas = 0
         estado.ultima_atualizacao = datetime.now(timezone.utc)
         sessao.add(
@@ -398,7 +714,10 @@ async def zerar_saldo_moedas(
                 tipo="AJUSTE_STAFF",
                 valor=-saldo,
                 saldo_apos=0,
-                referencia=(motivo or "Saldo zerado")[:200],
+                referencia=(
+                    f"{motivo or 'Saldo zerado'} · "
+                    f"{formatar_dinheiro(valor_zerado)}"
+                )[:200],
             )
         )
         await sessao.commit()

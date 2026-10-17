@@ -227,6 +227,34 @@ CREATE TABLE IF NOT EXISTS respostas_prova_laudo (
             "ON respostas_prova_laudo (consulta_id)"
         ),
     ),
+    Migracao(
+        numero=14,
+        descricao=(
+            "Carteira: lotes de moedas com cotação congelada no crédito. "
+            "Troca e desconto consomem do menor valor para o maior."
+        ),
+        comando_sql="""
+CREATE TABLE IF NOT EXISTS lotes_moedas (
+    id SERIAL PRIMARY KEY,
+    discord_id BIGINT NOT NULL,
+    cotacao INTEGER NOT NULL,
+    quantidade INTEGER NOT NULL DEFAULT 0,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+""",
+    ),
+    Migracao(
+        numero=15,
+        descricao=(
+            "Carteira: índice e unicidade (discord_id, cotacao) em lotes_moedas."
+        ),
+        comando_sql="""
+CREATE INDEX IF NOT EXISTS ix_lotes_moedas_discord_id
+    ON lotes_moedas (discord_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lotes_moedas_discord_cotacao
+    ON lotes_moedas (discord_id, cotacao)
+""",
+    ),
 ]
 
 

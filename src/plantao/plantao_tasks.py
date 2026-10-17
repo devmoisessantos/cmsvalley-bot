@@ -139,15 +139,20 @@ class PlantaoTasks(commands.Cog):
             if not _membro_conta_tempo_moeda(membro):
                 continue
             try:
+                from src.plantao.carteira_service import cotacao_moeda_do_membro
+
+                cotacao = cotacao_moeda_do_membro(membro)
                 segundos, moedas = await fechar_segmento_parcial_do_ciclo(
-                    estado.discord_id
+                    estado.discord_id,
+                    cotacao=cotacao,
                 )
                 if segundos > 0:
                     logger.debug(
-                        "Ciclo minuto: membro %s +%ss (moedas=%s)",
+                        "Ciclo minuto: membro %s +%ss (moedas=%s cotacao=%s)",
                         estado.discord_id,
                         segundos,
                         moedas,
+                        cotacao,
                     )
             except Exception as erro_ciclo:
                 logger.exception(
@@ -392,7 +397,18 @@ class PlantaoTasks(commands.Cog):
             ),
         )
 
-        estado.saldo_moedas = max(0, estado.saldo_moedas - PENALIDADE_AFK_MOEDAS)
+        saldo_antes_penalidade = int(estado.saldo_moedas or 0)
+        qtd_penalidade = min(int(PENALIDADE_AFK_MOEDAS), saldo_antes_penalidade)
+        if qtd_penalidade > 0:
+            from src.plantao.carteira_service import debitar_lotes
+
+            await debitar_lotes(
+                session,
+                estado.discord_id,
+                qtd_penalidade,
+                saldo_antes_penalidade,
+            )
+        estado.saldo_moedas = max(0, saldo_antes_penalidade - qtd_penalidade)
         estado.afk_mudo_surdo_desde = None
         estado.afk_canal_referencia_id = None
         estado.afk_aviso_enviado = False

@@ -1896,6 +1896,11 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             # Moeda do doutor é creditada abaixo (só uma vez)
             continue
         async with async_session() as session:
+            from src.plantao.carteira_service import (
+                cotacao_moeda_do_membro,
+                creditar_lotes,
+            )
+
             resultado = await session.execute(
                 select(EstadoPlantao).where(
                     EstadoPlantao.discord_id == medico.discord_id
@@ -1903,15 +1908,26 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             )
             estado = resultado.scalar_one_or_none()
             if estado:
+                membro_guild = guild.get_member(medico.discord_id)
+                cotacao = cotacao_moeda_do_membro(membro_guild)
+                await creditar_lotes(session, medico.discord_id, 1, cotacao)
                 estado.saldo_moedas = int(estado.saldo_moedas or 0) + 1
             await session.commit()
 
     async with async_session() as session:
+        from src.plantao.carteira_service import (
+            cotacao_moeda_do_membro,
+            creditar_lotes,
+        )
+
         resultado = await session.execute(
             select(EstadoPlantao).where(EstadoPlantao.discord_id == sessao.doutor_id)
         )
         estado_doutor = resultado.scalar_one_or_none()
         if estado_doutor:
+            membro_doutor = guild.get_member(sessao.doutor_id)
+            cotacao_doutor = cotacao_moeda_do_membro(membro_doutor)
+            await creditar_lotes(session, sessao.doutor_id, 1, cotacao_doutor)
             estado_doutor.saldo_moedas = int(estado_doutor.saldo_moedas or 0) + 1
             await session.commit()
 

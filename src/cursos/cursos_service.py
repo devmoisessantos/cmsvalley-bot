@@ -463,11 +463,23 @@ async def calcular_cobranca_pacote(
 
     desejadas = max(0, int(moedas_desconto_desejadas))
     moedas_usadas = min(desejadas, teto_moedas)
-    if cotacao > 0 and valor_bruto > 0:
-        max_pelo_preco = valor_bruto // cotacao
-        moedas_usadas = min(moedas_usadas, max_pelo_preco)
 
-    desconto_reais = moedas_usadas * cotacao
+    # Desconto real pelos lotes (menor cotação → maior), não pela cotação atual
+    from src.plantao.carteira_service import simular_valor_debito
+
+    if moedas_usadas > 0 and valor_bruto > 0:
+        # Ajusta quantidade para não passar do valor do curso
+        while moedas_usadas > 0:
+            desconto_tentativa = await simular_valor_debito(
+                membro.id, moedas_usadas
+            )
+            if desconto_tentativa <= valor_bruto:
+                break
+            moedas_usadas -= 1
+        desconto_reais = await simular_valor_debito(membro.id, moedas_usadas)
+    else:
+        desconto_reais = 0
+
     valor_a_pagar = max(0, valor_bruto - desconto_reais)
 
     return {
@@ -589,9 +601,15 @@ async def debitar_moedas_curso(
     discord_id: int,
     quantidade: int,
 ) -> tuple[bool, int, str]:
-    """Debita moedas. Retorna (ok, saldo_restante, mensagem_erro)."""
+    """
+    Debita moedas pelos lotes (menor cotação → maior).
+
+    Retorna (ok, saldo_restante, mensagem_erro).
+    """
     if quantidade <= 0:
         return True, await consultar_saldo_moedas(discord_id), ""
+
+    from src.plantao.carteira_service import debitar_lotes
 
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -610,6 +628,18 @@ async def debitar_moedas_curso(
                     f"e precisa de **{quantidade}**."
                 ),
             )
+        ok_lotes, _valor = await debitar_lotes(
+            sessao, discord_id, quantidade, saldo
+        )
+        if not ok_lotes:
+            return (
+                False,
+                saldo,
+                (
+                    f"Saldo insuficiente. Você tem **{saldo}** moeda(s) "
+                    f"e precisa de **{quantidade}**."
+                ),
+            )
         estado.saldo_moedas = saldo - quantidade
         await sessao.commit()
         return True, int(estado.saldo_moedas), ""
@@ -618,10 +648,20 @@ async def debitar_moedas_curso(
 async def creditar_moedas_instrutor(
     discord_id: int,
     quantidade: int,
+    cotacao: int | None = None,
 ) -> int:
-    """Credita moedas ao instrutor. Retorna saldo final."""
+    """
+    Credita moedas ao instrutor no lote da cotação informada (ou mínima).
+
+    Retorna saldo final.
+    """
     if quantidade <= 0:
         return await consultar_saldo_moedas(discord_id)
+
+    from src.config import VALOR_MOEDA_INGAME
+    from src.plantao.carteira_service import creditar_lotes
+
+    cotacao_usar = int(cotacao) if cotacao and cotacao > 0 else int(VALOR_MOEDA_INGAME)
 
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -631,6 +671,8 @@ async def creditar_moedas_instrutor(
         if estado is None:
             estado = EstadoPlantao(discord_id=discord_id, saldo_moedas=0)
             sessao.add(estado)
+            await sessao.flush()
+        await creditar_lotes(sessao, discord_id, quantidade, cotacao_usar)
         estado.saldo_moedas = int(estado.saldo_moedas or 0) + quantidade
         await sessao.commit()
         return int(estado.saldo_moedas)
