@@ -13,6 +13,8 @@ from src.cursos.cursos_service import (
     anular_e_apagar_pedido,
     creditar_moedas_instrutor,
     listar_pedidos_expirados,
+    parse_chaves_json,
+    remover_cargos_cursando,
 )
 from src.utils.error_handling import ignorar_falha_cosmetica
 
@@ -90,6 +92,23 @@ class CursosTasks(commands.Cog):
                 moedas = int(getattr(registro, "moedas_debitadas", 0) or 0)
                 status = registro.status
 
+                chaves = parse_chaves_json(
+                    getattr(registro, "chaves_cursos_json", None),
+                    getattr(registro, "chave_curso", None),
+                )
+                aluno = guilda.get_member(aluno_id)
+                # Retira material antes de apagar o pedido (só faz sentido
+                # em ACEITO — AGENDADO ainda não liberou cargo de estudo).
+                if status == "ACEITO" and aluno is not None and chaves:
+                    try:
+                        await remover_cargos_cursando(aluno, chaves)
+                    except Exception as erro_mat:
+                        logger.exception(
+                            "Falha ao retirar material do pedido #%s: %s",
+                            pedido_id,
+                            erro_mat,
+                        )
+
                 await _apagar_mensagem_do_canal(guilda, canal_id, mensagem_id)
                 apagado = await anular_e_apagar_pedido(pedido_id)
                 if apagado is None:
@@ -106,7 +125,6 @@ class CursosTasks(commands.Cog):
                             erro_moedas,
                         )
 
-                aluno = guilda.get_member(aluno_id)
                 if aluno is not None:
                     try:
                         await aluno.send(

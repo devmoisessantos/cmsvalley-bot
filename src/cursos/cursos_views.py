@@ -16,6 +16,7 @@ from src.cursos.cursos_service import (
     aceitar_agendamento,
     buscar_pedido_aberto,
     calcular_cobranca_pacote,
+    cancelar_pedido_aceito,
     conceder_cargos_cursando,
     conceder_cargos_dos_cursos,
     creditar_moedas_instrutor,
@@ -74,6 +75,7 @@ CUSTOM_ID_CONFIRMA_APROVAR = "cursos:confirma_aprovar:"
 CUSTOM_ID_CONFIRMA_REPROVAR = "cursos:confirma_reprovar:"
 CUSTOM_ID_CANCELA_DECISAO = "cursos:cancela_decisao:"
 CUSTOM_ID_REGISTRAR_REPASSE = "cursos:registrar_repasse:"
+CUSTOM_ID_CANCELAR_PEDIDO_DECISAO = "cursos:cancelar_pedido_decisao:"
 
 PRAZO_COMPROVANTE_REPASSE_SEGUNDOS = 300
 
@@ -122,7 +124,7 @@ def _pode_decidir_pedido(
     registro,
 ) -> bool:
     """
-    Quem pode aprovar, reprovar ou registrar repasse:
+    Quem pode aprovar, reprovar, cancelar o pedido ou registrar repasse:
 
     - o instrutor que aceitou o pedido
     - a equipe de Diretoria (intervém se o instrutor sair ou não concluir)
@@ -1176,8 +1178,23 @@ async def finalizar_pedido(
                 )
                 return
             # AGENDADO: republica no fim do canal de agendamentos.
-            # ACEITO: atualiza o card de decisão no lugar (não apaga).
+            # ACEITO: atualiza o card de decisão no lugar (não apaga)
+            # e libera material dos cursos recém-adicionados (o aceite
+            # original só concedeu cargo dos cursos que já estavam no pedido).
+            detalhe_material = None
             if registro.status == "ACEITO":
+                ok_material, detalhe_material = await conceder_cargos_cursando(
+                    membro,
+                    chaves_para_adicionar,
+                )
+                if not ok_material:
+                    await enviar_erro_para_log_erros(
+                        interacao.guild,
+                        "Pedido ACEITO atualizado mas falha ao liberar material",
+                        RuntimeError(detalhe_material),
+                        contexto="finalizar_pedido.mesclar_aceito.material",
+                        usuario=membro,
+                    )
                 ok_post = await _atualizar_card_decisao_no_lugar(
                     interacao.guild,
                     registro=registro,
@@ -1205,6 +1222,9 @@ async def finalizar_pedido(
                     else ""
                 ),
             ]
+            if detalhe_material:
+                linhas_ok.append(f"Material: {detalhe_material}")
+
         else:
             registro = await registrar_solicitacao_pacote(
                 discord_id=membro.id,
@@ -1721,10 +1741,18 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 botao_repasse = discord.ui.Button(
                     label="Registrar Pagamento",
                     style=discord.ButtonStyle.primary,
+                    emoji="📋",
                     custom_id=f"{CUSTOM_ID_REGISTRAR_REPASSE}{solicitacao_id}",
                     disabled=False,
                 )
                 linha.add_item(botao_repasse)
+            botao_cancelar_pedido = discord.ui.Button(
+                label="Cancelar Pedido",
+                style=discord.ButtonStyle.secondary,
+                emoji="🗑️",
+                custom_id=f"{CUSTOM_ID_CANCELAR_PEDIDO_DECISAO}{solicitacao_id}",
+                disabled=False,
+            )
             botao_ok = discord.ui.Button(
                 label="Aprovar",
                 style=discord.ButtonStyle.success,
@@ -1740,6 +1768,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 disabled=bloquear_decisao,
             )
             # Callbacks via on_interaction no cog (sobrevivem a restart)
+            linha.add_item(botao_cancelar_pedido)
             linha.add_item(botao_ok)
             linha.add_item(botao_nao)
             componentes.append(linha)
@@ -1747,7 +1776,7 @@ class ViewDecisaoCurso(LoggingViewMixin, discord.ui.LayoutView):
                 componentes.append(
                     discord.ui.TextDisplay(
                         "-# Aprovar e Reprovar liberam após "
-                        "**Registrar Pagamento** com o print do comprovante."
+                        "**Registrar Pagamento** com o print do comprovante. "
                     )
                 )
 
@@ -3119,6 +3148,249 @@ async def processar_clique_cancelar_decisao(
         solicitacao_id,
         modo="normal",
     )
+
+
+async def processar_clique_cancelar_pedido_decisao(
+    interacao: discord.Interaction,
+    solicitacao_id: int,
+) -> None:
+    """
+    Abre modal para cancelar pedido ACEITO no canal de decisão.
+
+    Uso típico: aluno saiu do servidor, foi exonerado, saiu da organização
+    ou desistiu do(s) curso(s). Independente do prazo de 48h.
+    """
+    membro = interacao.user
+    if not isinstance(membro, discord.Member) or not _instrutor_ou_diretoria(membro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão",
+            linhas=["Apenas **Instrutor** ou **Diretoria** pode cancelar."],
+        )
+        return
+    if interacao.guild is None:
+        await responder_erro(
+            interacao,
+            titulo="Contexto inválido",
+            linhas=["Use este botão dentro do servidor."],
+        )
+        return
+
+    registro = await obter_solicitacao_curso(solicitacao_id)
+    if registro is None:
+        await responder_erro(
+            interacao,
+            titulo="Pedido não encontrado",
+            linhas=_linhas_pedido_nao_encontrado(solicitacao_id),
+        )
+        return
+    if registro.status != "ACEITO":
+        await responder_aviso(
+            interacao,
+            titulo="Pedido indisponível",
+            linhas=[
+                f"Pedido `#{solicitacao_id}` — Status atual: `{registro.status}`.",
+                "Só pedidos **ACEITO** podem ser cancelados neste canal.",
+            ],
+            delay=12,
+        )
+        return
+    if not _pode_decidir_pedido(membro, registro):
+        await responder_erro(
+            interacao,
+            titulo="Sem permissão neste pedido",
+            linhas=[
+                "Somente quem **aceitou** esta solicitação "
+                "(ou a **Diretoria**) pode cancelar o pedido.",
+            ],
+        )
+        return
+
+    await interacao.response.send_modal(
+        ModalCancelarPedidoDecisao(
+            solicitacao_id=solicitacao_id,
+            staff_id=membro.id,
+            mensagem_decisao=interacao.message,
+        )
+    )
+
+
+class ModalCancelarPedidoDecisao(LoggingModalMixin, discord.ui.Modal):
+    """Motivo opcional ao cancelar pedido ACEITO (desistência / saída / exo)."""
+
+    def __init__(
+        self,
+        *,
+        solicitacao_id: int,
+        staff_id: int,
+        mensagem_decisao: discord.Message | None,
+    ):
+        super().__init__(title="Cancelar pedido de curso")
+        self.solicitacao_id = solicitacao_id
+        self.staff_id = staff_id
+        self.mensagem_decisao = mensagem_decisao
+        self.campo = discord.ui.TextInput(
+            label="Motivo (opcional)",
+            style=discord.TextStyle.paragraph,
+            placeholder=(
+                "Ex.: Aluno saiu do servidor / Exonerado / "
+                "Desistiu do curso / Saiu da organização"
+            ),
+            required=False,
+            max_length=500,
+        )
+        self.add_item(self.campo)
+
+    async def on_submit(self, interacao: discord.Interaction):
+        try:
+            await interacao.response.defer(ephemeral=True)
+            motivo = (self.campo.value or "").strip()
+            registro = await cancelar_pedido_aceito(
+                solicitacao_id=self.solicitacao_id,
+                staff_id=self.staff_id,
+                motivo=motivo or None,
+            )
+            if registro is None:
+                await responder_erro(
+                    interacao,
+                    titulo="Pedido não encontrado",
+                    linhas=[f"ID `#{self.solicitacao_id}`."],
+                )
+                return
+            if registro.status != "CANCELADO":
+                await responder_aviso(
+                    interacao,
+                    titulo="Não foi possível cancelar",
+                    linhas=[f"Status atual: `{registro.status}`."],
+                    delay=10,
+                )
+                return
+
+            guilda = interacao.guild
+            aluno = guilda.get_member(registro.discord_id) if guilda else None
+            chaves = parse_chaves_json(
+                registro.chaves_cursos_json,
+                registro.chave_curso,
+            )
+
+            detalhe_material = "Aluno fora da guilda — material não retirado."
+            if aluno is not None:
+                ok_mat, detalhe_material = await remover_cargos_cursando(
+                    aluno,
+                    chaves,
+                )
+                if not ok_mat:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Pedido cancelado mas falha ao retirar material",
+                        RuntimeError(detalhe_material),
+                        contexto="ModalCancelarPedidoDecisao.material",
+                        usuario=interacao.user,
+                    )
+
+            moedas = int(registro.moedas_debitadas or 0)
+            if moedas > 0:
+                try:
+                    await creditar_moedas_instrutor(registro.discord_id, moedas)
+                except Exception as erro_moedas:
+                    await enviar_erro_para_log_erros(
+                        guilda,
+                        "Pedido cancelado mas falha ao devolver moedas",
+                        erro_moedas,
+                        contexto="ModalCancelarPedidoDecisao.moedas",
+                        usuario=interacao.user,
+                    )
+
+            titulo, corpo = montar_linhas_corpo_pedido(
+                membro=aluno or interacao.user,  # type: ignore[arg-type]
+                registro=registro,
+            )
+            corpo += f"\n\n### 📌 Cancelado por: {interacao.user.mention}"
+            if motivo:
+                corpo += f"\n> {motivo}"
+            corpo += "\n\n-# 🗑️ **Pedido cancelado**"
+
+            url_avatar = (
+                aluno.display_avatar.url
+                if aluno is not None
+                else getattr(
+                    getattr(interacao.user, "display_avatar", None),
+                    "url",
+                    None,
+                )
+            )
+            if self.mensagem_decisao is not None and guilda is not None:
+                try:
+                    await self.mensagem_decisao.edit(
+                        view=ViewDecisaoCurso(
+                            titulo=titulo,
+                            corpo=corpo,
+                            guild=guilda,
+                            solicitacao_id=registro.id,
+                            url_avatar=url_avatar,
+                            modo="final",
+                            desabilitada=True,
+                            chaves_cursos=chaves,
+                        )
+                    )
+                except discord.HTTPException as erro_edit:
+                    ignorar_falha_cosmetica(
+                        erro_edit,
+                        o_que_falhou="marcar card de decisão como cancelado",
+                    )
+
+            await limpar_mensagem_solicitacao_curso(registro.id)
+
+            if aluno is not None:
+                linhas_dm = [
+                    f"Seu pedido de curso `#{registro.id}` foi **cancelado**.",
+                    f"Por: {interacao.user.mention}",
+                ]
+                if motivo:
+                    linhas_dm.append(f"Motivo: {motivo}")
+                else:
+                    linhas_dm.append("Motivo: _não informado_")
+                if moedas > 0:
+                    linhas_dm.append(f"Devolvidas **{moedas}** moeda(s) de desconto.")
+                linhas_dm.append(
+                    "O material de estudo foi retirado. "
+                    "Solicite de novo pelo painel se ainda precisar."
+                )
+                await enviar_dm_card(
+                    aluno,
+                    titulo="Pedido de curso cancelado",
+                    linhas=linhas_dm,
+                    cor=discord.Color.dark_grey(),
+                    guilda=guilda,
+                )
+
+            linhas_ok = [
+                f"Pedido `#{registro.id}` **cancelado**.",
+                f"Material: {detalhe_material}",
+            ]
+            if moedas > 0:
+                linhas_ok.append(f"Devolvidas **{moedas}** moeda(s) ao aluno.")
+            if motivo:
+                linhas_ok.append(f"Motivo: {motivo}")
+            await responder_sucesso(
+                interacao,
+                titulo="Pedido cancelado",
+                linhas=linhas_ok,
+                delay=15,
+            )
+        except Exception as erro:
+            await enviar_erro_para_log_erros(
+                interacao.guild,
+                "Erro ao cancelar pedido ACEITO de curso",
+                erro,
+                contexto="ModalCancelarPedidoDecisao.on_submit",
+                usuario=interacao.user,
+            )
+            await responder_erro(
+                interacao,
+                titulo="Erro inesperado",
+                linhas=["Não consegui cancelar o pedido. Veja LOG_ERROS."],
+            )
 
 
 async def processar_select_decisao_curso(

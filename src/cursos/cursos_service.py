@@ -1198,6 +1198,39 @@ async def recusar_agendamento(
         return registro
 
 
+async def cancelar_pedido_aceito(
+    *,
+    solicitacao_id: int,
+    staff_id: int,
+    motivo: str | None,
+) -> SolicitacaoCurso | None:
+    """
+    Cancela um pedido em ACEITO (aluno desistiu, saiu, exonerado, etc.).
+
+    Status vira CANCELADO. Quem chama deve retirar cargos de material e
+    devolver moedas de desconto. Convive com o prazo automático de 48h:
+    cancela na hora em vez de esperar a varredura anular o pedido.
+    """
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(SolicitacaoCurso).where(SolicitacaoCurso.id == solicitacao_id)
+        )
+        registro = resultado.scalar_one_or_none()
+        if registro is None:
+            return None
+        if registro.status != "ACEITO":
+            return registro
+        registro.status = "CANCELADO"
+        registro.aplicado_por = staff_id
+        texto_motivo = (motivo or "").strip()
+        if texto_motivo:
+            registro.observacao_instrutor = texto_motivo[:500]
+        registro.atualizado_em = agora()
+        await sessao.commit()
+        await sessao.refresh(registro)
+        return registro
+
+
 async def decidir_curso(
     *,
     solicitacao_id: int,
