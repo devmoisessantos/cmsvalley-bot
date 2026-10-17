@@ -842,10 +842,18 @@ async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
         # Cursos em que atuou como instrutor e concluiu.
         # Conta cada curso do pacote (chaves_cursos_json), não o pedido.
         # Ex.: pacote com 6 cursos = 6 na meta, não 1.
+        # Inclui instrutor_id e aplicado_por (quem fechou a decisão).
+        from sqlalchemy import or_
+
         resultado = await sessao.execute(
             select(SolicitacaoCurso).where(
-                SolicitacaoCurso.instrutor_id == discord_id,
-                SolicitacaoCurso.status.in_(["CONCLUIDO", "APROVADO", "FINALIZADO"]),
+                SolicitacaoCurso.status.in_(
+                    ["CONCLUIDO", "APROVADO", "FINALIZADO"]
+                ),
+                or_(
+                    SolicitacaoCurso.instrutor_id == discord_id,
+                    SolicitacaoCurso.aplicado_por == discord_id,
+                ),
             )
         )
         registros_curso = resultado.scalars().all()

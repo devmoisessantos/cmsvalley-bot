@@ -15,9 +15,10 @@ import logging
 from typing import Any
 
 import discord
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from src.config import CARGOS
+from src.cursos.cursos_service import parse_chaves_json
 from src.database.conexao import async_session
 from src.database.models import (
     Chamada,
@@ -31,6 +32,7 @@ from src.promocoes.promocoes_service import (
     id_cargo_por_nome,
     listar_cargos_destino_para_membro,
     membro_tem_cargo_nome,
+    obter_trilha_por_destino_e_origem,
 )
 from src.utils.ephemeral_botoes import linha_ephemeral
 from src.utils.error_handling import LoggingViewMixin
@@ -72,8 +74,13 @@ async def contar_producao_do_membro(discord_id: int) -> dict[str, int]:
     """
     Conta laudos, recrutamentos aprovados, chamadas e cursos aplicados.
 
-    Usa os mesmos critérios do checklist de promoção, para o número
-    bater com o que a trilha exige.
+    Mesmos critérios do checklist de promoção
+    (``_contar_metas_do_membro`` em promocoes_service):
+
+    - Cursos: cada **chave** do pacote (``chaves_cursos_json``), não o
+      pedido. Ex.: pacote com 6 cursos = 6, não 1.
+    - Instrutor: ``instrutor_id`` ou ``aplicado_por`` (legado / decisão).
+    - Status: APROVADO, CONCLUIDO, FINALIZADO.
     """
     contagens = {
         "laudos": 0,
@@ -108,17 +115,24 @@ async def contar_producao_do_membro(discord_id: int) -> dict[str, int]:
         )
         contagens["chamadas"] = int(resultado.scalar_one() or 0)
 
+        # Mesma regra de promoções: conta chaves do pacote, não o pedido.
         resultado = await sessao.execute(
-            select(func.count())
-            .select_from(SolicitacaoCurso)
-            .where(
-                SolicitacaoCurso.instrutor_id == discord_id,
-                SolicitacaoCurso.status.in_(
-                    ["APROVADO", "CONCLUIDO", "FINALIZADO"]
+            select(SolicitacaoCurso).where(
+                SolicitacaoCurso.status.in_(["APROVADO", "CONCLUIDO", "FINALIZADO"]),
+                or_(
+                    SolicitacaoCurso.instrutor_id == discord_id,
+                    SolicitacaoCurso.aplicado_por == discord_id,
                 ),
             )
         )
-        contagens["cursos_aplicados"] = int(resultado.scalar_one() or 0)
+        total_cursos = 0
+        for registro in resultado.scalars().all():
+            chaves = parse_chaves_json(
+                registro.chaves_cursos_json,
+                registro.chave_curso,
+            )
+            total_cursos += len(chaves)
+        contagens["cursos_aplicados"] = total_cursos
 
     contagens["segundos_plantao"] = int(
         await obter_segundos_plantao_totais(discord_id) or 0
@@ -174,10 +188,10 @@ def listar_cargos_referencia_para_membro(membro: discord.Member) -> list[str]:
     Cargos acima do atual do membro — candidatos a cargo de referência.
 
     1) Destinos das trilhas de promoção a partir do cargo mais alto
-       (próximo passo formal de carreira).
-    2) Se a trilha estiver vazia (ex.: Instrutor Resgate sem trilha
-       própria), completa com cargos da hierarquia acima que tenham
-       meta cadastrada.
+       (próximo passo formal de carreira) — primeiro.
+    2) Instrutor Resgate: trata como Instrutor para achar destinos.
+    3) Sempre completa com cargos da hierarquia acima (com meta), para
+       o select listar **todos** os degraus acima, não só o primeiro.
     """
     vistos: set[str] = set()
     lista: list[str] = []
@@ -189,8 +203,7 @@ def listar_cargos_referencia_para_membro(membro: discord.Member) -> list[str]:
 
     # Instrutor Resgate não entra em AREAS_MEDICAS; trata como Instrutor
     # para achar trilhas de área → área / Supervisor.
-    if not lista and membro_tem_cargo_nome(membro, CARGO_INSTRUTOR_RESGATE):
-        # Simula destinos como se o cargo alto fosse Instrutor.
+    if membro_tem_cargo_nome(membro, CARGO_INSTRUTOR_RESGATE):
         try:
             from src.config import TRILHAS_PROMOCAO
         except ImportError:
@@ -200,7 +213,10 @@ def listar_cargos_referencia_para_membro(membro: discord.Member) -> list[str]:
             de_cargo = trilha.get("de_cargo") or ""
             if de_cargo:
                 origens.append(de_cargo)
-            if CARGO_INSTRUTOR not in origens and CARGO_INSTRUTOR_RESGATE not in origens:
+            if (
+                CARGO_INSTRUTOR not in origens
+                and CARGO_INSTRUTOR_RESGATE not in origens
+            ):
                 continue
             destino = trilha.get("para_cargo") or ""
             if not destino or membro_tem_cargo_nome(membro, destino):
@@ -209,13 +225,48 @@ def listar_cargos_referencia_para_membro(membro: discord.Member) -> list[str]:
                 vistos.add(destino)
                 lista.append(destino)
 
-    if not lista:
-        for nome in _cargos_acima_na_hierarquia(membro):
-            if nome not in vistos:
-                vistos.add(nome)
-                lista.append(nome)
+    # Sempre mescla hierarquia acima (próximo → mais alto)
+    for nome in _cargos_acima_na_hierarquia(membro):
+        if nome not in vistos:
+            vistos.add(nome)
+            lista.append(nome)
 
     return lista
+
+
+def _metas_para_cargo_referencia(
+    membro: discord.Member,
+    cargo_ref: str | None,
+) -> dict[str, Any]:
+    """
+    Metas do cargo de referência.
+
+    Preferência:
+    1) Trilha real até o destino (plantão acumulado + produção da trilha)
+    2) Fallback: METAS_POR_CARGO do cargo
+    """
+    if not cargo_ref:
+        return {}
+
+    trilha = obter_trilha_por_destino_e_origem(cargo_ref, membro)
+    if trilha:
+        return {
+            "segundos_minimos_plantao": int(
+                trilha.get("segundos_minimos_plantao") or 0
+            ),
+            "meta_laudos": int(trilha.get("meta_laudos") or 0),
+            "meta_recrutamentos": int(trilha.get("meta_recrutamentos") or 0),
+            "meta_chamadas": int(trilha.get("meta_chamadas") or 0),
+            "meta_cursos_aplicados": int(trilha.get("meta_cursos_aplicados") or 0),
+            "meta_tickets": int(trilha.get("meta_tickets") or 0),
+            "fonte": "trilha",
+            "trilha_rotulo": trilha.get("rotulo") or cargo_ref,
+        }
+
+    base = dict(METAS_POR_CARGO.get(cargo_ref) or {})
+    base["fonte"] = "metas_por_cargo"
+    base["trilha_rotulo"] = None
+    return base
 
 
 def _cargo_de_referencia(
@@ -251,7 +302,7 @@ async def montar_relatorio_do_membro(
     destinos = listar_cargos_referencia_para_membro(membro)
     cargo_ref = _cargo_de_referencia(membro, cargo_referencia)
     cargo_atual = cargo_mais_alto_do_membro(membro)
-    metas = dict(METAS_POR_CARGO.get(cargo_ref) or {}) if cargo_ref else {}
+    metas = _metas_para_cargo_referencia(membro, cargo_ref)
 
     def _linha_meta(chave_meta: str, valor_atual: int) -> dict[str, Any]:
         exigido = int(metas.get(chave_meta) or 0)
@@ -265,26 +316,22 @@ async def montar_relatorio_do_membro(
         "discord_id": membro.id,
         "nome": membro.display_name,
         "mencao": membro.mention,
-        "avatar_url": (
-            membro.display_avatar.url if membro.display_avatar else None
-        ),
+        "avatar_url": (membro.display_avatar.url if membro.display_avatar else None),
         "cargos": _nomes_cargo_do_membro(membro),
         "cargo_atual": cargo_atual,
         "cargo_referencia": cargo_ref,
         "cargos_referencia_disponiveis": destinos,
+        "metas_fonte": metas.get("fonte"),
+        "trilha_rotulo": metas.get("trilha_rotulo"),
         "segundos_plantao": producao["segundos_plantao"],
         "plantao_formatado": formatar_hms(producao["segundos_plantao"]),
         "laudos": _linha_meta("meta_laudos", producao["laudos"]),
-        "recrutamentos": _linha_meta(
-            "meta_recrutamentos", producao["recrutamentos"]
-        ),
+        "recrutamentos": _linha_meta("meta_recrutamentos", producao["recrutamentos"]),
         "chamadas": _linha_meta("meta_chamadas", producao["chamadas"]),
         "cursos_aplicados": _linha_meta(
             "meta_cursos_aplicados", producao["cursos_aplicados"]
         ),
-        "meta_plantao_segundos": int(
-            metas.get("segundos_minimos_plantao") or 0
-        ),
+        "meta_plantao_segundos": int(metas.get("segundos_minimos_plantao") or 0),
     }
 
 
@@ -322,13 +369,9 @@ def formatar_relatorio_membro_em_linhas(
 
     cargo_ref = relatorio.get("cargo_referencia")
     if cargo_ref:
-        linhas.append(
-            f"**Cargo de referência (próximo / metas):** `{cargo_ref}`"
-        )
+        linhas.append(f"**Cargo de referência (próximo / metas):** `{cargo_ref}`")
     else:
-        linhas.append(
-            "**Cargo de referência:** nenhum destino de promoção disponível"
-        )
+        linhas.append("**Cargo de referência:** nenhum destino de promoção disponível")
 
     meta_plantao = int(relatorio.get("meta_plantao_segundos") or 0)
     plantao = relatorio.get("plantao_formatado") or "0s"
@@ -337,8 +380,7 @@ def formatar_relatorio_membro_em_linhas(
         ok_plantao = segundos >= meta_plantao
         marca = "✅" if ok_plantao else "❌"
         linhas.append(
-            f"{marca} **Plantão:** `{plantao}` "
-            f"(meta `{formatar_hms(meta_plantao)}`)"
+            f"{marca} **Plantão:** `{plantao}` (meta `{formatar_hms(meta_plantao)}`)"
         )
     else:
         linhas.append(f"• **Plantão:** `{plantao}`")
@@ -389,13 +431,16 @@ def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
 
     cargo_ref = relatorio.get("cargo_referencia")
     if cargo_ref:
-        partes.append(
-            f"`🎯` **Referência (próximo):** `{cargo_ref}`"
-        )
+        trilha_rotulo = relatorio.get("trilha_rotulo")
+        fonte = relatorio.get("metas_fonte")
+        extra = ""
+        if trilha_rotulo:
+            extra = f" · trilha `{trilha_rotulo}`"
+        elif fonte:
+            extra = f" · metas `{fonte}`"
+        partes.append(f"`🎯` **Referência (próximo):** `{cargo_ref}`{extra}")
     else:
-        partes.append(
-            "`🎯` **Referência:** _sem destino de promoção disponível_"
-        )
+        partes.append("`🎯` **Referência:** _sem destino de promoção disponível_")
 
     cargos = list(relatorio.get("cargos") or [])
     partes.append("`🏷️` **Cargos:**")
@@ -410,8 +455,7 @@ def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
     if meta_plantao > 0:
         marca = "✅" if segundos >= meta_plantao else "❌"
         partes.append(
-            f"{marca} **Plantão:** `{plantao}` "
-            f"/ meta `{formatar_hms(meta_plantao)}`"
+            f"{marca} **Plantão:** `{plantao}` / meta `{formatar_hms(meta_plantao)}`"
         )
     else:
         partes.append(f"• **Plantão:** `{plantao}`")
@@ -457,14 +501,11 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
         nome = rel.get("nome") or self.membro.display_name
         mencao = rel.get("mencao") or self.membro.mention
         avatar_url = rel.get("avatar_url") or (
-            self.membro.display_avatar.url
-            if self.membro.display_avatar
-            else None
+            self.membro.display_avatar.url if self.membro.display_avatar else None
         )
 
         cabecalho = (
-            f"# 📋 Avaliação HP — {nome}\n"
-            f"> {mencao} · `{rel.get('discord_id')}`"
+            f"# 📋 Avaliação HP — {nome}\n> {mencao} · `{rel.get('discord_id')}`"
         )
 
         componentes: list = []
@@ -478,15 +519,9 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
         else:
             componentes.append(discord.ui.TextDisplay(cabecalho))
 
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
-        componentes.append(
-            discord.ui.TextDisplay(montar_texto_corpo_relatorio(rel))
-        )
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(discord.ui.TextDisplay(montar_texto_corpo_relatorio(rel)))
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         destinos = list(rel.get("cargos_referencia_disponiveis") or [])
         cargo_ref = rel.get("cargo_referencia")
@@ -605,7 +640,7 @@ async def montar_relatorio_da_area(
         "segundos_plantao": 0,
     }
 
-    for membro in membros[: limite_membros]:
+    for membro in membros[:limite_membros]:
         producao = await contar_producao_do_membro(membro.id)
         totais["laudos"] += producao["laudos"]
         totais["recrutamentos"] += producao["recrutamentos"]
@@ -664,8 +699,7 @@ def formatar_relatorio_area_em_linhas(
         f"plantão `{formatar_hms(int(totais.get('segundos_plantao') or 0))}`"
     )
     linhas.append(
-        f"**Ranking pela meta principal** "
-        f"(`{relatorio.get('meta_principal')}`):"
+        f"**Ranking pela meta principal** (`{relatorio.get('meta_principal')}`):"
     )
 
     ranking = list(relatorio.get("ranking") or [])[:top]
