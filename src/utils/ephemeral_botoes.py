@@ -7,13 +7,11 @@ Membros não usam "Ignorar mensagem" e ficam clicando de novo no painel,
 gerando várias ephemerals iguais. O botão **Fechar** precisa apagar de
 verdade a ephemeral (não só parar o loop / o timeout).
 
-Discord trata ephemeral de followup e de response de formas diferentes.
-``apagar_ephemeral`` tenta, nesta ordem:
-
-1. mensagem conhecida (ex.: a que o view guardou ao postar)
-2. ``interaction.message.delete()``
-3. ``followup.delete_message(id)``
-4. ``delete_original_response()``
+Como apaga
+----------
+Usa ``excluir_mensagem`` (já provado no projeto: delay do Ver Informações,
+followups, etc.). No clique: reconhece a interação e agenda delete com
+``delay=0`` (ou 1s se preferir) na mensagem conhecida.
 
 Uso típico
 ----------
@@ -28,9 +26,9 @@ Uso típico
 
     row = linha_ephemeral(
         fechar=True,
-        voltar=self._ao_voltar,  # opcional
+        on_voltar=self._ao_voltar,  # opcional
         get_mensagem=lambda: self._mensagem_ao_vivo,
-        on_antes=self._parar_loop_ao_vivo,
+        on_antes=lambda _: self._parar_loop_ao_vivo(),
     )
 """
 
@@ -42,94 +40,79 @@ from typing import Any
 
 import discord
 
+from src.utils.mensagens import excluir_mensagem
+
 registrador = logging.getLogger(__name__)
 
 OnAntes = Callable[[discord.Interaction], Awaitable[Any] | Any]
 OnVoltar = Callable[[discord.Interaction], Awaitable[Any]]
 GetMensagem = Callable[[], discord.Message | None]
 
+# Após o clique: 1s e apaga (mesmo caminho do auto-delete que já funciona).
+DELAY_APAGAR_AO_FECHAR = 1
+
 
 async def apagar_ephemeral(
     interacao: discord.Interaction,
     *,
     mensagem: discord.Message | None = None,
+    delay: int = DELAY_APAGAR_AO_FECHAR,
 ) -> bool:
     """
-    Apaga a mensagem ephemeral ligada ao clique.
+    Reconhece o clique e apaga a ephemeral via ``excluir_mensagem``.
 
-    Devolve True se alguma tentativa de delete funcionou.
-    Reconhece a interação (defer) se ainda não foi respondida — senão o
-    Discord marca o clique como falho.
+    Mesmo caminho do auto-delete que já funciona (Ver Informações, etc.).
+    Devolve True se conseguiu agendar a exclusão.
     """
+    import asyncio
+
+    # 1) Reconhece o clique — senão o Discord mostra "interação falhou"
     if not interacao.response.is_done():
         try:
-            # defer sem ephemeral flag: só reconhece o clique no componente
             await interacao.response.defer()
         except (discord.NotFound, discord.HTTPException) as erro_defer:
             registrador.debug(
-                "apagar_ephemeral: defer falhou (%s) — tenta apagar mesmo assim",
+                "apagar_ephemeral: defer falhou (%s)",
                 erro_defer,
             )
 
-    alvos: list[discord.Message | None] = []
-    if mensagem is not None:
-        alvos.append(mensagem)
-    if interacao.message is not None and interacao.message is not mensagem:
-        alvos.append(interacao.message)
+    # 2) Mensagem do botão (interaction.message) tem prioridade — é a
+    #    ephemeral em que o membro clicou. Fallback: ref guardada no view.
+    alvo = interacao.message if interacao.message is not None else mensagem
 
-    for alvo in alvos:
-        if alvo is None:
-            continue
+    if alvo is None:
         try:
-            await alvo.delete()
-            return True
-        except discord.NotFound:
-            return True  # já sumiu
-        except (discord.Forbidden, discord.HTTPException) as erro_del:
-            registrador.debug(
-                "apagar_ephemeral: message.delete id=%s falhou: %s",
-                getattr(alvo, "id", "?"),
-                erro_del,
-            )
-
-    # Followup webhook (ephemeral de followup após defer no painel público)
-    message_id = None
-    if mensagem is not None:
-        message_id = getattr(mensagem, "id", None)
-    elif interacao.message is not None:
-        message_id = interacao.message.id
-
-    if message_id is not None:
-        try:
-            await interacao.followup.delete_message(int(message_id))
+            await interacao.delete_original_response()
             return True
         except discord.NotFound:
             return True
-        except (discord.Forbidden, discord.HTTPException) as erro_fu:
-            registrador.debug(
-                "apagar_ephemeral: followup.delete_message %s falhou: %s",
-                message_id,
-                erro_fu,
+        except (discord.Forbidden, discord.HTTPException) as erro_orig:
+            registrador.warning(
+                "apagar_ephemeral: sem mensagem e delete_original falhou: %s",
+                erro_orig,
             )
+            return False
 
+    # 3) Agenda no event loop (igual ao auto-delete do Ver Informações).
+    #    Não bloqueia o callback com await sleep — o create_task é o mesmo
+    #    padrão que já apaga a ephemeral após DELAY_INFORMACOES_SEGUNDOS.
     try:
-        await interacao.delete_original_response()
+        asyncio.create_task(excluir_mensagem(alvo, delay=delay))
         return True
-    except discord.NotFound:
-        return True
-    except (discord.Forbidden, discord.HTTPException) as erro_orig:
-        registrador.debug(
-            "apagar_ephemeral: delete_original_response falhou: %s",
-            erro_orig,
+    except Exception as erro_excluir:
+        registrador.warning(
+            "apagar_ephemeral: falha ao agendar excluir_mensagem id=%s: %s",
+            getattr(alvo, "id", "?"),
+            erro_excluir,
         )
-
-    return False
+        return False
 
 
 def _callback_fechar_ou_cancelar(
     *,
     get_mensagem: GetMensagem | None,
     on_antes: OnAntes | None,
+    delay: int,
 ) -> Callable[[discord.Interaction], Awaitable[None]]:
     async def _callback(interacao: discord.Interaction) -> None:
         if on_antes is not None:
@@ -137,7 +120,7 @@ def _callback_fechar_ou_cancelar(
             if hasattr(resultado, "__await__"):
                 await resultado
         msg = get_mensagem() if get_mensagem is not None else None
-        await apagar_ephemeral(interacao, mensagem=msg)
+        await apagar_ephemeral(interacao, mensagem=msg, delay=delay)
 
     return _callback
 
@@ -149,6 +132,7 @@ def botao_fechar(
     label: str = "Fechar",
     emoji: str | None = "❌",
     custom_id: str | None = None,
+    delay: int = DELAY_APAGAR_AO_FECHAR,
 ) -> discord.ui.Button:
     """Botão que apaga a ephemeral (equivalente a 'Ignorar mensagem')."""
     kwargs: dict[str, Any] = {
@@ -163,6 +147,7 @@ def botao_fechar(
     botao.callback = _callback_fechar_ou_cancelar(
         get_mensagem=get_mensagem,
         on_antes=on_antes,
+        delay=delay,
     )
     return botao
 
@@ -174,6 +159,7 @@ def botao_cancelar(
     label: str = "Cancelar",
     emoji: str | None = "❌",
     custom_id: str | None = None,
+    delay: int = DELAY_APAGAR_AO_FECHAR,
 ) -> discord.ui.Button:
     """Mesmo efeito de Fechar, rótulo de desistência de fluxo."""
     return botao_fechar(
@@ -182,6 +168,7 @@ def botao_cancelar(
         label=label,
         emoji=emoji,
         custom_id=custom_id,
+        delay=delay,
     )
 
 
@@ -223,6 +210,7 @@ def linha_ephemeral(
     on_voltar: OnVoltar | None = None,
     get_mensagem: GetMensagem | None = None,
     on_antes: OnAntes | None = None,
+    delay: int = DELAY_APAGAR_AO_FECHAR,
 ) -> discord.ui.ActionRow:
     """
     Monta uma ActionRow com Fechar / Cancelar / Voltar conforme flags.
@@ -235,10 +223,18 @@ def linha_ephemeral(
         row.add_item(botao_voltar(on_voltar))
     if fechar:
         row.add_item(
-            botao_fechar(get_mensagem=get_mensagem, on_antes=on_antes)
+            botao_fechar(
+                get_mensagem=get_mensagem,
+                on_antes=on_antes,
+                delay=delay,
+            )
         )
     elif cancelar:
         row.add_item(
-            botao_cancelar(get_mensagem=get_mensagem, on_antes=on_antes)
+            botao_cancelar(
+                get_mensagem=get_mensagem,
+                on_antes=on_antes,
+                delay=delay,
+            )
         )
     return row
