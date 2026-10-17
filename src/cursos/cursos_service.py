@@ -9,8 +9,10 @@ import discord
 from sqlalchemy import select
 
 from src.config import (
+    CARGO_COORDENADOR,
     CARGO_ENFERMEIRO,
     CARGOS,
+    CARGOS_HIERARQUIA,
     CURSOS,
     DIVISOR_REPASSE_CURSO,
     HORAS_ISENCAO_RESGATE,
@@ -370,36 +372,130 @@ def membro_e_enfermeiro(membro: discord.Member) -> bool:
     return any(cargo.name == CARGO_ENFERMEIRO for cargo in membro.roles)
 
 
+def _cargo_mais_alto_hierarquia(membro: discord.Member) -> str | None:
+    """Nome do cargo mais alto do membro na hierarquia do hospital."""
+    nomes = {cargo.name for cargo in membro.roles}
+    for nome in CARGOS_HIERARQUIA:
+        if nome in nomes:
+            return nome
+    return None
+
+
+def membro_pode_solicitar_chave(
+    membro: discord.Member,
+    chave: str,
+) -> tuple[bool, str]:
+    """
+    Diz se o membro pode **solicitar** um curso (lado do aluno).
+
+    Regras:
+    - Enfermeiro (cargo mais alto) → só **resgate**.
+    - Paramédico e acima (abaixo de Coordenador) → práticos, função e
+      diretoria; **exceto** diretoria_geral.
+    - Coordenador e acima → todos os cursos, inclusive diretoria_geral.
+    - Administrador do Discord → sempre autorizado.
+    """
+    if membro.guild_permissions.administrator:
+        return True, ""
+
+    if chave not in CURSOS:
+        return False, "Curso inválido."
+
+    cargo = _cargo_mais_alto_hierarquia(membro)
+
+    # Sem cargo na hierarquia ou só Enfermeiro: apenas Resgate.
+    if cargo is None or cargo == CARGO_ENFERMEIRO:
+        if chave == "resgate":
+            return True, ""
+        return (
+            False,
+            "Você não está autorizado a realizar esse(s) curso(s).",
+        )
+
+    # Coordenador e cargos acima na lista (índice menor = mais alto).
+    try:
+        indice_cargo = CARGOS_HIERARQUIA.index(cargo)
+        indice_coordenador = CARGOS_HIERARQUIA.index(CARGO_COORDENADOR)
+    except ValueError:
+        # Cargo fora da lista esperada: trata como enfermeiro.
+        if chave == "resgate":
+            return True, ""
+        return (
+            False,
+            "Você não está autorizado a realizar esse(s) curso(s).",
+        )
+
+    if indice_cargo <= indice_coordenador:
+        return True, ""
+
+    # Paramédico até abaixo de Coordenador: tudo menos diretoria_geral.
+    if chave == "diretoria_geral":
+        return (
+            False,
+            "Você não está autorizado a realizar esse(s) curso(s).",
+        )
+    return True, ""
+
+
+def membro_pode_solicitar_chaves(
+    membro: discord.Member,
+    chaves: list[str],
+) -> tuple[bool, str, list[str]]:
+    """
+    Valida um pacote de cursos para solicitação.
+
+    Retorna (ok, mensagem_erro, chaves_negadas).
+    Se qualquer chave for negada, ok=False e a mensagem é a padrão.
+    """
+    negadas: list[str] = []
+    for chave in chaves:
+        pode, _ = membro_pode_solicitar_chave(membro, chave)
+        if not pode:
+            negadas.append(chave)
+    if negadas:
+        return (
+            False,
+            "Você não está autorizado a realizar esse(s) curso(s).",
+            negadas,
+        )
+    return True, "", []
+
+
+async def segundos_plantao_para_isencao_resgate(
+    discord_id: int,
+) -> int:
+    """
+    Tempo total de plantão do membro para isenção do Resgate (≥ 6h).
+
+    Soma o histórico completo (todos os logs fechados) e o trecho ainda
+    em call, se o toggle estiver ligado. Não usa só o ciclo semanal —
+    o Enfermeiro precisa das horas totais acumuladas.
+    """
+    from src.plantao.ranking_plantao_service import (
+        _somar_segundos_em_call_ao_vivo,
+        obter_segundos_plantao_totais,
+    )
+
+    segundos_historico = await obter_segundos_plantao_totais(discord_id)
+    ao_vivo = await _somar_segundos_em_call_ao_vivo()
+    segundos_abertos = int(ao_vivo.get(int(discord_id), 0))
+    return max(0, segundos_historico + segundos_abertos)
+
+
+# Nome antigo mantido para quem ainda importa; delega ao total histórico.
 async def segundos_plantao_ciclo_atual(
     discord_id: int,
     *,
     guild: discord.Guild | None = None,
 ) -> int:
     """
-    Tempo de plantão do membro no ciclo atual (ranking tempo real).
+    Compatibilidade: agora devolve o total histórico + call aberta.
 
-    Usado só para isenção do Resgate (≥ 6h). Inclui plantão em andamento
-    (ao vivo). Sem guild, não aplica filtro de ranking — conta as horas
-    brutas do banco + call aberta.
+    O parâmetro guild é ignorado de propósito — a isenção do Resgate
+    não filtra por ranking.
     """
-    from src.plantao.ranking_plantao_service import (
-        _periodos,
-        buscar_horas_por_membro,
-    )
-
-    inicio, fim, _ = _periodos(
-        "horas",
-        "tempo_real",
-        None,
-        modo_postagem=False,
-    )
-    contagem = await buscar_horas_por_membro(
-        inicio,
-        fim,
-        guild=guild,
-        incluir_ao_vivo=True,
-    )
-    return int(contagem.get(int(discord_id), 0))
+    _ = guild
+    return await segundos_plantao_para_isencao_resgate(discord_id)
 
 
 async def calcular_cobranca_pacote(
@@ -414,8 +510,8 @@ async def calcular_cobranca_pacote(
     Regras:
     - Pagamento base sempre em dinheiro in-game.
     - Moedas só abatem (nunca pagam o curso sozinhas).
-    - Resgate: enfermeiro com ≥ 6h no ciclo → grátis (sem desconto).
-      Com < 6h → desconto máximo de 5 moedas.
+    - Resgate: enfermeiro com ≥ 6h no total histórico de plantão
+      → grátis (sem desconto). Com < 6h → desconto máximo de 5 moedas.
     - Demais cursos / pacotes: desconto máximo de 10 moedas.
     - Abatimento em R$ = moedas × cotação do aluno, sem passar do total.
     """
@@ -429,17 +525,13 @@ async def calcular_cobranca_pacote(
     teto_moedas = MOEDAS_DESCONTO_MAX_POR_PEDIDO
 
     if so_resgate and membro_e_enfermeiro(membro):
-        # Conta horas brutas (guild=None) para não excluir o aluno
-        # por regra de ranking e ainda assim liberar o Resgate grátis.
-        segundos = await segundos_plantao_ciclo_atual(
-            membro.id,
-            guild=None,
-        )
+        # Total histórico (logs fechados) + tempo ainda em call.
+        segundos = await segundos_plantao_para_isencao_resgate(membro.id)
         horas = segundos / 3600.0
         if horas >= HORAS_ISENCAO_RESGATE:
             isento = True
             motivo_isencao = (
-                f"Enfermeiro com {horas:.1f}h de plantão no ciclo "
+                f"Enfermeiro com {horas:.1f}h de plantão no total "
                 f"(mínimo {HORAS_ISENCAO_RESGATE}h)."
             )
             valor_bruto = 0

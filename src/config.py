@@ -1033,7 +1033,7 @@ HORA_LIMITE_MOEDA_SABADO = 12  # a partir das 12:00 de sábado, zero moeda
 # Cursos — pagamento sempre IN_GAME; moedas só como desconto limitado.
 MOEDAS_DESCONTO_MAX_POR_PEDIDO = 10
 MOEDAS_DESCONTO_MAX_RESGATE_PARCIAL = 5  # resgate com < 6h de plantão
-HORAS_ISENCAO_RESGATE = 6  # enfermeiro com >= 6h no ciclo → resgate grátis
+HORAS_ISENCAO_RESGATE = 6  # enfermeiro com >= 6h no total histórico → resgate grátis
 # Parte do valor pago in-game que vai ao caixa do hospital (1/4)
 DIVISOR_REPASSE_CURSO = 4
 

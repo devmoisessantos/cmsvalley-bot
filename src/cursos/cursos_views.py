@@ -27,6 +27,7 @@ from src.cursos.cursos_service import (
     marcar_grupo_repasse,
     marcar_mensagem_solicitacao_curso,
     membro_pode_aplicar_chaves,
+    membro_pode_solicitar_chaves,
     membro_tem_curso,
     menção_cargo_curso,
     mesclar_cursos_no_pedido,
@@ -204,8 +205,9 @@ class PainelCursosLayout(LoggingViewMixin, discord.ui.LayoutView):
                     "✅ Informe data/horário se quiser (ou deixe em branco).\n"
                     "✅ Pagamento **obrigatório in-game**; moedas só como "
                     "**desconto** (até 10 por pedido).\n"
-                    "✅ Resgate: Enfermeiro com **6h+** de plantão no ciclo = "
-                    "**grátis**.\n"
+                    "✅ Resgate: Enfermeiro com **6h+** de plantão no "
+                    "total (histórico) = **grátis**.\n"
+                    "✅ Enfermeiro só pode solicitar o **Curso Resgate**.\n"
                     "✅ Curso concluído = você recebe o **cargo** correspondente.\n"
                     "✅ Se já tiver um pedido aberto, novos cursos **entram no mesmo "
                     "card**."
@@ -688,6 +690,18 @@ class SeletorMultiCursosView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
+        # Restrição por cargo do solicitante (Enfermeiro só Resgate, etc.).
+        autorizado, motivo, _negadas = membro_pode_solicitar_chaves(
+            membro, chaves_validas
+        )
+        if not autorizado:
+            await responder_erro(
+                interacao,
+                titulo="Falha na solicitação",
+                linhas=[motivo],
+            )
+            return
+
         # Modal consome a response; a mensagem do select fica órfã —
         # guardamos o id para apagar depois no on_submit do modal.
         id_mensagem_seletor = (
@@ -889,6 +903,14 @@ class ConfirmacaoPagamentoPacoteView(LoggingViewMixin, discord.ui.LayoutView):
                 f"**Desconto máximo:** até `{teto}` moeda(s) neste pedido\n"
                 "_Cursos não são pagos só com moedas — o restante é in-game._\n"
             )
+            # Resgate + Enfermeiro ainda sem 6h: mostra o total de plantão
+            # para o membro entender por que não está grátis.
+            so_resgate = list(chaves) == ["resgate"]
+            if so_resgate and teto == 5:
+                texto_extra += (
+                    "_Enfermeiro precisa de **6h+** de plantão no total "
+                    "(histórico) para Resgate grátis._\n"
+                )
 
         self.add_item(
             discord.ui.Container(
@@ -1091,6 +1113,17 @@ async def finalizar_pedido(
                     *([f"Já concluídos: {', '.join(ja_tem)}"] if ja_tem else []),
                 ],
                 delay=15,
+            )
+            return
+
+        autorizado, motivo, _negadas = membro_pode_solicitar_chaves(
+            membro, chaves_novas
+        )
+        if not autorizado:
+            await responder_erro(
+                interacao,
+                titulo="Falha na solicitação",
+                linhas=[motivo],
             )
             return
 
