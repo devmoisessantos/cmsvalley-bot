@@ -107,19 +107,18 @@ async def montar_linhas_pagamento(
     return linhas, total_unidades, total_pago
 
 
-def montar_texto_solicitacao_area(
+def montar_titulo_e_corpo_solicitacao_area(
     *,
     chave_area: str,
     periodo_txt: str,
     total_pago: int,
     total_unidades: int,
     observacao_extra: str | None = None,
-) -> str:
-    """Monta a solicitação que resume o pagamento de uma área para finanças.
+) -> tuple[str, str]:
+    """Monta título + corpo do card de solicitação de pagamento de área.
 
-    Busca os dados da área configurada e preserva valores de referência quando
-    ela for desconhecida, para que o texto continue auditável. A observação
-    opcional permite anexar contexto sem alterar o cálculo do fechamento.
+    Padrão visual alinhado ao card de troca de moedas / CANAL_ERROS
+    (Components V2). Destaca FID e quantia que o responsável irá receber.
     """
     area = AREAS_FINANCEIRAS.get(chave_area, {})
     titulo_area = area.get("titulo", chave_area.upper())
@@ -128,24 +127,43 @@ def montar_texto_solicitacao_area(
     responsavel_id = area.get("responsavel_discord_id")
     responsavel_fid = area.get("responsavel_fid") or "—"
 
-    responsavel_txt = f"<@{responsavel_id}>" if responsavel_id else "_a definir_"
+    responsavel_txt = f"<@{responsavel_id}>" if responsavel_id else "_sem responsável_"
     area_txt = f"<@&{cargo_id}>" if cargo_id else titulo_area
+    valor_txt = formatar_reais(total_pago)
 
     obs = observacao_extra or (
         f"_Ranking {titulo_area} — {total_unidades} {unidade_plural} válidos_"
     )
 
-    return (
-        "# 💰・SOLICITAÇÃO - PAGAMENTO DE ÁREA\n"
-        "**=============================**\n"
-        f"• 👨‍⚕️ **Responsável:** {responsavel_txt}\n"
-        f"• 🆔 **FID:** {responsavel_fid}\n"
-        f"• 🎯 **Área Médica:** {area_txt}\n"
-        f"• 💰 **Valor Semanal:** {formatar_reais(total_pago)}\n"
-        f"• 📅 **Período:** {periodo_txt}\n"
-        f"• 🧾 **Observações (se houver):** {obs}\n"
-        "**=============================**"
+    titulo = f"💰 PAGAMENTO — RANKING {titulo_area}"
+    corpo = (
+        f"👨‍⚕️ {responsavel_txt}　·　🆔 **FID:** `{responsavel_fid}`\n"
+        f"> - `🎯` **Área:** {area_txt}\n"
+        f"> - `📦` **Unidades:** {total_unidades} {unidade_plural}\n"
+        f"> - `📅` **Período:** {periodo_txt}\n\n"
+        f"• 💰 **Quantia que irá receber:** **{valor_txt}**\n"
+        f"• 🧾 **Observações:** {obs}"
     )
+    return titulo, corpo
+
+
+def montar_texto_solicitacao_area(
+    *,
+    chave_area: str,
+    periodo_txt: str,
+    total_pago: int,
+    total_unidades: int,
+    observacao_extra: str | None = None,
+) -> str:
+    """Compat: devolve título+corpo juntos (texto legado). Preferir o card V2."""
+    titulo, corpo = montar_titulo_e_corpo_solicitacao_area(
+        chave_area=chave_area,
+        periodo_txt=periodo_txt,
+        total_pago=total_pago,
+        total_unidades=total_unidades,
+        observacao_extra=observacao_extra,
+    )
+    return f"# {titulo}\n{corpo}"
 
 
 def montar_texto_controle_dm(
@@ -245,6 +263,13 @@ async def processar_fechamento_ranking(
         )
 
 
+# Áreas cujo ranking continua gerando solicitação de pagamento mesmo sem
+# responsável cadastrado (recrutamento e laudos). Demais áreas (ex.: chamadas /
+# doutores) só postam no canal quando houver responsavel_discord_id — evita
+# enviar pagamento para "fantasma".
+AREAS_PAGAMENTO_SEM_RESPONSAVEL_OK = frozenset({"recrutamento", "laudos"})
+
+
 async def _processar_fechamento_ranking_interno(
     bot: discord.Client,
     guild: discord.Guild,
@@ -260,6 +285,21 @@ async def _processar_fechamento_ranking_interno(
         logger.info("Fechamento %s: contagem vazia — nada a postar", chave_area)
         return
 
+    area_cfg = AREAS_FINANCEIRAS.get(chave_area, {})
+    responsavel_id = area_cfg.get("responsavel_discord_id")
+    tem_responsavel = bool(responsavel_id)
+    pode_sem_responsavel = chave_area in AREAS_PAGAMENTO_SEM_RESPONSAVEL_OK
+
+    # Doutores (chamadas) e qualquer área sem responsável: não manda solicitação
+    # para "fantasma". Recrutamento e laudos seguem normalmente.
+    if not tem_responsavel and not pode_sem_responsavel:
+        logger.info(
+            "Fechamento %s: sem responsável cadastrado — solicitação omitida "
+            "(não envia pagamento sem destinatário)",
+            chave_area,
+        )
+        return
+
     valor_unitario = VALOR_UNITARIO_RANKING
     linhas, unidades_calc, pago_calc = await montar_linhas_pagamento(
         contagem, valor_unitario=valor_unitario
@@ -271,7 +311,7 @@ async def _processar_fechamento_ranking_interno(
     canal = _obter_canal_financas(guild)
     canal_id = CANAIS.get("CANAL_FINANCAS") or 0
 
-    texto_solicitacao = montar_texto_solicitacao_area(
+    titulo_solicitacao, corpo_solicitacao = montar_titulo_e_corpo_solicitacao_area(
         chave_area=chave_area,
         periodo_txt=periodo_txt,
         total_pago=pago,
@@ -293,19 +333,27 @@ async def _processar_fechamento_ranking_interno(
     )
 
     if canal is not None:
-        # Ranking ainda usa texto em content + botão (lista longa / agrupamentos)
-        await canal.send(
-            content=texto_solicitacao,
-            view=ViewBotaoPagamentoFinancas(ja_pago=False),
+        # Card Components V2 (mesmo padrão do bot / troca de moedas)
+        view_card = ViewSolicitacaoFinancasCard(
+            titulo=titulo_solicitacao,
+            corpo=corpo_solicitacao,
+            guild=guild,
+            cor=discord.Color.dark_gold(),
+            ja_pago=False,
+            discord_id_beneficiario=int(responsavel_id) if tem_responsavel else None,
         )
+        await canal.send(view=view_card)
+        # Lista detalhada (IDs FiveM) continua em texto + botão persistente
         await canal.send(
             content=texto_lista,
             view=ViewBotaoPagamentoFinancas(ja_pago=False),
         )
         logger.info(
-            "Finanças: solicitação + lista %s postadas em #%s",
+            "Finanças: card solicitação + lista %s postadas em #%s "
+            "(responsável=%s)",
             chave_area,
             getattr(canal, "name", canal_id),
+            responsavel_id or "—",
         )
     else:
         logger.warning("CANAL_FINANCAS ausente — fechamento %s sem post", chave_area)

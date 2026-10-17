@@ -77,7 +77,7 @@ def membro_e_equipe_diretoria(membro: discord.Member) -> bool:
     """Equipe de diretoria (cargo de equipe ou cargos da lista CARGOS_DIRETORIA)."""
     if e_diretoria(membro):
         return True
-    id_equipe = CARGOS.get("EQUIPE_DIRETORIA")
+    id_equipe = CARGOS.get("🌫️ EQUIPE・DIRETORIA")
     if id_equipe is None:
         return False
     return any(cargo.id == int(id_equipe) for cargo in membro.roles)
@@ -87,7 +87,7 @@ def membro_e_equipe_diretoria_geral(membro: discord.Member) -> bool:
     """Só a equipe de diretoria geral (ou administrador do Discord)."""
     if membro.guild_permissions.administrator:
         return True
-    id_geral = CARGOS.get("EQUIPE_DIRETORIA_GERAL")
+    id_geral = CARGOS.get("💌 EQUIPE・DIRETORIA GERAL")
     if id_geral is None:
         return False
     return any(cargo.id == int(id_geral) for cargo in membro.roles)

@@ -45,6 +45,8 @@ CARGO_DOUTOR = "🥼・Doutor"
 CARGO_PSICOLOGO = "🩺・Psicólogo"
 CARGO_RECRUTADOR = "✈️・Recrutador"
 CARGO_INSTRUTOR = "🥼・Instrutor"
+CARGO_SUPERVISOR = "👑・SUPERVISOR"
+CARGO_VICE_DIRETOR = "👑・VICE DIRETOR"
 
 CARGOS_ADV_BLOQUEIAM = ("🚫┇Adv 01", "🚫┇Adv 02")
 
@@ -1140,6 +1142,23 @@ async def aplicar_promocao_cargos(
         for nome_extra in extras:
             if nome_extra not in nomes_para_adicionar:
                 nomes_para_adicionar.append(nome_extra)
+
+    # Cargos de equipe vinculados à hierarquia de gestão:
+    # Supervisor → EQUIPE • TICKET + EQUIPE・FISCAL
+    # Vice Diretor → EQUIPE・DIRETORIA
+    cargos_equipe_extras: list[str] = []
+    if cargo_para_nome == CARGO_SUPERVISOR:
+        cargos_equipe_extras.extend(
+            [
+                "⚠️ EQUIPE • TICKET",
+                "🚨 EQUIPE・FISCAL",
+            ]
+        )
+    elif cargo_para_nome == CARGO_VICE_DIRETOR:
+        cargos_equipe_extras.append("🌫️ EQUIPE・DIRETORIA")
+    for nome_equipe in cargos_equipe_extras:
+        if nome_equipe not in nomes_para_adicionar:
+            nomes_para_adicionar.append(nome_equipe)
 
     roles_para_adicionar: list[discord.Role] = []
     for nome_cargo in nomes_para_adicionar:

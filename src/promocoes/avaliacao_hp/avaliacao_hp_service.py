@@ -18,15 +18,16 @@ import discord
 from sqlalchemy import func, or_, select
 
 from src.config import CARGOS
+from src.cursos.cursos_service import parse_chaves_json
 from src.database.conexao import async_session
 from src.database.models import (
     Chamada,
     Laudo,
     Recrutamento,
     SolicitacaoCurso,
+    Ticket,
 )
 from src.plantao.ranking_plantao_service import obter_segundos_plantao_totais
-from src.cursos.cursos_service import parse_chaves_json
 from src.promocoes.promocoes_service import (
     cargo_mais_alto_do_membro,
     id_cargo_por_nome,
@@ -72,7 +73,8 @@ META_PRINCIPAL_DA_AREA: dict[str, str] = {
 
 async def contar_producao_do_membro(discord_id: int) -> dict[str, int]:
     """
-    Conta laudos, recrutamentos aprovados, chamadas e cursos aplicados.
+    Conta laudos, recrutamentos aprovados, chamadas, cursos aplicados e
+    tickets finalizados.
 
     Mesmos critérios do checklist de promoção
     (``_contar_metas_do_membro`` em promocoes_service):
@@ -81,12 +83,14 @@ async def contar_producao_do_membro(discord_id: int) -> dict[str, int]:
       pedido. Ex.: pacote com 6 cursos = 6, não 1.
     - Instrutor: ``instrutor_id`` ou ``aplicado_por`` (legado / decisão).
     - Status: APROVADO, CONCLUIDO, FINALIZADO.
+    - Tickets: ``staff_finalizou_id`` + status ``finalizado``.
     """
     contagens = {
         "laudos": 0,
         "recrutamentos": 0,
         "chamadas": 0,
         "cursos_aplicados": 0,
+        "tickets": 0,
         "segundos_plantao": 0,
     }
 
@@ -115,12 +119,21 @@ async def contar_producao_do_membro(discord_id: int) -> dict[str, int]:
         )
         contagens["chamadas"] = int(resultado.scalar_one() or 0)
 
+        # Tickets finalizados pela staff (conta para meta de tickets)
+        resultado = await sessao.execute(
+            select(func.count())
+            .select_from(Ticket)
+            .where(
+                Ticket.staff_finalizou_id == discord_id,
+                Ticket.status == "finalizado",
+            )
+        )
+        contagens["tickets"] = int(resultado.scalar_one() or 0)
+
         # Mesma regra de promoções: conta chaves do pacote, não o pedido.
         resultado = await sessao.execute(
             select(SolicitacaoCurso).where(
-                SolicitacaoCurso.status.in_(
-                    ["APROVADO", "CONCLUIDO", "FINALIZADO"]
-                ),
+                SolicitacaoCurso.status.in_(["APROVADO", "CONCLUIDO", "FINALIZADO"]),
                 or_(
                     SolicitacaoCurso.instrutor_id == discord_id,
                     SolicitacaoCurso.aplicado_por == discord_id,
@@ -259,9 +272,7 @@ def _metas_para_cargo_referencia(
             "meta_laudos": int(trilha.get("meta_laudos") or 0),
             "meta_recrutamentos": int(trilha.get("meta_recrutamentos") or 0),
             "meta_chamadas": int(trilha.get("meta_chamadas") or 0),
-            "meta_cursos_aplicados": int(
-                trilha.get("meta_cursos_aplicados") or 0
-            ),
+            "meta_cursos_aplicados": int(trilha.get("meta_cursos_aplicados") or 0),
             "meta_tickets": int(trilha.get("meta_tickets") or 0),
             "fonte": "trilha",
             "trilha_rotulo": trilha.get("rotulo") or cargo_ref,
@@ -320,9 +331,7 @@ async def montar_relatorio_do_membro(
         "discord_id": membro.id,
         "nome": membro.display_name,
         "mencao": membro.mention,
-        "avatar_url": (
-            membro.display_avatar.url if membro.display_avatar else None
-        ),
+        "avatar_url": (membro.display_avatar.url if membro.display_avatar else None),
         "cargos": _nomes_cargo_do_membro(membro),
         "cargo_atual": cargo_atual,
         "cargo_referencia": cargo_ref,
@@ -332,16 +341,13 @@ async def montar_relatorio_do_membro(
         "segundos_plantao": producao["segundos_plantao"],
         "plantao_formatado": formatar_hms(producao["segundos_plantao"]),
         "laudos": _linha_meta("meta_laudos", producao["laudos"]),
-        "recrutamentos": _linha_meta(
-            "meta_recrutamentos", producao["recrutamentos"]
-        ),
+        "recrutamentos": _linha_meta("meta_recrutamentos", producao["recrutamentos"]),
         "chamadas": _linha_meta("meta_chamadas", producao["chamadas"]),
         "cursos_aplicados": _linha_meta(
             "meta_cursos_aplicados", producao["cursos_aplicados"]
         ),
-        "meta_plantao_segundos": int(
-            metas.get("segundos_minimos_plantao") or 0
-        ),
+        "tickets": _linha_meta("meta_tickets", producao["tickets"]),
+        "meta_plantao_segundos": int(metas.get("segundos_minimos_plantao") or 0),
     }
 
 
@@ -379,13 +385,9 @@ def formatar_relatorio_membro_em_linhas(
 
     cargo_ref = relatorio.get("cargo_referencia")
     if cargo_ref:
-        linhas.append(
-            f"**Cargo de referência (próximo / metas):** `{cargo_ref}`"
-        )
+        linhas.append(f"**Cargo de referência (próximo / metas):** `{cargo_ref}`")
     else:
-        linhas.append(
-            "**Cargo de referência:** nenhum destino de promoção disponível"
-        )
+        linhas.append("**Cargo de referência:** nenhum destino de promoção disponível")
 
     meta_plantao = int(relatorio.get("meta_plantao_segundos") or 0)
     plantao = relatorio.get("plantao_formatado") or "0s"
@@ -394,8 +396,7 @@ def formatar_relatorio_membro_em_linhas(
         ok_plantao = segundos >= meta_plantao
         marca = "✅" if ok_plantao else "❌"
         linhas.append(
-            f"{marca} **Plantão:** `{plantao}` "
-            f"(meta `{formatar_hms(meta_plantao)}`)"
+            f"{marca} **Plantão:** `{plantao}` (meta `{formatar_hms(meta_plantao)}`)"
         )
     else:
         linhas.append(f"• **Plantão:** `{plantao}`")
@@ -405,6 +406,7 @@ def formatar_relatorio_membro_em_linhas(
         ("recrutamentos", "Recrutamentos"),
         ("chamadas", "Chamadas"),
         ("cursos_aplicados", "Cursos aplicados"),
+        ("tickets", "Tickets finalizados"),
     ):
         bloco = relatorio.get(chave) or {}
         atual = int(bloco.get("atual") or 0)
@@ -453,13 +455,9 @@ def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
             extra = f" · trilha `{trilha_rotulo}`"
         elif fonte:
             extra = f" · metas `{fonte}`"
-        partes.append(
-            f"`🎯` **Referência (próximo):** `{cargo_ref}`{extra}"
-        )
+        partes.append(f"`🎯` **Referência (próximo):** `{cargo_ref}`{extra}")
     else:
-        partes.append(
-            "`🎯` **Referência:** _sem destino de promoção disponível_"
-        )
+        partes.append("`🎯` **Referência:** _sem destino de promoção disponível_")
 
     cargos = list(relatorio.get("cargos") or [])
     partes.append("`🏷️` **Cargos:**")
@@ -474,8 +472,7 @@ def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
     if meta_plantao > 0:
         marca = "✅" if segundos >= meta_plantao else "❌"
         partes.append(
-            f"{marca} **Plantão:** `{plantao}` "
-            f"/ meta `{formatar_hms(meta_plantao)}`"
+            f"{marca} **Plantão:** `{plantao}` / meta `{formatar_hms(meta_plantao)}`"
         )
     else:
         partes.append(f"• **Plantão:** `{plantao}`")
@@ -485,6 +482,7 @@ def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
         ("recrutamentos", "Recrutamentos"),
         ("chamadas", "Chamadas"),
         ("cursos_aplicados", "Cursos aplicados"),
+        ("tickets", "Tickets finalizados"),
     ):
         bloco = relatorio.get(chave) or {}
         atual = int(bloco.get("atual") or 0)
@@ -521,14 +519,11 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
         nome = rel.get("nome") or self.membro.display_name
         mencao = rel.get("mencao") or self.membro.mention
         avatar_url = rel.get("avatar_url") or (
-            self.membro.display_avatar.url
-            if self.membro.display_avatar
-            else None
+            self.membro.display_avatar.url if self.membro.display_avatar else None
         )
 
         cabecalho = (
-            f"# 📋 Avaliação HP — {nome}\n"
-            f"> {mencao} · `{rel.get('discord_id')}`"
+            f"# 📋 Avaliação HP — {nome}\n> {mencao} · `{rel.get('discord_id')}`"
         )
 
         componentes: list = []
@@ -542,15 +537,9 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
         else:
             componentes.append(discord.ui.TextDisplay(cabecalho))
 
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
-        componentes.append(
-            discord.ui.TextDisplay(montar_texto_corpo_relatorio(rel))
-        )
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
-        )
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(discord.ui.TextDisplay(montar_texto_corpo_relatorio(rel)))
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         destinos = list(rel.get("cargos_referencia_disponiveis") or [])
         cargo_ref = rel.get("cargo_referencia")
@@ -669,7 +658,7 @@ async def montar_relatorio_da_area(
         "segundos_plantao": 0,
     }
 
-    for membro in membros[: limite_membros]:
+    for membro in membros[:limite_membros]:
         producao = await contar_producao_do_membro(membro.id)
         totais["laudos"] += producao["laudos"]
         totais["recrutamentos"] += producao["recrutamentos"]
@@ -728,8 +717,7 @@ def formatar_relatorio_area_em_linhas(
         f"plantão `{formatar_hms(int(totais.get('segundos_plantao') or 0))}`"
     )
     linhas.append(
-        f"**Ranking pela meta principal** "
-        f"(`{relatorio.get('meta_principal')}`):"
+        f"**Ranking pela meta principal** (`{relatorio.get('meta_principal')}`):"
     )
 
     ranking = list(relatorio.get("ranking") or [])[:top]
