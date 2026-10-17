@@ -9,11 +9,13 @@ Atualização em tempo real (mesmo padrão do ranking de moedas):
 3. O ID da mensagem fica em ``paineis_postados`` (nome do painel no config).
 4. Nas horas, a contagem do período ``tempo_real`` soma logs fechados **e**
    o trecho ainda aberto em call — espelhando o saldo vivo das moedas.
+5. Quando o plantão de alguém muda, a assinatura da página muda e só
+   aquela página (ou as afetadas pela reordenação) é editada de novo.
 
-Agendamentos oficiais:
-- Sábado 11h00: fecha ciclo (apaga tempo real, finanças, posta semanal)
-- Sábado 11h05: publica novo ranking tempo real (novo ciclo)
-- Dia 1 às 11h: ranking mensal
+Agendamentos oficiais (horas):
+- Sábado 11h00: encerra contagem da semana (premiacao + histórico; sem re-postar)
+- Sábado 11h01: inicia novo ciclo (card tempo real zerado)
+- Dia 1 às 11h05: ranking mensal (total de horas do mês = soma das semanas)
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from src.config import (
     RANKING_DIA_POST_MENSAL,
     RANKING_HORA_POST,
     RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO,
+    RANKING_MINUTO_POST_MENSAL,
     TIMEZONE_LOCAL,
 )
 from src.database.conexao import async_session
@@ -381,8 +384,8 @@ class RankingPlantaoTasks(commands.Cog):
         if canal is None:
             return
 
-        # Janela do fechamento semanal (sábado 11h00–11h04): não mexe
-        # no tempo real. Evita corrida com o loop que fecha o ciclo.
+        # Janela do fechamento semanal (sábado 11h00): não mexe no tempo
+        # real. O card só volta em 11h01 com o ciclo novo zerado.
         agora_local = datetime.now(ZoneInfo(TIMEZONE_LOCAL))
         if (
             agora_local.weekday() == 5
@@ -515,11 +518,18 @@ class RankingPlantaoTasks(commands.Cog):
 
     async def _fechar_ciclo_semanal_horas(self, referencia: datetime) -> None:
         """
-        Sábado 11h:
-        1) apaga card tempo real
-        2) envia ganhadores + valores ao canal de finanças
-        3) posta ranking semanal oficial
+        Sábado 11h00 — encerra a contagem da semana:
+        1) fecha segmentos abertos (tempo da virada fica na semana que termina)
+        2) apaga card tempo real (volta zerado em 11h01)
+        3) envia ganhadores + valores ao canal de finanças
+        4) grava histórico (sem re-postar ranking no canal)
         """
+        from src.recrutamento.ranking_service import obter_periodo_postagem_semanal
+        from src.plantao.ranking_plantao_service import (
+            buscar_horas_por_membro,
+            montar_view_ranking_horas,
+        )
+
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
             return
@@ -527,17 +537,13 @@ class RankingPlantaoTasks(commands.Cog):
         canal_id = CANAIS.get("RANKING_HORAS_PLANTAO") or 0
         canal = guild.get_channel(int(canal_id)) if canal_id else None
 
-        # Dados do ciclo que fecha (modo postagem = semana completa)
-        views, contagem, inicio, fim, total = await gerar_view_ranking_horas(
-            "semanal", guild=guild, referencia=referencia, modo_postagem=True
-        )
-        if not isinstance(views, list):
-            views = [views]
-        premiados = montar_lista_premiados(contagem)
+        inicio, fim_periodo = obter_periodo_postagem_semanal(referencia)
 
         # Idempotência: se este ciclo semanal já foi fechado, não repete
         # ranking nem premiação (bot reiniciado no sábado 11h, etc.).
-        ja_fechado = await historico_ja_publicado("horas_semanal", inicio, fim)
+        ja_fechado = await historico_ja_publicado(
+            "horas_semanal", inicio, fim_periodo
+        )
         if ja_fechado is not None:
             logger.info(
                 "Ciclo semanal horas já fechado (histórico #%s) — "
@@ -549,12 +555,56 @@ class RankingPlantaoTasks(commands.Cog):
             await self._apagar_registro_tempo_real()
             return
 
-        # 1) Apaga todos os cards tempo real (página 1, 2, …)
+        # 1) Fecha segmentos abertos para o tempo na virada entrar na semana
+        #    que está encerrando (e o ciclo novo começar limpo).
+        try:
+            from src.plantao.plantao_service import fechar_segmento_parcial_do_ciclo
+            from src.plantao.carteira_service import cotacao_moeda_do_membro
+            from src.database.models import EstadoPlantao
+
+            async with async_session() as sessao:
+                resultado = await sessao.execute(
+                    select(EstadoPlantao).where(
+                        EstadoPlantao.toggle_ligado.is_(True),
+                        EstadoPlantao.em_call_valida.is_(True),
+                        EstadoPlantao.segmento_iniciado_em.is_not(None),
+                    )
+                )
+                estados_abertos = list(resultado.scalars().all())
+            for estado in estados_abertos:
+                membro = guild.get_member(int(estado.discord_id))
+                cotacao = cotacao_moeda_do_membro(membro) if membro else None
+                await fechar_segmento_parcial_do_ciclo(
+                    int(estado.discord_id),
+                    cotacao=cotacao,
+                )
+        except Exception as erro_fecha:
+            logger.exception(
+                "Falha ao fechar segmentos na virada do ciclo: %s",
+                erro_fecha,
+            )
+
+        # Contagem final: inclui logs fechados até agora (virada),
+        # usando o início da semana que termina.
+        agora_utc = datetime.now(ZoneInfo("UTC"))
+        contagem = await buscar_horas_por_membro(
+            inicio,
+            agora_utc,
+            guild=guild,
+            incluir_ao_vivo=False,
+        )
+        fim = fim_periodo
+        _views, total = montar_view_ranking_horas(
+            contagem, inicio, fim, periodo="semanal", guild=guild
+        )
+        premiados = montar_lista_premiados(contagem)
+
+        # 2) Apaga todos os cards tempo real (página 1, 2, …)
         if canal is not None:
             await self._apagar_mensagens_tempo_real_no_canal(canal)
         await self._apagar_registro_tempo_real()
 
-        # 2) Finanças
+        # 3) Finanças
         await self._enviar_premiacao_financas(
             guild,
             premiados=premiados,
@@ -563,39 +613,27 @@ class RankingPlantaoTasks(commands.Cog):
             total_segundos=total,
         )
 
-        # 3) Ranking semanal oficial (só se ainda não existe para este período)
-        if canal is not None:
-            existente = await historico_ja_publicado("horas_semanal", inicio, fim)
-            if existente is not None:
-                logger.info(
-                    "Ranking HORAS semanal já publicado (histórico #%s) — "
-                    "não duplica",
-                    existente.id,
-                )
-            else:
-                try:
-                    mensagem_publicada = None
-                    for view in views:
-                        mensagem_publicada = await canal.send(view=view)
-                    await salvar_historico_plantao(
-                        tipo="horas_semanal",
-                        inicio=inicio,
-                        fim=fim,
-                        contagem=contagem,
-                        total=total,
-                        channel_id=canal.id,
-                        message_id=(
-                            mensagem_publicada.id if mensagem_publicada else None
-                        ),
-                    )
-                    logger.info(
-                        "Ranking HORAS semanal oficial postado em #%s",
-                        canal.name,
-                    )
-                except discord.HTTPException as erro:
-                    logger.exception(
-                        "Falha ao postar ranking horas semanal: %s", erro
-                    )
+        # 4) Histórico da semana (sem postar de novo no canal — o card
+        #    tempo real já mostrou a contagem durante a semana).
+        existente = await historico_ja_publicado("horas_semanal", inicio, fim)
+        if existente is not None:
+            logger.info(
+                "Histórico HORAS semanal já existe (#%s) — não duplica",
+                existente.id,
+            )
+        else:
+            await salvar_historico_plantao(
+                tipo="horas_semanal",
+                inicio=inicio,
+                fim=fim,
+                contagem=contagem,
+                total=total,
+                channel_id=canal.id if canal is not None else None,
+                message_id=None,
+            )
+            logger.info(
+                "Ciclo semanal HORAS encerrado (histórico salvo, sem re-postar)"
+            )
 
     async def _enviar_premiacao_financas(
         self,
@@ -665,7 +703,7 @@ class RankingPlantaoTasks(commands.Cog):
         fuso_horario = ZoneInfo(TIMEZONE_LOCAL)
         agora = datetime.now(fuso_horario)
 
-        # Sábado 11h00 — fecha horas + ranking semanal chamadas/horas
+        # Sábado 11h00 — encerra contagem horas + ranking semanal chamadas
         if (
             agora.weekday() == 5
             and agora.hour == RANKING_HORA_POST
@@ -674,13 +712,11 @@ class RankingPlantaoTasks(commands.Cog):
             chave = f"semanal:{agora.strftime('%Y-%m-%d')}"
             if chave not in self._post_semanal:
                 await self._fechar_ciclo_semanal_horas(agora)
-                ok_c = await self._postar("chamada", "semanal", agora)
-                # horas semanal já postado em _fechar_ciclo
-                if ok_c:
-                    pass
+                await self._postar("chamada", "semanal", agora)
+                # horas: só encerra (histórico + finanças), sem re-postar
                 self._post_semanal.add(chave)
 
-        # Sábado 11h05 — novo card tempo real
+        # Sábado 11h01 — novo card tempo real (todos em 00:00:00)
         if (
             agora.weekday() == 5
             and agora.hour == RANKING_HORA_POST
@@ -701,15 +737,17 @@ class RankingPlantaoTasks(commands.Cog):
                     await self._apagar_registro_tempo_real()
                     await self._atualizar_ou_criar_tempo_real_horas()
                     self._reinicio_tempo_real.add(chave_r)
-                    logger.info("Novo ciclo RANKING HORAS tempo real iniciado")
+                    logger.info(
+                        "Novo ciclo RANKING HORAS tempo real iniciado (zerado)"
+                    )
                 except Exception as erro:
                     logger.exception("Reinício tempo real horas: %s", erro)
 
-        # Dia 1 às 11h — mensal
+        # Dia 1 às 11h05 — ranking mensal (total de horas = soma das semanas)
         if (
             agora.day == RANKING_DIA_POST_MENSAL
             and agora.hour == RANKING_HORA_POST
-            and agora.minute == 0
+            and agora.minute == RANKING_MINUTO_POST_MENSAL
         ):
             chave = f"mensal:{agora.strftime('%Y-%m')}"
             if chave not in self._post_mensal:

@@ -10,7 +10,9 @@ Contagem em tempo real (igual ao ranking de moedas):
 - Só entram membros elegíveis (mesma regra do ranking de moedas:
   no servidor + cargo de hierarquia).
 
-Ciclos oficiais: semanal (sábado) e mensal (dia 1), sem trecho ao vivo.
+Ciclos oficiais:
+- Semanal: sábado 11h00 encerra (sem re-postar); 11h01 novo ciclo zerado.
+- Mensal: dia 1 às 11h05 (total de horas do mês = soma das semanas).
 UI: Components V2.
 """
 
@@ -572,12 +574,15 @@ def montar_view_ranking_horas(
             f"({_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)})"
         )
         cor = discord.Color.green()
-        linha_extra = "📊 Relatório mensal de tempo em call"
+        linha_extra = (
+            "📊 Total do mês = soma das horas das semanas do período"
+        )
     elif periodo == "tempo_real":
         titulo = titulo_override or "⏱️ **RANKING DE HORAS — TEMPO REAL**"
         sub = (
             f"**Ciclo atual:** **{_formatar_data_curta(inicio_utc)} até "
-            f"{_formatar_data_curta(fim_utc)}** _(parcial · atualiza a cada 1 min)_"
+            f"{_formatar_data_curta(fim_utc)}** "
+            "_(parcial · atualiza quando o plantão muda)_"
         )
         cor = discord.Color.dark_green()
         linha_extra = linha_premio

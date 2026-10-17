@@ -52,7 +52,7 @@ def _para_utc(dt_local: datetime) -> datetime:
 def obter_periodo_ciclo_semanal(
     referencia: datetime | None = None,
 ) -> tuple[datetime, datetime]:
-    """Ciclo em andamento: sábado 12h → próximo sábado 12h (UTC)."""
+    """Ciclo em andamento: sábado 11h → próximo sábado 11h (local → UTC)."""
     fuso_horario = _tz()
     agora_local = (referencia or datetime.now(fuso_horario)).astimezone(fuso_horario)
 
@@ -75,18 +75,18 @@ def obter_periodo_ciclo_semanal(
 def obter_periodo_postagem_semanal(
     referencia: datetime | None = None,
 ) -> tuple[datetime, datetime]:
-    """Semana que está terminando (sáb anterior 12h → sáb atual 12h)."""
+    """Semana que está terminando (sáb anterior 11h → sáb atual 11h)."""
     fuso_horario = _tz()
     agora_local = (referencia or datetime.now(fuso_horario)).astimezone(fuso_horario)
 
     dias_desde_sabado = (agora_local.weekday() - 5) % 7
-    sabado_atual_12h = (agora_local - timedelta(days=dias_desde_sabado)).replace(
+    sabado_atual_11h = (agora_local - timedelta(days=dias_desde_sabado)).replace(
         hour=RANKING_HORA_INICIO_CICLO,
         minute=0,
         second=0,
         microsecond=0,
     )
-    return _para_utc(sabado_atual_12h - timedelta(days=7)), _para_utc(sabado_atual_12h)
+    return _para_utc(sabado_atual_11h - timedelta(days=7)), _para_utc(sabado_atual_11h)
 
 
 def obter_periodo_ciclo_mensal(

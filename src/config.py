@@ -459,12 +459,13 @@ def prova_esta_suspensa() -> bool:
 # Rankings que geram pagamento (mesmo valor unitário)
 VALOR_UNITARIO_RANKING = 100_000  # laudo, recrutamento, chamada
 VALOR_POR_RECRUTAMENTO = VALOR_UNITARIO_RANKING  # alias legado
-RANKING_HORA_POST = 11  # sábado 11h — fecha ciclo + ranking semanal oficial
-RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO = 5  # sábado 11h05 — novo card tempo real
-RANKING_HORA_INICIO_CICLO = (
-    12  # legado (ciclo semanal de dados continua via ranking_service)
+RANKING_HORA_POST = 11  # sábado 11h00 — encerra contagem da semana (sem re-postar)
+RANKING_HORA_REINICIO_TEMPO_REAL_MINUTO = (
+    5  # sábado 11h05 — novo ciclo, todos em 00:00:00
 )
+RANKING_HORA_INICIO_CICLO = 11  # início/fim do ciclo semanal (sábado 11h local)
 RANKING_DIA_POST_MENSAL = 1
+RANKING_MINUTO_POST_MENSAL = 1  # dia 1 às 11h01 — ranking mensal (soma das semanas)
 
 # Premiação do ranking de HORAS (plantão) — valores em R$ in-game
 # Top 1 → 10: 10M, 6M, 5M, 4M, 3M, 2M, 1M, 1M, 1M, 1M  (total 34M)
