@@ -32,6 +32,7 @@ from src.promocoes.promocoes_service import (
     listar_cargos_destino_para_membro,
     membro_tem_cargo_nome,
 )
+from src.utils.ephemeral_botoes import linha_ephemeral
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.formatacao import formatar_hms
 
@@ -306,10 +307,12 @@ def formatar_relatorio_membro_em_linhas(
     """Transforma o relatório em linhas legíveis (fallback texto)."""
     linhas: list[str] = []
     linhas.append(f"**Membro:** {relatorio['mencao']} (`{relatorio['discord_id']}`)")
-    cargos = relatorio.get("cargos") or []
+    cargos = list(relatorio.get("cargos") or [])
     if cargos:
-        lista_cargos = ", ".join(f"`{nome}`" for nome in cargos[:8])
-        linhas.append(f"**Cargos:** {lista_cargos}")
+        linhas.append("**Cargos:**")
+        for i in range(0, len(cargos), 4):
+            fatia = cargos[i : i + 4]
+            linhas.append(", ".join(f"`{nome}`" for nome in fatia))
     else:
         linhas.append("**Cargos:** nenhum cargo do hospital mapeado")
 
@@ -355,6 +358,25 @@ def formatar_relatorio_membro_em_linhas(
     return linhas
 
 
+def _formatar_cargos_em_linhas(
+    cargos: list[str],
+    *,
+    por_linha: int = 4,
+) -> str:
+    """
+    Lista todos os cargos, quebrando em linhas de ``por_linha`` itens.
+
+    Ex.: 4–5 cargos por linha para não estourar a largura do card.
+    """
+    if not cargos:
+        return "_nenhum cargo do hospital mapeado_"
+    linhas: list[str] = []
+    for i in range(0, len(cargos), por_linha):
+        fatia = cargos[i : i + por_linha]
+        linhas.append(", ".join(f"`{n}`" for n in fatia))
+    return "\n".join(linhas)
+
+
 def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
     """Corpo formatado do card de avaliação (sem cabeçalho)."""
     partes: list[str] = []
@@ -375,10 +397,9 @@ def montar_texto_corpo_relatorio(relatorio: dict[str, Any]) -> str:
             "`🎯` **Referência:** _sem destino de promoção disponível_"
         )
 
-    cargos = relatorio.get("cargos") or []
-    if cargos:
-        lista = ", ".join(f"`{n}`" for n in cargos[:10])
-        partes.append(f"`🏷️` **Cargos:** {lista}")
+    cargos = list(relatorio.get("cargos") or [])
+    partes.append("`🏷️` **Cargos:**")
+    partes.append(_formatar_cargos_em_linhas(cargos, por_linha=4))
 
     partes.append("")
     partes.append("### Produção × metas")
@@ -415,8 +436,9 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
     Card de avaliação HP de um membro.
 
     Visual no padrão do gerenciar-membros: thumbnail do avatar,
-    corpo estruturado e select para trocar o cargo de referência
-    (próximos cargos acima do atual).
+    corpo estruturado, select para trocar o cargo de referência
+    (próximos cargos acima do atual) e botão Fechar (ephemeral).
+    timeout=None — a mensagem some pelo delay do helper ou pelo Fechar.
     """
 
     def __init__(
@@ -424,7 +446,7 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
         membro: discord.Member,
         relatorio: dict[str, Any],
     ):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
         self.membro = membro
         self.relatorio = relatorio
         self._montar()
@@ -502,6 +524,9 @@ class RelatorioMembroHpView(LoggingViewMixin, discord.ui.LayoutView):
                     "do cargo atual deste membro."
                 )
             )
+
+        # Fechar ephemeral (helper padrão)
+        componentes.append(linha_ephemeral(fechar=True))
 
         self.add_item(
             discord.ui.Container(

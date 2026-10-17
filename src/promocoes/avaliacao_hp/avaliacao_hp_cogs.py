@@ -10,6 +10,7 @@ Comandos
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -25,7 +26,12 @@ from src.promocoes.avaliacao_hp.avaliacao_hp_service import (
     montar_relatorio_do_membro,
     sugerir_destaque_por_area,
 )
-from src.utils.mensagens import responder_erro, responder_info, responder_view
+from src.utils.mensagens import (
+    excluir_mensagem,
+    responder_erro,
+    responder_info,
+    responder_view,
+)
 from src.utils.permissions import membro_tem_cargo
 
 logger = logging.getLogger(__name__)
@@ -119,7 +125,9 @@ class AvaliacaoHpCog(commands.Cog):
         try:
             relatorio = await montar_relatorio_do_membro(membro)
             view = RelatorioMembroHpView(membro=membro, relatorio=relatorio)
-            await responder_view(interacao, view, ephemeral=True)
+            mensagem = await responder_view(interacao, view, ephemeral=True)
+            if mensagem is not None:
+                asyncio.create_task(excluir_mensagem(mensagem, delay=180))
         except Exception as erro_capturado:
             logger.exception(
                 "Falha em /avaliacao-membro para %s: %s",
