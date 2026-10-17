@@ -663,7 +663,6 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
 
         row_botao.add_item(
             botao_fechar(
-                get_mensagem=lambda: self._mensagem_ao_vivo,
                 on_antes=lambda _interacao: self._parar_loop_ao_vivo(),
             )
         )
@@ -903,10 +902,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
     async def _ao_fechar(self, interaction: discord.Interaction):
         """Apaga a ephemeral de Ver Informações (legado — use botao_fechar)."""
         self._parar_loop_ao_vivo()
-        await apagar_ephemeral(
-            interaction,
-            mensagem=self._mensagem_ao_vivo,
-        )
+        await apagar_ephemeral(interaction)
 
     async def _ao_selecionar_call(self, interaction: discord.Interaction):
         canal_id = int(interaction.data["values"][0])
