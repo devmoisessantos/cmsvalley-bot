@@ -48,6 +48,7 @@ from src.utils.formatacao import (
 )
 from src.utils.mensagens import (
     editar_mensagem_original,
+    excluir_mensagem,
     responder_aviso,
     responder_erro,
     responder_info,
@@ -59,6 +60,9 @@ from src.utils.mensagens import (
 # 1s atende o pedido de "segundo a segundo"; se o Discord limitar a edição,
 # o loop engole o 429 e tenta de novo no próximo ciclo.
 INTERVALO_ATUALIZACAO_AO_VIVO_SEGUNDOS = 1
+
+# Card de "Ver Informações" some sozinho após este tempo (segundos).
+DELAY_INFORMACOES_SEGUNDOS = 30
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +355,7 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 "## 💰 Sistema de Recompensas\n"
                 "- | ⏱️ **30 min** em call · 🪙 **1 moeda**\n"
-                "- | 📌 Cotação da moeda **varia pelo cargo** (ver carteira)\n"
+                "- | 📌 Cotação da moeda **varia pelo cargo**\n"
                 "- | 🚫 Teto **14 moedas/dia** e **84/semana**\n"
                 "- | 📅 Domingo sem moeda · Sábado só até **12h**\n"
                 "- | ⏱️ Horas de plantão **continuam** após o teto\n\n"
@@ -362,10 +366,11 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         # Bloco 6: separador antes dos botões
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
 
-        # Botões (inalterados)
+        # Botões fixos do painel: serviço, informações e carteira
         linha_botoes = discord.ui.ActionRow()
         linha_botoes.add_item(self._botao_toggle())
         linha_botoes.add_item(self._botao_informacoes())
+        linha_botoes.add_item(self._botao_carteira())
         componentes.append(linha_botoes)
 
         self.add_item(
@@ -383,6 +388,21 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
         botao.callback = self._ao_toggle
         return botao
+
+    def _botao_carteira(self) -> discord.ui.Button:
+        botao = discord.ui.Button(
+            label="Carteira",
+            style=discord.ButtonStyle.primary,
+            emoji="💰",
+            custom_id="plantao:carteira",
+        )
+        botao.callback = self._ao_carteira
+        return botao
+
+    async def _ao_carteira(self, interaction: discord.Interaction):
+        from src.plantao.carteira_panel import abrir_carteira
+
+        await abrir_carteira(interaction)
 
     async def _ao_toggle(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member):
@@ -514,6 +534,14 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
             ephemeral=True,
         )
         view.iniciar_atualizacao_ao_vivo(mensagem_efemera)
+        # Card informativo some sozinho após DELAY_INFORMACOES_SEGUNDOS.
+        if mensagem_efemera is not None:
+            asyncio.create_task(
+                excluir_mensagem(
+                    mensagem_efemera,
+                    delay=DELAY_INFORMACOES_SEGUNDOS,
+                )
+            )
 
 
 async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
@@ -526,15 +554,15 @@ async def _buscar_estado(discord_id: int) -> EstadoPlantao | None:
 
 class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
     """
-    Status pessoal do plantão — sem coordenação/chamada (isso vive em outros canais).
+    Card informativo do plantão (status, tempos e saldo).
 
-    Enquanto o membro está em serviço, o card é republicado a cada segundo com
-    o tempo do plantão atual (segmento aberto + logs do serviço). O histórico
-    só muda quando um segmento fecha (sair da call ou do serviço).
+    A carteira vive no painel fixo da Central de Plantão — este card não abre
+    carteira. Enquanto o membro está em serviço, o tempo do ciclo atualiza ao
+    vivo. O card some sozinho após DELAY_INFORMACOES_SEGUNDOS ou pelo botão
+    Fechar.
 
     O loop ao vivo edita a mensagem efêmera do card (a do followup), nunca a
-    mensagem do painel público. Usar edit_original_response da interação do
-    botão do painel reescreveria o painel fixo do canal.
+    mensagem do painel público.
     """
 
     def __init__(
@@ -545,7 +573,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         tempo_ciclo_segundos: int = 0,
         valor_equivalente: int | None = None,
     ):
-        super().__init__(timeout=300)
+        super().__init__(timeout=DELAY_INFORMACOES_SEGUNDOS)
         self.membro = membro
         self.estado = estado
         self.tempo_total_segundos = int(tempo_total_segundos or 0)
@@ -629,13 +657,13 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         botao.callback = self._ao_toggle
         row_botao.add_item(botao)
 
-        botao_carteira = discord.ui.Button(
-            label="Carteira",
-            style=discord.ButtonStyle.primary,
-            emoji="💰",
+        botao_fechar = discord.ui.Button(
+            label="Fechar",
+            style=discord.ButtonStyle.secondary,
+            emoji="❌",
         )
-        botao_carteira.callback = self._ao_carteira
-        row_botao.add_item(botao_carteira)
+        botao_fechar.callback = self._ao_fechar
+        row_botao.add_item(botao_fechar)
 
         url_do_avatar = self.membro.display_avatar.url
         secao = discord.ui.Section(
@@ -869,10 +897,38 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         if mensagem_do_card is not None:
             nova_view.iniciar_atualizacao_ao_vivo(mensagem_do_card)
 
-    async def _ao_carteira(self, interaction: discord.Interaction):
-        from src.plantao.carteira_panel import abrir_carteira
-
-        await abrir_carteira(interaction)
+    async def _ao_fechar(self, interaction: discord.Interaction):
+        """Apaga a mensagem efêmera de Ver Informações."""
+        self._parar_loop_ao_vivo()
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except (discord.NotFound, discord.HTTPException) as erro_defer:
+            ignorar_falha_cosmetica(
+                erro_defer,
+                o_que_falhou="defer ao fechar Ver Informações",
+            )
+        mensagem = interaction.message
+        if mensagem is not None:
+            try:
+                await mensagem.delete()
+            except (
+                discord.NotFound,
+                discord.Forbidden,
+                discord.HTTPException,
+            ) as erro_del:
+                ignorar_falha_cosmetica(
+                    erro_del,
+                    o_que_falhou="apagar ephemeral de Ver Informações",
+                )
+            return
+        try:
+            await interaction.delete_original_response()
+        except (discord.NotFound, discord.HTTPException) as erro_orig:
+            ignorar_falha_cosmetica(
+                erro_orig,
+                o_que_falhou="delete_original_response de Ver Informações",
+            )
 
     async def _ao_selecionar_call(self, interaction: discord.Interaction):
         canal_id = int(interaction.data["values"][0])
@@ -1009,7 +1065,7 @@ class ModalTrocarMoedasPlantao(
                     "confirmação).",
                     "Aguarde a equipe processar o pagamento in-game.",
                 ],
-                delay=15,
+                delay=10,
             )
         else:
             await responder_aviso(
@@ -1021,7 +1077,7 @@ class ModalTrocarMoedasPlantao(
                     "Detalhes foram enviados ao **log de erros**.",
                     "Avise a diretoria manualmente se precisar.",
                 ],
-                delay=20,
+                delay=16,
             )
 
         try:
