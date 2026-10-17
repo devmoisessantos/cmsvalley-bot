@@ -36,6 +36,10 @@ from src.plantao.plantao_service import (
     solicitar_troca_moedas,
 )
 from src.recrutamento.recrutamento_service import resolver_id_fivem
+from src.utils.ephemeral_botoes import (
+    apagar_ephemeral,
+    botao_fechar,
+)
 from src.utils.error_handling import (
     LoggingModalMixin,
     LoggingViewMixin,
@@ -657,13 +661,12 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
         botao.callback = self._ao_toggle
         row_botao.add_item(botao)
 
-        botao_fechar = discord.ui.Button(
-            label="Fechar",
-            style=discord.ButtonStyle.secondary,
-            emoji="❌",
+        row_botao.add_item(
+            botao_fechar(
+                get_mensagem=lambda: self._mensagem_ao_vivo,
+                on_antes=lambda _interacao: self._parar_loop_ao_vivo(),
+            )
         )
-        botao_fechar.callback = self._ao_fechar
-        row_botao.add_item(botao_fechar)
 
         url_do_avatar = self.membro.display_avatar.url
         secao = discord.ui.Section(
@@ -898,37 +901,12 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
             nova_view.iniciar_atualizacao_ao_vivo(mensagem_do_card)
 
     async def _ao_fechar(self, interaction: discord.Interaction):
-        """Apaga a mensagem efêmera de Ver Informações."""
+        """Apaga a ephemeral de Ver Informações (legado — use botao_fechar)."""
         self._parar_loop_ao_vivo()
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
-        except (discord.NotFound, discord.HTTPException) as erro_defer:
-            ignorar_falha_cosmetica(
-                erro_defer,
-                o_que_falhou="defer ao fechar Ver Informações",
-            )
-        mensagem = interaction.message
-        if mensagem is not None:
-            try:
-                await mensagem.delete()
-            except (
-                discord.NotFound,
-                discord.Forbidden,
-                discord.HTTPException,
-            ) as erro_del:
-                ignorar_falha_cosmetica(
-                    erro_del,
-                    o_que_falhou="apagar ephemeral de Ver Informações",
-                )
-            return
-        try:
-            await interaction.delete_original_response()
-        except (discord.NotFound, discord.HTTPException) as erro_orig:
-            ignorar_falha_cosmetica(
-                erro_orig,
-                o_que_falhou="delete_original_response de Ver Informações",
-            )
+        await apagar_ephemeral(
+            interaction,
+            mensagem=self._mensagem_ao_vivo,
+        )
 
     async def _ao_selecionar_call(self, interaction: discord.Interaction):
         canal_id = int(interaction.data["values"][0])
