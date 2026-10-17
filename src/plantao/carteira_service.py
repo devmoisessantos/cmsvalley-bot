@@ -18,7 +18,7 @@ from datetime import (
 )
 
 import discord
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import (
@@ -150,11 +150,14 @@ async def _garantir_lotes_alinhados(
     sessao: AsyncSession,
     discord_id: int,
     saldo_moedas: int,
+    *,
+    cotacao_legado: int | None = None,
 ) -> list[LoteMoeda]:
     """
     Garante que a soma dos lotes bate com o saldo.
 
-    Saldo legado (sem lote) vira um lote na cotação mínima (Enfermeiro).
+    Saldo legado (sem lote) vira um lote na cotação informada
+    (``cotacao_legado``) ou, se omitida, na cotação mínima (Enfermeiro).
     Se os lotes tiverem mais que o saldo, corta do maior para o menor.
     """
     lotes = await _listar_lotes_ordenados(sessao, discord_id)
@@ -166,16 +169,18 @@ async def _garantir_lotes_alinhados(
 
     if soma < saldo:
         falta = saldo - soma
-        cotacao_legado = int(VALOR_MOEDA_INGAME)
+        cot = int(cotacao_legado) if cotacao_legado and cotacao_legado > 0 else int(
+            VALOR_MOEDA_INGAME
+        )
         lote_legado = None
         for lote in lotes:
-            if int(lote.cotacao) == cotacao_legado:
+            if int(lote.cotacao) == cot:
                 lote_legado = lote
                 break
         if lote_legado is None:
             lote_legado = LoteMoeda(
                 discord_id=discord_id,
-                cotacao=cotacao_legado,
+                cotacao=cot,
                 quantidade=falta,
             )
             sessao.add(lote_legado)
@@ -328,8 +333,20 @@ async def zerar_lotes(sessao: AsyncSession, discord_id: int) -> int:
     return valor
 
 
-async def obter_valor_total_lotes(discord_id: int) -> int:
-    """Soma quantidade × cotação de todos os lotes do membro (com alinhamento)."""
+async def obter_valor_total_lotes(
+    discord_id: int,
+    *,
+    cotacao_legado: int | None = None,
+    reparar_legado: bool = False,
+) -> int:
+    """
+    Soma quantidade × cotação de todos os lotes do membro (com alinhamento).
+
+    ``cotacao_legado``: cotação usada para saldo sem lote (cargo atual).
+    ``reparar_legado``: se True e o saldo estiver 100% em lote na cotação
+    mínima enquanto ``cotacao_legado`` for maior, reclassifica esse lote
+    para a cotação do cargo (corrige o freeze indevido em R$10.000).
+    """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(EstadoPlantao.saldo_moedas).where(
@@ -339,10 +356,125 @@ async def obter_valor_total_lotes(discord_id: int) -> int:
         saldo = int(resultado.scalar_one_or_none() or 0)
         if saldo <= 0:
             return 0
-        lotes = await _garantir_lotes_alinhados(sessao, discord_id, saldo)
+        lotes = await _garantir_lotes_alinhados(
+            sessao,
+            discord_id,
+            saldo,
+            cotacao_legado=cotacao_legado,
+        )
+        if reparar_legado and cotacao_legado and int(cotacao_legado) > int(
+            VALOR_MOEDA_INGAME
+        ):
+            lotes = await _reparar_lotes_so_minimo(
+                sessao,
+                discord_id,
+                saldo,
+                cotacao_destino=int(cotacao_legado),
+                lotes=lotes,
+            )
         valor = sum(int(lote.quantidade) * int(lote.cotacao) for lote in lotes)
         await sessao.commit()
         return valor
+
+
+async def _reparar_lotes_so_minimo(
+    sessao: AsyncSession,
+    discord_id: int,
+    saldo: int,
+    *,
+    cotacao_destino: int,
+    lotes: list[LoteMoeda] | None = None,
+) -> list[LoteMoeda]:
+    """
+    Se todo o saldo está em lote(s) na cotação mínima (legado mal congelado),
+    move a quantidade para a cotação do cargo atual.
+
+    Não mexe se já existir qualquer lote com cotação diferente da mínima
+    (significa que já houve créditos com cotação real).
+    """
+    cot_min = int(VALOR_MOEDA_INGAME)
+    cot_dest = int(cotacao_destino)
+    if cot_dest <= cot_min or saldo <= 0:
+        return lotes or await _listar_lotes_ordenados(sessao, discord_id)
+
+    if lotes is None:
+        lotes = await _listar_lotes_ordenados(sessao, discord_id)
+
+    if not lotes:
+        return lotes
+
+    # Só repara se TODOS os lotes ativos estão na cotação mínima
+    if any(int(lote.cotacao) != cot_min for lote in lotes):
+        return lotes
+
+    qtd_total = sum(int(lote.quantidade) for lote in lotes)
+    if qtd_total <= 0:
+        return lotes
+
+    # Remove lotes mínimos e cria/soma no destino
+    for lote in list(lotes):
+        await sessao.delete(lote)
+    await sessao.flush()
+
+    resultado = await sessao.execute(
+        select(LoteMoeda)
+        .where(LoteMoeda.discord_id == discord_id)
+        .where(LoteMoeda.cotacao == cot_dest)
+    )
+    lote_dest = resultado.scalar_one_or_none()
+    if lote_dest is None:
+        sessao.add(
+            LoteMoeda(
+                discord_id=discord_id,
+                cotacao=cot_dest,
+                quantidade=qtd_total,
+            )
+        )
+    else:
+        lote_dest.quantidade = int(lote_dest.quantidade or 0) + qtd_total
+    await sessao.flush()
+    return await _listar_lotes_ordenados(sessao, discord_id)
+
+
+def valor_ingame_de_pares(
+    pares: list[tuple[int, int]],
+    saldo: int,
+    *,
+    cotacao_legado: int | None = None,
+) -> int:
+    """
+    Calcula valor in-game a partir de pares (cotacao, quantidade) e saldo.
+
+    Usado no ranking sem gravar no banco.
+    """
+    saldo = max(0, int(saldo))
+    if saldo <= 0:
+        return 0
+    cot_legado = (
+        int(cotacao_legado)
+        if cotacao_legado and int(cotacao_legado) > 0
+        else int(VALOR_MOEDA_INGAME)
+    )
+    pares_ok = [(int(c), int(q)) for c, q in pares if int(q) > 0]
+    soma = sum(q for _, q in pares_ok)
+    if soma == 0:
+        return saldo * cot_legado
+    if soma <= saldo:
+        valor = sum(c * q for c, q in pares_ok)
+        falta = saldo - soma
+        if falta > 0:
+            valor += falta * cot_legado
+        return valor
+    # Lotes > saldo: valor das moedas de menor cotação (equivalente ao corte do excesso)
+    restante = saldo
+    valor = 0
+    for cot, qtd in sorted(pares_ok, key=lambda p: p[0]):
+        if restante <= 0:
+            break
+        usar = min(qtd, restante)
+        valor += usar * cot
+        restante -= usar
+    return valor
 
 
 async def simular_valor_debito(discord_id: int, quantidade: int) -> int:
@@ -523,7 +655,8 @@ async def transferir_moedas(
                 saldo_apos=saldo_rem_final,
                 outro_discord_id=destinatario.id,
                 referencia=(
-                    f"para {destinatario.id} · {formatar_dinheiro(valor_movido)}"
+                    f"para {destinatario.id} · "
+                    f"{formatar_dinheiro(valor_movido)}"
                 )[:200],
             )
         )
@@ -534,9 +667,10 @@ async def transferir_moedas(
                 valor=quantidade,
                 saldo_apos=saldo_dest_final,
                 outro_discord_id=remetente.id,
-                referencia=(f"de {remetente.id} · {formatar_dinheiro(valor_movido)}")[
-                    :200
-                ],
+                referencia=(
+                    f"de {remetente.id} · "
+                    f"{formatar_dinheiro(valor_movido)}"
+                )[:200],
             )
         )
         await sessao.commit()
@@ -629,9 +763,10 @@ async def aprovar_deposito(
                 tipo="DEPOSITO",
                 valor=qtd,
                 saldo_apos=saldo_apos,
-                referencia=(f"pedido #{pedido.id} · {formatar_dinheiro(valor_pedido)}")[
-                    :200
-                ],
+                referencia=(
+                    f"pedido #{pedido.id} · "
+                    f"{formatar_dinheiro(valor_pedido)}"
+                )[:200],
             )
         )
         await sessao.commit()
@@ -666,19 +801,23 @@ async def recusar_deposito(
         return True, "Pedido recusado.", pedido
 
 
-async def ranking_top_moedas(limite: int = 15) -> list[tuple[int, int, int]]:
+async def ranking_top_moedas(
+    limite: int = 15,
+    *,
+    cotacao_por_membro: dict[int, int] | None = None,
+) -> list[tuple[int, int, int]]:
     """
     Lista (discord_id, saldo_moedas, valor_ingame) ordenada por valor_ingame desc.
 
     O valor in-game é a soma dos lotes (quantidade × cotação congelada no crédito).
-    Membros só com saldo legado (sem lotes) usam a cotação mínima (Enfermeiro).
-    Se lotes < saldo, completa a diferença na cotação mínima; se lotes > saldo,
-    o excesso é ignorado (saldo do estado é a fonte da verdade).
+    Saldo sem lote (ou só legado mínimo) usa ``cotacao_por_membro[id]`` quando
+    informada; senão a cotação mínima (Enfermeiro).
 
     Busca mais linhas do que o limite para o ranking filtrar quem
     ainda faz parte da organização (guild + hierarquia).
     """
     buscar = max(limite * 5, 50)
+    cotacoes = cotacao_por_membro or {}
     async with async_session() as sessao:
         resultado_lotes = await sessao.execute(
             select(
@@ -687,7 +826,6 @@ async def ranking_top_moedas(limite: int = 15) -> list[tuple[int, int, int]]:
                 LoteMoeda.quantidade,
             ).where(LoteMoeda.quantidade > 0)
         )
-        # discord_id -> lista (cotacao, quantidade)
         lotes_por_membro: dict[int, list[tuple[int, int]]] = {}
         for row in resultado_lotes.all():
             did = int(row[0])
@@ -702,8 +840,8 @@ async def ranking_top_moedas(limite: int = 15) -> list[tuple[int, int, int]]:
                 EstadoPlantao.saldo_moedas > 0
             )
         )
-        cotacao_legado = int(VALOR_MOEDA_INGAME)
         candidatos: list[tuple[int, int, int]] = []
+        cot_min = int(VALOR_MOEDA_INGAME)
 
         for row in resultado_estado.all():
             did = int(row[0])
@@ -711,27 +849,18 @@ async def ranking_top_moedas(limite: int = 15) -> list[tuple[int, int, int]]:
             if saldo <= 0:
                 continue
             pares = lotes_por_membro.get(did, [])
-            soma_lotes = sum(q for _, q in pares)
-            if soma_lotes == 0:
-                candidatos.append((did, saldo, saldo * cotacao_legado))
-                continue
-            if soma_lotes <= saldo:
-                valor = sum(c * q for c, q in pares)
-                falta = saldo - soma_lotes
-                if falta > 0:
-                    valor += falta * cotacao_legado
-                candidatos.append((did, saldo, valor))
-                continue
-            # Lotes > saldo: excesso seria cortado do maior cotação;
-            # o valor remanescente são as moedas de menor cotação primeiro.
-            restante = saldo
-            valor = 0
-            for cot, qtd in sorted(pares, key=lambda p: p[0]):
-                if restante <= 0:
-                    break
-                usar = min(qtd, restante)
-                valor += usar * cot
-                restante -= usar
+            cot_membro = int(cotacoes.get(did) or 0)
+            # Se só há lote na cotação mínima e o cargo atual vale mais,
+            # trata como legado a reparar: usa cotação do cargo no ranking.
+            if pares and cot_membro > cot_min:
+                so_minimo = all(c == cot_min for c, _ in pares)
+                if so_minimo:
+                    pares = []  # força uso da cotação do cargo via valor_ingame_de_pares
+            valor = valor_ingame_de_pares(
+                pares,
+                saldo,
+                cotacao_legado=cot_membro if cot_membro > 0 else None,
+            )
             candidatos.append((did, saldo, valor))
 
         candidatos.sort(key=lambda item: item[2], reverse=True)
@@ -767,7 +896,8 @@ async def zerar_saldo_moedas(
                 valor=-saldo,
                 saldo_apos=0,
                 referencia=(
-                    f"{motivo or 'Saldo zerado'} · {formatar_dinheiro(valor_zerado)}"
+                    f"{motivo or 'Saldo zerado'} · "
+                    f"{formatar_dinheiro(valor_zerado)}"
                 )[:200],
             )
         )

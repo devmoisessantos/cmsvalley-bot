@@ -516,9 +516,22 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
         tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
         try:
-            from src.plantao.carteira_service import obter_valor_total_lotes
+            from src.plantao.carteira_service import (
+                cotacao_moeda_do_membro,
+                obter_valor_total_lotes,
+            )
 
-            valor_equiv = await obter_valor_total_lotes(interaction.user.id)
+            membro = interaction.user
+            cotacao_cargo = (
+                cotacao_moeda_do_membro(membro)
+                if isinstance(membro, discord.Member)
+                else None
+            )
+            valor_equiv = await obter_valor_total_lotes(
+                interaction.user.id,
+                cotacao_legado=cotacao_cargo,
+                reparar_legado=isinstance(membro, discord.Member),
+            )
         except Exception:
             valor_equiv = None
         view = InformacoesPlantaoView(

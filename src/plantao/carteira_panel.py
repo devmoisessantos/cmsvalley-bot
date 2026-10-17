@@ -11,6 +11,7 @@ from src.config import (
 from src.plantao.carteira_service import (
     aprovar_deposito,
     cargo_principal_hierarquia,
+    cotacao_moeda_do_membro,
     criar_pedido_deposito,
     equivalente_em_reais,
     listar_extrato,
@@ -218,11 +219,21 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
         await interacao.response.defer(ephemeral=True)
         movimentos = await listar_extrato(self.membro_id, limite=15)
         saldo = await obter_saldo(self.membro_id)
+        membro = interacao.user if isinstance(interacao.user, discord.Member) else None
+        cotacao_cargo = cotacao_moeda_do_membro(membro) if membro else None
         try:
-            valor_equiv = await obter_valor_total_lotes(self.membro_id)
+            valor_equiv = await obter_valor_total_lotes(
+                self.membro_id,
+                cotacao_legado=cotacao_cargo,
+                reparar_legado=bool(membro),
+            )
             texto_equiv = formatar_dinheiro(valor_equiv)
         except Exception:
-            texto_equiv = equivalente_em_reais(saldo)
+            texto_equiv = (
+                equivalente_em_reais(saldo, membro=membro)
+                if membro
+                else equivalente_em_reais(saldo)
+            )
         linhas_mov: list[str] = []
         for mov in movimentos:
             momento = para_horario_brasilia(mov.criado_em)
@@ -304,10 +315,17 @@ async def abrir_carteira(interacao: discord.Interaction) -> None:
         return
     saldo = await obter_saldo(membro.id)
     id_fivem = await _fid(membro)
+    cotacao_cargo = cotacao_moeda_do_membro(membro)
     try:
-        valor_equiv = await obter_valor_total_lotes(membro.id)
+        # Alinha saldo legado com a cotação do cargo atual e corrige
+        # lotes que ficaram indevidamente congelados em R$10.000.
+        valor_equiv = await obter_valor_total_lotes(
+            membro.id,
+            cotacao_legado=cotacao_cargo,
+            reparar_legado=True,
+        )
     except Exception:
-        valor_equiv = None
+        valor_equiv = saldo * cotacao_cargo if saldo else None
     view = CarteiraHubView(
         membro,
         saldo=saldo,

@@ -22,6 +22,7 @@ from src.database.models import (
     Usuario,
 )
 from src.plantao.carteira_service import (
+    cotacao_moeda_do_membro,
     membro_elegivel_ranking_moedas,
     ranking_top_moedas,
     zerar_saldo_moedas,
@@ -110,7 +111,17 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
     aparecendo ou possam ser usadas indevidamente. Devolve uma view pronta para
     publicar ou editar no Discord, inclusive quando não houver participantes.
     """
-    candidatos = await ranking_top_moedas(15)
+    # Cotação do cargo atual de cada membro na guild (para saldo legado
+    # que ainda está congelado na mínima de R$10.000).
+    cotacao_por_membro: dict[int, int] = {}
+    for membro in guilda.members:
+        if membro_elegivel_ranking_moedas(membro):
+            cotacao_por_membro[membro.id] = cotacao_moeda_do_membro(membro)
+
+    candidatos = await ranking_top_moedas(
+        15,
+        cotacao_por_membro=cotacao_por_membro,
+    )
     medalhas = {1: "🥇", 2: "🥈", 3: "🥉"}
     linhas_rank: list[str] = []
 

@@ -410,6 +410,11 @@ async def _finalizar_periodo_em_call(
         from sqlalchemy.ext.asyncio import async_object_session
 
         membro = guild.get_member(discord_id)
+        if membro is None:
+            try:
+                membro = await guild.fetch_member(discord_id)
+            except Exception:
+                membro = None
         cotacao_ganho = cotacao_moeda_do_membro(membro)
         sessao_estado = async_object_session(estado)
         if sessao_estado is not None:
