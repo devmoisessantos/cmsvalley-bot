@@ -27,8 +27,8 @@ from src.plantao.carteira_service import (
     ranking_top_moedas,
     zerar_saldo_moedas,
 )
-from src.recrutamento.recrutamento_service import resolver_id_fivem
 from src.utils.formatacao import formatar_dinheiro
+from src.recrutamento.recrutamento_service import resolver_id_fivem
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,8 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
             )
         else:
             linhas_rank.append(
-                f"`{posicao}.` {mencao} | FID `{fid}` · **{saldo}** · `{equiv}`"
+                f"`{posicao}.` {mencao} | FID `{fid}` · "
+                f"**{saldo}** · `{equiv}`"
             )
 
     if not linhas_rank:
@@ -181,7 +182,7 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
 
     titulo = "# 🏆 Ranking de Moedas — Top 15"
     intro = (
-        "> Classificação por **valor dos lotes**"
+        "> Classificação por **valor dos lotes** (cotação congelada no crédito)"
         " · sem premiação · sem reset\n\n"
         f"## Ranking\n{corpo_rank}"
     )

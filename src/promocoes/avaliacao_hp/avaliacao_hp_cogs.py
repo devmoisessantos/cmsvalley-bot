@@ -18,14 +18,14 @@ from discord.ext import commands
 
 from src.config import CARGOS
 from src.promocoes.avaliacao_hp.avaliacao_hp_service import (
+    RelatorioMembroHpView,
     formatar_destaques_em_linhas,
     formatar_relatorio_area_em_linhas,
-    formatar_relatorio_membro_em_linhas,
     montar_relatorio_da_area,
     montar_relatorio_do_membro,
     sugerir_destaque_por_area,
 )
-from src.utils.mensagens import responder_erro, responder_info
+from src.utils.mensagens import responder_erro, responder_info, responder_view
 from src.utils.permissions import membro_tem_cargo
 
 logger = logging.getLogger(__name__)
@@ -118,14 +118,8 @@ class AvaliacaoHpCog(commands.Cog):
         await interacao.response.defer(ephemeral=True)
         try:
             relatorio = await montar_relatorio_do_membro(membro)
-            linhas = formatar_relatorio_membro_em_linhas(relatorio)
-            await responder_info(
-                interacao,
-                titulo=f"Avaliação HP — {membro.display_name}",
-                linhas=linhas,
-                delay=120,
-                com_marcador=False,
-            )
+            view = RelatorioMembroHpView(membro=membro, relatorio=relatorio)
+            await responder_view(interacao, view, ephemeral=True)
         except Exception as erro_capturado:
             logger.exception(
                 "Falha em /avaliacao-membro para %s: %s",
