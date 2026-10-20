@@ -238,7 +238,15 @@ class CarteiraHubView(LoggingViewMixin, discord.ui.LayoutView):
         for mov in movimentos:
             momento = para_horario_brasilia(mov.criado_em)
             marca = momento.strftime("%d/%m %H:%M") if momento else "—"
-            sinal = f"+{mov.valor}" if mov.valor > 0 else str(mov.valor)
+            # Plantão: deixa explícito "moeda/moedas" para não parecer
+            # que +14 veio de um único bloco de 30 min.
+            if mov.tipo == "GANHO_PLANTAO" and mov.valor > 0:
+                unidade = "moeda" if int(mov.valor) == 1 else "moedas"
+                sinal = f"+{mov.valor} {unidade}"
+            elif mov.valor > 0:
+                sinal = f"+{mov.valor}"
+            else:
+                sinal = str(mov.valor)
             extra = ""
             if mov.outro_discord_id:
                 extra = f" · <@{mov.outro_discord_id}>"

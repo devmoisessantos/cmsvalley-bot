@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import (
     datetime,
+    timedelta,
     timezone,
 )
 
@@ -23,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import (
     CARGOS_HIERARQUIA,
+    SEGUNDOS_PARA_MOEDA,
     VALOR_MOEDA_INGAME,
     VALOR_MOEDA_POR_CARGO,
 )
@@ -559,15 +561,72 @@ async def registrar_movimentacao(
         await sessao.commit()
 
 
+async def registrar_ganhos_plantao_no_extrato(
+    *,
+    discord_id: int,
+    quantidade: int,
+    saldo_apos: int,
+    referencia: str | None = None,
+) -> None:
+    """
+    Grava no extrato uma linha por moeda ganha no plantão.
+
+    Cada linha é ``+1 moeda · Plantão (30 min)``. O horário de cada linha
+    marca o momento em que aquele bloco de 30 min fechou:
+
+    - 1 moeda no ciclo normal → ``criado_em = agora``
+    - várias de uma vez (atraso/saída) → horários espaçados de 30 em 30 min
+      para trás a partir de agora (ex.: 07:18, 07:48, 08:18)
+    """
+    quantidade_inteira = int(quantidade)
+    if quantidade_inteira <= 0:
+        return
+
+    saldo_final = int(saldo_apos)
+    saldo_antes = saldo_final - quantidade_inteira
+    texto_referencia = (referencia or "")[:200] or None
+    agora = datetime.now(timezone.utc)
+    intervalo_segundos = int(SEGUNDOS_PARA_MOEDA)
+
+    async with async_session() as sessao:
+        for indice in range(quantidade_inteira):
+            # A última moeda é a mais recente (agora). As anteriores
+            # ficam 30 min, 60 min, … antes — como se cada bloco
+            # tivesse sido creditado no instante em que fechou.
+            blocos_antes_do_ultimo = quantidade_inteira - 1 - indice
+            momento_do_credito = agora - timedelta(
+                seconds=blocos_antes_do_ultimo * intervalo_segundos
+            )
+            saldo_desta_linha = saldo_antes + indice + 1
+            sessao.add(
+                MovimentacaoMoeda(
+                    discord_id=discord_id,
+                    tipo="GANHO_PLANTAO",
+                    valor=1,
+                    saldo_apos=saldo_desta_linha,
+                    referencia=texto_referencia,
+                    criado_em=momento_do_credito,
+                )
+            )
+        await sessao.commit()
+
+
 async def listar_extrato(discord_id: int, limite: int = 15) -> list[MovimentacaoMoeda]:
     """
     Devolve as movimentações mais recentes na ordem adequada para exibir o extrato.
+
+    Ordena por horário real do crédito (criado_em), não só pelo id: assim
+    as moedas de plantão com horário espaçado de 30 em 30 min aparecem
+    na sequência correta no card.
     """
     async with async_session() as sessao:
         resultado = await sessao.execute(
             select(MovimentacaoMoeda)
             .where(MovimentacaoMoeda.discord_id == discord_id)
-            .order_by(MovimentacaoMoeda.id.desc())
+            .order_by(
+                MovimentacaoMoeda.criado_em.desc(),
+                MovimentacaoMoeda.id.desc(),
+            )
             .limit(limite)
         )
         return list(resultado.scalars().all())

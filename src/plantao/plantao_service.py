@@ -354,14 +354,10 @@ async def desligar_servico(membro: discord.Member) -> str:
 
     try:
         valor_lotes = await obter_valor_total_lotes(membro.id)
-        saldo_txt = (
-            f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
-        )
+        saldo_txt = f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
     except Exception:
         cotacao = cotacao_moeda_do_membro(membro)
-        saldo_txt = (
-            f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
-        )
+        saldo_txt = f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
     await registrar_evento_plantao(
         membro.guild,
         membro.id,
@@ -374,7 +370,7 @@ async def desligar_servico(membro: discord.Member) -> str:
         },
     )
 
-    return "✅ Você saiu de serviço. Cronômetro encerrado."
+    return "✅ Você saiu de serviço. Contador encerrado."
 
 
 async def _finalizar_periodo_em_call(
@@ -466,17 +462,18 @@ async def _finalizar_periodo_em_call(
             },
         )
         try:
-            from src.plantao.carteira_service import registrar_movimentacao
+            from src.plantao.carteira_service import (
+                registrar_ganhos_plantao_no_extrato,
+            )
 
-            await registrar_movimentacao(
+            # Uma linha por moeda: o extrato mostra +1, nunca +14 de uma vez.
+            await registrar_ganhos_plantao_no_extrato(
                 discord_id=discord_id,
-                tipo="GANHO_PLANTAO",
-                valor=moedas_ganhas,
+                quantidade=moedas_ganhas,
                 saldo_apos=int(estado.saldo_moedas),
-                referencia=(
-                    f"+{moedas_ganhas} plantão · "
-                    f"{formatar_dinheiro(cotacao_ganho)}/moeda"
-                )[:200],
+                referencia=(f"+1 plantão · {formatar_dinheiro(cotacao_ganho)}/moeda")[
+                    :200
+                ],
             )
         except Exception as erro_ao_registrar_ganho:
             # ATENCAO: aqui as moedas JA foram creditadas ao membro. Se o
@@ -580,15 +577,17 @@ async def fechar_segmento_parcial_do_ciclo(
 
     if moedas_ganhas > 0:
         try:
-            from src.plantao.carteira_service import registrar_movimentacao
+            from src.plantao.carteira_service import (
+                registrar_ganhos_plantao_no_extrato,
+            )
 
-            await registrar_movimentacao(
+            # Uma linha por moeda: o extrato mostra +1, nunca +14 de uma vez.
+            await registrar_ganhos_plantao_no_extrato(
                 discord_id=discord_id,
-                tipo="GANHO_PLANTAO",
-                valor=moedas_ganhas,
+                quantidade=moedas_ganhas,
                 saldo_apos=saldo_apos,
                 referencia=(
-                    f"+{moedas_ganhas} plantão (ciclo minuto) · "
+                    f"+1 plantão (ciclo minuto) · "
                     f"{formatar_dinheiro(cotacao_usar)}/moeda"
                 )[:200],
             )
