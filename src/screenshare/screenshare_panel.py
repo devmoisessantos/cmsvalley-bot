@@ -18,7 +18,6 @@ from src.utils.mensagens import (
 )
 from src.utils.permissions import membro_tem_algum_cargo
 
-
 TEXTO_PAINEL = (
     "# Compartilhamento de tela — Centro Medico Sul\n\n"
     "Gere um link para transmitir sua tela pelo navegador.\n"
@@ -148,16 +147,33 @@ class PainelScreenshareLayout(LoggingViewMixin, discord.ui.LayoutView):
                 link=link,
             )
 
+        linha_do_botao = discord.ui.ActionRow()
+        linha_do_botao.add_item(
+            discord.ui.Button(
+                label="Entrar na sala",
+                style=discord.ButtonStyle.link,
+                url=link,
+            )
+        )
+
         await responder_sucesso(
             interacao,
-            titulo="Link de compartilhamento",
+            titulo=":link: Compartilhamento de Tela",
             linhas=[
-                f"Codigo: `{codigo}`",
-                f"Link: {link}",
-                "Abra o link no navegador e escolha o que transmitir.",
-                "Quem for assistir usa o **mesmo link**.",
+                f":key: **Código da sala:** ||`{codigo}`||",
+                f"### :globe_with_meridians: **Link:**\n```c\n{link}\n```",
+                (
+                    "## :arrow_forward: Como participar\n"
+                    "• Para transmitir: abra o link no navegador e "
+                    "escolha o que deseja compartilhar.\n"
+                    "• Para assistir: use o mesmo link.\n\n"
+                    "> :warning: Todos usam o mesmo link — "
+                    "não é necessário criar outro."
+                ),
             ],
-            delay=None,
+            extra_row=linha_do_botao,
+            com_marcador=False,
+            delay=80,
         )
 
     async def _ao_status(self, interacao: discord.Interaction):
