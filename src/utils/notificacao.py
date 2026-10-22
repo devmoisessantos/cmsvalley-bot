@@ -478,6 +478,106 @@ async def notificar_dm_plantao_desligado_automatico(
     )
 
 
+async def notificar_dm_toggle_desligado_pelo_jogo(
+    membro: discord.Member | None,
+    *,
+    id_fivem: str,
+    nome_cidade: str,
+    guilda: discord.Guild | None = None,
+) -> bool:
+    """Plantão desligado porque a log da cidade mostrou saída de serviço."""
+    return await enviar_dm_card(
+        membro,
+        titulo="Plantão desligado (saiu de serviço no jogo)",
+        linhas=[
+            (
+                f"Detectamos que **`{nome_cidade}`** "
+                f"(FiveM `{id_fivem}`) saiu de serviço na cidade."
+            ),
+            "",
+            "O plantão no Discord foi encerrado junto para não deixar "
+            "tempo correndo sem você estar de serviço.",
+            "",
+            "Quando voltar a atuar: ligue o serviço no jogo **e** no painel "
+            "de plantão, depois entre em uma call válida.",
+        ],
+        cor=COR_AVISO,
+        guilda=guilda,
+    )
+
+
+async def notificar_dm_toggle_sem_call(
+    membro: discord.Member | None,
+    *,
+    id_fivem: str,
+    nome_cidade: str,
+    plantao_ja_ligado: bool,
+    guilda: discord.Guild | None = None,
+) -> bool:
+    """
+    Aviso 5 minutos após ENTROU no jogo sem o membro estar em call de plantão.
+
+    Se o plantão no Discord ainda não foi ligado, manda o link da central
+    e o passo a passo de entrar/sair.
+    """
+    canal_painel = CANAIS.get("CANAL_PAINEL_PLANTAO_ID") or 0
+    botoes: list[tuple[str, str]] = []
+    if canal_painel > 0:
+        botoes.append(
+            ("Central de plantão", _montar_url_canal(canal_painel)),
+        )
+
+    if plantao_ja_ligado:
+        linhas = [
+            (
+                f"Você entrou em serviço no jogo "
+                f"(`{nome_cidade}` · FiveM `{id_fivem}`) "
+                "há cerca de **5 minutos**."
+            ),
+            "",
+            "O plantão no Discord está ligado, mas você **não está** "
+            "em nenhuma call de plantão.",
+            "",
+            "Entre em uma call válida para o tempo e as moedas contarem. "
+            "Se não for mais atuar, desligue o serviço no painel.",
+        ]
+        return await enviar_dm_card(
+            membro,
+            titulo="Plantão ligado — entre na call",
+            linhas=linhas,
+            cor=COR_AVISO,
+            botoes_link=botoes or None,
+            guilda=guilda,
+        )
+
+    linhas = [
+        (
+            f"Você entrou em serviço no jogo "
+            f"(`{nome_cidade}` · FiveM `{id_fivem}`) "
+            "há cerca de **5 minutos**."
+        ),
+        "",
+        "Ainda **não** encontramos plantão ligado no Discord e você "
+        "não está em call de plantão.",
+        "",
+        "**Como fazer:**",
+        "1. Abra a **Central de plantão** (botão abaixo).",
+        "2. Ligue o serviço no painel (mesmo passaporte do jogo).",
+        "3. Entre em uma das calls de plantão do servidor.",
+        "",
+        "Para sair: desligue no jogo **e** no painel, ou só no painel "
+        "se a log da cidade já tiver desligado por você.",
+    ]
+    return await enviar_dm_card(
+        membro,
+        titulo="Entrou em serviço — inicie o plantão",
+        linhas=linhas,
+        cor=COR_AVISO,
+        botoes_link=botoes or None,
+        guilda=guilda,
+    )
+
+
 async def notificar_dm_plantao_afk_aviso(
     membro: discord.Member | None,
     *,

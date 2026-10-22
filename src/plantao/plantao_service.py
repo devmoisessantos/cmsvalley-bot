@@ -354,10 +354,14 @@ async def desligar_servico(membro: discord.Member) -> str:
 
     try:
         valor_lotes = await obter_valor_total_lotes(membro.id)
-        saldo_txt = f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
+        saldo_txt = (
+            f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
+        )
     except Exception:
         cotacao = cotacao_moeda_do_membro(membro)
-        saldo_txt = f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
+        saldo_txt = (
+            f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
+        )
     await registrar_evento_plantao(
         membro.guild,
         membro.id,
@@ -370,7 +374,7 @@ async def desligar_servico(membro: discord.Member) -> str:
         },
     )
 
-    return "✅ Você saiu de serviço. Contador encerrado."
+    return "✅ Você saiu de serviço. Cronômetro encerrado."
 
 
 async def _finalizar_periodo_em_call(
@@ -471,9 +475,9 @@ async def _finalizar_periodo_em_call(
                 discord_id=discord_id,
                 quantidade=moedas_ganhas,
                 saldo_apos=int(estado.saldo_moedas),
-                referencia=(f"+1 plantão · {formatar_dinheiro(cotacao_ganho)}/moeda")[
-                    :200
-                ],
+                referencia=(
+                    f"+1 plantão · {formatar_dinheiro(cotacao_ganho)}/moeda"
+                )[:200],
             )
         except Exception as erro_ao_registrar_ganho:
             # ATENCAO: aqui as moedas JA foram creditadas ao membro. Se o

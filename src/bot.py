@@ -180,6 +180,7 @@ CAMINHOS_DOS_COGS = [
     "src.plantao.plantao_tasks",
     "src.plantao.plantao_ativos_tasks",
     "src.plantao.plantao_listener",
+    "src.plantao.toggle.toggle_listener",
     "src.plantao.ranking_plantao_tasks",
     "src.ranking.ranking_cogs",
     "src.hierarquia.hierarquia_cogs",

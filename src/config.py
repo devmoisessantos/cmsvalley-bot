@@ -671,6 +671,8 @@ CANAIS = {
     "LOG_HORAS": 1553969268620791838,  # plantão: início/fim/duração/ajustes
     "LOG_LAUDO": 1545982152406077586,
     "LOG_BAU": 1486369263479423047,  # logs do baú (servidor)
+    # Toggle médico do jogo (entrou/saiu de serviço) — complemento do plantão
+    "LOG_TOGGLE_MEDICO": 1545828262364586145,
     "LOG_ERROS": 1545982165823520909,
     # 0 ate o canal de log ser criado no deploy
     "LOG_SCREENSHARE": 1543653722587136140,
