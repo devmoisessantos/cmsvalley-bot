@@ -832,15 +832,18 @@ class EscolherAdvertenciaRemoverView(LoggingViewMixin, discord.ui.LayoutView):
     async def _on_select_adv(self, interaction: discord.Interaction):
         punicao_id = int(interaction.data["values"][0])
         cargo_nome = ""
+        cargo_id = 0
         for punicao in self.ativas:
             if int(punicao.id) == punicao_id:
                 cargo_nome = punicao.cargo_nome or ""
+                cargo_id = int(punicao.cargo_id or 0)
                 break
         await interaction.response.edit_message(
             view=EscolherTipoRemocaoView(
                 membro=self.membro,
                 punicao_id=punicao_id,
                 cargo_nome=cargo_nome,
+                cargo_id=cargo_id,
             )
         )
 
@@ -857,62 +860,72 @@ class EscolherTipoRemocaoView(LoggingViewMixin, discord.ui.LayoutView):
         membro: discord.Member,
         punicao_id: int,
         cargo_nome: str = "",
+        cargo_id: int = 0,
     ):
         super().__init__(timeout=300)
         self.membro = membro
         self.punicao_id = punicao_id
         self.cargo_nome = cargo_nome or ""
+        self.cargo_id = int(cargo_id or 0)
 
         from src.utils.formatacao import formatar_reais
 
+        nivel = nivel_da_advertencia(self.cargo_nome)
         valor, rotulo = valor_pagamento_advertencia(
             self.cargo_nome,
             membro=membro,
         )
-        if valor > 0:
-            texto_valor = (
-                f"**Valor a pagar:** `{formatar_reais(valor)}`\n"
-                f"**Referência:** {rotulo}\n\n"
-            )
-        elif nivel_da_advertencia(self.cargo_nome) == 0:
-            texto_valor = (
-                "**ADV VERBAL** — sem valor formal de pagamento; "
-                "não usa desconto em moedas.\n\n"
-            )
+
+        if self.cargo_id:
+            texto_punicao = f"<@&{self.cargo_id}>"
         else:
-            texto_valor = ""
+            texto_punicao = f"**{(self.cargo_nome or '—').strip()}**"
+
+        blocos: list[str] = [
+            f"`👤` • **Membro:** {membro.mention}",
+            f"`📋` • **Registro:** `#{punicao_id}`",
+            f"- **Punição:** {texto_punicao}",
+        ]
+
+        if nivel == 0:
+            blocos.append("")
+            blocos.append(
+                "> *Nota: Adv Verbal não possui pagamento em moedas nem descontos.*"
+            )
+        elif valor > 0:
+            blocos.append("")
+            blocos.append(f"`💵` • **Valor a pagar:** `{formatar_reais(valor)}`")
+            blocos.append(f"`📋` • **Referência:** {rotulo}")
+
+        blocos.append("")
+        blocos.append(
+            "🟢 **Pagar e remover:** Somente para Adv 01 / Adv 02 "
+            "(até 10 moedas de desconto)."
+        )
+        blocos.append(
+            "⚪ **Revogar (sem pagamento):** Decisão da equipe, "
+            "obrigatório justificativa."
+        )
+        corpo = "\n".join(blocos)
 
         linha = discord.ui.ActionRow()
         botao_pagar = discord.ui.Button(
-            label="Pagar e remover",
+            label="🟢 Pagar e remover",
             style=discord.ButtonStyle.success,
         )
         botao_pagar.callback = self._ao_pagar
         linha.add_item(botao_pagar)
 
         botao_revogar = discord.ui.Button(
-            label="Revogar (sem pagamento)",
+            label="⚪ Revogar (sem pagamento)",
             style=discord.ButtonStyle.secondary,
         )
         botao_revogar.callback = self._ao_revogar
         linha.add_item(botao_revogar)
 
-        nome_punicao = (self.cargo_nome or "—").strip()
-        corpo = (
-            f"**Membro:** {membro.mention}\n"
-            f"**Registro:** `#{punicao_id}`\n"
-            f"**Punição:** **{nome_punicao}**\n\n"
-            f"{texto_valor}"
-            "**Pagar e remover** — comprovante in-game; até 10 "
-            "moedas de desconto em Adv formal (Verbal não usa "
-            "moedas).\n"
-            "**Revogar** — remove sem pagamento (decisão da "
-            "equipe; motivo obrigatório)."
-        )
-
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# 🧹 Como remover esta punição?"),
+                discord.ui.TextDisplay("# 🧹 **Como remover esta punição?**"),
                 discord.ui.TextDisplay(corpo),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 linha,
@@ -937,7 +950,6 @@ class EscolherTipoRemocaoView(LoggingViewMixin, discord.ui.LayoutView):
                 tipo_remocao="REVOGACAO",
             )
         )
-
 
 
 class ModalDiscordIdRemover(
@@ -1066,7 +1078,9 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
         4. Publica o pagamento em CANAL_PAGAMENTO_ADV
         5. Só então envia a mensagem de sucesso
         """
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        if interaction.guild is None or not isinstance(
+            interaction.user, discord.Member
+        ):
             await responder_erro(
                 interaction,
                 titulo="Erro de contexto",
@@ -1111,8 +1125,7 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                     interaction,
                     titulo="Comprovante obrigatório",
                     linhas=[
-                        "Anexe o print/PDF do pagamento para remover "
-                        "a advertência.",
+                        "Anexe o print/PDF do pagamento para remover a advertência.",
                     ],
                     delay=12,
                 )
@@ -1188,8 +1201,7 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                         delta=-moedas_usadas,
                         executor_id=interaction.user.id,
                         referencia=(
-                            f"Desconto pagamento ADV "
-                            f"#{self.punicao_id or '—'}"
+                            f"Desconto pagamento ADV #{self.punicao_id or '—'}"
                         ),
                     )
                 except ValueError as erro_saldo:
@@ -1210,8 +1222,7 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                         interaction,
                         titulo="Falha nas moedas",
                         linhas=[
-                            "Não consegui debitar as moedas agora. "
-                            "Tente de novo.",
+                            "Não consegui debitar as moedas agora. Tente de novo.",
                         ],
                         delay=12,
                     )
@@ -1222,9 +1233,7 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
             else:
                 motivo_txt = "PAGAMENTO"
             if moedas_usadas > 0:
-                motivo_txt = (
-                    f"{motivo_txt} · desconto {moedas_usadas} moeda(s)"
-                )
+                motivo_txt = f"{motivo_txt} · desconto {moedas_usadas} moeda(s)"
         else:
             motivo_txt = f"REVOGACAO: {motivo_bruto}"
 
@@ -1261,8 +1270,7 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                     )
                 except Exception as erro_estorno:
                     registrador.exception(
-                        "Falha ao estornar moedas de %s após remoção "
-                        "falhar: %s",
+                        "Falha ao estornar moedas de %s após remoção falhar: %s",
                         self.alvo.id,
                         erro_estorno,
                     )
@@ -1326,9 +1334,7 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                     "`CANAL_PAGAMENTO_ADV`."
                 )
         else:
-            linhas_sucesso.append(
-                "Revogação registrada (sem pagamento)."
-            )
+            linhas_sucesso.append("Revogação registrada (sem pagamento).")
 
         await responder_sucesso(
             interaction,
