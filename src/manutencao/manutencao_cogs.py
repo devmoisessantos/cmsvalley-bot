@@ -141,17 +141,11 @@ class ManutencaoCog(commands.Cog):
         description="Apaga registro/mensagem antiga e publica o painel atualizado",
     )
     @app_commands.describe(nome="Qual painel recriar")
-    @app_commands.choices(
-        nome=[
-            app_commands.Choice(name=nome_painel, value=nome_painel)
-            for nome_painel in NOMES_DOS_PAINEIS
-        ]
-    )
     @apenas_administrador()
     async def paineis_recriar(
         self,
         interacao: discord.Interaction,
-        nome: app_commands.Choice[str],
+        nome: str,
     ):
         """Substitui um painel específico e informa o resultado de forma privada.
 
@@ -159,6 +153,20 @@ class ManutencaoCog(commands.Cog):
         de serviço apaga a referência e a mensagem anteriores antes de publicar
         a versão atual, evitando controles duplicados no Discord.
         """
+        nome_normalizado = (nome or "").strip().lower()
+        if nome_normalizado not in NOMES_DOS_PAINEIS:
+            await enviar_card(
+                interacao,
+                titulo="Painel desconhecido",
+                linhas=[
+                    f"`{nome}` não está na lista de painéis.",
+                    "Use o autocomplete ou `/manutencao paineis-listar`.",
+                ],
+                cor=COR_AVISO,
+                delay=15,
+            )
+            return
+
         try:
             await interacao.response.defer(ephemeral=True, thinking=True)
         except discord.NotFound:
@@ -167,19 +175,39 @@ class ManutencaoCog(commands.Cog):
         except discord.HTTPException:
             return
 
-        resultado = await recriar_painel(self.bot, nome.value)
+        resultado = await recriar_painel(self.bot, nome_normalizado)
 
         await enviar_card(
             interacao,
             titulo=(
-                f"✅ Painel `{nome.value}` recriado"
+                f"✅ Painel `{nome_normalizado}` recriado"
                 if resultado.ok
-                else f"❌ Falha em `{nome.value}`"
+                else f"❌ Falha em `{nome_normalizado}`"
             ),
             linhas=[resultado.mensagem],
             cor=COR_SUCESSO if resultado.ok else COR_ERRO,
             delay=25,
         )
+
+
+    @paineis_recriar.autocomplete("nome")
+    async def autocompletar_nome_painel(
+        self,
+        interacao: discord.Interaction,
+        texto_digitado: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Sugere painéis cujo nome contém o que foi digitado."""
+        filtro = (texto_digitado or "").strip().lower()
+        escolhas: list[app_commands.Choice[str]] = []
+        for nome_painel in NOMES_DOS_PAINEIS:
+            if filtro and filtro not in nome_painel:
+                continue
+            escolhas.append(
+                app_commands.Choice(name=nome_painel, value=nome_painel)
+            )
+            if len(escolhas) >= 25:
+                break
+        return escolhas
 
     # ------------------------------------------------------------------
     # /manutencao paineis-recriar-todos

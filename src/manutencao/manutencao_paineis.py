@@ -19,6 +19,9 @@ from src.cursos.cursos_setup import garantir_painel_cursos
 from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.demissao.demissao_setup import garantir_painel_demissao
+from src.avaliacao.avaliacao_atendimento_setup import (
+    garantir_painel_avaliar_atendimento,
+)
 from src.guia.guia_setup import (
     garantir_painel_boas_vindas,
     garantir_painel_tutoriais,
@@ -31,6 +34,11 @@ from src.membros.membros_setup import (
     garantir_painel_gerenciar_cargos,
     garantir_painel_gerenciar_membros,
 )
+from src.gate.membros.membros_gate_setup import (
+    garantir_painel_gerenciar_gate,
+    garantir_painel_ingressar_gate,
+)
+from src.notificacoes.notificacoes_setup import garantir_painel_notificacao
 from src.promocoes.promocoes_setup import garantir_painel_promocao
 from src.punicoes.punicoes_cogs import garantir_painel_punicoes
 from src.screenshare.screenshare_setup import garantir_painel_screenshare
@@ -70,6 +78,10 @@ FUNCOES_GARANTIR_PAINEL = {
     "ticket_suporte": garantir_painel_ticket_suporte,
     "ticket_denuncias": garantir_painel_ticket_denuncias,
     "screenshare": garantir_painel_screenshare,
+    "avaliar_atendimento": garantir_painel_avaliar_atendimento,
+    "ingressar_gate": garantir_painel_ingressar_gate,
+    "gerenciar_gate": garantir_painel_gerenciar_gate,
+    "enviar_notificacao": garantir_painel_notificacao,
 }
 
 NOMES_DOS_PAINEIS = list(FUNCOES_GARANTIR_PAINEL.keys())

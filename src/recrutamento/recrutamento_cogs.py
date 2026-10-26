@@ -189,7 +189,7 @@ class RecrutamentoCog(commands.Cog):
         )
 
     @grupo_recrutamento.command(
-        name="limpar_formulario",
+        name="limpar-formulario",
         description="Desmarca formulario_aberto (prova presa) sem cancelar o processo",
     )
     @app_commands.describe(membro="Candidato com formulário preso")

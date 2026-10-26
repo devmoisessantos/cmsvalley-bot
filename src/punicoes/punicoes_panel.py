@@ -879,7 +879,7 @@ class EscolherTipoRemocaoView(LoggingViewMixin, discord.ui.LayoutView):
         if self.cargo_id:
             texto_punicao = f"<@&{self.cargo_id}>"
         else:
-            texto_punicao = f"**{(self.cargo_nome or '—').strip()}**"
+            texto_punicao = f"**{(self.cargo_nome or "—").strip()}**"
 
         blocos: list[str] = [
             f"`👤` • **Membro:** {membro.mention}",
@@ -890,16 +890,19 @@ class EscolherTipoRemocaoView(LoggingViewMixin, discord.ui.LayoutView):
         if nivel == 0:
             blocos.append("")
             blocos.append(
-                "> *Nota: Adv Verbal não possui pagamento em moedas nem descontos.*"
+                "> *Nota: Adv Verbal não possui pagamento em moedas "
+                "nem descontos.*"
             )
         elif valor > 0:
             blocos.append("")
-            blocos.append(f"`💵` • **Valor a pagar:** `{formatar_reais(valor)}`")
+            blocos.append(
+                f"`💵` • **Valor a pagar:** `{formatar_reais(valor)}`"
+            )
             blocos.append(f"`📋` • **Referência:** {rotulo}")
 
         blocos.append("")
         blocos.append(
-            "🟢 **Pagar e remover:** Somente para Adv 01 / Adv 02 "
+            "🟢 **Pagar e remover:** Somente para Adv Formal "
             "(até 10 moedas de desconto)."
         )
         blocos.append(
@@ -925,9 +928,13 @@ class EscolherTipoRemocaoView(LoggingViewMixin, discord.ui.LayoutView):
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# 🧹 **Como remover esta punição?**"),
+                discord.ui.TextDisplay(
+                    "# 🧹 **Como remover esta punição?**"
+                ),
                 discord.ui.TextDisplay(corpo),
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                discord.ui.Separator(
+                    spacing=discord.SeparatorSpacing.large
+                ),
                 linha,
                 accent_color=discord.Color.dark_grey(),
             )
@@ -950,6 +957,7 @@ class EscolherTipoRemocaoView(LoggingViewMixin, discord.ui.LayoutView):
                 tipo_remocao="REVOGACAO",
             )
         )
+
 
 
 class ModalDiscordIdRemover(
@@ -1078,9 +1086,7 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
         4. Publica o pagamento em CANAL_PAGAMENTO_ADV
         5. Só então envia a mensagem de sucesso
         """
-        if interaction.guild is None or not isinstance(
-            interaction.user, discord.Member
-        ):
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await responder_erro(
                 interaction,
                 titulo="Erro de contexto",
@@ -1125,7 +1131,8 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                     interaction,
                     titulo="Comprovante obrigatório",
                     linhas=[
-                        "Anexe o print/PDF do pagamento para remover a advertência.",
+                        "Anexe o print/PDF do pagamento para remover "
+                        "a advertência.",
                     ],
                     delay=12,
                 )
@@ -1201,7 +1208,8 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                         delta=-moedas_usadas,
                         executor_id=interaction.user.id,
                         referencia=(
-                            f"Desconto pagamento ADV #{self.punicao_id or '—'}"
+                            f"Desconto pagamento ADV "
+                            f"#{self.punicao_id or '—'}"
                         ),
                     )
                 except ValueError as erro_saldo:
@@ -1222,7 +1230,8 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                         interaction,
                         titulo="Falha nas moedas",
                         linhas=[
-                            "Não consegui debitar as moedas agora. Tente de novo.",
+                            "Não consegui debitar as moedas agora. "
+                            "Tente de novo.",
                         ],
                         delay=12,
                     )
@@ -1233,7 +1242,9 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
             else:
                 motivo_txt = "PAGAMENTO"
             if moedas_usadas > 0:
-                motivo_txt = f"{motivo_txt} · desconto {moedas_usadas} moeda(s)"
+                motivo_txt = (
+                    f"{motivo_txt} · desconto {moedas_usadas} moeda(s)"
+                )
         else:
             motivo_txt = f"REVOGACAO: {motivo_bruto}"
 
@@ -1270,7 +1281,8 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                     )
                 except Exception as erro_estorno:
                     registrador.exception(
-                        "Falha ao estornar moedas de %s após remoção falhar: %s",
+                        "Falha ao estornar moedas de %s após remoção "
+                        "falhar: %s",
                         self.alvo.id,
                         erro_estorno,
                     )
@@ -1334,7 +1346,9 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                     "`CANAL_PAGAMENTO_ADV`."
                 )
         else:
-            linhas_sucesso.append("Revogação registrada (sem pagamento).")
+            linhas_sucesso.append(
+                "Revogação registrada (sem pagamento)."
+            )
 
         await responder_sucesso(
             interaction,

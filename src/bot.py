@@ -583,6 +583,7 @@ class CmsValleyBot(commands.Bot):
             garantir_painel_cursos,
             garantir_painel_promocao,
             garantir_painel_demissao,
+            garantir_painel_avaliar_atendimento,
             garantir_painel_ausencia,
             garantir_painel_notificacao,
             garantir_painel_ticket_suporte,
