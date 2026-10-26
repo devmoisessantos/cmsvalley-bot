@@ -420,7 +420,6 @@ VALOR_PAGAMENTO_ADVERTENCIA: dict[int, int] = {
 }
 
 
-
 # Hierarquia: define quem pode conceder cargos a algum usuário.
 HIERARQUIA_CONCESSAO = {
     "Visitantes": None,
@@ -598,7 +597,10 @@ CANAIS = {
     "CANAL_TICKETS_BAU": 1486369093769760843,  # ← canal/categoria de tickets (link DM)
     "CANAL_TICKET_VALLEY": 1077995758785138758,
     "CANAL_FINANCAS": 1486369137021161472,
-    "CANAL_AVALIAR_ATENDIMENTO": 1486369031614365856,
+    # Painel fixo para iniciar avaliação de atendimento
+    "CANAL_AVALIAR_ATENDIMENTO": 1564162255438876792,
+    # Mural público onde as avaliações confirmadas são publicadas
+    "MURAL_AVALIACOES": 1486369031614365856,
     # Promoções e cursos
     "CANAL_PROMOVIDOS": 1546206892643192945,
     "CANAL_NAO_PROMOVIDOS": 1546206906081746975,
@@ -844,7 +846,7 @@ ESCOPOS_GERENCIAMENTO = {
             "👑・VICE DIRETOR",
             "👑・SUPERVISOR",
             "🥼・Instrutor",
-                    "✈️・Recrutador",
+            "✈️・Recrutador",
             "🩺・Psicólogo",
             "🥼・Doutor",
             "🚑・Paramédico",
@@ -877,7 +879,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                            "✈️・Recrutador",
+                "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
@@ -887,7 +889,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                            "✈️・Recrutador",
+                "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
@@ -896,7 +898,7 @@ ESCOPOS_GERENCIAMENTO = {
             "👑・VICE DIRETOR": [
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                            "✈️・Recrutador",
+                "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
@@ -904,7 +906,7 @@ ESCOPOS_GERENCIAMENTO = {
             ],
             "👑・SUPERVISOR": [
                 "🥼・Instrutor",
-                            "✈️・Recrutador",
+                "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
@@ -938,7 +940,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                            "✈️・Recrutador",
+                "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
@@ -962,7 +964,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                            "✈️・Recrutador",
+                "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",
@@ -985,7 +987,7 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                            "✈️・Recrutador",
+                "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
                 "🚑・Paramédico",

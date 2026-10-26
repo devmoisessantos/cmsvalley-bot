@@ -30,6 +30,9 @@ from src.cursos.cursos_setup import garantir_painel_cursos
 from src.database.conexao import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
 from src.demissao.demissao_setup import garantir_painel_demissao
+from src.avaliacao.avaliacao_atendimento_setup import (
+    garantir_painel_avaliar_atendimento,
+)
 from src.gate.gate_panel import PainelEventosGate
 from src.gate.gate_presenca_service import montar_container_presenca
 from src.gate.gate_service import listar_eventos_abertos
