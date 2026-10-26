@@ -17,8 +17,10 @@ from src.punicoes.punicoes_helpers import (
     e_staff_punicao,
     lista_cargos_punicao_ordenada,
     mensagem_sem_permissao,
+    nivel_da_advertencia,
     proximo_cargo_punicao,
     resolver_id_fivem,
+    valor_pagamento_advertencia,
 )
 from src.punicoes.punicoes_logger import registrar_pagamento_advertencia
 from src.punicoes.punicoes_service import (
