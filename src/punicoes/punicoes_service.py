@@ -26,15 +26,16 @@ from src.database.models import (
 from src.punicoes.punicoes_helpers import (
     e_cargo_exonerado,
     id_cargo_exonerado,
-    ids_cargos_advertencia_formal,
     parse_links,
-    quantidade_advertencias_formais_no_membro,
+    pontos_da_advertencia,
+    pontos_formais_ativos,
 )
 from src.punicoes.punicoes_logger import (
     registrar_advertencia,
     registrar_exoneracao,
     registrar_log_advertencia,
     registrar_log_remocao,
+    registrar_remocao_publica,
 )
 from src.utils.error_handling import ignorar_falha_cosmetica
 from src.utils.nickname import remover_prefixo_existente
@@ -51,36 +52,52 @@ PRAZO_RECURSO_EXONERACAO_HORAS = 48
 def _montar_snapshot_exoneracao(
     cargos_antes_ids: list[int],
     nick_antes: str | None,
+    *,
+    extras: dict | None = None,
 ) -> str:
     """
-    Empacota cargos e nick do momento da exoneração em JSON.
+    Empacota o estado completo do membro no momento da exoneração.
 
-    Formato novo: {"cargos": [ids], "nick": "..."}.
-    Leitores antigos que esperavam só uma lista ainda são aceitos em
-    ``_ler_snapshot_exoneracao``.
+    Formato atual:
+      {
+        "cargos": [ids],
+        "nick": "...",
+        "plantao": {...},
+        "moedas": {...},
+        "metas": {...},
+        "id_fivem": "...",
+        "capturado_em": "ISO-8601"
+      }
+
+    Leitores antigos (lista pura ou só cargos+nick) continuam aceitos.
     """
-    return json.dumps(
-        {
-            "cargos": list(cargos_antes_ids),
-            "nick": (nick_antes or "")[:100],
-        }
-    )
+    pacote: dict = {
+        "cargos": list(cargos_antes_ids),
+        "nick": (nick_antes or "")[:100],
+        "capturado_em": datetime.now(timezone.utc).isoformat(),
+    }
+    if extras:
+        for chave, valor in extras.items():
+            if valor is not None:
+                pacote[chave] = valor
+    return json.dumps(pacote, ensure_ascii=False)
 
 
 def _ler_snapshot_exoneracao(
     texto: str | None,
-) -> tuple[list[int], str | None]:
+) -> tuple[list[int], str | None, dict]:
     """
     Lê o snapshot gravado na exoneração.
 
-    Aceita lista pura (legado) ou objeto com cargos + nick.
+    Devolve (ids_cargos, nick, extras) onde extras guarda plantao,
+    moedas, metas e demais campos do pacote completo.
     """
     if not texto:
-        return [], None
+        return [], None, {}
     try:
         dados = json.loads(texto)
     except (TypeError, ValueError, json.JSONDecodeError):
-        return [], None
+        return [], None, {}
     if isinstance(dados, list):
         ids = []
         for item in dados:
@@ -88,7 +105,7 @@ def _ler_snapshot_exoneracao(
                 ids.append(int(item))
             except (TypeError, ValueError):
                 continue
-        return ids, None
+        return ids, None, {}
     if isinstance(dados, dict):
         lista_bruta = dados.get("cargos") or []
         ids = []
@@ -101,8 +118,95 @@ def _ler_snapshot_exoneracao(
         nick = dados.get("nick")
         if nick is not None:
             nick = str(nick)[:100]
-        return ids, nick
-    return [], None
+        extras = {
+            chave: valor
+            for chave, valor in dados.items()
+            if chave not in ("cargos", "nick")
+        }
+        return ids, nick, extras
+    return [], None, {}
+
+
+async def _coletar_extras_snapshot(discord_id: int) -> dict:
+    """
+    Lê plantão, moedas e produção atuais para guardar no snapshot.
+
+    Na revogação gratuita esses valores voltam ao membro.
+    """
+    from sqlalchemy import select
+
+    from src.database.conexao import async_session
+    from src.database.models import EstadoPlantao
+    from src.membros.membros_service import (
+        segundos_fechados_no_ciclo,
+        tempo_total_segundos_plantao,
+    )
+
+    extras: dict = {}
+    try:
+        segundos_ciclo = await segundos_fechados_no_ciclo(discord_id)
+        segundos_total = await tempo_total_segundos_plantao(discord_id)
+        extras["plantao"] = {
+            "segundos_ciclo": int(segundos_ciclo or 0),
+            "segundos_total": int(segundos_total or 0),
+        }
+    except Exception as erro_plantao:
+        registrador.warning(
+            "Snapshot: falha ao ler plantão de %s: %s",
+            discord_id,
+            erro_plantao,
+        )
+        extras["plantao"] = {"segundos_ciclo": 0, "segundos_total": 0}
+
+    try:
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(EstadoPlantao).where(
+                    EstadoPlantao.discord_id == discord_id
+                )
+            )
+            estado = resultado.scalar_one_or_none()
+        if estado is not None:
+            extras["moedas"] = {
+                "saldo": int(estado.saldo_moedas or 0),
+            }
+            extras["id_fivem"] = estado.id_fivem
+            extras["plantao"]["segundos_acumulados"] = int(
+                estado.segundos_acumulados or 0
+            )
+        else:
+            extras["moedas"] = {"saldo": 0}
+    except Exception as erro_moedas:
+        registrador.warning(
+            "Snapshot: falha ao ler moedas de %s: %s",
+            discord_id,
+            erro_moedas,
+        )
+        extras["moedas"] = {"saldo": 0}
+
+    try:
+        from src.promocoes.avaliacao_hp.avaliacao_hp_service import (
+            contar_producao_do_membro,
+        )
+
+        producao = await contar_producao_do_membro(discord_id)
+        extras["metas"] = {
+            "laudos": int(producao.get("laudos") or 0),
+            "recrutamentos": int(producao.get("recrutamentos") or 0),
+            "chamadas": int(producao.get("chamadas") or 0),
+            "cursos_aplicados": int(producao.get("cursos_aplicados") or 0),
+            "segundos_plantao": int(producao.get("segundos_plantao") or 0),
+            "tickets": int(producao.get("tickets") or 0),
+        }
+    except Exception as erro_metas:
+        registrador.warning(
+            "Snapshot: falha ao ler metas de %s: %s",
+            discord_id,
+            erro_metas,
+        )
+        extras["metas"] = {}
+
+    return extras
 
 
 async def aplicar_punicao(
@@ -122,10 +226,11 @@ async def aplicar_punicao(
     """Aplica cargo, grava no banco, posta em CANAL_ADVERTENCIAS + LOG_PUNICOES.
 
     Cargos de advertência são **acumulativos** (verbal + Adv 01 + Adv 02…).
-    Se o cargo for Exonerado, ou se após a aplicação o membro atingir 3
-    advertências formais (Adv 01/02/03), executa a exoneração completa
-    (remove todos os cargos, deixa só Exonerado + Visitantes, limpa prefixo
-    do nick e registra em CANAL_EXONERACOES).
+    Se o cargo for Exonerado, ou se após a aplicação a soma de pontos das
+    advertências formais ativas chegar a 3 ou mais (Adv 01=1, Adv 02=2,
+    Adv 03=3), executa a exoneração completa (remove todos os cargos, deixa
+    só Exonerado + Visitantes, limpa prefixo do nick e registra em
+    CANAL_EXONERACOES).
 
     ``origem``: MANUAL | CHAMADA | SISTEMA — usado na regularização.
     ``expira_em``: data em que a punição some sozinha (ex.: verbal em 3 dias).
@@ -267,10 +372,11 @@ async def aplicar_punicao(
         msg_advertencia=msg_adv,
     )
 
-    # 3) 3ª advertência formal → exoneração automática
-    quantidade_formais = quantidade_advertencias_formais_no_membro(membro_atualizado)
+    # 3) Soma de pontos formais ≥ 3 → exoneração automática
+    # Adv 01=1, Adv 02=2, Adv 03=3 (conta registros ativos no banco)
+    pontos_ativos = await pontos_formais_ativos(membro_atualizado.id)
     automatica_por_limite = (
-        cargo_id in ids_cargos_advertencia_formal() and quantidade_formais >= 3
+        pontos_da_advertencia(cargo_nome) > 0 and pontos_ativos >= 3
     )
 
     mensagem_extra = ""
@@ -342,9 +448,11 @@ async def executar_exoneracao(
         if cargo.id != guild.default_role.id and not cargo.managed
     ]
     nick_antes = (alvo.nick or alvo.display_name or "")[:100]
+    extras_snapshot = await _coletar_extras_snapshot(alvo.id)
     cargos_antes_json = _montar_snapshot_exoneracao(
         cargos_antes_ids,
         nick_antes,
+        extras=extras_snapshot,
     )
 
     # Cargos que devem permanecer
@@ -392,7 +500,8 @@ async def executar_exoneracao(
             o_que_falhou="executar exoneracao",
         )
 
-    # Zera plantão e moedas só na exoneração (na revogação eles permanecem).
+    # Zera plantão e moedas na exoneração (na revogação gratuita voltam
+    # pelo snapshot completo).
     try:
         from src.membros.membros_service import (
             ajustar_horas_plantao,
@@ -532,7 +641,23 @@ async def executar_exoneracao(
         msg_log=msg_exo,
     )
 
-    origem = "automática (3ª advertência)" if automatica else "manual"
+    try:
+        await criar_blacklist_pos_exoneracao(
+            discord_id=alvo.id,
+            id_fivem=id_fivem,
+            punicao_id=id_do_registro,
+            snapshot_json=cargos_antes_json,
+            origem="SISTEMA" if automatica else "MANUAL",
+            guild=guild,
+        )
+    except Exception as erro_bl:
+        registrador.exception(
+            "Exoneração de %s: falha ao criar blacklist: %s",
+            alvo.id,
+            erro_bl,
+        )
+
+    origem = "automática (pontos ≥ 3)" if automatica else "manual"
     return True, f"⛔ Exoneração {origem} concluída em {alvo.mention}."
 
 
@@ -555,7 +680,7 @@ async def remover_punicao(
     - zera TODAS as advertências ativas no banco
     - tira cargos de punição, Exonerado e Visitantes no Discord
     - devolve os cargos de produção e o nick do snapshot
-    - plantão e moedas **não** são alterados (só zeravam na exoneração)
+    - devolve plantão (ciclo e total) e saldo de moedas do snapshot
 
     ``apenas_origem``: se informado (ex.: ``CHAMADA``), só mexe nesses registros
     (não aplica o pacote completo de recurso).
@@ -567,6 +692,7 @@ async def remover_punicao(
     ids_cargos_snapshot: list[int] = []
     nick_para_restaurar: str | None = None
     e_recurso_de_exoneracao = False
+    snapshot_extras: dict = {}
 
     async with async_session() as session:
         filtros = [
@@ -624,13 +750,15 @@ async def remover_punicao(
                 ):
                     e_recurso_de_exoneracao = True
                     registro_exonerado = row
-                    lista_ids, nick_salvo = _ler_snapshot_exoneracao(
-                        row.cargos_antes_json
+                    lista_ids, nick_salvo, extras_snapshot = (
+                        _ler_snapshot_exoneracao(row.cargos_antes_json)
                     )
                     if lista_ids:
                         ids_cargos_snapshot = lista_ids
                     if nick_salvo:
                         nick_para_restaurar = nick_salvo
+                    # extras guardados para restaurar plantão/moedas abaixo
+                    snapshot_extras = extras_snapshot
             if e_recurso_de_exoneracao and registro_exonerado is not None:
                 data_da_exoneracao = registro_exonerado.criada_em
                 if data_da_exoneracao is not None:
@@ -776,7 +904,6 @@ async def remover_punicao(
                 )
 
     # Recurso: devolve o nick salvo no snapshot.
-    # Plantão e moedas não mudam aqui — só foram zerados na exoneração.
     if e_recurso_de_exoneracao and nick_para_restaurar:
         try:
             nick_limpo = nick_para_restaurar[:32]
@@ -795,6 +922,49 @@ async def remover_punicao(
                 o_que_falhou="restaurar nick no recurso de exoneracao",
             )
 
+    # Recurso gratuito: devolve plantão e moedas do snapshot.
+    if e_recurso_de_exoneracao and snapshot_extras:
+        try:
+            from src.membros.membros_service import (
+                ajustar_horas_plantao,
+                ajustar_saldo_moedas,
+                ajustar_tempo_ciclo_plantao,
+            )
+
+            plantao = snapshot_extras.get("plantao") or {}
+            segundos_ciclo = int(plantao.get("segundos_ciclo") or 0)
+            segundos_total = int(plantao.get("segundos_total") or 0)
+            if segundos_ciclo >= 0:
+                await ajustar_tempo_ciclo_plantao(
+                    alvo.id,
+                    segundos_absolutos=segundos_ciclo,
+                    executor_id=executor.id,
+                    motivo="Restaurar ciclo na revogação da exoneração",
+                )
+            if segundos_total >= 0:
+                await ajustar_horas_plantao(
+                    alvo.id,
+                    segundos_absolutos=segundos_total,
+                    executor_id=executor.id,
+                    motivo="Restaurar total de plantão na revogação",
+                )
+
+            moedas = snapshot_extras.get("moedas") or {}
+            saldo = int(moedas.get("saldo") or 0)
+            if saldo >= 0:
+                await ajustar_saldo_moedas(
+                    alvo.id,
+                    novo_saldo=saldo,
+                    executor_id=executor.id,
+                    referencia="Restaurar moedas na revogação da exoneração",
+                )
+        except Exception as erro_restaura:
+            registrador.exception(
+                "Recurso de %s: falha ao restaurar plantão/moedas: %s",
+                alvo.id,
+                erro_restaura,
+            )
+
     await registrar_log_remocao(
         guild=guild,
         alvo=alvo,
@@ -803,6 +973,17 @@ async def remover_punicao(
         motivo_remocao=motivo_remocao,
         punicao_ids=punicao_ids,
         id_fivem=id_fivem,
+    )
+
+    await registrar_remocao_publica(
+        guild=guild,
+        alvo=alvo,
+        executor=executor,
+        cargos_removidos=removidos,
+        motivo_remocao=motivo_remocao,
+        punicao_ids=punicao_ids,
+        id_fivem=id_fivem,
+        e_exoneracao=e_recurso_de_exoneracao,
     )
 
     from src.utils.notificacao import notificar_dm_remocao_punicao
@@ -818,9 +999,9 @@ async def remover_punicao(
     extra = ""
     if e_recurso_de_exoneracao:
         extra = (
-            " Recurso aplicado: cargos de produção e nick restaurados, "
-            "advertências zeradas, Visitantes/Exonerado removidos. "
-            "Plantão e moedas permanecem como estavam após a exoneração."
+            " Recurso aplicado: cargos, nick, plantão e moedas "
+            "restaurados; advertências zeradas; Visitantes/Exonerado "
+            "removidos — como se a exoneração não tivesse ocorrido."
         )
     return True, f"✅ Punição removida de {alvo.mention}: {lista}.{extra}"
 
@@ -841,3 +1022,118 @@ async def listar_punicoes_membro(
         stmt = stmt.order_by(Punicao.criada_em.desc())
         resultado_da_consulta = await session.execute(stmt)
         return list(resultado_da_consulta.scalars().all())
+
+
+
+def _resolver_cargo_blacklist(
+    cargos_ids: list[int],
+    guild: discord.Guild | None = None,
+) -> tuple[str, int | None, int, int]:
+    """
+    Escolhe o cargo mais alto do snapshot para dias e valor da blacklist.
+
+    Devolve (nome, id, dias, valor).
+    """
+    from src.config import (
+        BLACKLIST_POR_CARGO,
+        CARGOS,
+        CARGOS_HIERARQUIA,
+    )
+
+    nomes_por_id = {int(v): k for k, v in CARGOS.items()}
+    melhor_nome = "🚑・Paramédico"
+    melhor_id: int | None = None
+    melhor_rank = 10_000
+
+    for cargo_id in cargos_ids:
+        nome = nomes_por_id.get(int(cargo_id))
+        if not nome:
+            if guild is not None:
+                role = guild.get_role(int(cargo_id))
+                nome = role.name if role else None
+        if not nome or nome not in BLACKLIST_POR_CARGO:
+            continue
+        try:
+            rank = CARGOS_HIERARQUIA.index(nome)
+        except ValueError:
+            rank = 9999
+        if rank < melhor_rank:
+            melhor_rank = rank
+            melhor_nome = nome
+            melhor_id = int(cargo_id)
+
+    cfg = BLACKLIST_POR_CARGO.get(melhor_nome) or {
+        "dias": 14,
+        "valor": 3_000_000,
+    }
+    return (
+        melhor_nome,
+        melhor_id,
+        int(cfg.get("dias") or 14),
+        int(cfg.get("valor") or 3_000_000),
+    )
+
+
+async def criar_blacklist_pos_exoneracao(
+    *,
+    discord_id: int,
+    id_fivem: str | None,
+    punicao_id: int | None,
+    snapshot_json: str | None,
+    origem: str = "SISTEMA",
+    guild: discord.Guild | None = None,
+) -> None:
+    """
+    Grava a blacklist da exoneração (prazo + valor de retorno).
+
+    Enquanto ativa, o membro não inicia novo recrutamento.
+    """
+    from src.database.models import Blacklist
+
+    cargos_ids, _nick, _extras = _ler_snapshot_exoneracao(snapshot_json)
+    nome, cargo_id, dias, valor = _resolver_cargo_blacklist(cargos_ids, guild)
+    agora_utc = datetime.now(timezone.utc)
+    termina = agora_utc + timedelta(days=dias)
+
+    try:
+        async with async_session() as sessao:
+            sessao.add(
+                Blacklist(
+                    discord_id=discord_id,
+                    id_fivem=(id_fivem or None),
+                    punicao_id=punicao_id,
+                    cargo_referencia=nome,
+                    cargo_referencia_id=cargo_id,
+                    dias_totais=dias,
+                    valor_retorno=valor,
+                    inicia_em=agora_utc,
+                    termina_em=termina,
+                    ativa=True,
+                    paga=False,
+                    snapshot_json=snapshot_json,
+                    origem=(origem or "SISTEMA")[:30],
+                )
+            )
+            await sessao.commit()
+    except SQLAlchemyError as erro_banco:
+        registrador.exception(
+            "Falha ao gravar blacklist de %s: %s",
+            discord_id,
+            erro_banco,
+        )
+
+
+async def membro_em_blacklist_ativa(discord_id: int) -> bool:
+    """True se existe blacklist ativa e ainda dentro do prazo."""
+    from src.database.models import Blacklist
+
+    agora_utc = datetime.now(timezone.utc)
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(Blacklist).where(
+                Blacklist.discord_id == discord_id,
+                Blacklist.ativa.is_(True),
+                Blacklist.termina_em > agora_utc,
+            )
+        )
+        return resultado.scalar_one_or_none() is not None

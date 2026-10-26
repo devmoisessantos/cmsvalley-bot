@@ -58,7 +58,6 @@ CARGO_DOUTOR = "🥼・Doutor"
 CARGO_PSICOLOGO = "🩺・Psicólogo"
 CARGO_RECRUTADOR = "✈️・Recrutador"
 CARGO_INSTRUTOR = "🥼・Instrutor"
-CARGO_INSTRUTOR_RESGATE = "🚑・Instrutor Resgate"
 
 # Quem pode abrir os relatórios de avaliação HP (igual ao cog)
 CARGOS_QUE_PODEM_AVALIAR = (
@@ -235,8 +234,7 @@ def listar_cargos_referencia_para_membro(membro: discord.Member) -> list[str]:
 
     1) Destinos das trilhas de promoção a partir do cargo mais alto
        (próximo passo formal de carreira) — primeiro.
-    2) Instrutor Resgate: trata como Instrutor para achar destinos.
-    3) Sempre completa com cargos da hierarquia acima (com meta), para
+    2) Sempre completa com cargos da hierarquia acima (com meta), para
        o select listar **todos** os degraus acima, não só o primeiro.
     """
     vistos: set[str] = set()
@@ -246,30 +244,6 @@ def listar_cargos_referencia_para_membro(membro: discord.Member) -> list[str]:
         if nome not in vistos:
             vistos.add(nome)
             lista.append(nome)
-
-    # Instrutor Resgate não entra em AREAS_MEDICAS; trata como Instrutor
-    # para achar trilhas de área → área / Supervisor.
-    if membro_tem_cargo_nome(membro, CARGO_INSTRUTOR_RESGATE):
-        try:
-            from src.config import TRILHAS_PROMOCAO
-        except ImportError:
-            TRILHAS_PROMOCAO = []
-        for trilha in TRILHAS_PROMOCAO:
-            origens = list(trilha.get("de_cargos") or [])
-            de_cargo = trilha.get("de_cargo") or ""
-            if de_cargo:
-                origens.append(de_cargo)
-            if (
-                CARGO_INSTRUTOR not in origens
-                and CARGO_INSTRUTOR_RESGATE not in origens
-            ):
-                continue
-            destino = trilha.get("para_cargo") or ""
-            if not destino or membro_tem_cargo_nome(membro, destino):
-                continue
-            if destino not in vistos:
-                vistos.add(destino)
-                lista.append(destino)
 
     # Sempre mescla hierarquia acima (próximo → mais alto)
     for nome in _cargos_acima_na_hierarquia(membro):

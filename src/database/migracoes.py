@@ -255,6 +255,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_lotes_moedas_discord_cotacao
     ON lotes_moedas (discord_id, cotacao)
 """,
     ),
+    Migracao(
+        numero=16,
+        descricao=(
+            "Blacklist pós-exoneração: prazo de afastamento, valor de "
+            "retorno e bloqueio de novo recrutamento enquanto ativa."
+        ),
+        comando_sql="""
+CREATE TABLE IF NOT EXISTS blacklists (
+    id SERIAL PRIMARY KEY,
+    discord_id BIGINT NOT NULL,
+    id_fivem VARCHAR(20),
+    punicao_id INTEGER,
+    cargo_referencia VARCHAR(80) NOT NULL,
+    cargo_referencia_id BIGINT,
+    dias_totais INTEGER NOT NULL DEFAULT 0,
+    valor_retorno INTEGER NOT NULL DEFAULT 0,
+    inicia_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    termina_em TIMESTAMPTZ NOT NULL,
+    ativa BOOLEAN NOT NULL DEFAULT TRUE,
+    paga BOOLEAN NOT NULL DEFAULT FALSE,
+    paga_em TIMESTAMPTZ,
+    paga_por BIGINT,
+    motivo_pagamento VARCHAR(500),
+    snapshot_json TEXT,
+    origem VARCHAR(30) NOT NULL DEFAULT 'SISTEMA',
+    criada_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_blacklists_discord_id ON blacklists (discord_id);
+CREATE INDEX IF NOT EXISTS ix_blacklists_ativa ON blacklists (ativa);
+""",
+    ),
 ]
 
 

@@ -1,7 +1,8 @@
 """Log de punição em Components V2 + tópico de provas + DM ao advertido.
 
 Canais:
-  - CANAL_ADVERTENCIAS → registro público da advertência + tópico de provas + DM
+  - CANAL_ADVERTENCIAS → aplicação e remoção de advertências (público)
+  - CANAL_EXONERACOES  → aplicação e revogação de exoneração (público)
   - LOG_PUNICOES       → log interno (aplicação e remoção)
   - CANAL_PAGAMENTO_ADV → comprovante de pagamento ao remover advertência
 """
@@ -347,6 +348,10 @@ async def registrar_pagamento_advertencia(
     motivo_remocao: str | None,
     bytes_comprovante: bytes,
     nome_arquivo: str,
+    moedas_desconto: int = 0,
+    saldo_moedas_apos: int | None = None,
+    valor_esperado: int | None = None,
+    rotulo_valor: str | None = None,
 ) -> discord.Message | None:
     """
     Publica o comprovante de pagamento da advertência em CANAL_PAGAMENTO_ADV.
@@ -398,14 +403,42 @@ async def registrar_pagamento_advertencia(
 
     nl = "\n"
     titulo = "# 💳 Pagamento de Advertência"
+    from src.utils.formatacao import formatar_reais
+
+    linha_valor = ""
+    if valor_esperado is not None and int(valor_esperado) > 0:
+        rotulo = (rotulo_valor or "Tabela de pagamento").strip()
+        linha_valor = (
+            nl
+            + f"> • `💵` **Valor da advertência:** "
+            f"`{formatar_reais(int(valor_esperado))}`"
+            + nl
+            + f"> • `📋` **Referência:** {rotulo}"
+        )
+
+    linha_moedas = ""
+    if int(moedas_desconto or 0) > 0:
+        saldo_txt = (
+            f" · saldo agora `{saldo_moedas_apos}`"
+            if saldo_moedas_apos is not None
+            else ""
+        )
+        linha_moedas = (
+            nl
+            + f"> • `🪙` **Desconto em moedas:** `{int(moedas_desconto)}`"
+            + saldo_txt
+        )
+
     corpo = (
         f"> • `👤` **Nome:** {alvo.mention} • **ID:** `{fivem_txt}`"
         + nl
         + f"> • `🎖️` **Cargo:** {cargo_membro_txt}"
         + nl
         + f"> • `⚠️` **Advertência:** {adv_txt}"
+        + linha_valor
         + nl
         + f"> • `📅` **Data do Pagamento:** `{data_pagamento}`"
+        + linha_moedas
         + nl
         + nl
         + f"> • `🛡️` **Responsável pela remoção:** {executor.mention}"
@@ -594,3 +627,87 @@ async def _criar_topico_provas(
             registrador.warning(f"⚠️ [punicoes] Fallback archived também falhou: {e2}")
 
     return thread
+
+
+async def registrar_remocao_publica(
+    *,
+    guild: discord.Guild,
+    alvo: discord.Member,
+    executor: discord.Member,
+    cargos_removidos: list[str],
+    motivo_remocao: str | None,
+    punicao_ids: list[int] | None = None,
+    id_fivem: str | None = None,
+    e_exoneracao: bool = False,
+) -> discord.Message | None:
+    """
+    Posta a remoção no canal público adequado.
+
+    - Advertência → CANAL_ADVERTENCIAS
+    - Exoneração (recurso/revogação) → CANAL_EXONERACOES
+
+    O motivo pode ser pagamento, revogação administrativa ou outro;
+    a revogação não se limita a erro de aplicação.
+    """
+    chave_canal = (
+        "CANAL_EXONERACOES" if e_exoneracao else "CANAL_ADVERTENCIAS"
+    )
+    canal = _canal(guild, chave_canal)
+    if canal is None:
+        registrador.warning(
+            "⚠️ [punicoes] Canal %s não encontrado para postar a remoção.",
+            chave_canal,
+        )
+        return None
+
+    lista = (
+        ", ".join(f"**{nome.strip()}**" for nome in cargos_removidos) or "—"
+    )
+    ids_txt = (
+        ", ".join(f"`#{indice}`" for indice in (punicao_ids or [])) or "—"
+    )
+    motivo_txt = (motivo_remocao or "Sem motivo informado")[:500]
+    fivem_txt = f"`{id_fivem}`" if id_fivem else "—"
+    motivo_upper = (motivo_remocao or "").upper()
+    e_pagamento = "PAGAMENTO" in motivo_upper
+    e_revogacao = "REVOGACAO" in motivo_upper
+
+    if e_exoneracao:
+        titulo = (
+            "# ↩️ Exoneração Revogada"
+            if e_revogacao or not e_pagamento
+            else "# 💳 Exoneração Removida (pagamento)"
+        )
+    elif e_pagamento:
+        titulo = "# 💳 Advertência Paga e Removida"
+    elif e_revogacao:
+        titulo = "# ↩️ Advertência Revogada"
+    else:
+        titulo = "# 🟢 Remoção de Advertência"
+    linhas = (
+        f"- **Membro:** {alvo.mention} (`{alvo.id}`)\n"
+        f"- **Responsável:** {executor.mention} (`{executor.id}`)\n"
+        f"- **ID FiveM:** {fivem_txt}\n"
+        f"- **Punições:** {lista}\n"
+        f"- **Registros:** {ids_txt}\n"
+        f"- **Motivo:** {motivo_txt}"
+    )
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(titulo),
+        discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+        discord.ui.Section(
+            linhas,
+            accessory=discord.ui.Thumbnail(alvo.display_avatar.url),
+        ),
+        accent_color=discord.Color.green(),
+    )
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(container)
+    try:
+        return await canal.send(view=view)
+    except discord.HTTPException as erro:
+        registrador.warning(
+            "⚠️ [punicoes] Falha ao postar remoção pública: %s", erro
+        )
+        return None
+

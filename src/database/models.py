@@ -454,6 +454,39 @@ class Punicao(Base):
     cargos_antes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+
+class Blacklist(Base):
+    """
+    Afastamento após exoneração: bloqueia novo recrutamento até o fim
+    do prazo (ou até pagamento + retorno conforme a regra vigente).
+    """
+
+    __tablename__ = "blacklists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    punicao_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cargo_referencia: Mapped[str] = mapped_column(String(80))
+    cargo_referencia_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dias_totais: Mapped[int] = mapped_column(Integer, default=0)
+    valor_retorno: Mapped[int] = mapped_column(Integer, default=0)
+    inicia_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
+    termina_em: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ativa: Mapped[bool] = mapped_column(Boolean, default=True)
+    paga: Mapped[bool] = mapped_column(Boolean, default=False)
+    paga_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    paga_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    motivo_pagamento: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    origem: Mapped[str] = mapped_column(String(30), default="SISTEMA")
+    criada_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=agora
+    )
+
+
 # ---------------------------------------------------------------------------
 # Snapshot de cargos (rejoin automático)
 # ---------------------------------------------------------------------------

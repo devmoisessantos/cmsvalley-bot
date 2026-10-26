@@ -829,9 +829,113 @@ class EscolherAdvertenciaRemoverView(LoggingViewMixin, discord.ui.LayoutView):
 
     async def _on_select_adv(self, interaction: discord.Interaction):
         punicao_id = int(interaction.data["values"][0])
-        await interaction.response.send_modal(
-            ModalMotivoRemocao(alvo=self.membro, punicao_id=punicao_id)
+        cargo_nome = ""
+        for punicao in self.ativas:
+            if int(punicao.id) == punicao_id:
+                cargo_nome = punicao.cargo_nome or ""
+                break
+        await interaction.response.edit_message(
+            view=EscolherTipoRemocaoView(
+                membro=self.membro,
+                punicao_id=punicao_id,
+                cargo_nome=cargo_nome,
+            )
         )
+
+
+class EscolherTipoRemocaoView(LoggingViewMixin, discord.ui.LayoutView):
+    """
+    Após escolher a advertência: pagar (com comprovante) ou
+    revogar sem pagamento.
+    """
+
+    def __init__(
+        self,
+        *,
+        membro: discord.Member,
+        punicao_id: int,
+        cargo_nome: str = "",
+    ):
+        super().__init__(timeout=300)
+        self.membro = membro
+        self.punicao_id = punicao_id
+        self.cargo_nome = cargo_nome or ""
+
+        from src.utils.formatacao import formatar_reais
+
+        valor, rotulo = valor_pagamento_advertencia(
+            self.cargo_nome,
+            membro=membro,
+        )
+        if valor > 0:
+            texto_valor = (
+                f"**Valor a pagar:** `{formatar_reais(valor)}`\n"
+                f"**Referência:** {rotulo}\n\n"
+            )
+        elif nivel_da_advertencia(self.cargo_nome) == 0:
+            texto_valor = (
+                "**ADV VERBAL** — sem valor formal de pagamento; "
+                "não usa desconto em moedas.\n\n"
+            )
+        else:
+            texto_valor = ""
+
+        linha = discord.ui.ActionRow()
+        botao_pagar = discord.ui.Button(
+            label="Pagar e remover",
+            style=discord.ButtonStyle.success,
+        )
+        botao_pagar.callback = self._ao_pagar
+        linha.add_item(botao_pagar)
+
+        botao_revogar = discord.ui.Button(
+            label="Revogar (sem pagamento)",
+            style=discord.ButtonStyle.secondary,
+        )
+        botao_revogar.callback = self._ao_revogar
+        linha.add_item(botao_revogar)
+
+        nome_punicao = (self.cargo_nome or "—").strip()
+        corpo = (
+            f"**Membro:** {membro.mention}\n"
+            f"**Registro:** `#{punicao_id}`\n"
+            f"**Punição:** **{nome_punicao}**\n\n"
+            f"{texto_valor}"
+            "**Pagar e remover** — comprovante in-game; até 10 "
+            "moedas de desconto em Adv formal (Verbal não usa "
+            "moedas).\n"
+            "**Revogar** — remove sem pagamento (decisão da "
+            "equipe; motivo obrigatório)."
+        )
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# 🧹 Como remover esta punição?"),
+                discord.ui.TextDisplay(corpo),
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+                linha,
+                accent_color=discord.Color.dark_grey(),
+            )
+        )
+
+    async def _ao_pagar(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            ModalMotivoRemocao(
+                alvo=self.membro,
+                punicao_id=self.punicao_id,
+                tipo_remocao="PAGAMENTO",
+            )
+        )
+
+    async def _ao_revogar(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            ModalMotivoRemocao(
+                alvo=self.membro,
+                punicao_id=self.punicao_id,
+                tipo_remocao="REVOGACAO",
+            )
+        )
+
 
 
 class ModalDiscordIdRemover(
@@ -887,26 +991,46 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
         placeholder="Ex: Pagamento via Ticket",
     )
 
-    def __init__(self, alvo: discord.Member, punicao_id: int | None = None):
+    def __init__(
+        self,
+        alvo: discord.Member,
+        punicao_id: int | None = None,
+        tipo_remocao: str = "PAGAMENTO",
+    ):
         super().__init__()
         self.alvo = alvo
         self.punicao_id = punicao_id
+        # PAGAMENTO = exige comprovante | REVOGACAO = sem pagamento
+        self.tipo_remocao = (tipo_remocao or "PAGAMENTO").upper()
         self.comprovante_arquivo = None
+        self.campo_moedas = None
 
-        # FileUpload (discord.py 2.6+) — comprovante obrigatório
-        if hasattr(discord.ui, "FileUpload") and hasattr(discord.ui, "Label"):
-            self.comprovante_arquivo = discord.ui.FileUpload(
-                min_values=1,
-                max_values=3,
-                required=True,
+        # FileUpload e desconto em moedas só no caminho de pagamento
+        if self.tipo_remocao == "PAGAMENTO":
+            from src.config import MOEDAS_DESCONTO_MAX_POR_PEDIDO
+
+            teto = int(MOEDAS_DESCONTO_MAX_POR_PEDIDO or 10)
+            self.campo_moedas = discord.ui.TextInput(
+                label=f"Moedas de desconto (0 a {teto})",
+                required=False,
+                max_length=2,
+                placeholder=f"0 — máx. {teto}. Verbal não aceita moedas.",
             )
-            self.add_item(
-                discord.ui.Label(
-                    text="📎 Comprovante de pagamento",
-                    description="Print/PDF do pagamento (obrigatório)",
-                    component=self.comprovante_arquivo,
+            self.add_item(self.campo_moedas)
+
+            if hasattr(discord.ui, "FileUpload") and hasattr(discord.ui, "Label"):
+                self.comprovante_arquivo = discord.ui.FileUpload(
+                    min_values=1,
+                    max_values=3,
+                    required=True,
                 )
-            )
+                self.add_item(
+                    discord.ui.Label(
+                        text="📎 Comprovante de pagamento",
+                        description="Print/PDF do restante in-game (obrigatório)",
+                        component=self.comprovante_arquivo,
+                    )
+                )
 
     async def _coletar_comprovantes(self) -> list[tuple[bytes, str]]:
         """Baixa todos os bytes dos anexos antes de qualquer publicação."""
@@ -951,27 +1075,46 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
         # Defer cedo (limite de 3s do Discord); bytes vêm em seguida, antes de publicar
         await interaction.response.defer(ephemeral=True)
 
+        e_pagamento = self.tipo_remocao == "PAGAMENTO"
+        texto_processando = (
+            "Baixando o comprovante e removendo a punição…"
+            if e_pagamento
+            else "Revogando a punição…"
+        )
         await responder_info(
             interaction,
             titulo="Processando remoção",
-            linhas=[
-                "Baixando o comprovante e removendo a punição…",
-            ],
+            linhas=[texto_processando],
             delay=None,
         )
 
-        # 1) Baixa todos os bytes ANTES de remover / publicar no canal
-        comprovantes = await self._coletar_comprovantes()
-        if not comprovantes:
+        motivo_bruto = self.motivo.value.strip() if self.motivo.value else ""
+        if not e_pagamento and not motivo_bruto:
             await responder_erro(
                 interaction,
-                titulo="Comprovante obrigatório",
+                titulo="Motivo obrigatório",
                 linhas=[
-                    "Anexe o print/PDF do pagamento para remover a advertência.",
+                    "Na revogação sem pagamento, informe o motivo.",
                 ],
                 delay=12,
             )
             return
+
+        # 1) Comprovante só no caminho de pagamento
+        comprovantes: list[tuple[bytes, str]] = []
+        if e_pagamento:
+            comprovantes = await self._coletar_comprovantes()
+            if not comprovantes:
+                await responder_erro(
+                    interaction,
+                    titulo="Comprovante obrigatório",
+                    linhas=[
+                        "Anexe o print/PDF do pagamento para remover "
+                        "a advertência.",
+                    ],
+                    delay=12,
+                )
+                return
 
         # Dados da punição antes de baixar (cargo, id, fivem)
         cargo_id_adv = 0
@@ -991,7 +1134,97 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
         if not id_fivem:
             id_fivem = await resolver_id_fivem(self.alvo.id)
 
-        motivo_txt = self.motivo.value.strip() if self.motivo.value else None
+        moedas_usadas = 0
+        saldo_apos_moedas: int | None = None
+        if e_pagamento:
+            texto_moedas = ""
+            if self.campo_moedas is not None and self.campo_moedas.value:
+                texto_moedas = self.campo_moedas.value.strip()
+            if texto_moedas:
+                if not texto_moedas.isdigit():
+                    await responder_erro(
+                        interaction,
+                        titulo="Moedas inválidas",
+                        linhas=["Informe um número inteiro de moedas."],
+                        delay=12,
+                    )
+                    return
+                moedas_usadas = int(texto_moedas)
+            from src.config import MOEDAS_DESCONTO_MAX_POR_PEDIDO
+
+            teto_moedas = int(MOEDAS_DESCONTO_MAX_POR_PEDIDO or 10)
+            if moedas_usadas < 0 or moedas_usadas > teto_moedas:
+                await responder_erro(
+                    interaction,
+                    titulo="Limite de moedas",
+                    linhas=[
+                        f"Use de 0 a {teto_moedas} moedas como desconto.",
+                    ],
+                    delay=12,
+                )
+                return
+
+            e_verbal = "verbal" in (cargo_nome_adv or "").lower()
+            if e_verbal and moedas_usadas > 0:
+                await responder_erro(
+                    interaction,
+                    titulo="Verbal sem desconto em moedas",
+                    linhas=[
+                        "ADV VERBAL não aceita desconto em moedas. "
+                        "Use 0 ou deixe em branco.",
+                    ],
+                    delay=12,
+                )
+                return
+
+            if moedas_usadas > 0:
+                from src.membros.membros_service import ajustar_saldo_moedas
+
+                try:
+                    _antes, saldo_apos_moedas = await ajustar_saldo_moedas(
+                        self.alvo.id,
+                        delta=-moedas_usadas,
+                        executor_id=interaction.user.id,
+                        referencia=(
+                            f"Desconto pagamento ADV "
+                            f"#{self.punicao_id or '—'}"
+                        ),
+                    )
+                except ValueError as erro_saldo:
+                    await responder_erro(
+                        interaction,
+                        titulo="Saldo insuficiente",
+                        linhas=[str(erro_saldo)],
+                        delay=12,
+                    )
+                    return
+                except Exception as erro_moedas:
+                    registrador.exception(
+                        "Falha ao debitar moedas na remoção de ADV de %s: %s",
+                        self.alvo.id,
+                        erro_moedas,
+                    )
+                    await responder_erro(
+                        interaction,
+                        titulo="Falha nas moedas",
+                        linhas=[
+                            "Não consegui debitar as moedas agora. "
+                            "Tente de novo.",
+                        ],
+                        delay=12,
+                    )
+                    return
+
+            if motivo_bruto:
+                motivo_txt = f"PAGAMENTO: {motivo_bruto}"
+            else:
+                motivo_txt = "PAGAMENTO"
+            if moedas_usadas > 0:
+                motivo_txt = (
+                    f"{motivo_txt} · desconto {moedas_usadas} moeda(s)"
+                )
+        else:
+            motivo_txt = f"REVOGACAO: {motivo_bruto}"
 
         ok, mensagem = await remover_punicao(
             guild=interaction.guild,
@@ -1010,6 +1243,27 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                 pass
 
         if not ok:
+            # Devolve moedas se já tinham sido debitadas e a remoção falhou.
+            if e_pagamento and moedas_usadas > 0:
+                try:
+                    from src.membros.membros_service import ajustar_saldo_moedas
+
+                    await ajustar_saldo_moedas(
+                        self.alvo.id,
+                        delta=moedas_usadas,
+                        executor_id=interaction.user.id,
+                        referencia=(
+                            f"Estorno desconto ADV "
+                            f"#{self.punicao_id or '—'} (remoção falhou)"
+                        ),
+                    )
+                except Exception as erro_estorno:
+                    registrador.exception(
+                        "Falha ao estornar moedas de %s após remoção "
+                        "falhar: %s",
+                        self.alvo.id,
+                        erro_estorno,
+                    )
             await responder_erro(
                 interaction,
                 titulo="Não foi possível remover",
@@ -1018,9 +1272,15 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
             )
             return
 
-        # 4) Publica comprovante(s) no canal de pagamento
+        # 4) Publica comprovante(s) só no caminho de pagamento
         mensagens_pagamento: list[discord.Message] = []
+        if not e_pagamento:
+            comprovantes = []
         for bytes_arquivo, nome_arquivo in comprovantes:
+            valor_esp, rotulo_esp = valor_pagamento_advertencia(
+                cargo_nome_adv,
+                membro=self.alvo,
+            )
             msg_pag = await registrar_pagamento_advertencia(
                 guild=interaction.guild,
                 alvo=self.alvo,
@@ -1032,20 +1292,40 @@ class ModalMotivoRemocao(LoggingModalMixin, discord.ui.Modal, title="Remover pun
                 motivo_remocao=motivo_txt,
                 bytes_comprovante=bytes_arquivo,
                 nome_arquivo=nome_arquivo,
+                moedas_desconto=moedas_usadas,
+                saldo_moedas_apos=saldo_apos_moedas,
+                valor_esperado=valor_esp if valor_esp > 0 else None,
+                rotulo_valor=rotulo_esp,
             )
             if msg_pag is not None:
                 mensagens_pagamento.append(msg_pag)
 
         linhas_sucesso = [mensagem]
-        if mensagens_pagamento:
-            linhas_sucesso.append(
-                f"Comprovante registrado no canal de pagamento "
-                f"({len(mensagens_pagamento)} arquivo(s))."
-            )
+        if e_pagamento:
+            if moedas_usadas > 0:
+                linhas_sucesso.append(
+                    f"Desconto: **{moedas_usadas}** moeda(s) debitadas "
+                    f"do membro"
+                    + (
+                        f" (saldo agora: **{saldo_apos_moedas}**)."
+                        if saldo_apos_moedas is not None
+                        else "."
+                    )
+                )
+            if mensagens_pagamento:
+                linhas_sucesso.append(
+                    f"Comprovante registrado no canal de pagamento "
+                    f"({len(mensagens_pagamento)} arquivo(s))."
+                )
+            else:
+                linhas_sucesso.append(
+                    "⚠️ Punição removida, mas não consegui publicar o "
+                    "comprovante no canal de pagamento. Verifique "
+                    "`CANAL_PAGAMENTO_ADV`."
+                )
         else:
             linhas_sucesso.append(
-                "⚠️ Punição removida, mas não consegui publicar o comprovante "
-                "no canal de pagamento. Verifique `CANAL_PAGAMENTO_ADV`."
+                "Revogação registrada (sem pagamento)."
             )
 
         await responder_sucesso(

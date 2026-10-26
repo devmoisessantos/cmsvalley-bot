@@ -183,7 +183,6 @@ CARGOS = {
     "🥼・Doutor": 1486368765330591754,
     "🩺・Psicólogo": 1486368764059451503,
     "✈️・Recrutador": 1486368762369282179,
-    "🚑・Instrutor Resgate": 1506834191126630521,
     "🥼・Instrutor": 1486368762872594534,
     "👑・Responsável Doutor・🥼": 1486368760536240340,
     "👑・Responsável Psicólogo・🧠": 1486368759227613235,
@@ -227,7 +226,6 @@ CARGOS_HIERARQUIA = [
     "👑・VICE DIRETOR",
     "👑・SUPERVISOR",
     "🥼・Instrutor",
-    "🚑・Instrutor Resgate",
     "✈️・Recrutador",
     "🩺・Psicólogo",
     "🥼・Doutor",
@@ -244,7 +242,6 @@ CARGO_DOUTOR = "🥼・Doutor"
 CARGO_PSICOLOGO = "🩺・Psicólogo"
 CARGO_RECRUTADOR = "✈️・Recrutador"
 CARGO_INSTRUTOR = "🥼・Instrutor"
-CARGO_INSTRUTOR_RESGATE = "🚑・Instrutor Resgate"
 CARGO_SUPERVISOR = "👑・SUPERVISOR"
 CARGO_VICE_DIRETOR = "👑・VICE DIRETOR"
 CARGO_DIRETOR = "👑・DIRETOR"
@@ -390,6 +387,39 @@ CARGOS_PUNICOES = {
     "🚫┇Exonerado": 1486368788956971139,
 }
 
+# Blacklist após exoneração (dias de afastamento + valor para retorno pago).
+# Cargo de referência = mais alto do snapshot na hierarquia médica/diretoria.
+BLACKLIST_POR_CARGO: dict[str, dict] = {
+    "🔰・Enfermeiro (a)": {"dias": 7, "valor": 2_000_000},
+    "🚑・Paramédico": {"dias": 14, "valor": 3_000_000},
+    "🥼・Doutor": {"dias": 21, "valor": 5_000_000},
+    "🩺・Psicólogo": {"dias": 28, "valor": 5_000_000},
+    "✈️・Recrutador": {"dias": 35, "valor": 5_000_000},
+    "🥼・Instrutor": {"dias": 42, "valor": 5_000_000},
+    "👑・SUPERVISOR": {"dias": 49, "valor": 8_000_000},
+    "👑・VICE DIRETOR": {"dias": 56, "valor": 8_000_000},
+    "👑・DIRETOR": {"dias": 63, "valor": 8_000_000},
+    "🔍・COORDENADOR": {"dias": 49, "valor": 8_000_000},
+    "👑・Responsável Doutor・🥼": {"dias": 49, "valor": 8_000_000},
+    "👑・Responsável Psicólogo・🧠": {"dias": 49, "valor": 8_000_000},
+    "👑・Responsável Instrutor・🎓": {"dias": 49, "valor": 8_000_000},
+    "👑・Responsável Recrutamento・🎯": {"dias": 49, "valor": 8_000_000},
+    "👑 |  VICE DIRETOR GERAL": {"dias": 56, "valor": 10_000_000},
+    "👑 |  DIRETOR GERAL": {"dias": 63, "valor": 10_000_000},
+    "👑 | RESPONSÁVEL GERAL": {"dias": 70, "valor": 10_000_000},
+}
+
+
+# Valores in-game para quitar advertência formal (pagamento).
+# Nível 1 = Adv 01 (média), nível 2 = Adv 02 (grave).
+# Nível 3 (Adv 03 / caminho de exo) usa o valor da BLACKLIST_POR_CARGO
+# do cargo mais alto do membro.
+VALOR_PAGAMENTO_ADVERTENCIA: dict[int, int] = {
+    1: 500_000,
+    2: 1_000_000,
+}
+
+
 # Hierarquia: define quem pode conceder cargos a algum usuário.
 HIERARQUIA_CONCESSAO = {
     "Visitantes": None,
@@ -402,7 +432,6 @@ HIERARQUIA_CONCESSAO = {
     "🥼・Doutor": "👑・DIRETOR",
     "🩺・Psicólogo": "👑・DIRETOR",
     "✈️・Recrutador": "👑・DIRETOR",
-    "🚑・Instrutor Resgate": "👑・DIRETOR",
     "🥼・Instrutor": "👑・DIRETOR",
     "👑・Responsável Doutor・🥼": "👑 |  VICE DIRETOR GERAL",
     "👑・Responsável Psicólogo・🧠": "👑 |  VICE DIRETOR GERAL",
@@ -775,7 +804,6 @@ PREFIXOS_NICKNAME = {
     "🩺・Psicólogo": "[ PSI ]",
     "✈️・Recrutador": "[ REC ]",
     "🥼・Instrutor": "[ INS ]",
-    "🚑・Instrutor Resgate": "[ INS · R ]",
     "👑・VICE DIRETOR": "[ V・DIR ]",
     "👑・DIRETOR": "[ DIR ]",
     "🔍・COORDENADOR": "[ COR ]",
@@ -815,7 +843,6 @@ ESCOPOS_GERENCIAMENTO = {
             "👑・VICE DIRETOR",
             "👑・SUPERVISOR",
             "🥼・Instrutor",
-            "🚑・Instrutor Resgate",
             "✈️・Recrutador",
             "🩺・Psicólogo",
             "🥼・Doutor",
@@ -849,7 +876,6 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                "🚑・Instrutor Resgate",
                 "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
@@ -860,7 +886,6 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                "🚑・Instrutor Resgate",
                 "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
@@ -870,7 +895,6 @@ ESCOPOS_GERENCIAMENTO = {
             "👑・VICE DIRETOR": [
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                "🚑・Instrutor Resgate",
                 "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
@@ -879,7 +903,6 @@ ESCOPOS_GERENCIAMENTO = {
             ],
             "👑・SUPERVISOR": [
                 "🥼・Instrutor",
-                "🚑・Instrutor Resgate",
                 "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
@@ -914,7 +937,6 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                "🚑・Instrutor Resgate",
                 "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
@@ -939,7 +961,6 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                "🚑・Instrutor Resgate",
                 "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
@@ -963,7 +984,6 @@ ESCOPOS_GERENCIAMENTO = {
                 "👑・VICE DIRETOR",
                 "👑・SUPERVISOR",
                 "🥼・Instrutor",
-                "🚑・Instrutor Resgate",
                 "✈️・Recrutador",
                 "🩺・Psicólogo",
                 "🥼・Doutor",
@@ -1009,7 +1029,6 @@ VALOR_MOEDA_POR_CARGO: dict[str, int] = {
     CARGO_PSICOLOGO: 25_000,
     CARGO_RECRUTADOR: 30_000,
     CARGO_INSTRUTOR: 30_000,
-    CARGO_INSTRUTOR_RESGATE: 30_000,
     CARGO_SUPERVISOR: 35_000,
     CARGO_VICE_DIRETOR: 40_000,
     CARGO_DIRETOR: 45_000,
@@ -1446,15 +1465,6 @@ METAS_POR_CARGO = {
         "exige_avaliacao_hp": False,
     },
     CARGO_INSTRUTOR: {
-        "segundos_minimos_plantao": 18 * 3600,
-        "meta_laudos": 0,
-        "meta_recrutamentos": 0,
-        "meta_chamadas": 0,
-        "meta_cursos_aplicados": 10,
-        "meta_tickets": 0,
-        "exige_avaliacao_hp": False,
-    },
-    CARGO_INSTRUTOR_RESGATE: {
         "segundos_minimos_plantao": 18 * 3600,
         "meta_laudos": 0,
         "meta_recrutamentos": 0,

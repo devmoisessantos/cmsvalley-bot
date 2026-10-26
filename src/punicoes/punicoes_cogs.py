@@ -32,7 +32,6 @@ from src.punicoes.punicoes_classes import (
 )
 from src.punicoes.punicoes_helpers import (
     e_staff_punicao,
-    id_cargo_exonerado,
     mensagem_sem_permissao,
 )
 from src.punicoes.punicoes_panel import (
@@ -210,37 +209,6 @@ class PunicoesCog(commands.Cog):
         await responder_view(
             interacao,
             FluxoRemoverPunicaoView(),
-            ephemeral=True,
-        )
-
-    @app_commands.command(
-        name="exo",
-        description="Abre o fluxo efêmero para exonerar um membro",
-    )
-    async def comando_exo(self, interacao: discord.Interaction):
-        """Abre o fluxo de aplicação com o cargo Exonerado pré-selecionado."""
-        if not await self._garantir_staff(interacao):
-            return
-
-        limpar_sessao(interacao.user.id)
-        sessao = obter_sessao(interacao.user.id)
-
-        id_exonerado = id_cargo_exonerado()
-        if id_exonerado is not None:
-            nome_exonerado = next(
-                (
-                    nome
-                    for nome, cargo_id in CARGOS_PUNICOES.items()
-                    if cargo_id == id_exonerado
-                ),
-                "🚫┇Exonerado",
-            )
-            sessao.cargo_id = id_exonerado
-            sessao.cargo_nome = nome_exonerado
-
-        await responder_view(
-            interacao,
-            FluxoAplicarAdvertenciaView(interacao.user.id),
             ephemeral=True,
         )
 

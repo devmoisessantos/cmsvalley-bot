@@ -280,6 +280,20 @@ async def validar_e_iniciar_recrutamento(
         )
         return
 
+    from src.punicoes.punicoes_service import membro_em_blacklist_ativa
+
+    if await membro_em_blacklist_ativa(candidato.id):
+        await responder_erro(
+            interaction,
+            titulo="Membro em blacklist",
+            linhas=[
+                "Este membro está em período de blacklist após "
+                "exoneração e não pode iniciar um novo recrutamento "
+                "enquanto o prazo estiver ativo.",
+            ],
+        )
+        return
+
     if cargo_hp in candidato.roles or cargo_aprovado in candidato.roles:
         await responder_erro(
             interaction,
