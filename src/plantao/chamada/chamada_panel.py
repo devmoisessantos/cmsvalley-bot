@@ -1093,6 +1093,14 @@ def _adicionar_medico_manual(
         id_fivem_lido=id_lido,
     )
     sessao.reconhecidos.append(novo)
+    # Quem entrou no /ems (manual ou resgate) não pode mais carregar a
+    # pendência de "toggle ligado, ausente no /ems".
+    sessao.faltas_pendentes_ems.discard(discord_id)
+    sessao.toggle_ligado_mas_nao_no_ems = [
+        medico
+        for medico in sessao.toggle_ligado_mas_nao_no_ems
+        if medico.discord_id != discord_id
+    ]
     _sincronizar_nao_reconhecidos_com_ems_original(sessao)
     return True, ""
 
@@ -1398,7 +1406,8 @@ class ModalRemoverDesconhecido(discord.ui.Modal, title="Remover não identificad
             nome_da_entrada = str(entrada.get("nome_ems") or "").strip()
             bate_id = id_da_entrada and id_da_entrada == valor_digitado
             bate_nome = (
-                nome_da_entrada and nome_da_entrada.lower() == valor_em_minusculas
+                nome_da_entrada
+                and nome_da_entrada.lower() == valor_em_minusculas
             )
             if bate_id or bate_nome:
                 removido = True
@@ -1413,7 +1422,8 @@ class ModalRemoverDesconhecido(discord.ui.Modal, title="Remover não identificad
             nome_da_entrada = str(entrada.get("nome_ems") or "").strip()
             bate_id = id_da_entrada and id_da_entrada == valor_digitado
             bate_nome = (
-                nome_da_entrada and nome_da_entrada.lower() == valor_em_minusculas
+                nome_da_entrada
+                and nome_da_entrada.lower() == valor_em_minusculas
             )
             if bate_id or bate_nome:
                 removido = True
@@ -1590,13 +1600,13 @@ def _construir_etapa_2(
 
     row_modais = discord.ui.ActionRow()
     botao_discord_id = discord.ui.Button(
-        label="🆔 Buscar por Discord ID", style=discord.ButtonStyle.secondary
+        label="🆔 Discord ID", style=discord.ButtonStyle.secondary
     )
     botao_discord_id.callback = _ao_abrir_modal_discord_id_etapa_2
     row_modais.add_item(botao_discord_id)
 
     botao_fivem = discord.ui.Button(
-        label="🎮 Buscar por ID FiveM", style=discord.ButtonStyle.secondary
+        label="🎮 ID FiveM", style=discord.ButtonStyle.secondary
     )
     botao_fivem.callback = _ao_abrir_modal_id_fivem_etapa_2
     row_modais.add_item(botao_fivem)
@@ -1711,10 +1721,29 @@ def _construir_etapa_3(
 
     # Quem foi reconhecido no /ems não pode ficar como "ausente no /ems".
     # Limpa a pendência automática — a etapa 3 decide falta só pelo select.
-    for medico_da_lista in sessao.presentes_no_ems_toggle_ligado:
-        sessao.faltas_pendentes_ems.discard(medico_da_lista.discord_id)
-    for medico_bypass in sessao.bypass_presenca:
-        sessao.faltas_pendentes_ems.discard(medico_bypass.discord_id)
+    ids_no_ems_agora = {
+        medico_da_lista.discord_id
+        for medico_da_lista in sessao.presentes_no_ems_toggle_ligado
+        if medico_da_lista.discord_id is not None
+    }
+    ids_no_ems_agora.update(
+        medico_bypass.discord_id
+        for medico_bypass in sessao.bypass_presenca
+        if medico_bypass.discord_id is not None
+    )
+    # Também cobre reconhecidos que ainda não entraram no select
+    ids_no_ems_agora.update(
+        medico_reconhecido.discord_id
+        for medico_reconhecido in sessao.reconhecidos
+        if medico_reconhecido.discord_id is not None
+    )
+    for discord_id_no_ems in ids_no_ems_agora:
+        sessao.faltas_pendentes_ems.discard(discord_id_no_ems)
+    sessao.toggle_ligado_mas_nao_no_ems = [
+        medico
+        for medico in sessao.toggle_ligado_mas_nao_no_ems
+        if medico.discord_id not in ids_no_ems_agora
+    ]
 
     linha_bypass = (
         f"`🛡️` **{len(sessao.bypass_presenca)}** já contam como presentes "
@@ -2013,6 +2042,21 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
     for discord_id_presente in ids_com_presenca:
         sessao.faltas_pendentes_ems.discard(discord_id_presente)
 
+    # Quem está (ou esteve) identificado no /ems nunca leva o motivo
+    # "ausente no /ems". A falta dele, se houver, é "não respondeu".
+    ids_identificados_no_ems = {
+        medico.discord_id
+        for medico in sessao.reconhecidos
+        if medico.discord_id is not None
+    }
+    ids_identificados_no_ems.update(
+        medico.discord_id
+        for medico in sessao.presentes_no_ems_toggle_ligado
+        if medico.discord_id is not None
+    )
+    for discord_id_identificado in ids_identificados_no_ems:
+        sessao.faltas_pendentes_ems.discard(discord_id_identificado)
+
     # Une faltas do select + quem continua pendente por toggle/EMS
     ids_para_falta: set[int] = set(sessao.faltantes_ids) | set(
         sessao.faltas_pendentes_ems
@@ -2067,13 +2111,40 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
         guild, sessao, presentes, faltantes
     )
 
-    # Provas compartilhadas por todas as advertências desta chamada
+    # Provas compartilhadas por todas as advertências desta chamada.
+    # Lista em texto + print em arquivo — o tópico precisa receber os dois.
     lista_ems_provas = list(sessao.entradas_ems_originais or [])
     arquivos_provas_print: list[tuple[bytes, str]] = []
+
+    # Arquivo de texto com a lista do /ems (prova legível mesmo sem o print)
+    linhas_lista_ems = [
+        f"{entrada.get('id_fivem') or '—'} — {entrada.get('nome_ems') or '—'}"
+        for entrada in lista_ems_provas
+    ]
+    texto_lista_ems = (
+        f"Lista extraída do /ems — chamada #{sessao.chamada_id}\n"
+        f"Total: {len(linhas_lista_ems)}\n\n"
+        + ("\n".join(linhas_lista_ems) if linhas_lista_ems else "(vazia)")
+    )
+    arquivos_provas_print.append(
+        (texto_lista_ems.encode("utf-8"), "lista_ems_chamada.txt")
+    )
+
     try:
         bytes_print, nome_print = await _resolver_bytes_do_print(sessao)
         if bytes_print:
-            arquivos_provas_print.append((bytes_print, nome_print))
+            # Cópia nova: cada advertência reenvia o arquivo sem esvaziar o buffer
+            arquivos_provas_print.append((bytes(bytes_print), nome_print))
+            registrador.info(
+                "[chamada] print pronto para provas (%s bytes, %s)",
+                len(bytes_print),
+                nome_print,
+            )
+        else:
+            registrador.warning(
+                "[chamada] print do /ems sem bytes — tópico de provas "
+                "vai só com lista e texto"
+            )
     except Exception as erro_ao_ler_print:
         registrador.warning(
             "[chamada] não consegui anexar o print nas provas: %s",
@@ -2086,7 +2157,15 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             continue
         if _tem_cargo_bypass(membro.id, guild):
             continue
-        if discord_id_falta in sessao.faltas_pendentes_ems:
+        # Prioridade do motivo:
+        # 1) Estava no /ems e foi desmarcado na etapa 3 → não respondeu
+        # 2) Só plantão ligado e fora do print → ausente no /ems
+        if (
+            discord_id_falta in sessao.faltantes_ids
+            or discord_id_falta in ids_identificados_no_ems
+        ):
+            motivo_falta = "Não respondeu à chamada (call/rádio)"
+        elif discord_id_falta in sessao.faltas_pendentes_ems:
             motivo_falta = "Toggle ligado no Discord, ausente no /ems"
         else:
             motivo_falta = "Não respondeu à chamada (call/rádio)"
@@ -2096,7 +2175,7 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             motivo_falta,
             guild,
             lista_ems=lista_ems_provas,
-            arquivos_provas=arquivos_provas_print or None,
+            arquivos_provas=list(arquivos_provas_print) or None,
             link_registro_chamada=link_registro_chamada,
         )
         await desligar_servico(membro)

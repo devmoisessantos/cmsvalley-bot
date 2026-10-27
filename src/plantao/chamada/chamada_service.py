@@ -562,6 +562,23 @@ async def _aplicar_punicao_acumulativa(
         f"{linha_origem}"
     )
 
+    # Cópia dos arquivos: o logger consome BytesIO; cada punição precisa
+    # de bytes intactos (várias faltas na mesma chamada).
+    arquivos_para_esta_punicao: list[tuple[bytes, str]] | None = None
+    if arquivos_provas:
+        arquivos_para_esta_punicao = [
+            (bytes(dados), nome) for dados, nome in arquivos_provas if dados
+        ]
+
+    registrador.info(
+        "[chamada] aplicando punição em %s com provas: texto=%s chars, "
+        "arquivos=%s, link=%s",
+        discord_id,
+        len(texto_provas_da_chamada),
+        len(arquivos_para_esta_punicao or []),
+        bool(link_registro_chamada),
+    )
+
     ok, mensagem, punicao = await aplicar_punicao(
         guild=guild,
         alvo=membro,
@@ -571,7 +588,7 @@ async def _aplicar_punicao_acumulativa(
         cargo_id=cargo_id,
         motivo=motivo_completo,
         links_texto=texto_provas_da_chamada,
-        arquivos_provas=arquivos_provas,
+        arquivos_provas=arquivos_para_esta_punicao,
         origem=ORIGEM_PUNICAO_CHAMADA,
         expira_em=(
             datetime.now(timezone.utc) + timedelta(days=DIAS_EXPIRACAO_VERBAL)
