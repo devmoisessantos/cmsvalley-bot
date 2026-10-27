@@ -42,6 +42,7 @@ from src.database.models import (
     Usuario,
 )
 from src.plantao.chamada.chamada_service import (
+    MOTIVO_CANCEL_ABANDONO,
     MOTIVO_CANCEL_ERRO,
     MOTIVO_CANCEL_TIMEOUT_INTERACAO,
     MOTIVO_CANCEL_TIMEOUT_PRINT,
@@ -1014,6 +1015,12 @@ def _construir_etapa_1(
     componentes.append(row_botoes)
 
     row_continuar = discord.ui.ActionRow()
+    botao_cancelar = discord.ui.Button(
+        label="🗑 Cancelar", style=discord.ButtonStyle.danger
+    )
+    botao_cancelar.callback = _ao_cancelar_chamada_manual
+    row_continuar.add_item(botao_cancelar)
+
     botao_continuar = discord.ui.Button(
         label="➡️ Continuar", style=discord.ButtonStyle.primary
     )
@@ -1348,6 +1355,154 @@ async def _ao_abrir_modal_remover(interaction: discord.Interaction):
     await interaction.response.send_modal(ModalRemoverMedico())
 
 
+class ModalRemoverDesconhecido(discord.ui.Modal, title="Remover não identificado"):
+    """
+    Tira da lista da Etapa 2 um ID/nome do OCR que entrou errado.
+
+    Também remove da cópia original do print, senão a sincronização
+    devolve o mesmo item na próxima renderização.
+    """
+
+    identificador = discord.ui.TextInput(
+        label="ID FiveM ou nome como no print",
+        placeholder="Ex: 54623 ou nome lido no /ems",
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        sessao = obter_sessao()
+        if sessao is None:
+            await responder_aviso(
+                interaction,
+                titulo="Sessão expirada",
+                linhas=["Sessão expirada."],
+            )
+            return
+
+        valor_digitado = self.identificador.value.strip()
+        if not valor_digitado:
+            await responder_erro(
+                interaction,
+                titulo="Campo vazio",
+                linhas=["Informe o ID FiveM ou o nome exatamente como no print."],
+            )
+            return
+
+        valor_em_minusculas = valor_digitado.lower()
+        removido = False
+
+        # 1) Tira de nao_reconhecidos (lista da Etapa 2)
+        restantes_nao_reconhecidos = []
+        for entrada in sessao.nao_reconhecidos:
+            id_da_entrada = str(entrada.get("id_fivem") or "").strip()
+            nome_da_entrada = str(entrada.get("nome_ems") or "").strip()
+            bate_id = id_da_entrada and id_da_entrada == valor_digitado
+            bate_nome = (
+                nome_da_entrada and nome_da_entrada.lower() == valor_em_minusculas
+            )
+            if bate_id or bate_nome:
+                removido = True
+                continue
+            restantes_nao_reconhecidos.append(entrada)
+        sessao.nao_reconhecidos = restantes_nao_reconhecidos
+
+        # 2) Tira também do print original, senão a sincronização traz de volta
+        restantes_originais = []
+        for entrada in sessao.entradas_ems_originais:
+            id_da_entrada = str(entrada.get("id_fivem") or "").strip()
+            nome_da_entrada = str(entrada.get("nome_ems") or "").strip()
+            bate_id = id_da_entrada and id_da_entrada == valor_digitado
+            bate_nome = (
+                nome_da_entrada and nome_da_entrada.lower() == valor_em_minusculas
+            )
+            if bate_id or bate_nome:
+                removido = True
+                continue
+            restantes_originais.append(entrada)
+        sessao.entradas_ems_originais = restantes_originais
+
+        if not removido:
+            await responder_erro(
+                interaction,
+                titulo="Não encontrado",
+                linhas=[
+                    "Ninguém na lista de não identificados bate com esse valor.",
+                    "Use o ID FiveM ou o nome exatamente como apareceu no print.",
+                ],
+            )
+            return
+
+        # Total do /ems acompanha a lista original após remoção manual
+        sessao.total_medicos_ems = len(sessao.entradas_ems_originais)
+
+        await interaction.response.defer(ephemeral=True)
+        await editar_mensagem_original(
+            interaction,
+            view=_construir_etapa_2(sessao, interaction.guild),
+        )
+
+
+async def _ao_abrir_modal_remover_desconhecido(interaction: discord.Interaction):
+    await interaction.response.send_modal(ModalRemoverDesconhecido())
+
+
+async def _ao_cancelar_chamada_manual(interaction: discord.Interaction):
+    """
+    Cancela a chamada em andamento a pedido do doutor.
+
+    Libera o lock sem cooldown de 2h, para outro médico poder iniciar
+    na hora. A sessão em memória some junto.
+    """
+    sessao = obter_sessao()
+    if sessao is None:
+        await responder_aviso(
+            interaction,
+            titulo="Chamada já encerrada",
+            linhas=["Não há chamada ativa para cancelar."],
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await cancelar_chamada(motivo=MOTIVO_CANCEL_ABANDONO)
+    except Exception as erro_ao_cancelar:
+        registrador.exception(
+            "[chamada] falha ao cancelar chamada manualmente: %s",
+            erro_ao_cancelar,
+        )
+        await responder_erro(
+            interaction,
+            titulo="Não consegui cancelar",
+            linhas=[
+                "Tente de novo em instantes. Se o lock continuar preso,",
+                "aguarde o tempo máximo da sessão expirar sozinho.",
+            ],
+        )
+        return
+
+    definir_sessao(None)
+    try:
+        await editar_mensagem_original(
+            interaction,
+            view=_construir_view_simples(
+                "🗑 Chamada cancelada",
+                "O lock foi liberado. Outro médico já pode iniciar uma chamada.",
+                discord.Color.dark_grey(),
+            ),
+        )
+    except discord.HTTPException as erro_ao_editar:
+        ignorar_falha_cosmetica(
+            erro_ao_editar,
+            o_que_falhou="mostrar o card de chamada cancelada",
+        )
+
+    await responder_info(
+        interaction,
+        titulo="Chamada cancelada",
+        linhas=["Lock liberado. Outro doutor pode realizar a chamada agora."],
+    )
+
+
 async def _ao_abrir_modal_discord_id(interaction: discord.Interaction):
     await interaction.response.send_modal(ModalBuscarPorDiscordId())
 
@@ -1435,16 +1590,22 @@ def _construir_etapa_2(
 
     row_modais = discord.ui.ActionRow()
     botao_discord_id = discord.ui.Button(
-        label="🆔 Discord ID", style=discord.ButtonStyle.secondary
+        label="🆔 Buscar por Discord ID", style=discord.ButtonStyle.secondary
     )
     botao_discord_id.callback = _ao_abrir_modal_discord_id_etapa_2
     row_modais.add_item(botao_discord_id)
 
     botao_fivem = discord.ui.Button(
-        label="🎮 ID FiveM", style=discord.ButtonStyle.secondary
+        label="🎮 Buscar por ID FiveM", style=discord.ButtonStyle.secondary
     )
     botao_fivem.callback = _ao_abrir_modal_id_fivem_etapa_2
     row_modais.add_item(botao_fivem)
+
+    botao_remover_desconhecido = discord.ui.Button(
+        label="❌ Remover", style=discord.ButtonStyle.danger
+    )
+    botao_remover_desconhecido.callback = _ao_abrir_modal_remover_desconhecido
+    row_modais.add_item(botao_remover_desconhecido)
     componentes.append(row_modais)
 
     row = discord.ui.ActionRow()
@@ -1859,6 +2020,66 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
     ids_para_falta.discard(sessao.doutor_id)
     ids_para_falta -= ids_com_presenca
 
+    # Limpa Norte de quem já está em presentes (FID / nome) — antes do card
+    ids_presentes, nomes_presentes = _coletar_ids_e_nomes_reconhecidos(sessao)
+    for medico in presentes:
+        if medico.id_fivem:
+            ids_presentes.add(str(medico.id_fivem).strip())
+        if medico.nome_ems:
+            nomes_presentes.append(medico.nome_ems)
+        if medico.nome_discord:
+            nomes_presentes.append(medico.nome_discord)
+    sessao.medicos_norte = [
+        entrada
+        for entrada in sessao.medicos_norte
+        if not nomes_ou_ids_batem_com_reconhecido(
+            str(entrada.get("id_fivem") or "").strip(),
+            entrada.get("nome_ems") or "",
+            ids_presentes,
+            nomes_presentes,
+        )
+    ]
+
+    # Atualiza totais no banco e publica o card ANTES das advertências,
+    # para o tópico de provas poder apontar o link do registro.
+    ausentes_ems_confirmados = [
+        medico
+        for medico in sessao.toggle_ligado_mas_nao_no_ems
+        if medico.discord_id in sessao.faltas_pendentes_ems
+        and medico.discord_id not in ids_com_presenca
+        and medico.discord_id != sessao.doutor_id
+    ]
+    async with async_session() as session:
+        resultado_chamada = await session.execute(
+            select(Chamada).where(Chamada.id == sessao.chamada_id)
+        )
+        registro_chamada = resultado_chamada.scalar_one_or_none()
+        if registro_chamada:
+            registro_chamada.total_medicos_ems = sessao.total_medicos_ems
+            registro_chamada.total_toggle_ligado = sessao.total_toggle_ligado
+            registro_chamada.total_presentes = len(presentes)
+            registro_chamada.total_ausentes = len(faltantes) + len(
+                ausentes_ems_confirmados
+            )
+            await session.commit()
+
+    link_registro_chamada = await _enviar_log_chamada_canal(
+        guild, sessao, presentes, faltantes
+    )
+
+    # Provas compartilhadas por todas as advertências desta chamada
+    lista_ems_provas = list(sessao.entradas_ems_originais or [])
+    arquivos_provas_print: list[tuple[bytes, str]] = []
+    try:
+        bytes_print, nome_print = await _resolver_bytes_do_print(sessao)
+        if bytes_print:
+            arquivos_provas_print.append((bytes_print, nome_print))
+    except Exception as erro_ao_ler_print:
+        registrador.warning(
+            "[chamada] não consegui anexar o print nas provas: %s",
+            erro_ao_ler_print,
+        )
+
     for discord_id_falta in ids_para_falta:
         membro = guild.get_member(discord_id_falta) if guild else None
         if membro is None:
@@ -1874,6 +2095,9 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             sessao.chamada_id,
             motivo_falta,
             guild,
+            lista_ems=lista_ems_provas,
+            arquivos_provas=arquivos_provas_print or None,
+            link_registro_chamada=link_registro_chamada,
         )
         await desligar_servico(membro)
         try:
@@ -1930,49 +2154,6 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             await creditar_lotes(session, sessao.doutor_id, 1, cotacao_doutor)
             estado_doutor.saldo_moedas = int(estado_doutor.saldo_moedas or 0) + 1
             await session.commit()
-
-        resultado_chamada = await session.execute(
-            select(Chamada).where(Chamada.id == sessao.chamada_id)
-        )
-        registro_chamada = resultado_chamada.scalar_one_or_none()
-        # Ausentes reais: select + pendências EMS que sobraram após presença
-        ausentes_ems_confirmados = [
-            medico
-            for medico in sessao.toggle_ligado_mas_nao_no_ems
-            if medico.discord_id in sessao.faltas_pendentes_ems
-            and medico.discord_id not in ids_com_presenca
-            and medico.discord_id != sessao.doutor_id
-        ]
-        if registro_chamada:
-            registro_chamada.total_medicos_ems = sessao.total_medicos_ems
-            registro_chamada.total_toggle_ligado = sessao.total_toggle_ligado
-            registro_chamada.total_presentes = len(presentes)
-            registro_chamada.total_ausentes = len(faltantes) + len(
-                ausentes_ems_confirmados
-            )
-            await session.commit()
-
-    # Limpa Norte de quem já está em presentes (FID / nome)
-    ids_presentes, nomes_presentes = _coletar_ids_e_nomes_reconhecidos(sessao)
-    for medico in presentes:
-        if medico.id_fivem:
-            ids_presentes.add(str(medico.id_fivem).strip())
-        if medico.nome_ems:
-            nomes_presentes.append(medico.nome_ems)
-        if medico.nome_discord:
-            nomes_presentes.append(medico.nome_discord)
-    sessao.medicos_norte = [
-        entrada
-        for entrada in sessao.medicos_norte
-        if not nomes_ou_ids_batem_com_reconhecido(
-            str(entrada.get("id_fivem") or "").strip(),
-            entrada.get("nome_ems") or "",
-            ids_presentes,
-            nomes_presentes,
-        )
-    ]
-
-    await _enviar_log_chamada_canal(guild, sessao, presentes, faltantes)
 
     if sessao.print_ems_mensagem is not None:
         asyncio.create_task(
@@ -2202,25 +2383,27 @@ async def _enviar_log_chamada_canal(
     sessao: SessaoChamada,
     presentes: list[MedicoNaChamada],
     faltantes: list[MedicoNaChamada],
-):
+) -> str | None:
     """
     Publica o registro da chamada em dois lugares:
 
     1) CANAL_CHAMADAS_HP_SUL — registro completo + tópico com print /ems
     2) LOG_CHAMADAS — só o registro (sem anexo / sem tópico)
+
+    Devolve a URL do card público (jump_url), ou None se não publicou.
+    Essa URL entra no tópico de provas da advertência automática.
     """
     canal_registro = guild.get_channel(CANAIS.get("CANAL_CHAMADAS_HP_SUL"))
     canal_log = guild.get_channel(CANAIS.get("LOG_CHAMADAS"))
 
     # Só conta quem realmente ficou pendente após presença / reconhecimento
-    total_ausentes_ems = len(
-        [
-            medico
-            for medico in sessao.toggle_ligado_mas_nao_no_ems
-            if medico.discord_id in sessao.faltas_pendentes_ems
-            and medico.discord_id != sessao.doutor_id
-        ]
-    )
+    ausentes_ems = [
+        medico
+        for medico in sessao.toggle_ligado_mas_nao_no_ems
+        if medico.discord_id in sessao.faltas_pendentes_ems
+        and medico.discord_id != sessao.doutor_id
+    ]
+    total_ausentes_ems = len(ausentes_ems)
     total_norte = len(sessao.medicos_norte)
     total_toggle = sessao.total_toggle_ligado
 
@@ -2233,6 +2416,13 @@ async def _enviar_log_chamada_canal(
     linhas_faltantes = (
         "\n".join(
             f"`❌` `{medico.id_fivem}` — <@{medico.discord_id}>" for medico in faltantes
+        )
+        or "_(nenhum)_"
+    )
+    linhas_ausentes_ems = (
+        "\n".join(
+            f"`⚠️` `{medico.id_fivem}` — <@{medico.discord_id}>"
+            for medico in ausentes_ems
         )
         or "_(nenhum)_"
     )
@@ -2280,7 +2470,10 @@ async def _enviar_log_chamada_canal(
         discord.ui.TextDisplay(
             f"**Médicos com Falta/Ausência:**\n"
             f"`❌` Ausentes (não respondeu): **{len(faltantes)}**\n"
-            f"{linhas_faltantes}"
+            f"{linhas_faltantes}\n\n"
+            f"`⚠️` Plantão ativo, ausente no `/ems`: "
+            f"**{total_ausentes_ems}**\n"
+            f"{linhas_ausentes_ems}"
         )
     )
     if total_norte:
@@ -2306,8 +2499,10 @@ async def _enviar_log_chamada_canal(
     )
 
     mensagem_registro: discord.Message | None = None
+    link_do_registro: str | None = None
     if canal_registro is not None:
         mensagem_registro = await canal_registro.send(view=layout_publico)
+        link_do_registro = getattr(mensagem_registro, "jump_url", None)
         await _criar_topico_print_ems(
             mensagem_registro,
             canal_registro,
@@ -2318,7 +2513,7 @@ async def _enviar_log_chamada_canal(
 
     # --- Log interno (LOG_CHAMADAS) — só registro, sem print ---
     if canal_log is None:
-        return
+        return link_do_registro
 
     cabecalho_log = (
         f"`📋` Total `/ems`: **{sessao.total_medicos_ems}** · "
@@ -2340,7 +2535,9 @@ async def _enviar_log_chamada_canal(
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(
-                f"**Presentes:**\n{linhas_presentes}\n\n**Faltas:**\n{linhas_faltantes}"
+                f"**Presentes:**\n{linhas_presentes}\n\n"
+                f"**Faltas (não respondeu):**\n{linhas_faltantes}\n\n"
+                f"**Plantão ativo, ausente no /ems:**\n{linhas_ausentes_ems}"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(f"-# {guild.name} • <t:{agora_unix}:f>"),
@@ -2348,3 +2545,4 @@ async def _enviar_log_chamada_canal(
         )
     )
     await canal_log.send(view=layout_log)
+    return link_do_registro

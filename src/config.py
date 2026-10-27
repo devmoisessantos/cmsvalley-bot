@@ -598,9 +598,9 @@ CANAIS = {
     "CANAL_TICKET_VALLEY": 1077995758785138758,
     "CANAL_FINANCAS": 1486369137021161472,
     # Painel fixo para iniciar avaliação de atendimento
-    "CANAL_AVALIAR_ATENDIMENTO": 1564162255438876792,
+    "CANAL_AVALIAR_ATENDIMENTO": 1486369031614365856,
     # Mural público onde as avaliações confirmadas são publicadas
-    "MURAL_AVALIACOES": 1486369031614365856,
+    "MURAL_AVALIACOES": 1564162255438876792,
     # Promoções e cursos
     "CANAL_PROMOVIDOS": 1546206892643192945,
     "CANAL_NAO_PROMOVIDOS": 1546206906081746975,
@@ -1135,8 +1135,11 @@ NOMES_CANAIS_PLANTAO = _gerar_nomes_amigaveis()
 
 
 TIMEZONE_LOCAL = "America/Sao_Paulo"  # ajuste se o fuso do servidor/cidade for outro
-RR_HORARIOS = ["11:00", "17:00"]  # horários diários de RR (restart) da cidade
-INTERVALO_CHAMADA_MINUTOS = 120
+# Restart (RR) da cidade — durante a hora seguinte a chamada fica bloqueada.
+# Ex.: RR 11:00 → libera 12:00 | RR 17:00 → libera 18:00
+RR_HORARIOS = ["11:00", "17:00"]
+MINUTOS_APOS_RR_PARA_CHAMADA = 60  # 1 hora após o RR
+INTERVALO_CHAMADA_MINUTOS = 120  # 2 em 2 horas entre chamadas concluídas
 
 # ---------------------------------------------------------------------------
 # Status do servidor FiveM (painel no Discord do hospital)

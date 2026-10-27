@@ -25,6 +25,7 @@ from sqlalchemy import (
 from src.config import (
     CARGOS_PUNICOES,
     INTERVALO_CHAMADA_MINUTOS,
+    MINUTOS_APOS_RR_PARA_CHAMADA,
     RR_HORARIOS,
     TEMPO_MAXIMO_SESSAO_CHAMADA_MINUTOS,
     TIMEZONE_LOCAL,
@@ -81,35 +82,39 @@ CONFIANCA_MINIMA_AUTOMATICA = (
 # ─────────────────────────────────────────────
 
 
-def _limite_apos_rr_mais_recente(agora_utc: datetime) -> datetime:
-    """Encontra o horário mais recente de 'RR + 1h' que já passou (olha hoje e ontem,
-    pra cobrir o caso de agora ser antes do primeiro RR do dia)."""
-    fuso_horario = ZoneInfo(TIMEZONE_LOCAL)
-    agora_local = agora_utc.astimezone(fuso_horario)
-    candidatos = []
+def _ajustar_para_fora_da_janela_rr(horario_utc: datetime) -> datetime:
+    """
+    Se o horário cair dentro de uma janela [RR, RR + 1h), empurra para o fim dela.
 
-    for offset_dias in (0, -1):
-        dia_ref = (agora_local + timedelta(days=offset_dias)).date()
+    Exemplos (RR em 11:00 e 17:00, espera de 60 min):
+    - 11:00 → 12:00
+    - 11:30 → 12:00
+    - 12:00 → 12:00 (já liberou)
+    - 17:00 → 18:00
+    """
+    fuso_horario = ZoneInfo(TIMEZONE_LOCAL)
+    horario_local = horario_utc.astimezone(fuso_horario)
+    minutos_bloqueio = max(1, int(MINUTOS_APOS_RR_PARA_CHAMADA))
+
+    # Olha ontem, hoje e amanhã para cobrir virada de dia
+    for offset_dias in (-1, 0, 1):
+        dia_ref = (horario_local + timedelta(days=offset_dias)).date()
         for horario_str in RR_HORARIOS:
             hora_em_texto, minuto_em_texto = horario_str.split(":")
-            hora = int(hora_em_texto)
-            minuto = int(minuto_em_texto)
-            rr_dt = datetime(
+            inicio_rr = datetime(
                 dia_ref.year,
                 dia_ref.month,
                 dia_ref.day,
-                hora,
-                minuto,
+                int(hora_em_texto),
+                int(minuto_em_texto),
                 tzinfo=fuso_horario,
             )
-            limite = rr_dt + timedelta(hours=1)
-            if limite <= agora_local:
-                candidatos.append(limite)
+            fim_bloqueio = inicio_rr + timedelta(minutes=minutos_bloqueio)
+            # Bloqueado do RR inclusive até 1h depois (exclusive no fim)
+            if inicio_rr <= horario_local < fim_bloqueio:
+                return fim_bloqueio.astimezone(timezone.utc)
 
-    if not candidatos:
-        return agora_local - timedelta(days=1)  # fallback improvável
-
-    return max(candidatos).astimezone(timezone.utc)
+    return horario_utc
 
 
 async def obter_controle_chamada(session) -> ControleChamada:
@@ -131,19 +136,32 @@ async def obter_controle_chamada(session) -> ControleChamada:
 
 
 async def calcular_proximo_horario_permitido() -> tuple[datetime, bool]:
-    """Retorna (próximo horário permitido em UTC, já liberado agora?)."""
+    """
+    Retorna (próximo horário permitido em UTC, já liberado agora?).
+
+    Regras:
+    1) Chamadas de 2 em 2 horas após uma chamada **concluída**
+       (INTERVALO_CHAMADA_MINUTOS).
+    2) Na hora do RR e na hora seguinte a chamada fica bloqueada.
+       RR 11:00 → libera 12:00 | RR 17:00 → libera 18:00.
+    """
     agora = datetime.now(timezone.utc)
     async with async_session() as session:
         controle = await obter_controle_chamada(session)
-        limite_rr = _limite_apos_rr_mais_recente(agora)
 
         if controle.ultima_chamada_em is None:
-            proximo = limite_rr
+            # Nunca houve chamada concluída: só respeita a janela do RR
+            proximo = agora
         else:
-            proximo_por_intervalo = garantir_aware(
-                controle.ultima_chamada_em
-            ) + timedelta(minutes=INTERVALO_CHAMADA_MINUTOS)
-            proximo = max(limite_rr, proximo_por_intervalo)
+            proximo = garantir_aware(controle.ultima_chamada_em) + timedelta(
+                minutes=INTERVALO_CHAMADA_MINUTOS
+            )
+            # Se o intervalo já passou, a base é "agora"
+            if proximo < agora:
+                proximo = agora
+
+        # Empurra para fora da janela [RR, RR+1h) se cair dentro dela
+        proximo = _ajustar_para_fora_da_janela_rr(proximo)
 
         await session.commit()
 
@@ -376,7 +394,36 @@ def _e_cargo_verbal(cargo_nome: str) -> bool:
     return "verbal" in (cargo_nome or "").lower()
 
 
-async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) -> int:
+def _montar_lista_ems_para_provas(lista_ems: list[dict] | None) -> str:
+    """
+    Transforma as linhas do print do /ems em texto legível pro tópico.
+
+    Cada linha fica no formato `id` — nome, como o OCR leu.
+    """
+    if not lista_ems:
+        return "_(nenhuma linha do /ems disponível)_"
+
+    linhas: list[str] = []
+    for entrada in lista_ems:
+        id_lido = str(entrada.get("id_fivem") or "").strip() or "—"
+        nome_lido = str(entrada.get("nome_ems") or "").strip() or "—"
+        linhas.append(f"`{id_lido}` — {nome_lido}")
+
+    total = len(linhas)
+    corpo = "\n".join(linhas)
+    return f"**Total no `/ems`: {total}**\n{corpo}"
+
+
+async def registrar_falta(
+    discord_id: int,
+    chamada_id: int,
+    motivo: str,
+    guild,
+    *,
+    lista_ems: list[dict] | None = None,
+    arquivos_provas: list[tuple[bytes, str]] | None = None,
+    link_registro_chamada: str | None = None,
+) -> int:
     """
     Registra falta e, se for o caso, aplica o próximo cargo de punição.
 
@@ -395,6 +442,11 @@ async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) 
 
     Toda aplicação grava linha em ``punicoes`` (origem=CHAMADA) para
     poder revogar / regularizar pelo painel de punições.
+
+    Provas opcionais (vêm do finalizar da chamada):
+    - lista_ems: linhas id/nome lidas no print
+    - arquivos_provas: print do /ems em bytes
+    - link_registro_chamada: URL do card no canal de chamadas
     """
     membro = guild.get_member(discord_id) if guild is not None else None
     if membro is not None and e_diretoria(membro):
@@ -423,6 +475,9 @@ async def registrar_falta(discord_id: int, chamada_id: int, motivo: str, guild) 
             estado_punicao["cargo_nome"],
             chamada_id=chamada_id,
             motivo_falta=motivo,
+            lista_ems=lista_ems,
+            arquivos_provas=arquivos_provas,
+            link_registro_chamada=link_registro_chamada,
         )
         debito = DEBITO_MOEDAS_POR_PUNICAO.get(estado_punicao["cargo_nome"], 0)
         if debito:
@@ -443,6 +498,9 @@ async def _aplicar_punicao_acumulativa(
     *,
     chamada_id: int,
     motivo_falta: str,
+    lista_ems: list[dict] | None = None,
+    arquivos_provas: list[tuple[bytes, str]] | None = None,
+    link_registro_chamada: str | None = None,
 ) -> None:
     """
     Adiciona o cargo NOVO sem tirar os anteriores (acumulativo).
@@ -450,6 +508,9 @@ async def _aplicar_punicao_acumulativa(
     Grava em ``punicoes`` via domínio de punições. Se o tier for Exonerado,
     ou se após a aplicação o membro tiver 3 advs formais, roda a exoneração
     completa (Exonerado + Visitantes).
+
+    No tópico de provas entram: motivo, número da chamada, total de faltas,
+    punição, lista do /ems, print do EMS e link do registro da chamada.
     """
     from datetime import timedelta
 
@@ -472,6 +533,35 @@ async def _aplicar_punicao_acumulativa(
         f"[CHAMADA #{chamada_id}] {total_faltas}ª falta — {motivo_falta}"
     )[:1500]
 
+    lista_formatada = _montar_lista_ems_para_provas(lista_ems)
+
+    if link_registro_chamada:
+        # URL solta: o logger extrai como link clicável no tópico
+        # e ainda deixa o texto de origem legível.
+        linha_origem = (
+            "chamada de plantão (auditoria automática)\n"
+            f"{link_registro_chamada}"
+        )
+    else:
+        linha_origem = "chamada de plantão (auditoria automática)"
+
+    # Texto do tópico de provas (motivo + contexto + lista do /ems + link).
+    # O print do /ems vai como arquivo em arquivos_provas.
+    texto_provas_da_chamada = (
+        f"**Motivo da falta**\n"
+        f"{motivo_falta}\n\n"
+        f"**Número da chamada**\n"
+        f"`#{chamada_id}`\n\n"
+        f"**Faltas deste médico**\n"
+        f"{total_faltas}ª falta registrada\n\n"
+        f"**Punição aplicada**\n"
+        f"{cargo_nome.strip()}\n\n"
+        f"**Lista extraída do `/ems`**\n"
+        f"{lista_formatada}\n\n"
+        f"**Origem**\n"
+        f"{linha_origem}"
+    )
+
     ok, mensagem, punicao = await aplicar_punicao(
         guild=guild,
         alvo=membro,
@@ -480,7 +570,8 @@ async def _aplicar_punicao_acumulativa(
         cargo_nome=cargo_nome,
         cargo_id=cargo_id,
         motivo=motivo_completo,
-        links_texto=None,
+        links_texto=texto_provas_da_chamada,
+        arquivos_provas=arquivos_provas,
         origem=ORIGEM_PUNICAO_CHAMADA,
         expira_em=(
             datetime.now(timezone.utc) + timedelta(days=DIAS_EXPIRACAO_VERBAL)

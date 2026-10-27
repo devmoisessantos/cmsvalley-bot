@@ -32,6 +32,36 @@ from src.utils.notificacao import notificar_dm_advertencia
 
 registrador = logging.getLogger(__name__)
 
+
+def _partir_texto_em_mensagens(
+    texto: str, tamanho_maximo: int = 1900
+) -> list[str]:
+    """
+    Quebra texto longo em pedaços que cabem numa mensagem do Discord.
+
+    Preferência: corta no final de linha, para não partir no meio do nome
+    da lista do /ems.
+    """
+    texto_limpo = (texto or "").strip()
+    if not texto_limpo:
+        return []
+    if len(texto_limpo) <= tamanho_maximo:
+        return [texto_limpo]
+
+    pedacos: list[str] = []
+    resto = texto_limpo
+    while resto:
+        if len(resto) <= tamanho_maximo:
+            pedacos.append(resto)
+            break
+        corte = resto.rfind("\n", 0, tamanho_maximo)
+        if corte <= 0:
+            corte = tamanho_maximo
+        pedacos.append(resto[:corte].rstrip())
+        resto = resto[corte:].lstrip("\n")
+    return pedacos
+
+
 _DIAS_SEMANA = (
     "segunda-feira",
     "terça-feira",
@@ -619,7 +649,8 @@ async def _criar_topico_provas(
                 texto_sem_urls = texto_sem_urls.strip()
                 if texto_sem_urls:
                     await thread.send("\n### 📝 Observações\n\n")
-                    await thread.send(texto_sem_urls[:1900])
+                    for trecho in _partir_texto_em_mensagens(texto_sem_urls):
+                        await thread.send(trecho)
         elif texto_limpo:
             await thread.send("\n## 📁 Provas anexadas")
             await thread.send(
@@ -627,7 +658,8 @@ async def _criar_topico_provas(
                 "pelo Responsável da Exoneração.\n\n"
             )
             await thread.send("\n### 📝 Observações\n\n")
-            await thread.send(texto_limpo[:1900])
+            for trecho in _partir_texto_em_mensagens(texto_limpo):
+                await thread.send(trecho)
         elif not lista_arquivos:
             await thread.send(
                 "\n## 📁 **Provas anexadas**\n_Nenhum link, arquivo ou texto de prova "
