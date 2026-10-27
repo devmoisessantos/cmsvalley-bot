@@ -606,6 +606,12 @@ async def executar_exoneracao(
             erro_do_snapshot,
         )
 
+    # Blacklist pelo cargo mais alto do snapshot (antes de tirar cargos)
+    nome_bl, _id_bl, dias_bl, valor_bl = _resolver_cargo_blacklist(
+        cargos_antes_ids,
+        guild,
+    )
+
     msg_exo, _thread = await registrar_exoneracao(
         guild=guild,
         alvo=alvo,
@@ -617,6 +623,9 @@ async def executar_exoneracao(
         texto_provas=texto_provas,
         automatica=automatica,
         arquivos_provas=arquivos_provas,
+        blacklist_dias=dias_bl,
+        blacklist_cargo=nome_bl,
+        blacklist_valor=valor_bl,
     )
 
     if msg_exo and id_do_registro is not None:
@@ -1125,15 +1134,28 @@ async def criar_blacklist_pos_exoneracao(
 
 async def membro_em_blacklist_ativa(discord_id: int) -> bool:
     """True se existe blacklist ativa e ainda dentro do prazo."""
+    registro = await obter_blacklist_ativa(discord_id)
+    return registro is not None
+
+
+async def obter_blacklist_ativa(discord_id: int):
+    """
+    Devolve a blacklist ativa do membro, se ainda estiver no prazo.
+
+    Usada no pagamento da exoneração para mostrar o valor e o cargo
+    de referência gravados no momento da exo (não os cargos atuais).
+    """
     from src.database.models import Blacklist
 
     agora_utc = datetime.now(timezone.utc)
     async with async_session() as sessao:
         resultado = await sessao.execute(
-            select(Blacklist).where(
+            select(Blacklist)
+            .where(
                 Blacklist.discord_id == discord_id,
                 Blacklist.ativa.is_(True),
                 Blacklist.termina_em > agora_utc,
             )
+            .order_by(Blacklist.criada_em.desc())
         )
-        return resultado.scalar_one_or_none() is not None
+        return resultado.scalar_one_or_none()

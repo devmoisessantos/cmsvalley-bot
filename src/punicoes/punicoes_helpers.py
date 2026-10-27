@@ -238,6 +238,11 @@ def valor_pagamento_advertencia(
     Adv 03 / Exonerado → valor da blacklist do cargo mais alto do membro
     Verbal → 0 (não tem tabela de pagamento formal)
 
+    No nível 3 o cargo de referência é o mais alto na hierarquia
+    (índice menor em CARGOS_HIERARQUIA) entre snapshot e cargos atuais
+    que existam em BLACKLIST_POR_CARGO. Snapshot vem primeiro: após
+    a exoneração o membro só tem Visitantes/Exonerado.
+
     Devolve (valor, rotulo_explicativo).
     """
     from src.config import (
@@ -276,9 +281,11 @@ def valor_pagamento_advertencia(
 
     melhor_nome = "🚑・Paramédico"
     melhor_rank = 10_000
+    encontrou_candidato = False
     for nome in candidatos:
         if nome not in BLACKLIST_POR_CARGO:
             continue
+        encontrou_candidato = True
         try:
             rank = CARGOS_HIERARQUIA.index(nome)
         except ValueError:
@@ -292,4 +299,6 @@ def valor_pagamento_advertencia(
         "valor": 3_000_000,
     }
     valor = int(cfg.get("valor") or 3_000_000)
+    if not encontrou_candidato:
+        return valor, "Nível 3 — blacklist padrão (Paramédico)"
     return valor, f"Nível 3 — blacklist de {melhor_nome}"

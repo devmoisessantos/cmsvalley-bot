@@ -174,6 +174,9 @@ async def registrar_exoneracao(
     texto_provas: str | None = None,
     automatica: bool = False,
     arquivos_provas: list[tuple[bytes, str]] | None = None,
+    blacklist_dias: int | None = None,
+    blacklist_cargo: str | None = None,
+    blacklist_valor: int | None = None,
 ) -> tuple[discord.Message | None, discord.Thread | None]:
     """Posta a exoneração em CANAL_EXONERACOES (mesmo modelo das advertências)."""
     canal = _canal(guild, "CANAL_EXONERACOES")
@@ -186,12 +189,29 @@ async def registrar_exoneracao(
     origem = "Automática (3ª advertência)" if automatica else "Manual"
     registro_txt = f"`#{punicao_id}`" if punicao_id else "—"
 
+    # Blacklist pelo cargo mais alto do snapshot (antes da exo)
+    if blacklist_dias is not None and int(blacklist_dias) > 0:
+        dias_txt = f"{int(blacklist_dias)} dias"
+        if blacklist_cargo:
+            dias_txt = f"{dias_txt} ({blacklist_cargo})"
+        if blacklist_valor is not None and int(blacklist_valor) > 0:
+            from src.utils.formatacao import formatar_reais
+
+            dias_txt = (
+                f"{dias_txt} — retorno "
+                f"`{formatar_reais(int(blacklist_valor))}`"
+            )
+        linha_blacklist = f"- **Blacklist:** {dias_txt}\n"
+    else:
+        linha_blacklist = ""
+
     linhas = (
         f"- **Membro exonerado:** {alvo.mention} (`{alvo.id}`)\n"
         f"- **Exonerado por:** {executor.mention} (`{executor.id}`)\n"
         f"- **ID FiveM:** `{id_fivem}`\n"
         f"- **Origem:** {origem}\n"
         f"- **Cargos finais:** Exonerado + Visitantes\n"
+        f"{linha_blacklist}"
         f"- **Motivo da exoneração:**\n{motivo}\n"
         f"- **Registro:** {registro_txt}"
     )
