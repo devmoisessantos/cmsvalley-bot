@@ -1,0 +1,36 @@
+# Ambiente virtual e cache Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Arquivos de ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Git e IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testes e ferramentas locais
+tests/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+ferramentas/
+
+# Documentação e arquivos que não precisam ir pro container
+*.md
+!README.md
+estrutura.yaml
+assets/
+test.py
