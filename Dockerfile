@@ -1,5 +1,5 @@
 # Imagem base enxuta do Python
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 # Pasta de trabalho dentro do container
 WORKDIR /app
