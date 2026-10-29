@@ -138,7 +138,7 @@ class ManutencaoCog(commands.Cog):
 
     @grupo_manutencao.command(
         name="paineis-recriar",
-        description="Apaga registro/mensagem antiga e publica o painel atualizado",
+        description="Limpa o canal, remove o registro e publica o painel de novo",
     )
     @app_commands.describe(nome="Qual painel recriar")
     @apenas_administrador()
@@ -149,9 +149,8 @@ class ManutencaoCog(commands.Cog):
     ):
         """Substitui um painel específico e informa o resultado de forma privada.
 
-        Reconhece interações expiradas antes de executar a recuperação. A rotina
-        de serviço apaga a referência e a mensagem anteriores antes de publicar
-        a versão atual, evitando controles duplicados no Discord.
+        Limpa o canal do painel (para não sobrar mensagem duplicada), remove o
+        registro no banco e publica a versão atual.
         """
         nome_normalizado = (nome or "").strip().lower()
         if nome_normalizado not in NOMES_DOS_PAINEIS:
@@ -215,15 +214,15 @@ class ManutencaoCog(commands.Cog):
 
     @grupo_manutencao.command(
         name="paineis-recriar-todos",
-        description="Recria TODOS os painéis (apaga antigos e publica de novo)",
+        description="Limpa cada canal e recria TODOS os painéis de novo",
     )
     @apenas_administrador()
     async def paineis_recriar_todos(self, interacao: discord.Interaction):
         """Recupera todos os painéis e resume falhas sem interromper os demais.
 
-        Executa a recriação em lote depois de confirmar a interação e mostra a
-        situação individual de cada painel. Isso reduz o risco de deixar o bot
-        parcialmente recuperado sem que a administração perceba.
+        Para cada painel: limpa o canal (apaga mensagens antigas e duplicadas),
+        remove o registro no banco e publica de novo. Mostra o resultado de
+        cada um para a administração acompanhar.
         """
         try:
             await interacao.response.defer(ephemeral=True, thinking=True)
@@ -376,8 +375,8 @@ class ManutencaoCog(commands.Cog):
             titulo="🛠️ Ajuda · Manutenção",
             linhas=[
                 "`/manutencao paineis-listar` — o que está salvo no banco.",
-                "`/manutencao paineis-recriar` — apaga um painel e publica de novo.",
-                "`/manutencao paineis-recriar-todos` — recria todos os painéis.",
+                "`/manutencao paineis-recriar` — limpa o canal e publica de novo.",
+                "`/manutencao paineis-recriar-todos` — limpa e recria todos.",
                 "`/manutencao sincronizar-comandos` — atualiza slash commands no "
                 "Discord.",
                 "`/manutencao keepalive-status` — estado do ping na API Render.",

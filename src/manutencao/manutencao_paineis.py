@@ -2,25 +2,30 @@
 """
 Manutenção dos painéis persistentes.
 
-Permite apagar o registro no banco (e a mensagem antiga, se ainda existir)
-e publicar de novo o painel atualizado — sem reiniciar o bot.
+Permite limpar o canal do painel (apaga mensagens antigas e duplicadas),
+remover o registro no banco e publicar de novo — sem reiniciar o bot.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import discord
 from sqlalchemy import select
 
 from src.ausencia.ausencia_setup import garantir_painel_ausencia
+from src.avaliacao.avaliacao_atendimento_setup import (
+    garantir_painel_avaliar_atendimento,
+)
 from src.bau.bau_setup import garantir_painel_bau
 from src.cursos.cursos_setup import garantir_painel_cursos
 from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.demissao.demissao_setup import garantir_painel_demissao
-from src.avaliacao.avaliacao_atendimento_setup import (
-    garantir_painel_avaliar_atendimento,
+from src.gate.membros.membros_gate_setup import (
+    garantir_painel_gerenciar_gate,
+    garantir_painel_ingressar_gate,
 )
 from src.guia.guia_setup import (
     garantir_painel_boas_vindas,
@@ -33,10 +38,6 @@ from src.laudos.laudos_setup import (
 from src.membros.membros_setup import (
     garantir_painel_gerenciar_cargos,
     garantir_painel_gerenciar_membros,
-)
-from src.gate.membros.membros_gate_setup import (
-    garantir_painel_gerenciar_gate,
-    garantir_painel_ingressar_gate,
 )
 from src.notificacoes.notificacoes_setup import garantir_painel_notificacao
 from src.promocoes.promocoes_setup import garantir_painel_promocao
@@ -54,6 +55,12 @@ from src.utils.setup_paineis import (
     garantir_painel_recrutamento,
     garantir_painel_whitelist,
 )
+
+registrador = logging.getLogger(__name__)
+
+# Quantidade máxima de mensagens apagadas ao limpar o canal do painel.
+# Canais de painel costumam ter poucas mensagens; 100 cobre duplicatas.
+LIMITE_LIMPEZA_DO_CANAL = 100
 
 # nome_no_banco → função que posta o painel se não existir registro
 FUNCOES_GARANTIR_PAINEL = {
@@ -110,26 +117,34 @@ async def buscar_painel(nome_painel: str) -> PainelPostado | None:
         return resultado.scalar_one_or_none()
 
 
-async def _apagar_mensagem_antiga(
+async def _limpar_canal_do_painel(
     bot: discord.Client,
     canal_id: int,
-    message_id: int,
 ) -> str:
-    """Tenta apagar a mensagem antiga do painel. Devolve texto do que aconteceu."""
+    """
+    Apaga as mensagens recentes do canal do painel.
+
+    Assim, se existirem dois painéis (ou lixo antigo), o canal fica limpo
+    antes de postar o painel novo. Devolve um texto curto do que aconteceu.
+    """
     canal = bot.get_channel(canal_id)
     if canal is None:
-        return "Canal antigo não encontrado (mensagem não apagada)."
+        return "Canal não encontrado (não foi possível limpar)."
+
+    if not isinstance(canal, (discord.TextChannel, discord.Thread)):
+        return "Canal não é de texto (não foi possível limpar)."
 
     try:
-        mensagem = await canal.fetch_message(message_id)
-        await mensagem.delete()
-        return "Mensagem antiga apagada."
-    except discord.NotFound:
-        return "Mensagem antiga já não existia."
+        mensagens_apagadas = await canal.purge(limit=LIMITE_LIMPEZA_DO_CANAL)
+        quantidade = len(mensagens_apagadas)
+        if quantidade == 0:
+            return "Canal já estava limpo."
+        return f"Canal limpo ({quantidade} mensagem(ns) apagada(s))."
     except discord.Forbidden:
-        return "Sem permissão para apagar a mensagem antiga."
-    except discord.HTTPException as erro:
-        return f"Falha ao apagar mensagem antiga: {erro}"
+        return "Sem permissão para limpar o canal."
+    except discord.HTTPException as erro_http:
+        registrador.warning("Falha ao limpar canal %s: %s", canal_id, erro_http)
+        return f"Falha ao limpar o canal: {erro_http}"
 
 
 async def remover_registro_painel(nome_painel: str) -> bool:
@@ -151,7 +166,7 @@ async def recriar_painel(
     nome_painel: str,
 ) -> ResultadoPainel:
     """
-    1. Apaga a mensagem antiga (se possível)
+    1. Limpa o canal do painel (apaga mensagens antigas e duplicadas)
     2. Remove o registro no banco
     3. Chama a função garantir_* para postar de novo
     """
@@ -166,10 +181,8 @@ async def recriar_painel(
     registro = await buscar_painel(nome_painel)
 
     if registro is not None:
-        detalhe_mensagem = await _apagar_mensagem_antiga(
-            bot, registro.canal_id, registro.message_id
-        )
-        detalhes.append(detalhe_mensagem)
+        detalhe_limpeza = await _limpar_canal_do_painel(bot, registro.canal_id)
+        detalhes.append(detalhe_limpeza)
         await remover_registro_painel(nome_painel)
         detalhes.append("Registro removido do banco.")
     else:
