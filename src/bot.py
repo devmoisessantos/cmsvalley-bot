@@ -3,8 +3,10 @@ Ponto central do bot: cria o cliente, carrega os cogs e sobe os paineis.
 
 Ordem do que acontece quando o bot liga:
 
-1. `setup_hook` roda antes de o bot ficar online. Ele carrega os cogs,
-   sincroniza os comandos de barra e prepara o banco de dados.
+1. `setup_hook` roda antes de o bot ficar online. Ele prepara o banco
+   (cria tabelas e aplica migrações), carrega os cogs e sincroniza os
+   comandos de barra. O banco vem primeiro porque alguns cogs consultam
+   tabelas no setup (views pendentes de promoção e demissão).
 2. `on_ready` roda depois de o bot estar conectado. Ele cria as views dos
    paineis, registra essas views (isso precisa acontecer em TODO reinicio) e
    garante que a mensagem de cada painel existe no canal certo.
@@ -18,6 +20,9 @@ from discord.ext import commands
 
 from src.ausencia.ausencia_panel import PainelAusenciaLayout
 from src.ausencia.ausencia_setup import garantir_painel_ausencia
+from src.avaliacao.avaliacao_atendimento_setup import (
+    garantir_painel_avaliar_atendimento,
+)
 from src.avaliacao.avaliacao_panel import PainelAvaliacaoLayout
 from src.bau.bau_panel import PainelBauLayout
 from src.bau.bau_setup import garantir_painel_bau
@@ -30,9 +35,6 @@ from src.cursos.cursos_setup import garantir_painel_cursos
 from src.database.conexao import init_db
 from src.database.seed_perguntas import seed_perguntas_se_vazio
 from src.demissao.demissao_setup import garantir_painel_demissao
-from src.avaliacao.avaliacao_atendimento_setup import (
-    garantir_painel_avaliar_atendimento,
-)
 from src.gate.gate_panel import PainelEventosGate
 from src.gate.gate_presenca_service import montar_container_presenca
 from src.gate.gate_service import listar_eventos_abertos
@@ -266,13 +268,17 @@ class CmsValleyBot(commands.Bot):
         """
         Roda uma vez, antes de o bot ficar online.
 
-        Carrega os cogs, sincroniza os comandos de barra e prepara o banco.
+        Prepara o banco primeiro (cria tabelas e aplica migrações). Só depois
+        carrega os cogs e sincroniza os comandos de barra. Alguns cogs
+        consultam o banco no setup/cog_load (views pendentes de promoção e
+        demissão); se o banco ainda não existir, isso só gera ERROR no log
+        e as views pendentes ficam sem botão até o próximo restart.
         """
         inicio_deploy()
 
+        await self._preparar_banco_de_dados()
         await self._carregar_todos_os_cogs()
         await self._sincronizar_comandos_de_barra()
-        await self._preparar_banco_de_dados()
 
         self.tree.error(self._ao_falhar_comando_de_barra)
 
@@ -363,10 +369,13 @@ class CmsValleyBot(commands.Bot):
             nome_do_comando = interacao.command.name
 
         erro_real: Exception = erro_do_comando
-        if isinstance(
-            erro_do_comando,
-            discord.app_commands.CommandInvokeError,
-        ) and erro_do_comando.original is not None:
+        if (
+            isinstance(
+                erro_do_comando,
+                discord.app_commands.CommandInvokeError,
+            )
+            and erro_do_comando.original is not None
+        ):
             erro_real = erro_do_comando.original
 
         try:
