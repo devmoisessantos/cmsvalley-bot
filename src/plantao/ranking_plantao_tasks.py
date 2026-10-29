@@ -223,7 +223,9 @@ class RankingPlantaoTasks(commands.Cog):
             fim = inicio + por_pagina
             pedaco = ordenados[inicio:fim]
             partes = [f"{discord_id}:{segundos}" for discord_id, segundos in pedaco]
-            assinatura = f"{indice_pagina + 1}/{total_paginas}|" + "|".join(partes)
+            assinatura = (
+                f"{indice_pagina + 1}/{total_paginas}|" + "|".join(partes)
+            )
             # Última página exibe o total da equipe — entra na assinatura
             if indice_pagina == total_paginas - 1:
                 assinatura = f"{assinatura}|total:{total_geral}"
@@ -428,20 +430,30 @@ class RankingPlantaoTasks(commands.Cog):
                 break
 
             assinatura_nova = (
-                assinaturas_novas[indice] if indice < len(assinaturas_novas) else ""
+                assinaturas_novas[indice]
+                if indice < len(assinaturas_novas)
+                else ""
             )
             assinatura_antiga = self._assinaturas_paginas_horas.get(indice)
             eh_ultima_pagina = indice == indice_ultima_pagina
             contagem_igual = (
-                assinatura_antiga is not None and assinatura_antiga == assinatura_nova
+                assinatura_antiga is not None
+                and assinatura_antiga == assinatura_nova
             )
             if contagem_igual and not eh_ultima_pagina:
+                continue
+
+            # Primeiro ciclo após restart: assinaturas vazias. Aprende a
+            # assinatura das páginas do meio SEM editar todas de uma vez
+            # (evita 429). Só a última página edita (rodapé <t:R>).
+            if assinatura_antiga is None and not eh_ultima_pagina:
+                self._assinaturas_paginas_horas[indice] = assinatura_nova
                 continue
 
             # Espaça edições entre páginas para não estourar o limite
             # do canal (duas PATCHs no mesmo segundo geram 429).
             if ja_editou_alguma:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(2.0)
 
             registro = registros[indice]
             try:
@@ -497,9 +509,9 @@ class RankingPlantaoTasks(commands.Cog):
                         mensagem.id,
                     )
                     if indice < len(assinaturas_novas):
-                        self._assinaturas_paginas_horas[indice] = assinaturas_novas[
-                            indice
-                        ]
+                        self._assinaturas_paginas_horas[indice] = (
+                            assinaturas_novas[indice]
+                        )
                     logger.info(
                         "Ranking HORAS tempo real página %s/%s em #%s",
                         pagina,
@@ -538,11 +550,11 @@ class RankingPlantaoTasks(commands.Cog):
         3) envia ganhadores + valores ao canal de finanças
         4) grava histórico (sem re-postar ranking no canal)
         """
+        from src.recrutamento.ranking_service import obter_periodo_postagem_semanal
         from src.plantao.ranking_plantao_service import (
             buscar_horas_por_membro,
             montar_view_ranking_horas,
         )
-        from src.recrutamento.ranking_service import obter_periodo_postagem_semanal
 
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
@@ -555,7 +567,9 @@ class RankingPlantaoTasks(commands.Cog):
 
         # Idempotência: se este ciclo semanal já foi fechado, não repete
         # ranking nem premiação (bot reiniciado no sábado 11h, etc.).
-        ja_fechado = await historico_ja_publicado("horas_semanal", inicio, fim_periodo)
+        ja_fechado = await historico_ja_publicado(
+            "horas_semanal", inicio, fim_periodo
+        )
         if ja_fechado is not None:
             logger.info(
                 "Ciclo semanal horas já fechado (histórico #%s) — "
@@ -570,9 +584,9 @@ class RankingPlantaoTasks(commands.Cog):
         # 1) Fecha segmentos abertos para o tempo na virada entrar na semana
         #    que está encerrando (e o ciclo novo começar limpo).
         try:
-            from src.database.models import EstadoPlantao
-            from src.plantao.carteira_service import cotacao_moeda_do_membro
             from src.plantao.plantao_service import fechar_segmento_parcial_do_ciclo
+            from src.plantao.carteira_service import cotacao_moeda_do_membro
+            from src.database.models import EstadoPlantao
 
             async with async_session() as sessao:
                 resultado = await sessao.execute(
@@ -749,7 +763,9 @@ class RankingPlantaoTasks(commands.Cog):
                     await self._apagar_registro_tempo_real()
                     await self._atualizar_ou_criar_tempo_real_horas()
                     self._reinicio_tempo_real.add(chave_r)
-                    logger.info("Novo ciclo RANKING HORAS tempo real iniciado (zerado)")
+                    logger.info(
+                        "Novo ciclo RANKING HORAS tempo real iniciado (zerado)"
+                    )
                 except Exception as erro:
                     logger.exception("Reinício tempo real horas: %s", erro)
 

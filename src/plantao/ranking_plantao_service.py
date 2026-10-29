@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+import time
 from datetime import (
     datetime,
     timezone,
@@ -47,6 +48,7 @@ from src.database.models import (
     RankingHistorico,
     agora,
 )
+from src.utils.relogio import timestamp_unix_agora
 from src.plantao.carteira_service import membro_elegivel_ranking_moedas
 from src.recrutamento.ranking_service import (
     obter_periodo_ciclo_mensal,
@@ -60,7 +62,6 @@ from src.utils.formatacao import (
     formatar_mes_e_ano,
     formatar_reais,
 )
-from src.utils.relogio import timestamp_unix_agora
 
 
 def _tz() -> ZoneInfo:
@@ -79,7 +80,6 @@ def _formatar_mes_ano(data_e_hora: datetime) -> str:
 
 def _medalha(posicao: int) -> str:
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(posicao, "🏅")
-
 
 # Discord TextDisplay: limite prático ~4000 caracteres por bloco.
 # Partimos o corpo para não estourar o card único (falha no edit → republica
@@ -138,6 +138,8 @@ def _textos_corpo_como_componentes(corpo: str) -> list:
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
             )
     return componentes
+
+
 
 
 def _formatar_mencoes(ids: list[int]) -> str:
@@ -241,7 +243,11 @@ async def buscar_horas_por_membro(
             )
             .group_by(LogPlantao.discord_id)
         )
-        bruto = {int(did): int(segs) for did, segs in resultado.all() if int(segs) > 0}
+        bruto = {
+            int(did): int(segs)
+            for did, segs in resultado.all()
+            if int(segs) > 0
+        }
 
     # Contagem ao vivo: só no ranking tempo real (não mistura no semanal/mensal oficial)
     if incluir_ao_vivo:
@@ -570,7 +576,9 @@ def montar_view_ranking_horas(
             f"({_formatar_data_curta(inicio_utc)} até {_formatar_data_curta(fim_utc)})"
         )
         cor = discord.Color.green()
-        linha_extra = "📊 Total do mês = soma das horas das semanas do período"
+        linha_extra = (
+            "📊 Total do mês = soma das horas das semanas do período"
+        )
     elif periodo == "tempo_real":
         titulo = titulo_override or "⏱️ **RANKING DE HORAS — TEMPO REAL**"
         sub = (
@@ -691,6 +699,7 @@ def montar_view_ranking_horas(
     return views, total
 
 
+
 # ── Geração por tipo ─────────────────────────────────────────────────────
 
 
@@ -771,6 +780,7 @@ async def gerar_view_ranking_horas(
     return views, contagem, inicio, fim, total
 
 
+
 async def historico_ja_publicado(
     tipo: str,
     inicio: datetime,
@@ -803,10 +813,9 @@ async def historico_ja_publicado(
                 fim_reg = fim_reg.replace(tzinfo=timezone.utc)
             alvo_ini = inicio if inicio.tzinfo else inicio.replace(tzinfo=timezone.utc)
             alvo_fim = fim if fim.tzinfo else fim.replace(tzinfo=timezone.utc)
-            if (
-                abs((ini - alvo_ini).total_seconds()) <= margem.total_seconds()
-                and abs((fim_reg - alvo_fim).total_seconds()) <= margem.total_seconds()
-            ):
+            if abs((ini - alvo_ini).total_seconds()) <= margem.total_seconds() and abs(
+                (fim_reg - alvo_fim).total_seconds()
+            ) <= margem.total_seconds():
                 return registro
     return None
 

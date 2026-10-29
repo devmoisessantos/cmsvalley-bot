@@ -4,19 +4,21 @@ Atualiza o painel fixo de plantão ativo a cada minuto.
 Busca quem tem toggle ligado, monta o card e edita a mesma mensagem
 no canal PAINEL_FIXO_PLANTAO_ATIVO. Se a mensagem sumiu, publica de novo.
 
-A cada ciclo (1 minuto) a mensagem é reescrita de propósito:
-  - lista de quem está em serviço
-  - cronômetros de cada um
-  - rodapé ``<t:unix:R>`` com carimbo novo
+Regra always-on:
+  a cada 60 s → um único edit (lista, tempos, status, rodapé <t:R>).
+  O rodapé recomeça em "há 1 segundo" e sobe até ~1 minuto.
 
-Assim o Discord volta a mostrar "há 1 segundo", "há 2 segundos"…
-até chegar perto de "há 1 minuto", quando o próximo ciclo reinicia
-a contagem. Um edit por minuto em uma só mensagem não gera rate limit.
+Proteções:
+  - trava (lock) evita dois edits ao mesmo tempo
+  - debounce: se o último edit foi há menos de 50 s, pula o ciclo
+    (cobre instância duplicada ou loop acionado em dobro)
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
 import discord
 from discord.ext import commands, tasks
@@ -32,9 +34,9 @@ from src.utils.relogio import sincronizar_relogio_com_rede
 registrador = logging.getLogger(__name__)
 
 NOME_PAINEL = "plantao_ativo"
-# 1 minuto: quando o ``:R`` chega perto de "há 1 minuto", o próximo
-# edit zera o carimbo e a contagem relativa recomeça em segundos.
 INTERVALO_SEGUNDOS = 60
+# Não edita de novo se o ciclo anterior terminou há menos que isso.
+MINIMO_ENTRE_EDITS = 50.0
 
 
 class PlantaoAtivosTasks(commands.Cog):
@@ -44,22 +46,45 @@ class PlantaoAtivosTasks(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.atualizar_painel_ativos.start()
+        self._trava_atualizacao = asyncio.Lock()
+        self._ultimo_edit_monotonic = 0.0
+        # Evita start() em dobro se o cog for adicionado de novo.
+        if not self.atualizar_painel_ativos.is_running():
+            self.atualizar_painel_ativos.start()
 
     def cog_unload(self) -> None:
         self.atualizar_painel_ativos.cancel()
 
     @tasks.loop(seconds=INTERVALO_SEGUNDOS)
     async def atualizar_painel_ativos(self) -> None:
-        """Busca quem está em serviço e atualiza o card fixo."""
-        try:
-            await sincronizar_relogio_com_rede()
-            await self._atualizar_ou_publicar()
-        except Exception as erro_capturado:
-            registrador.exception(
-                "Falha ao atualizar o painel de plantão ativo: %s",
-                erro_capturado,
+        """Um edit por ciclo de 60 s (com trava e debounce)."""
+        if self._trava_atualizacao.locked():
+            registrador.debug(
+                "Plantão ativo: ciclo anterior ainda em andamento; pulando."
             )
+            return
+
+        async with self._trava_atualizacao:
+            decorrido = time.monotonic() - self._ultimo_edit_monotonic
+            if (
+                self._ultimo_edit_monotonic > 0
+                and decorrido < MINIMO_ENTRE_EDITS
+            ):
+                registrador.debug(
+                    "Plantão ativo: debounce (último edit há %.0f s); pulando.",
+                    decorrido,
+                )
+                return
+
+            try:
+                await sincronizar_relogio_com_rede()
+                await self._atualizar_ou_publicar()
+                self._ultimo_edit_monotonic = time.monotonic()
+            except Exception as erro_capturado:
+                registrador.exception(
+                    "Falha ao atualizar o painel de plantão ativo: %s",
+                    erro_capturado,
+                )
 
     @atualizar_painel_ativos.before_loop
     async def _esperar_bot_pronto(self) -> None:
@@ -68,7 +93,9 @@ class PlantaoAtivosTasks(commands.Cog):
     async def _atualizar_ou_publicar(self) -> None:
         canal_id = CANAIS.get("PAINEL_FIXO_PLANTAO_ATIVO") or 0
         if not canal_id:
-            registrador.debug("PAINEL_FIXO_PLANTAO_ATIVO não configurado; pulando.")
+            registrador.debug(
+                "PAINEL_FIXO_PLANTAO_ATIVO não configurado; pulando."
+            )
             return
 
         canal = self.bot.get_channel(canal_id)
@@ -104,7 +131,9 @@ class PlantaoAtivosTasks(commands.Cog):
     async def _buscar_registro(self):
         async with async_session() as sessao:
             resultado = await sessao.execute(
-                select(PainelPostado).where(PainelPostado.nome_painel == NOME_PAINEL)
+                select(PainelPostado).where(
+                    PainelPostado.nome_painel == NOME_PAINEL
+                )
             )
             return resultado.scalar_one_or_none()
 
@@ -144,6 +173,7 @@ class PlantaoAtivosTasks(commands.Cog):
                     "Rate limit ao editar plantão ativo %s; tenta de novo.",
                     message_id,
                 )
+                # Conta como "tentou": evita martelar no próximo ciclo imediato.
                 return True
             registrador.warning(
                 "Falha ao editar plantão ativo %s: %s. Republicando.",
@@ -201,4 +231,8 @@ class PlantaoAtivosTasks(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
+    # Se o cog já existir (reload), remove antes de adicionar de novo.
+    nome_do_cog = PlantaoAtivosTasks.__name__
+    if bot.get_cog(nome_do_cog) is not None:
+        await bot.remove_cog(nome_do_cog)
     await bot.add_cog(PlantaoAtivosTasks(bot))
