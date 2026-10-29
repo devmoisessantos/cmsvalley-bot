@@ -105,21 +105,31 @@ URL_DO_BANCO_PRONTA, ARGUMENTOS_DE_CONEXAO = (
     _preparar_url_e_argumentos_de_conexao(DATABASE_URL)
 )
 
-# Render / Neon / proxies costumam fechar conexões ociosas.
-# pre_ping + recycle evitam entregar uma conexão já morta às tasks.
+# Render / Neon / proxies costumam fechar conexões ociosas em poucos
+# minutos. Se o pool_recycle for maior que isso, o servidor já matou a
+# conexão e o close() do asyncpg estoura TimeoutError no log a cada ciclo
+# de task. 5 minutos renova antes do corte típico dos provedores.
+#
+# pool_pre_ping testa no checkout e descarta mortas sem tentar close longo.
 engine = create_async_engine(
     URL_DO_BANCO_PRONTA,
     echo=False,
     pool_size=5,
     max_overflow=10,
     pool_pre_ping=True,
-    pool_recycle=3600,
+    pool_recycle=300,
+    pool_timeout=30,
     connect_args=ARGUMENTOS_DE_CONEXAO,
 )
 
 # expire_on_commit=False evita que os objetos "expirem" depois do commit
 # e obriguem outro SELECT só para ler um atributo.
 async_session = async_sessionmaker(engine, expire_on_commit=False)
+
+# O TimeoutError no close de conexão já morta é ruído: a pool já descarta
+# a conexão e a próxima query abre outra. Sem isso o log enche de ERROR
+# a cada 1–2 minutos sem impacto no bot.
+logging.getLogger("sqlalchemy.pool").setLevel(logging.CRITICAL)
 
 
 async def init_db():

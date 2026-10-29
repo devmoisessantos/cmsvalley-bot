@@ -138,14 +138,13 @@ def _montar_rodape() -> str:
     """
     Rodapé com timestamp relativo do Discord (<t:unix:R>).
 
-    O cliente do Discord atualiza sozinho (há 5 segundos, há 23 segundos,
-    há 1 minuto…). Mesmo padrão do ranking de plantão em tempo real.
+    O cliente do Discord atualiza sozinho (há 1 segundo, há 37 segundos,
+    há 1 minuto…). A task só reedita o card quando a lista muda; nessas
+    edições o carimbo é renovado.
     """
+    # Unix timestamp é absoluto; FUSO só define "agora" no fuso local.
     agora_ts = int(datetime.now(FUSO).timestamp())
-    return (
-        f"-# CENTRO MÉDICO SUL · atualizado em tempo real · "
-        f"<t:{agora_ts}:R>"
-    )
+    return f"-# CENTRO MÉDICO SUL · atualizado em tempo real · <t:{agora_ts}:R>"
 
 
 async def montar_painel_plantao_ativo(
@@ -254,30 +253,21 @@ async def montar_painel_plantao_ativo(
 
         if eh_primeiro:
             itens.append(_cabecalho())
-            itens.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-            )
+            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         else:
             itens.append(
                 discord.ui.TextDisplay(
-                    f"-# Continuação · plantão ativo "
-                    f"({indice + 1}/{total_blocos})"
+                    f"-# Continuação · plantão ativo ({indice + 1}/{total_blocos})"
                 )
             )
-            itens.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
-            )
+            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
 
         itens.append(discord.ui.TextDisplay(corpo))
 
         if eh_ultimo:
-            itens.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-            )
+            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
             itens.append(discord.ui.TextDisplay(legenda))
-            itens.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-            )
+            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
             itens.append(discord.ui.TextDisplay(rodape))
 
         view.add_item(discord.ui.Container(*itens, accent_color=cor))

@@ -3,9 +3,10 @@
 Atualização em tempo real (mesmo padrão do ranking de moedas):
 
 1. ``loop_tempo_real_horas`` e ``loop_ranking_moedas`` rodam a cada 1 minuto.
-2. Cada ciclo monta o card de novo e **edita só as páginas cuja
-   contagem mudou** (assinatura por página). Página igual à anterior
-   não chama a API — evita rate limit no canal.
+2. Cada ciclo monta o card de novo e edita as páginas cuja contagem
+   mudou (assinatura por página). A **última página sempre é reeditada**:
+   só ela traz o rodapé ``<t:unix:R>``, para o cliente mostrar
+   "há 1 segundo", "há 37 segundos", etc.
 3. O ID da mensagem fica em ``paineis_postados`` (nome do painel no config).
 4. Nas horas, a contagem do período ``tempo_real`` soma logs fechados **e**
    o trecho ainda aberto em call — espelhando o saldo vivo das moedas.
@@ -202,8 +203,9 @@ class RankingPlantaoTasks(commands.Cog):
 
         A assinatura usa quem aparece naquela página e os segundos de cada
         um. Na última página entra também o total geral (o card mostra
-        esse total). O rodapé com horário relativo não entra: ele muda
-        todo minuto e forçaria edição sem o ranking ter mudado.
+        esse total). O rodapé relativo não entra na assinatura: a última
+        página é reeditada todo ciclo de propósito, para renovar o
+        ``<t:unix:R>`` mesmo quando a contagem não mudou.
         """
         ordenados = ordenar_ranking_individual(contagem)
         por_pagina = ENTRADAS_POR_CARD_RANKING_HORAS
@@ -218,9 +220,7 @@ class RankingPlantaoTasks(commands.Cog):
             fim = inicio + por_pagina
             pedaco = ordenados[inicio:fim]
             partes = [f"{discord_id}:{segundos}" for discord_id, segundos in pedaco]
-            assinatura = (
-                f"{indice_pagina + 1}/{total_paginas}|" + "|".join(partes)
-            )
+            assinatura = f"{indice_pagina + 1}/{total_paginas}|" + "|".join(partes)
             # Última página exibe o total da equipe — entra na assinatura
             if indice_pagina == total_paginas - 1:
                 assinatura = f"{assinatura}|total:{total_geral}"
@@ -412,10 +412,12 @@ class RankingPlantaoTasks(commands.Cog):
             }
             return
 
-        # Tenta só editar as páginas cuja contagem mudou.
-        # Página igual à última enviada → não chama a API (evita 429).
+        # Edita páginas cuja contagem mudou. A última página sempre é
+        # reeditada: só ela carrega o rodapé ``<t:unix:R>``, e sem isso
+        # o cliente mostra "há 2 minutos" mesmo com ranking correto.
         precisa_republicar = False
         ja_editou_alguma = False
+        indice_ultima_pagina = len(views) - 1
         for indice, view in enumerate(views):
             if indice >= len(registros):
                 # Ranking cresceu: páginas novas — só acrescenta no fim
@@ -423,15 +425,14 @@ class RankingPlantaoTasks(commands.Cog):
                 break
 
             assinatura_nova = (
-                assinaturas_novas[indice]
-                if indice < len(assinaturas_novas)
-                else ""
+                assinaturas_novas[indice] if indice < len(assinaturas_novas) else ""
             )
             assinatura_antiga = self._assinaturas_paginas_horas.get(indice)
-            if (
-                assinatura_antiga is not None
-                and assinatura_antiga == assinatura_nova
-            ):
+            eh_ultima_pagina = indice == indice_ultima_pagina
+            contagem_igual = (
+                assinatura_antiga is not None and assinatura_antiga == assinatura_nova
+            )
+            if contagem_igual and not eh_ultima_pagina:
                 continue
 
             # Espaça edições entre páginas para não estourar o limite
@@ -454,13 +455,23 @@ class RankingPlantaoTasks(commands.Cog):
                 precisa_republicar = True
                 break
             except discord.HTTPException as erro_http:
-                logger.warning(
-                    "Falha ao editar página %s do ranking horas: %s",
-                    indice + 1,
-                    erro_http,
-                )
+                # Rate limit (429) e erros transitórios: só registra em
+                # debug para não poluir o log a cada minuto.
+                codigo = getattr(erro_http, "status", None)
+                if codigo == 429:
+                    logger.debug(
+                        "Rate limit ao editar página %s do ranking horas; "
+                        "tenta de novo no próximo ciclo.",
+                        indice + 1,
+                    )
+                else:
+                    logger.warning(
+                        "Falha ao editar página %s do ranking horas: %s",
+                        indice + 1,
+                        erro_http,
+                    )
                 # Não republica por erro transitório (rate limit etc.)
-                # para não floodar o canal. O próximo minuto tenta de novo.
+                # para não floodar o canal. O próximo ciclo tenta de novo.
                 # Não grava a assinatura: na próxima volta tenta de novo.
 
         if precisa_republicar:
@@ -483,9 +494,9 @@ class RankingPlantaoTasks(commands.Cog):
                         mensagem.id,
                     )
                     if indice < len(assinaturas_novas):
-                        self._assinaturas_paginas_horas[indice] = (
-                            assinaturas_novas[indice]
-                        )
+                        self._assinaturas_paginas_horas[indice] = assinaturas_novas[
+                            indice
+                        ]
                     logger.info(
                         "Ranking HORAS tempo real página %s/%s em #%s",
                         pagina,
@@ -524,11 +535,11 @@ class RankingPlantaoTasks(commands.Cog):
         3) envia ganhadores + valores ao canal de finanças
         4) grava histórico (sem re-postar ranking no canal)
         """
-        from src.recrutamento.ranking_service import obter_periodo_postagem_semanal
         from src.plantao.ranking_plantao_service import (
             buscar_horas_por_membro,
             montar_view_ranking_horas,
         )
+        from src.recrutamento.ranking_service import obter_periodo_postagem_semanal
 
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
@@ -541,9 +552,7 @@ class RankingPlantaoTasks(commands.Cog):
 
         # Idempotência: se este ciclo semanal já foi fechado, não repete
         # ranking nem premiação (bot reiniciado no sábado 11h, etc.).
-        ja_fechado = await historico_ja_publicado(
-            "horas_semanal", inicio, fim_periodo
-        )
+        ja_fechado = await historico_ja_publicado("horas_semanal", inicio, fim_periodo)
         if ja_fechado is not None:
             logger.info(
                 "Ciclo semanal horas já fechado (histórico #%s) — "
@@ -558,9 +567,9 @@ class RankingPlantaoTasks(commands.Cog):
         # 1) Fecha segmentos abertos para o tempo na virada entrar na semana
         #    que está encerrando (e o ciclo novo começar limpo).
         try:
-            from src.plantao.plantao_service import fechar_segmento_parcial_do_ciclo
-            from src.plantao.carteira_service import cotacao_moeda_do_membro
             from src.database.models import EstadoPlantao
+            from src.plantao.carteira_service import cotacao_moeda_do_membro
+            from src.plantao.plantao_service import fechar_segmento_parcial_do_ciclo
 
             async with async_session() as sessao:
                 resultado = await sessao.execute(
@@ -737,9 +746,7 @@ class RankingPlantaoTasks(commands.Cog):
                     await self._apagar_registro_tempo_real()
                     await self._atualizar_ou_criar_tempo_real_horas()
                     self._reinicio_tempo_real.add(chave_r)
-                    logger.info(
-                        "Novo ciclo RANKING HORAS tempo real iniciado (zerado)"
-                    )
+                    logger.info("Novo ciclo RANKING HORAS tempo real iniciado (zerado)")
                 except Exception as erro:
                     logger.exception("Reinício tempo real horas: %s", erro)
 

@@ -27,8 +27,8 @@ from src.plantao.carteira_service import (
     ranking_top_moedas,
     zerar_saldo_moedas,
 )
-from src.utils.formatacao import formatar_dinheiro
 from src.recrutamento.recrutamento_service import resolver_id_fivem
+from src.utils.formatacao import formatar_dinheiro
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +168,7 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
             )
         else:
             linhas_rank.append(
-                f"`{posicao}.` {mencao} | FID `{fid}` · "
-                f"**{saldo}** · `{equiv}`"
+                f"`{posicao}.` {mencao} | FID `{fid}` · **{saldo}** · `{equiv}`"
             )
 
     if not linhas_rank:
@@ -228,11 +227,25 @@ async def atualizar_ranking_moedas(bot: discord.Client) -> None:
             mensagem = await canal.fetch_message(int(registro.message_id))
             await mensagem.edit(view=view)
             return
-        except (discord.NotFound, discord.HTTPException) as erro:
+        except discord.NotFound as erro:
+            logger.warning("Ranking moedas: mensagem sumiu, recriando (%s)", erro)
+        except discord.HTTPException as erro:
+            codigo = getattr(erro, "status", None)
+            if codigo == 429:
+                logger.debug(
+                    "Ranking moedas: rate limit na edição; tenta no próximo ciclo."
+                )
+                return
             logger.warning("Ranking moedas: recriando mensagem (%s)", erro)
 
     try:
         mensagem = await canal.send(view=view)
         await _salvar_registro(canal.id, mensagem.id)
     except discord.HTTPException as erro:
+        codigo = getattr(erro, "status", None)
+        if codigo == 429:
+            logger.debug(
+                "Ranking moedas: rate limit ao postar; tenta no próximo ciclo."
+            )
+            return
         logger.warning("Ranking moedas: falha ao postar (%s)", erro)

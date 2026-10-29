@@ -3,6 +3,10 @@ Atualiza o painel fixo de plantão ativo a cada minuto.
 
 Busca quem tem toggle ligado, monta o card e edita a mesma mensagem
 no canal PAINEL_FIXO_PLANTAO_ATIVO. Se a mensagem sumiu, publica de novo.
+
+Só reedita quando a lista de quem está em serviço (status e tempo)
+mudou. O rodapé ``<t:unix:R>`` é renovado nessas edições; o cliente do
+Discord atualiza o texto relativo sozinho entre uma edição e outra.
 """
 
 from __future__ import annotations
@@ -17,7 +21,10 @@ from src.config import CANAIS
 from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.plantao.plantao_ativos_panel import montar_painel_plantao_ativo
-from src.plantao.plantao_service import listar_em_servico
+from src.plantao.plantao_service import (
+    calcular_segundos_plantao_atual,
+    listar_em_servico,
+)
 
 registrador = logging.getLogger(__name__)
 
@@ -32,6 +39,8 @@ class PlantaoAtivosTasks(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Assinatura da última lista enviada. Se nada mudou, não chama a API.
+        self._assinatura_ultima_lista: str | None = None
         self.atualizar_painel_ativos.start()
 
     def cog_unload(self) -> None:
@@ -39,7 +48,7 @@ class PlantaoAtivosTasks(commands.Cog):
 
     @tasks.loop(seconds=INTERVALO_SEGUNDOS)
     async def atualizar_painel_ativos(self) -> None:
-        """Busca quem está em serviço e atualiza o card fixo."""
+        """Busca quem está em serviço e atualiza o card fixo se mudou."""
         try:
             await self._atualizar_ou_publicar()
         except Exception as erro_capturado:
@@ -52,12 +61,35 @@ class PlantaoAtivosTasks(commands.Cog):
     async def _esperar_bot_pronto(self) -> None:
         await self.bot.wait_until_ready()
 
+    async def _montar_assinatura(self, estados) -> str:
+        """
+        Texto estável que resume quem está no painel e com qual status/tempo.
+
+        Se a assinatura for igual à da última edição, o card não precisa
+        ser reescrito (evita rate limit e DELETE em cascata no canal).
+        """
+        if not estados:
+            return "vazio"
+        partes: list[str] = []
+        for estado in estados:
+            segundos = await calcular_segundos_plantao_atual(
+                estado.discord_id,
+                estado,
+            )
+            # Arredonda para o minuto: mudança de segundo a segundo não
+            # força edição a cada ciclo sem mudança real de status.
+            minutos = int(segundos) // 60
+            em_call = "1" if estado.em_call_valida else "0"
+            segmento = "1" if estado.segmento_iniciado_em is not None else "0"
+            mudo = "1" if estado.afk_mudo_surdo_desde is not None else "0"
+            partes.append(f"{estado.discord_id}:{em_call}:{segmento}:{mudo}:{minutos}")
+        partes.sort()
+        return "|".join(partes)
+
     async def _atualizar_ou_publicar(self) -> None:
         canal_id = CANAIS.get("PAINEL_FIXO_PLANTAO_ATIVO") or 0
         if not canal_id:
-            registrador.debug(
-                "PAINEL_FIXO_PLANTAO_ATIVO não configurado; pulando."
-            )
+            registrador.debug("PAINEL_FIXO_PLANTAO_ATIVO não configurado; pulando.")
             return
 
         canal = self.bot.get_channel(canal_id)
@@ -73,10 +105,20 @@ class PlantaoAtivosTasks(commands.Cog):
                 return
 
         estados = await listar_em_servico(limite=80)
+        assinatura_nova = await self._montar_assinatura(estados)
+        registro = await self._buscar_registro()
+
+        # Já tem mensagem e a lista não mudou: não mexe no Discord.
+        if (
+            registro is not None
+            and self._assinatura_ultima_lista is not None
+            and self._assinatura_ultima_lista == assinatura_nova
+        ):
+            return
+
         guilda = getattr(canal, "guild", None)
         view = await montar_painel_plantao_ativo(estados, guild=guilda)
 
-        registro = await self._buscar_registro()
         if registro is not None:
             atualizado = await self._editar_mensagem_existente(
                 canal,
@@ -84,18 +126,19 @@ class PlantaoAtivosTasks(commands.Cog):
                 view,
             )
             if atualizado:
+                self._assinatura_ultima_lista = assinatura_nova
                 return
             await self._publicar_nova_mensagem(canal, view, registro)
+            self._assinatura_ultima_lista = assinatura_nova
             return
 
         await self._publicar_nova_mensagem(canal, view, None)
+        self._assinatura_ultima_lista = assinatura_nova
 
     async def _buscar_registro(self):
         async with async_session() as sessao:
             resultado = await sessao.execute(
-                select(PainelPostado).where(
-                    PainelPostado.nome_painel == NOME_PAINEL
-                )
+                select(PainelPostado).where(PainelPostado.nome_painel == NOME_PAINEL)
             )
             return resultado.scalar_one_or_none()
 
@@ -125,6 +168,15 @@ class PlantaoAtivosTasks(commands.Cog):
             await mensagem.edit(view=view)
             return True
         except discord.HTTPException as erro_edicao:
+            codigo = getattr(erro_edicao, "status", None)
+            if codigo == 429:
+                # Rate limit: não republica nem polui o log; o próximo
+                # ciclo tenta de novo.
+                registrador.debug(
+                    "Rate limit ao editar plantão ativo %s; tenta de novo.",
+                    message_id,
+                )
+                return True
             registrador.warning(
                 "Falha ao editar plantão ativo %s: %s. Republicando.",
                 message_id,
