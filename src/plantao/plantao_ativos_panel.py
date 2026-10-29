@@ -138,9 +138,10 @@ def _montar_rodape() -> str:
     """
     Rodapé com timestamp relativo do Discord (<t:unix:R>).
 
-    O cliente do Discord atualiza sozinho (há 1 segundo, há 37 segundos,
-    há 1 minuto…). A task só reedita o card quando a lista muda; nessas
-    edições o carimbo é renovado.
+    O cliente atualiza sozinho (há 1 segundo … há 1 minuto). A cada
+    ciclo de 1 minuto a task reedita o card com carimbo novo: a
+    contagem relativa recomeça em "há 1 segundo" e os tempos da lista
+    também são atualizados.
     """
     # Unix timestamp é absoluto; FUSO só define "agora" no fuso local.
     agora_ts = int(datetime.now(FUSO).timestamp())
