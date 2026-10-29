@@ -1,17 +1,14 @@
 """
-Relógio confiável para carimbos do Discord (<t:unix:R>).
+Horário para carimbos ``<t:unix:R>`` — só a API do Discord.
 
-Em container sem NTP (sem systemd/sudo) o relógio do sistema pode ficar
-atrasado. O Discord compara o timestamp do card com o relógio do celular
-do membro: se o bot gravar um Unix 2 minutos no passado, o rodapé já
-nasce como "há 2 minutos".
+O container pode ter relógio atrasado (sem NTP). O Discord compara o
+timestamp do card com o relógio do celular do membro. Por isso o bot
+não confia no ``time.time()`` do sistema para o rodapé.
 
-Esta rotina:
-1. Consulta a hora real via HTTP (cabeçalho Date ou API pública)
-2. Guarda o desvio (segundos) entre o sistema e a hora real
-3. Devolve time.time() + desvio para montar <t:...:R>
+Fonte única: cabeçalho ``Date`` de ``https://discord.com``.
+Guarda o desvio (Discord − local) e devolve ``time.time() + desvio``.
 
-Se a rede falhar, usa o relógio local (melhor que travar o bot).
+Se a rede falhar uma vez, mantém o último desvio conhecido.
 """
 
 from __future__ import annotations
@@ -25,29 +22,25 @@ import aiohttp
 
 registrador = logging.getLogger(__name__)
 
-# Desvio em segundos: real - local. Positivo = sistema atrasado.
+# Discord − local. Positivo = sistema do bot atrasado.
 _desvio_segundos: float = 0.0
 _ultima_sincronizacao: float = 0.0
-# Não martela a rede: no máximo uma sync a cada 10 minutos.
-_INTERVALO_SINCRONIZACAO = 600.0
+# Sync a cada 5 min (desvio pode crescer em containers sem NTP).
+_INTERVALO_SINCRONIZACAO = 300.0
 
 
 def timestamp_unix_agora() -> int:
     """
-    Unix agora, corrigido pelo desvio medido na última sincronização.
+    Unix "agora" alinhado ao horário da API do Discord.
 
-    Pode ser chamado de código síncrono (montagem de rodapé).
+    Uso síncrono na montagem do rodapé ``<t:...:R>``.
     """
     return int(time.time() + _desvio_segundos)
 
 
 async def sincronizar_relogio_com_rede() -> None:
     """
-    Atualiza o desvio medindo a hora real na internet.
-
-    Preferência:
-    1. Cabeçalho Date de https://discord.com (mesma infra do cliente)
-    2. Fallback: worldtimeapi.org em UTC
+    Atualiza o desvio consultando só o Discord (cabeçalho Date).
     """
     global _desvio_segundos, _ultima_sincronizacao
 
@@ -58,67 +51,47 @@ async def sincronizar_relogio_com_rede() -> None:
     ):
         return
 
-    hora_real = await _buscar_hora_real_http()
-    if hora_real is None:
+    hora_discord = await _hora_unix_do_discord()
+    if hora_discord is None:
         registrador.warning(
-            "Não consegui sincronizar o relógio pela rede; "
-            "mantenho desvio atual de %.1f s.",
+            "Não consegui ler a hora do Discord; mantenho desvio atual de %.1f s.",
             _desvio_segundos,
         )
         return
 
-    # Mede de novo o local perto da resposta para reduzir latência no desvio.
     local_no_fim = time.time()
-    _desvio_segundos = hora_real - local_no_fim
+    _desvio_segundos = hora_discord - local_no_fim
     _ultima_sincronizacao = local_no_fim
 
     if abs(_desvio_segundos) >= 30:
         registrador.warning(
-            "Relógio do sistema está %.0f s fora da hora real "
+            "Relógio local %.0f s fora do Discord "
             "(desvio aplicado nos carimbos <t:R>).",
             _desvio_segundos,
         )
     else:
         registrador.info(
-            "Relógio sincronizado; desvio = %.1f s.",
+            "Relógio alinhado ao Discord; desvio = %.1f s.",
             _desvio_segundos,
         )
 
 
-async def _buscar_hora_real_http() -> float | None:
-    """Devolve Unix UTC da rede, ou None se tudo falhar."""
+async def _hora_unix_do_discord() -> float | None:
+    """Unix UTC a partir do cabeçalho Date de discord.com."""
     timeout = aiohttp.ClientTimeout(total=8)
-
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sessao:
             async with sessao.head("https://discord.com") as resposta:
                 cabecalho = resposta.headers.get("Date")
-                if cabecalho:
-                    momento = parsedate_to_datetime(cabecalho)
-                    if momento.tzinfo is None:
-                        momento = momento.replace(tzinfo=timezone.utc)
-                    return momento.timestamp()
+                if not cabecalho:
+                    return None
+                momento = parsedate_to_datetime(cabecalho)
+                if momento.tzinfo is None:
+                    momento = momento.replace(tzinfo=timezone.utc)
+                return momento.timestamp()
     except Exception as erro_discord:
         registrador.debug(
             "Hora via discord.com falhou: %s",
             erro_discord,
         )
-
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as sessao:
-            async with sessao.get(
-                "https://worldtimeapi.org/api/timezone/Etc/UTC"
-            ) as resposta:
-                if resposta.status != 200:
-                    return None
-                dados = await resposta.json(content_type=None)
-                unixtime = dados.get("unixtime")
-                if unixtime is not None:
-                    return float(unixtime)
-    except Exception as erro_api:
-        registrador.debug(
-            "Hora via worldtimeapi falhou: %s",
-            erro_api,
-        )
-
-    return None
+        return None

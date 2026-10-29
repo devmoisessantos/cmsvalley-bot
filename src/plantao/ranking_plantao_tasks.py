@@ -59,6 +59,7 @@ from src.utils.formatacao import (
 )
 from src.utils.log_container import LogContainerView
 from src.utils.mensagens import COR_SUCESSO
+from src.utils.relogio import sincronizar_relogio_com_rede
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +105,13 @@ class RankingPlantaoTasks(commands.Cog):
     @tasks.loop(minutes=1)
     async def loop_tempo_real_horas(self):
         """
-        Atualiza o card persistente de horas a cada minuto.
+        Ciclo de 1 minuto (rodapé <t:R> 1s → ~1 min → reinicia).
 
-        Espelha o ``loop_ranking_moedas``: recalcula totais e edita a mesma
-        mensagem no canal de ranking. Falhas ficam no log e não param o loop.
+        - Páginas do meio: só edita se a contagem daquela página mudou.
+        - Última página: sempre edita (leva o rodapé; zera o <t:R>).
         """
         try:
+            await sincronizar_relogio_com_rede()
             await self._atualizar_ou_criar_tempo_real_horas()
         except Exception as erro:
             logger.exception("Loop tempo real horas: %s", erro)
@@ -136,14 +138,15 @@ class RankingPlantaoTasks(commands.Cog):
     @tasks.loop(minutes=1)
     async def loop_ranking_moedas(self):
         """
-        Mantém o ranking de moedas atualizado a cada minuto.
+        Ciclo de 1 minuto (rodapé <t:R> 1s → ~1 min → reinicia).
 
-        Mesmo contrato do loop de horas: edita a mensagem persistente
-        (saldo vivo em estado_plantao) e isola falhas do ciclo seguinte.
+        Sempre reedita a mensagem única para zerar o rodapé. A view já
+        traz saldos atuais; um edit/min não estoura rate limit.
         """
         try:
             from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
 
+            await sincronizar_relogio_com_rede()
             await atualizar_ranking_moedas(self.bot)
         except Exception as erro:
             logger.exception("Loop ranking moedas: %s", erro)

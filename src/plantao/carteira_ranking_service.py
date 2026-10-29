@@ -204,7 +204,12 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
 
 
 async def atualizar_ranking_moedas(bot: discord.Client) -> None:
-    """Cria ou edita a mensagem única do ranking de moedas."""
+    """
+    Cria ou edita a mensagem única do ranking de moedas.
+
+    Chamada a cada 1 minuto pelo loop: sempre reedita para o rodapé
+    ``<t:R>`` voltar a "há 1 segundo". Um edit por minuto é seguro.
+    """
     canal_id = CANAIS.get("RANKING_MOEDAS") or 0
     if not canal_id:
         return

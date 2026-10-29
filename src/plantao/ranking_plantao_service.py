@@ -45,6 +45,7 @@ from src.database.models import (
     EstadoPlantao,
     LogPlantao,
     RankingHistorico,
+    agora,
 )
 from src.plantao.carteira_service import membro_elegivel_ranking_moedas
 from src.recrutamento.ranking_service import (
@@ -840,6 +841,7 @@ async def salvar_historico_plantao(
         ),
         channel_id=channel_id,
         message_id=message_id,
+        criado_em=agora(),
     )
     async with async_session() as session:
         session.add(registro)
