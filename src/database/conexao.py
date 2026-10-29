@@ -13,6 +13,7 @@ Pool:
 """
 
 import logging
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -31,20 +32,89 @@ from src.database.models import Base
 
 registrador = logging.getLogger(__name__)
 
+
+def _preparar_url_e_argumentos_de_conexao(url_do_banco: str) -> tuple[str, dict]:
+    """
+    Ajusta a URL do banco para o driver asyncpg.
+
+    Neon, Render e outros provedores costumam entregar DATABASE_URL com
+    ?sslmode=require. Esse parâmetro é do libpq/psycopg2. O asyncpg não
+    aceita sslmode e estoura TypeError na subida do bot.
+
+    Esta função:
+    1. Garante o prefixo postgresql+asyncpg://
+    2. Remove sslmode (e channel_binding) da query da URL
+    3. Se o provedor pedia SSL, devolve connect_args com ssl=True
+    """
+    url_ajustada = url_do_banco.strip()
+
+    if url_ajustada.startswith("postgres://"):
+        url_ajustada = "postgresql://" + url_ajustada[len("postgres://") :]
+
+    if url_ajustada.startswith("postgresql://"):
+        url_ajustada = (
+            "postgresql+asyncpg://" + url_ajustada[len("postgresql://") :]
+        )
+
+    partes = urlparse(url_ajustada)
+    parametros = parse_qsl(partes.query, keep_blank_values=True)
+
+    parametros_que_ficam = []
+    precisa_de_ssl = False
+
+    for nome, valor in parametros:
+        nome_em_minusculo = nome.lower()
+        if nome_em_minusculo == "sslmode":
+            valor_em_minusculo = (valor or "").lower()
+            if valor_em_minusculo not in ("disable", "allow", ""):
+                precisa_de_ssl = True
+            continue
+        if nome_em_minusculo == "channel_binding":
+            # Também é parâmetro do libpq; o asyncpg não conhece.
+            continue
+        if nome_em_minusculo == "ssl":
+            if (valor or "").lower() in ("true", "1", "require"):
+                precisa_de_ssl = True
+            continue
+        parametros_que_ficam.append((nome, valor))
+
+    query_limpa = urlencode(parametros_que_ficam)
+    url_limpa = urlunparse(
+        (
+            partes.scheme,
+            partes.netloc,
+            partes.path,
+            partes.params,
+            query_limpa,
+            partes.fragment,
+        )
+    )
+
+    argumentos_de_conexao = {
+        "timeout": 30,
+        "command_timeout": 60,
+        "server_settings": {"application_name": "discord-bot"},
+    }
+    if precisa_de_ssl:
+        argumentos_de_conexao["ssl"] = True
+
+    return url_limpa, argumentos_de_conexao
+
+
+URL_DO_BANCO_PRONTA, ARGUMENTOS_DE_CONEXAO = (
+    _preparar_url_e_argumentos_de_conexao(DATABASE_URL)
+)
+
 # Render / Neon / proxies costumam fechar conexões ociosas.
 # pre_ping + recycle evitam entregar uma conexão já morta às tasks.
 engine = create_async_engine(
-    DATABASE_URL,
+    URL_DO_BANCO_PRONTA,
     echo=False,
     pool_size=5,
     max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=3600,
-    connect_args={
-        "timeout": 30,
-        "command_timeout": 60,
-        "server_settings": {"application_name": "discord-bot"},
-    },
+    connect_args=ARGUMENTOS_DE_CONEXAO,
 )
 
 # expire_on_commit=False evita que os objetos "expirem" depois do commit
