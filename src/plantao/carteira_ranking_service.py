@@ -4,10 +4,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import (
-    datetime,
-    timezone,
-)
 
 import discord
 from sqlalchemy import select
@@ -29,6 +25,7 @@ from src.plantao.carteira_service import (
 )
 from src.recrutamento.recrutamento_service import resolver_id_fivem
 from src.utils.formatacao import formatar_dinheiro
+from src.utils.relogio import timestamp_unix_agora
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +173,7 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
     else:
         corpo_rank = "\n".join(linhas_rank)
 
-    momento = int(datetime.now(timezone.utc).timestamp())
+    momento = timestamp_unix_agora()
     url_icone = guilda.icon.url if guilda.icon else None
 
     titulo = "# 🏆 Ranking de Moedas — Top 15"

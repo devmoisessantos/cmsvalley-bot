@@ -11,7 +11,6 @@ Status:
 
 from __future__ import annotations
 
-from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import discord
@@ -20,6 +19,7 @@ from src.config import FUSO_HORARIO_LOCAL
 from src.database.models import EstadoPlantao
 from src.plantao.plantao_service import calcular_segundos_plantao_atual
 from src.utils.formatacao import formatar_hms
+from src.utils.relogio import timestamp_unix_agora
 
 FUSO = ZoneInfo(FUSO_HORARIO_LOCAL)
 
@@ -143,8 +143,8 @@ def _montar_rodape() -> str:
     contagem relativa recomeça em "há 1 segundo" e os tempos da lista
     também são atualizados.
     """
-    # Unix timestamp é absoluto; FUSO só define "agora" no fuso local.
-    agora_ts = int(datetime.now(FUSO).timestamp())
+    # Relógio do sistema (Unix). Não usa data do banco.
+    agora_ts = timestamp_unix_agora()
     return f"-# CENTRO MÉDICO SUL · atualizado em tempo real · <t:{agora_ts}:R>"
 
 

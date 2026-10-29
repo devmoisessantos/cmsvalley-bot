@@ -98,6 +98,7 @@ from src.utils.mensagens import (
     COR_AVISO,
     COR_ERRO,
 )
+from src.utils.relogio import sincronizar_relogio_com_rede
 from src.utils.setup_paineis import (
     garantir_painel_avaliacao,
     garantir_painel_eventos_gate,
@@ -408,6 +409,15 @@ class CmsValleyBot(commands.Bot):
             return
 
         registrador.info("✅ Bot conectado como %s (ID: %s)", self.user, self.user.id)
+
+        # Corrige desvio do relógio do container (sem NTP/systemd).
+        try:
+            await sincronizar_relogio_com_rede()
+        except Exception as erro_relogio:
+            registrador.warning(
+                "Sincronização de relógio falhou: %s",
+                erro_relogio,
+            )
 
         await self._avisar_sobre_cogs_que_falharam(servidor_principal)
 

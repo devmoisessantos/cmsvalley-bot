@@ -27,6 +27,7 @@ from src.database.conexao import async_session
 from src.database.models import PainelPostado
 from src.plantao.plantao_ativos_panel import montar_painel_plantao_ativo
 from src.plantao.plantao_service import listar_em_servico
+from src.utils.relogio import sincronizar_relogio_com_rede
 
 registrador = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class PlantaoAtivosTasks(commands.Cog):
     async def atualizar_painel_ativos(self) -> None:
         """Busca quem está em serviço e atualiza o card fixo."""
         try:
+            await sincronizar_relogio_com_rede()
             await self._atualizar_ou_publicar()
         except Exception as erro_capturado:
             registrador.exception(
@@ -130,6 +132,10 @@ class PlantaoAtivosTasks(commands.Cog):
 
         try:
             await mensagem.edit(view=view)
+            registrador.info(
+                "Plantão ativo atualizado (edit message_id=%s).",
+                message_id,
+            )
             return True
         except discord.HTTPException as erro_edicao:
             codigo = getattr(erro_edicao, "status", None)
