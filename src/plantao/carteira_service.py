@@ -19,7 +19,7 @@ from datetime import (
 )
 
 import discord
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import (
@@ -171,8 +171,10 @@ async def _garantir_lotes_alinhados(
 
     if soma < saldo:
         falta = saldo - soma
-        cot = int(cotacao_legado) if cotacao_legado and cotacao_legado > 0 else int(
-            VALOR_MOEDA_INGAME
+        cot = (
+            int(cotacao_legado)
+            if cotacao_legado and cotacao_legado > 0
+            else int(VALOR_MOEDA_INGAME)
         )
         lote_legado = None
         for lote in lotes:
@@ -364,8 +366,10 @@ async def obter_valor_total_lotes(
             saldo,
             cotacao_legado=cotacao_legado,
         )
-        if reparar_legado and cotacao_legado and int(cotacao_legado) > int(
-            VALOR_MOEDA_INGAME
+        if (
+            reparar_legado
+            and cotacao_legado
+            and int(cotacao_legado) > int(VALOR_MOEDA_INGAME)
         ):
             lotes = await _reparar_lotes_so_minimo(
                 sessao,
@@ -714,8 +718,7 @@ async def transferir_moedas(
                 saldo_apos=saldo_rem_final,
                 outro_discord_id=destinatario.id,
                 referencia=(
-                    f"para {destinatario.id} · "
-                    f"{formatar_dinheiro(valor_movido)}"
+                    f"para {destinatario.id} · {formatar_dinheiro(valor_movido)}"
                 )[:200],
             )
         )
@@ -726,10 +729,9 @@ async def transferir_moedas(
                 valor=quantidade,
                 saldo_apos=saldo_dest_final,
                 outro_discord_id=remetente.id,
-                referencia=(
-                    f"de {remetente.id} · "
-                    f"{formatar_dinheiro(valor_movido)}"
-                )[:200],
+                referencia=(f"de {remetente.id} · {formatar_dinheiro(valor_movido)}")[
+                    :200
+                ],
             )
         )
         await sessao.commit()
@@ -822,10 +824,9 @@ async def aprovar_deposito(
                 tipo="DEPOSITO",
                 valor=qtd,
                 saldo_apos=saldo_apos,
-                referencia=(
-                    f"pedido #{pedido.id} · "
-                    f"{formatar_dinheiro(valor_pedido)}"
-                )[:200],
+                referencia=(f"pedido #{pedido.id} · {formatar_dinheiro(valor_pedido)}")[
+                    :200
+                ],
             )
         )
         await sessao.commit()
@@ -866,11 +867,13 @@ async def ranking_top_moedas(
     cotacao_por_membro: dict[int, int] | None = None,
 ) -> list[tuple[int, int, int]]:
     """
-    Lista (discord_id, saldo_moedas, valor_ingame) ordenada por valor_ingame desc.
+    Lista (discord_id, saldo_moedas, valor_ingame) ordenada por **saldo** desc.
 
-    O valor in-game é a soma dos lotes (quantidade × cotação congelada no crédito).
-    Saldo sem lote (ou só legado mínimo) usa ``cotacao_por_membro[id]`` quando
-    informada; senão a cotação mínima (Enfermeiro).
+    Quem tem mais moedas fica na frente. Em empate de saldo, usa o valor
+    in-game dos lotes (cotação congelada) como desempate.
+
+    O valor in-game continua sendo calculado e devolvido para o card
+    mostrar o equivalente em R$, mas não define a posição.
 
     Busca mais linhas do que o limite para o ranking filtrar quem
     ainda faz parte da organização (guild + hierarquia).
@@ -922,7 +925,12 @@ async def ranking_top_moedas(
             )
             candidatos.append((did, saldo, valor))
 
-        candidatos.sort(key=lambda item: item[2], reverse=True)
+        # item = (discord_id, saldo, valor_ingame)
+        # Ordena por quantidade de moedas; valor R$ só desempatat.
+        candidatos.sort(
+            key=lambda item: (item[1], item[2]),
+            reverse=True,
+        )
         return candidatos[:buscar]
 
 
@@ -955,8 +963,7 @@ async def zerar_saldo_moedas(
                 valor=-saldo,
                 saldo_apos=0,
                 referencia=(
-                    f"{motivo or 'Saldo zerado'} · "
-                    f"{formatar_dinheiro(valor_zerado)}"
+                    f"{motivo or 'Saldo zerado'} · {formatar_dinheiro(valor_zerado)}"
                 )[:200],
             )
         )

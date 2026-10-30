@@ -4,11 +4,6 @@
 from __future__ import annotations
 
 import logging
-import time
-from datetime import (
-    datetime,
-    timezone,
-)
 
 import discord
 from sqlalchemy import select
@@ -28,9 +23,9 @@ from src.plantao.carteira_service import (
     ranking_top_moedas,
     zerar_saldo_moedas,
 )
+from src.recrutamento.recrutamento_service import resolver_id_fivem
 from src.utils.formatacao import formatar_dinheiro
 from src.utils.relogio import timestamp_unix_agora
-from src.recrutamento.recrutamento_service import resolver_id_fivem
 
 logger = logging.getLogger(__name__)
 
@@ -170,8 +165,7 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
             )
         else:
             linhas_rank.append(
-                f"`{posicao}.` {mencao} | FID `{fid}` · "
-                f"**{saldo}** · `{equiv}`"
+                f"`{posicao}.` {mencao} | FID `{fid}` · **{saldo}** · `{equiv}`"
             )
 
     if not linhas_rank:
@@ -179,28 +173,32 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
     else:
         corpo_rank = "\n".join(linhas_rank)
 
-    momento = timestamp_unix_agora()
+    momento = int(timestamp_unix_agora())
     url_icone = guilda.icon.url if guilda.icon else None
 
-    titulo = "# 🏆 Ranking de Moedas — Top 15"
-    intro = (
-        "> Classificação por **valor dos lotes** (cotação congelada no crédito)"
-        " · sem premiação · sem reset\n\n"
-        f"## Ranking\n{corpo_rank}"
+    titulo = "# Ranking de Moedas — Top 15"
+    subtitulo = (
+        "> Classificação por **quantidade de moedas** "
+        "( equiv. R$ ) · sem premiação · sem reset"
     )
-    rodape = f"-# {guilda.name} • atualizado em tempo real · <t:{momento}:R>"
+    corpo = f"## Ranking\n{corpo_rank}"
+    # Rodapé isolado: o <t:R> precisa de TextDisplay próprio para o
+    # cliente Discord atualizar "há 1 segundo" … "há 1 minuto".
+    rodape = f"-# {guilda.name} · atualizado em tempo real · <t:{momento}:R>"
 
     componentes: list = []
     if url_icone:
         componentes.append(
             discord.ui.Section(
-                titulo,
-                intro,
+                discord.ui.TextDisplay(titulo),
                 accessory=discord.ui.Thumbnail(url_icone),
             )
         )
     else:
-        componentes.append(discord.ui.TextDisplay(f"{titulo}\n{intro}"))
+        componentes.append(discord.ui.TextDisplay(titulo))
+    componentes.append(discord.ui.TextDisplay(subtitulo))
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+    componentes.append(discord.ui.TextDisplay(corpo))
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(rodape))
 
@@ -233,15 +231,16 @@ async def atualizar_ranking_moedas(bot: discord.Client) -> None:
     if registro is not None:
         try:
             mensagem = await canal.fetch_message(int(registro.message_id))
-            await mensagem.edit(view=view)
+            # Components V2: limpa content/embeds para o rodapé <t:R> entrar.
+            await mensagem.edit(content=None, embeds=[], view=view)
             return
         except discord.NotFound as erro:
             logger.warning("Ranking moedas: mensagem sumiu, recriando (%s)", erro)
         except discord.HTTPException as erro:
             codigo = getattr(erro, "status", None)
             if codigo == 429:
-                logger.debug(
-                    "Ranking moedas: rate limit na edição; tenta no próximo ciclo."
+                logger.warning(
+                    "Ranking moedas: rate limit 429; tenta no próximo ciclo."
                 )
                 return
             logger.warning("Ranking moedas: recriando mensagem (%s)", erro)
