@@ -193,14 +193,14 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
     texto_cabecalho = (
         "# 🏆 Ranking de Moedas — Top 15\n"
         "```yaml\n"
-        "Este ranking é atualizado automaticamente e considera apenas "
+        "📌 Este ranking é atualizado automaticamente e considera apenas "
         "a quantidade de moedas em posse de cada jogador.\n"
-        "```\n"
-        "> Classificação por quantidade de moedas (equiv. em R$) · "
+        "```"
+        "> Classificação por quantidade de moedas (equiv. em **R$**) · "
         "sem premiação · sem reset"
     )
 
-    rodape = f"-# 🏥 {guilda.name} · atualizado em tempo real · <t:{momento}:R>"
+    rodape = f"-# 🏥 · {guilda.name} · atualizado em tempo real · <t:{momento}:R>"
 
     componentes: list = []
     if url_icone:
@@ -214,7 +214,7 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
         componentes.append(discord.ui.TextDisplay(texto_cabecalho))
 
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-    componentes.append(discord.ui.TextDisplay(corpo_rank))
+    componentes.append(discord.ui.TextDisplay(f"## Ranking\n{corpo_rank}"))
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(rodape))
 
