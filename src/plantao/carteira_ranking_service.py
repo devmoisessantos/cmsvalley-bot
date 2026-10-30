@@ -196,11 +196,13 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
         "📌 Este ranking é atualizado automaticamente e considera apenas "
         "a quantidade de moedas em posse de cada jogador.\n"
         "```\n"
-        "> **Classificação por quantidade de moedas (equiv. em R$)** **·** "
+        "> **Classificação por quantidade de moedas (equiv. R$)** **·** "
         "**sem premiação** **·** **sem reset**"
     )
 
-    rodape = f"-# 🏥 · {guilda.name} · atualizado em tempo real · <t:{momento}:R>"
+    rodape = (
+        f"-# **{guilda.name}**  ·  **atualizado em tempo real**  ·  <t:{momento}:R>"
+    )
 
     componentes: list = []
     if url_icone:
