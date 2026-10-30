@@ -1,13 +1,13 @@
 """
 Atualiza o painel fixo de plantão ativo a cada 60 segundos.
 
-A cada ciclo:
-  1. Busca quem tem toggle ligado
-  2. Recalcula o tempo de cada um (logs fechados + segmento aberto)
-  3. Reedita a mesma mensagem (lista, tempos, status, rodapé <t:R>)
+Loop próprio (asyncio), sem discord.ext.tasks — o tasks.loop estava
+disparando o corpo em dobro a cada ~2 min (ciclo N e N+1 com 1 s de
+diferença). Um único ``create_task`` + ``sleep`` garante:
 
-O rodapé recomeça em "há 1 segundo". Os cronômetros da lista
-avançam conforme o tempo real desde o segmento_iniciado_em.
+  edit → espera 60 s → edit → espera 60 s → …
+
+A cada edit: lista, tempos de cada membro e rodapé ``<t:R>``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import logging
 import time
 
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from sqlalchemy import select
 
 from src.config import CANAIS
@@ -30,7 +30,7 @@ from src.utils.relogio import sincronizar_relogio_com_rede
 registrador = logging.getLogger(__name__)
 
 NOME_PAINEL = "plantao_ativo"
-INTERVALO_SEGUNDOS = 60
+INTERVALO_SEGUNDOS = 60.0
 
 
 class PlantaoAtivosTasks(commands.Cog):
@@ -38,51 +38,83 @@ class PlantaoAtivosTasks(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._trava_atualizacao = asyncio.Lock()
+        self._trava = asyncio.Lock()
+        self._tarefa: asyncio.Task | None = None
         self._numero_do_ciclo = 0
-        if not self.atualizar_painel_ativos.is_running():
-            self.atualizar_painel_ativos.start()
+        self._ultimo_edit_ok = 0.0
+
+    async def cog_load(self) -> None:
+        """Sobe o loop depois que o cog está registrado no bot."""
+        if self._tarefa is None or self._tarefa.done():
+            self._tarefa = asyncio.create_task(
+                self._loop_plantao_ativo(),
+                name="plantao_ativo_loop",
+            )
 
     def cog_unload(self) -> None:
-        self.atualizar_painel_ativos.cancel()
+        if self._tarefa is not None and not self._tarefa.done():
+            self._tarefa.cancel()
 
-    @tasks.loop(seconds=INTERVALO_SEGUNDOS)
-    async def atualizar_painel_ativos(self) -> None:
-        """Um edit por ciclo: lista, tempos e rodapé."""
-        if self._trava_atualizacao.locked():
+    async def _loop_plantao_ativo(self) -> None:
+        """
+        Um ciclo a cada INTERVALO_SEGUNDOS, sem sobreposição.
+
+        O sleep é o que sobra do intervalo depois do trabalho, para o
+        ritmo ficar perto de 60 s mesmo se o edit demorar 1–2 s.
+        """
+        await self.bot.wait_until_ready()
+        registrador.info(
+            "Loop plantão ativo iniciado (a cada %.0f s, asyncio puro).",
+            INTERVALO_SEGUNDOS,
+        )
+
+        while not self.bot.is_closed():
+            inicio = time.monotonic()
+            try:
+                await self._rodar_um_ciclo()
+            except asyncio.CancelledError:
+                raise
+            except Exception as erro_capturado:
+                registrador.exception(
+                    "Plantão ativo: falha no ciclo: %s",
+                    erro_capturado,
+                )
+
+            decorrido = time.monotonic() - inicio
+            espera = INTERVALO_SEGUNDOS - decorrido
+            if espera < 1.0:
+                espera = 1.0
+            try:
+                await asyncio.sleep(espera)
+            except asyncio.CancelledError:
+                raise
+
+    async def _rodar_um_ciclo(self) -> None:
+        # Evita reentrada se algo externo chamar o ciclo.
+        if self._trava.locked():
             registrador.warning(
-                "Plantão ativo: ciclo pulado (ainda processando o anterior)."
+                "Plantão ativo: ciclo ignorado (já em andamento)."
             )
             return
 
-        async with self._trava_atualizacao:
+        async with self._trava:
+            # Corta echo se por algum motivo o ciclo rodou de novo cedo.
+            agora = time.monotonic()
+            if (
+                self._ultimo_edit_ok > 0
+                and (agora - self._ultimo_edit_ok) < 50.0
+            ):
+                registrador.debug(
+                    "Plantão ativo: cedo demais (%.0f s); pulando.",
+                    agora - self._ultimo_edit_ok,
+                )
+                return
+
             self._numero_do_ciclo += 1
             numero = self._numero_do_ciclo
-            inicio = time.monotonic()
-            try:
-                await sincronizar_relogio_com_rede()
-                await self._atualizar_ou_publicar(numero)
-            except Exception as erro_capturado:
-                registrador.exception(
-                    "Plantão ativo ciclo %s falhou: %s",
-                    numero,
-                    erro_capturado,
-                )
-            else:
-                decorrido = time.monotonic() - inicio
-                registrador.debug(
-                    "Plantão ativo ciclo %s terminou em %.1f s.",
-                    numero,
-                    decorrido,
-                )
 
-    @atualizar_painel_ativos.before_loop
-    async def _esperar_bot_pronto(self) -> None:
-        await self.bot.wait_until_ready()
-        registrador.info(
-            "Loop plantão ativo iniciado (a cada %s s).",
-            INTERVALO_SEGUNDOS,
-        )
+            await sincronizar_relogio_com_rede()
+            await self._atualizar_ou_publicar(numero)
 
     async def _atualizar_ou_publicar(self, numero_do_ciclo: int) -> None:
         canal_id = CANAIS.get("PAINEL_FIXO_PLANTAO_ATIVO") or 0
@@ -119,11 +151,14 @@ class PlantaoAtivosTasks(commands.Cog):
                 len(estados),
             )
             if atualizado:
+                self._ultimo_edit_ok = time.monotonic()
                 return
             await self._publicar_nova_mensagem(canal, view, registro)
+            self._ultimo_edit_ok = time.monotonic()
             return
 
         await self._publicar_nova_mensagem(canal, view, None)
+        self._ultimo_edit_ok = time.monotonic()
 
     async def _buscar_registro(self):
         async with async_session() as sessao:
@@ -159,8 +194,6 @@ class PlantaoAtivosTasks(commands.Cog):
             return False
 
         try:
-            # LayoutView (Components V2): limpa content/embeds para o
-            # Discord aceitar só os componentes novos (tempos + rodapé).
             await mensagem.edit(
                 content=None,
                 embeds=[],
@@ -179,12 +212,10 @@ class PlantaoAtivosTasks(commands.Cog):
             if codigo == 429:
                 registrador.warning(
                     "Plantão ativo ciclo %s: rate limit 429 "
-                    "(message_id=%s). Tempos NÃO atualizados; "
-                    "tenta de novo no próximo ciclo.",
+                    "(message_id=%s). Próximo ciclo.",
                     numero_do_ciclo,
                     message_id,
                 )
-                # True = não republicar em cima do rate limit.
                 return True
             registrador.warning(
                 "Falha ao editar plantão ativo %s: %s. Republicando.",
