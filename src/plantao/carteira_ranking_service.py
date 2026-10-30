@@ -197,7 +197,7 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
         "a quantidade de moedas em posse de cada jogador.\n"
         "```\n"
         "> **Classificação por quantidade de moedas (equiv. R$)** **·** "
-        "**sem premiação** **·** **sem reset**"
+        "**sem premiação**"
     )
 
     rodape = (
