@@ -4,6 +4,11 @@
 from __future__ import annotations
 
 import logging
+import time
+from datetime import (
+    datetime,
+    timezone,
+)
 
 import discord
 from sqlalchemy import select
@@ -23,9 +28,9 @@ from src.plantao.carteira_service import (
     ranking_top_moedas,
     zerar_saldo_moedas,
 )
-from src.recrutamento.recrutamento_service import resolver_id_fivem
 from src.utils.formatacao import formatar_dinheiro
 from src.utils.relogio import timestamp_unix_agora
+from src.recrutamento.recrutamento_service import resolver_id_fivem
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +170,8 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
             )
         else:
             linhas_rank.append(
-                f"`{posicao}.` {mencao} | FID `{fid}` · **{saldo}** · `{equiv}`"
+                f"`{posicao}.` {mencao} | FID `{fid}` · "
+                f"**{saldo}** · `{equiv}`"
             )
 
     if not linhas_rank:

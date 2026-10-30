@@ -1,19 +1,20 @@
 """
 Atualiza o painel fixo de plantão ativo a cada 60 segundos.
 
-Regra always-on:
-  a cada ciclo → um edit (lista, tempos de cada membro, status, rodapé).
-  O ``<t:R>`` recomeça em "há 1 segundo" e sobe até perto de 1 minuto.
-  Nunca deixa o rodapé chegar em "há 2 minutos".
+A cada ciclo:
+  1. Busca quem tem toggle ligado
+  2. Recalcula o tempo de cada um (logs fechados + segmento aberto)
+  3. Reedita a mesma mensagem (lista, tempos, status, rodapé <t:R>)
 
-Um único edit por ciclo. Trava evita sobreposição; sem debounce que
-esticava o intervalo para 2 minutos.
+O rodapé recomeça em "há 1 segundo". Os cronômetros da lista
+avançam conforme o tempo real desde o segmento_iniciado_em.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import discord
 from discord.ext import commands, tasks
@@ -29,16 +30,16 @@ from src.utils.relogio import sincronizar_relogio_com_rede
 registrador = logging.getLogger(__name__)
 
 NOME_PAINEL = "plantao_ativo"
-# 60 s: ao chegar perto de "há 1 minuto", o edit zera o <t:R>.
 INTERVALO_SEGUNDOS = 60
 
 
 class PlantaoAtivosTasks(commands.Cog):
-    """Cog só de tarefa: painel de plantão ativo a cada ciclo."""
+    """Cog só de tarefa: painel de plantão ativo a cada 60 s."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._trava_atualizacao = asyncio.Lock()
+        self._numero_do_ciclo = 0
         if not self.atualizar_painel_ativos.is_running():
             self.atualizar_painel_ativos.start()
 
@@ -49,26 +50,47 @@ class PlantaoAtivosTasks(commands.Cog):
     async def atualizar_painel_ativos(self) -> None:
         """Um edit por ciclo: lista, tempos e rodapé."""
         if self._trava_atualizacao.locked():
+            registrador.warning(
+                "Plantão ativo: ciclo pulado (ainda processando o anterior)."
+            )
             return
 
         async with self._trava_atualizacao:
+            self._numero_do_ciclo += 1
+            numero = self._numero_do_ciclo
+            inicio = time.monotonic()
             try:
                 await sincronizar_relogio_com_rede()
-                await self._atualizar_ou_publicar()
+                await self._atualizar_ou_publicar(numero)
             except Exception as erro_capturado:
                 registrador.exception(
-                    "Falha ao atualizar o painel de plantão ativo: %s",
+                    "Plantão ativo ciclo %s falhou: %s",
+                    numero,
                     erro_capturado,
+                )
+            else:
+                decorrido = time.monotonic() - inicio
+                registrador.debug(
+                    "Plantão ativo ciclo %s terminou em %.1f s.",
+                    numero,
+                    decorrido,
                 )
 
     @atualizar_painel_ativos.before_loop
     async def _esperar_bot_pronto(self) -> None:
         await self.bot.wait_until_ready()
+        registrador.info(
+            "Loop plantão ativo iniciado (a cada %s s).",
+            INTERVALO_SEGUNDOS,
+        )
 
-    async def _atualizar_ou_publicar(self) -> None:
+    async def _atualizar_ou_publicar(self, numero_do_ciclo: int) -> None:
         canal_id = CANAIS.get("PAINEL_FIXO_PLANTAO_ATIVO") or 0
         if not canal_id:
-            registrador.debug("PAINEL_FIXO_PLANTAO_ATIVO não configurado; pulando.")
+            registrador.warning(
+                "PAINEL_FIXO_PLANTAO_ATIVO não configurado; ciclo %s pulado.",
+                numero_do_ciclo,
+            )
             return
 
         canal = self.bot.get_channel(canal_id)
@@ -93,6 +115,8 @@ class PlantaoAtivosTasks(commands.Cog):
                 canal,
                 registro.message_id,
                 view,
+                numero_do_ciclo,
+                len(estados),
             )
             if atualizado:
                 return
@@ -104,7 +128,9 @@ class PlantaoAtivosTasks(commands.Cog):
     async def _buscar_registro(self):
         async with async_session() as sessao:
             resultado = await sessao.execute(
-                select(PainelPostado).where(PainelPostado.nome_painel == NOME_PAINEL)
+                select(PainelPostado).where(
+                    PainelPostado.nome_painel == NOME_PAINEL
+                )
             )
             return resultado.scalar_one_or_none()
 
@@ -113,6 +139,8 @@ class PlantaoAtivosTasks(commands.Cog):
         canal: discord.abc.Messageable,
         message_id: int,
         view: discord.ui.LayoutView,
+        numero_do_ciclo: int,
+        quantidade_em_servico: int,
     ) -> bool:
         try:
             mensagem = await canal.fetch_message(message_id)
@@ -131,19 +159,32 @@ class PlantaoAtivosTasks(commands.Cog):
             return False
 
         try:
-            await mensagem.edit(view=view)
+            # LayoutView (Components V2): limpa content/embeds para o
+            # Discord aceitar só os componentes novos (tempos + rodapé).
+            await mensagem.edit(
+                content=None,
+                embeds=[],
+                view=view,
+            )
             registrador.info(
-                "Plantão ativo atualizado (edit message_id=%s).",
+                "Plantão ativo ciclo %s: edit ok "
+                "(message_id=%s, em_servico=%s).",
+                numero_do_ciclo,
                 message_id,
+                quantidade_em_servico,
             )
             return True
         except discord.HTTPException as erro_edicao:
             codigo = getattr(erro_edicao, "status", None)
             if codigo == 429:
-                registrador.debug(
-                    "Rate limit ao editar plantão ativo %s; próximo ciclo.",
+                registrador.warning(
+                    "Plantão ativo ciclo %s: rate limit 429 "
+                    "(message_id=%s). Tempos NÃO atualizados; "
+                    "tenta de novo no próximo ciclo.",
+                    numero_do_ciclo,
                     message_id,
                 )
+                # True = não republicar em cima do rate limit.
                 return True
             registrador.warning(
                 "Falha ao editar plantão ativo %s: %s. Republicando.",

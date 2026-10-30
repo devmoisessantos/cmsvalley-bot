@@ -11,6 +11,8 @@ Status:
 
 from __future__ import annotations
 
+import time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import discord
@@ -145,7 +147,10 @@ def _montar_rodape() -> str:
     """
     # Relógio do sistema (Unix). Não usa data do banco.
     agora_ts = timestamp_unix_agora()
-    return f"-# CENTRO MÉDICO SUL · atualizado em tempo real · <t:{agora_ts}:R>"
+    return (
+        f"-# CENTRO MÉDICO SUL · atualizado em tempo real · "
+        f"<t:{agora_ts}:R>"
+    )
 
 
 async def montar_painel_plantao_ativo(
@@ -254,21 +259,30 @@ async def montar_painel_plantao_ativo(
 
         if eh_primeiro:
             itens.append(_cabecalho())
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            itens.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
         else:
             itens.append(
                 discord.ui.TextDisplay(
-                    f"-# Continuação · plantão ativo ({indice + 1}/{total_blocos})"
+                    f"-# Continuação · plantão ativo "
+                    f"({indice + 1}/{total_blocos})"
                 )
             )
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+            itens.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+            )
 
         itens.append(discord.ui.TextDisplay(corpo))
 
         if eh_ultimo:
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            itens.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
             itens.append(discord.ui.TextDisplay(legenda))
-            itens.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+            itens.append(
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+            )
             itens.append(discord.ui.TextDisplay(rodape))
 
         view.add_item(discord.ui.Container(*itens, accent_color=cor))
