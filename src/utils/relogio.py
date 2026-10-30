@@ -54,7 +54,8 @@ async def sincronizar_relogio_com_rede() -> None:
     hora_discord = await _hora_unix_do_discord()
     if hora_discord is None:
         registrador.warning(
-            "Não consegui ler a hora do Discord; mantenho desvio atual de %.1f s.",
+            "Não consegui ler a hora do Discord; "
+            "mantenho desvio atual de %.1f s.",
             _desvio_segundos,
         )
         return
