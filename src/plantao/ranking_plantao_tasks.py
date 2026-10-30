@@ -2,7 +2,7 @@
 
 Atualização em tempo real (mesmo padrão do ranking de moedas):
 
-1. ``loop_tempo_real_horas`` e ``loop_ranking_moedas`` rodam a cada 1 minuto.
+1. ``loop_tempo_real_horas`` (tasks) e o loop asyncio de moedas rodam a cada 1 minuto.
 2. Cada ciclo monta o card de novo e edita as páginas cuja contagem
    mudou (assinatura por página). A **última página sempre é reeditada**:
    só ela traz o rodapé ``<t:unix:R>``, para o cliente mostrar
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -77,21 +78,32 @@ class RankingPlantaoTasks(commands.Cog):
         # Assinatura da última contagem enviada por página (índice 0, 1, …).
         # Se a página não mudou, o loop não chama message.edit e evita 429.
         self._assinaturas_paginas_horas: dict[int, str] = {}
+        self._tarefa_moedas: asyncio.Task | None = None
+        self._ultimo_edit_moedas = 0.0
+        self._numero_ciclo_moedas = 0
         self.loop_rankings.start()
         self.loop_tempo_real_horas.start()
-        self.loop_ranking_moedas.start()
+        # Moedas: loop asyncio puro (mesmo padrão do plantão ativo).
         logger.info(
-            "🏆 RankingPlantaoTasks (chamadas + horas + tempo real + moedas) "
-            "inicializado"
+            "RankingPlantaoTasks (chamadas + horas + tempo real + moedas) inicializado"
         )
+
+    async def cog_load(self) -> None:
+        """Sobe o loop de moedas depois que o cog está no bot."""
+        if self._tarefa_moedas is None or self._tarefa_moedas.done():
+            self._tarefa_moedas = asyncio.create_task(
+                self._loop_ranking_moedas_asyncio(),
+                name="ranking_moedas_loop",
+            )
 
     def cog_unload(self):
         """
-        Interrompe os três loops para evitar publicações duplicadas após recarregar.
+        Interrompe os loops para evitar publicações duplicadas após recarregar.
         """
         self.loop_rankings.cancel()
         self.loop_tempo_real_horas.cancel()
-        self.loop_ranking_moedas.cancel()
+        if self._tarefa_moedas is not None and not self._tarefa_moedas.done():
+            self._tarefa_moedas.cancel()
 
     # ── Tempo real a cada 1 minuto (horas e moedas usam o mesmo ritmo) ────
     #
@@ -135,27 +147,57 @@ class RankingPlantaoTasks(commands.Cog):
                 erro_reajuste,
             )
 
-    @tasks.loop(seconds=60)
-    async def loop_ranking_moedas(self):
+    async def _loop_ranking_moedas_asyncio(self) -> None:
         """
-        Ciclo de 1 minuto (rodapé <t:R> 1s → ~1 min → reinicia).
+        Loop puro de moedas: edit a cada 60 s (rodapé <t:R> reinicia).
 
-        Sempre reedita a mensagem única para zerar o rodapé. A view já
-        traz saldos atuais; um edit/min não estoura rate limit.
+        Mesmo padrão do plantão ativo — sem discord.ext.tasks, para não
+        disparar o corpo em dobro.
         """
-        try:
-            from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
-
-            await sincronizar_relogio_com_rede()
-            await atualizar_ranking_moedas(self.bot)
-        except Exception as erro:
-            logger.exception("Loop ranking moedas: %s", erro)
-
-    @loop_ranking_moedas.before_loop
-    async def before_ranking_moedas(self):
-        """Aguarda a conexão do bot antes de iniciar as atualizações de moedas."""
         await self.bot.wait_until_ready()
-        logger.info("✅ Loop ranking MOEDAS tempo real (60 s) ativo")
+        logger.info("Loop ranking MOEDAS iniciado (a cada 60 s, asyncio puro).")
+
+        intervalo = 60.0
+        while not self.bot.is_closed():
+            inicio = time.monotonic()
+            try:
+                await self._rodar_ciclo_moedas()
+            except asyncio.CancelledError:
+                raise
+            except Exception as erro:
+                logger.exception("Loop ranking moedas: %s", erro)
+
+            decorrido = time.monotonic() - inicio
+            espera = intervalo - decorrido
+            if espera < 1.0:
+                espera = 1.0
+            try:
+                await asyncio.sleep(espera)
+            except asyncio.CancelledError:
+                raise
+
+    async def _rodar_ciclo_moedas(self) -> None:
+        """Um edit do card de moedas (com corte se veio cedo demais)."""
+        agora = time.monotonic()
+        if self._ultimo_edit_moedas > 0 and (agora - self._ultimo_edit_moedas) < 50.0:
+            logger.debug(
+                "Ranking moedas: cedo demais (%.0f s); pulando.",
+                agora - self._ultimo_edit_moedas,
+            )
+            return
+
+        from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
+
+        self._numero_ciclo_moedas += 1
+        numero = self._numero_ciclo_moedas
+
+        await sincronizar_relogio_com_rede()
+        await atualizar_ranking_moedas(self.bot)
+        self._ultimo_edit_moedas = time.monotonic()
+        logger.info(
+            "Ranking moedas ciclo %s: atualização ok.",
+            numero,
+        )
 
     @commands.Cog.listener()
     async def on_interaction(self, interacao: discord.Interaction):
@@ -223,9 +265,7 @@ class RankingPlantaoTasks(commands.Cog):
             fim = inicio + por_pagina
             pedaco = ordenados[inicio:fim]
             partes = [f"{discord_id}:{segundos}" for discord_id, segundos in pedaco]
-            assinatura = (
-                f"{indice_pagina + 1}/{total_paginas}|" + "|".join(partes)
-            )
+            assinatura = f"{indice_pagina + 1}/{total_paginas}|" + "|".join(partes)
             # Última página exibe o total da equipe — entra na assinatura
             if indice_pagina == total_paginas - 1:
                 assinatura = f"{assinatura}|total:{total_geral}"
@@ -430,15 +470,12 @@ class RankingPlantaoTasks(commands.Cog):
                 break
 
             assinatura_nova = (
-                assinaturas_novas[indice]
-                if indice < len(assinaturas_novas)
-                else ""
+                assinaturas_novas[indice] if indice < len(assinaturas_novas) else ""
             )
             assinatura_antiga = self._assinaturas_paginas_horas.get(indice)
             eh_ultima_pagina = indice == indice_ultima_pagina
             contagem_igual = (
-                assinatura_antiga is not None
-                and assinatura_antiga == assinatura_nova
+                assinatura_antiga is not None and assinatura_antiga == assinatura_nova
             )
             if contagem_igual and not eh_ultima_pagina:
                 continue
@@ -509,9 +546,9 @@ class RankingPlantaoTasks(commands.Cog):
                         mensagem.id,
                     )
                     if indice < len(assinaturas_novas):
-                        self._assinaturas_paginas_horas[indice] = (
-                            assinaturas_novas[indice]
-                        )
+                        self._assinaturas_paginas_horas[indice] = assinaturas_novas[
+                            indice
+                        ]
                     logger.info(
                         "Ranking HORAS tempo real página %s/%s em #%s",
                         pagina,
@@ -550,11 +587,11 @@ class RankingPlantaoTasks(commands.Cog):
         3) envia ganhadores + valores ao canal de finanças
         4) grava histórico (sem re-postar ranking no canal)
         """
-        from src.recrutamento.ranking_service import obter_periodo_postagem_semanal
         from src.plantao.ranking_plantao_service import (
             buscar_horas_por_membro,
             montar_view_ranking_horas,
         )
+        from src.recrutamento.ranking_service import obter_periodo_postagem_semanal
 
         guild = self.bot.get_guild(int(GUILD_ID))
         if guild is None:
@@ -567,9 +604,7 @@ class RankingPlantaoTasks(commands.Cog):
 
         # Idempotência: se este ciclo semanal já foi fechado, não repete
         # ranking nem premiação (bot reiniciado no sábado 11h, etc.).
-        ja_fechado = await historico_ja_publicado(
-            "horas_semanal", inicio, fim_periodo
-        )
+        ja_fechado = await historico_ja_publicado("horas_semanal", inicio, fim_periodo)
         if ja_fechado is not None:
             logger.info(
                 "Ciclo semanal horas já fechado (histórico #%s) — "
@@ -584,9 +619,9 @@ class RankingPlantaoTasks(commands.Cog):
         # 1) Fecha segmentos abertos para o tempo na virada entrar na semana
         #    que está encerrando (e o ciclo novo começar limpo).
         try:
-            from src.plantao.plantao_service import fechar_segmento_parcial_do_ciclo
-            from src.plantao.carteira_service import cotacao_moeda_do_membro
             from src.database.models import EstadoPlantao
+            from src.plantao.carteira_service import cotacao_moeda_do_membro
+            from src.plantao.plantao_service import fechar_segmento_parcial_do_ciclo
 
             async with async_session() as sessao:
                 resultado = await sessao.execute(
@@ -763,9 +798,7 @@ class RankingPlantaoTasks(commands.Cog):
                     await self._apagar_registro_tempo_real()
                     await self._atualizar_ou_criar_tempo_real_horas()
                     self._reinicio_tempo_real.add(chave_r)
-                    logger.info(
-                        "Novo ciclo RANKING HORAS tempo real iniciado (zerado)"
-                    )
+                    logger.info("Novo ciclo RANKING HORAS tempo real iniciado (zerado)")
                 except Exception as erro:
                     logger.exception("Reinício tempo real horas: %s", erro)
 
