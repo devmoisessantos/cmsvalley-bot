@@ -119,7 +119,6 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
         15,
         cotacao_por_membro=cotacao_por_membro,
     )
-    medalhas = {1: "🥇", 2: "🥈", 3: "🥉"}
     linhas_rank: list[str] = []
 
     # Filtra só quem ainda faz parte da organização; zera saldo de quem saiu/exonerado
@@ -157,15 +156,22 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
         mencao = _rotulo_membro(guilda, discord_id, nicknames.get(discord_id))
         fid = await resolver_id_fivem(discord_id) or "—"
         equiv = formatar_dinheiro(valor_ingame)
-        prefixo = medalhas.get(posicao, f"`{posicao}.`")
-        if posicao <= 3:
+        if posicao == 1:
             linhas_rank.append(
-                f"{prefixo} **{posicao}.** {mencao} | FID `{fid}` · "
-                f"**{saldo}** · `{equiv}`"
+                f"🥇 **1º** {mencao} · FID `{fid}` · **{saldo} moedas** · `{equiv}`"
+            )
+        elif posicao == 2:
+            linhas_rank.append(
+                f"🥈 **2º** {mencao} · FID `{fid}` · **{saldo} moedas** · `{equiv}`"
+            )
+        elif posicao == 3:
+            linhas_rank.append(
+                f"🥉 **3º** {mencao} · FID `{fid}` · **{saldo} moedas** · `{equiv}`"
             )
         else:
             linhas_rank.append(
-                f"`{posicao}.` {mencao} | FID `{fid}` · **{saldo}** · `{equiv}`"
+                f"**{posicao}º** {mencao} · FID `{fid}` · "
+                f"**{saldo} moedas** · `{equiv}`"
             )
 
     if not linhas_rank:
@@ -177,13 +183,15 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
     url_icone = guilda.icon.url if guilda.icon else None
 
     titulo = "# Ranking de Moedas — Top 15"
-    subtitulo = (
-        "> Classificação por **quantidade de moedas** "
-        "( equiv. R$ ) · sem premiação · sem reset"
+    aviso = (
+        "**Este ranking é atualizado automaticamente e considera "
+        "apenas a quantidade de moedas em posse de cada jogador.**"
     )
-    corpo = f"## Ranking\n{corpo_rank}"
-    # Rodapé isolado: o <t:R> precisa de TextDisplay próprio para o
-    # cliente Discord atualizar "há 1 segundo" … "há 1 minuto".
+    subtitulo = (
+        "> Classificação por quantidade de moedas (equiv. em R$) · "
+        "sem premiação · sem reset"
+    )
+    # Rodapé isolado: o <t:R> precisa de TextDisplay próprio.
     rodape = f"-# {guilda.name} · atualizado em tempo real · <t:{momento}:R>"
 
     componentes: list = []
@@ -196,9 +204,10 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
         )
     else:
         componentes.append(discord.ui.TextDisplay(titulo))
+    componentes.append(discord.ui.TextDisplay(aviso))
     componentes.append(discord.ui.TextDisplay(subtitulo))
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
-    componentes.append(discord.ui.TextDisplay(corpo))
+    componentes.append(discord.ui.TextDisplay(corpo_rank))
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(rodape))
 
