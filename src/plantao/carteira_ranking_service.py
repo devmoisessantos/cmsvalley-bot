@@ -119,7 +119,6 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
         15,
         cotacao_por_membro=cotacao_por_membro,
     )
-    linhas_rank: list[str] = []
 
     # Filtra só quem ainda faz parte da organização; zera saldo de quem saiu/exonerado
     # candidatos: (discord_id, saldo_moedas, valor_ingame dos lotes)
@@ -152,67 +151,77 @@ async def montar_view_ranking_moedas(guilda: discord.Guild) -> discord.ui.Layout
     ]
     nicknames = await _nicknames_do_banco(ids_fora_cache)
 
+    linhas_podio: list[str] = []
+    linhas_resto: list[str] = []
+
     for posicao, (discord_id, saldo, valor_ingame) in enumerate(top, start=1):
         mencao = _rotulo_membro(guilda, discord_id, nicknames.get(discord_id))
         fid = await resolver_id_fivem(discord_id) or "—"
         equiv = formatar_dinheiro(valor_ingame)
         if posicao == 1:
-            linhas_rank.append(
-                f"🥇 **1º** {mencao} · FID `{fid}` · **{saldo} moedas** · `{equiv}`"
+            linhas_podio.append(
+                f"`🥇` **1º** {mencao} · **FID:** `{fid}` · **{saldo}** · `{equiv}`"
             )
         elif posicao == 2:
-            linhas_rank.append(
-                f"🥈 **2º** {mencao} · FID `{fid}` · **{saldo} moedas** · `{equiv}`"
+            linhas_podio.append(
+                f"`🥈` **2º** {mencao} · **FID:** `{fid}` · **{saldo}** · `{equiv}`"
             )
         elif posicao == 3:
-            linhas_rank.append(
-                f"🥉 **3º** {mencao} · FID `{fid}` · **{saldo} moedas** · `{equiv}`"
+            linhas_podio.append(
+                f"`🥉` **3º** {mencao} · **FID:** `{fid}` · **{saldo}** · `{equiv}`"
             )
         else:
-            linhas_rank.append(
-                f"**{posicao}º** {mencao} · FID `{fid}` · "
-                f"**{saldo} moedas** · `{equiv}`"
+            linhas_resto.append(
+                f"- **{posicao}º** {mencao} · FID `{fid}` · **{saldo}** · `{equiv}`"
             )
 
-    if not linhas_rank:
+    if not linhas_podio and not linhas_resto:
         corpo_rank = "_Ninguém com saldo de moedas ainda._"
     else:
-        corpo_rank = "\n".join(linhas_rank)
+        partes_corpo: list[str] = []
+        if linhas_podio:
+            partes_corpo.append("\n".join(linhas_podio))
+        if linhas_resto:
+            if linhas_podio:
+                partes_corpo.append("______")
+            partes_corpo.append("\n".join(linhas_resto))
+        corpo_rank = "\n".join(partes_corpo)
 
     momento = int(timestamp_unix_agora())
     url_icone = guilda.icon.url if guilda.icon else None
 
-    titulo = "# Ranking de Moedas — Top 15"
-    aviso = (
-        "**Este ranking é atualizado automaticamente e considera "
-        "apenas a quantidade de moedas em posse de cada jogador.**"
-    )
-    subtitulo = (
+    texto_cabecalho = (
+        "# 🏆 Ranking de Moedas — Top 15\n"
+        "```yaml\n"
+        "Este ranking é atualizado automaticamente e considera apenas "
+        "a quantidade de moedas em posse de cada jogador.\n"
+        "```\n"
         "> Classificação por quantidade de moedas (equiv. em R$) · "
         "sem premiação · sem reset"
     )
-    # Rodapé isolado: o <t:R> precisa de TextDisplay próprio.
-    rodape = f"-# {guilda.name} · atualizado em tempo real · <t:{momento}:R>"
+
+    rodape = f"-# 🏥 {guilda.name} · atualizado em tempo real · <t:{momento}:R>"
 
     componentes: list = []
     if url_icone:
         componentes.append(
             discord.ui.Section(
-                discord.ui.TextDisplay(titulo),
+                texto_cabecalho,
                 accessory=discord.ui.Thumbnail(url_icone),
             )
         )
     else:
-        componentes.append(discord.ui.TextDisplay(titulo))
-    componentes.append(discord.ui.TextDisplay(aviso))
-    componentes.append(discord.ui.TextDisplay(subtitulo))
+        componentes.append(discord.ui.TextDisplay(texto_cabecalho))
+
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(corpo_rank))
     componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
     componentes.append(discord.ui.TextDisplay(rodape))
 
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.Container(*componentes, accent_color=discord.Color.gold()))
+    view.add_item(
+        discord.ui.Container(*componentes, accent_color=discord.Color.yellow())
+    )
     return view
 
 
