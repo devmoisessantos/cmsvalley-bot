@@ -71,7 +71,7 @@ def montar_mensagem_booster(
     view.add_item(
         item=discord.ui.Container(
             *componentes,
-            accent_color=discord.Color.__hash__("#9A4EB8FD"),
+            accent_color=discord.Color.purple(),
         )
     )
     return view
