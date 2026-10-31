@@ -8,15 +8,20 @@ Cada opção redireciona o membro ao canal correspondente (botão de link).
 
 from __future__ import annotations
 
+import asyncio
+
 import discord
 
 from src.config import GUIA_ESTAGIARIO
 from src.guia.guia_helpers import (
+    TEMPO_EFEMERA_SEGUNDOS,
     buscar_id_do_canal,
     montar_botao_link,
 )
+from src.utils.ephemeral_botoes import linha_ephemeral
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.mensagens import (
+    excluir_mensagem,
     responder_erro,
     responder_view,
 )
@@ -103,7 +108,8 @@ def montar_resposta_da_opcao(chave_da_opcao: str) -> discord.ui.LayoutView:
     """
     Monta a resposta ephemeral (Components V2) da opção escolhida no select.
 
-    Mostra o texto explicativo e um botão de link para o canal do tópico.
+    Mostra o texto explicativo, o botão de link do canal e o botão Fechar.
+    O card some sozinho após TEMPO_EFEMERA_SEGUNDOS (ou ao clicar em Fechar).
     """
     dados_da_opcao = OPCOES_DO_GUIA[chave_da_opcao]
 
@@ -136,11 +142,15 @@ def montar_resposta_da_opcao(chave_da_opcao: str) -> discord.ui.LayoutView:
             )
         )
 
+    # Fechar: apaga a ephemeral na hora (mesmo efeito de "Ignorar mensagem").
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    componentes.append(linha_ephemeral(fechar=True))
+
     container = discord.ui.Container(
         *componentes,
         accent_color=discord.Color.green(),
     )
-    view_da_resposta = discord.ui.LayoutView(timeout=180)
+    view_da_resposta = discord.ui.LayoutView(timeout=TEMPO_EFEMERA_SEGUNDOS)
     view_da_resposta.add_item(container)
     return view_da_resposta
 
@@ -275,4 +285,15 @@ class PainelBoasVindasLayout(LoggingViewMixin, discord.ui.LayoutView):
             return
 
         view_da_resposta = montar_resposta_da_opcao(chave_escolhida)
-        await responder_view(interacao, view_da_resposta, ephemeral=True)
+        mensagem_efemera = await responder_view(
+            interacao,
+            view_da_resposta,
+            ephemeral=True,
+        )
+        if mensagem_efemera is not None:
+            asyncio.create_task(
+                excluir_mensagem(
+                    mensagem_efemera,
+                    delay=TEMPO_EFEMERA_SEGUNDOS,
+                )
+            )

@@ -4,6 +4,9 @@ Helpers compartilhados do domínio guia.
 
 Montagem de links de canal, botões e linhas de ActionRow
 para os painéis de boas-vindas e tutoriais.
+
+Também guarda constantes usadas pelos dois painéis efêmeros
+(tempo de auto-exclusão, etc.).
 """
 
 from __future__ import annotations
@@ -14,6 +17,10 @@ from src.config import (
     CANAIS,
     GUILD_ID,
 )
+
+# Tempo em que o card efêmero do guia fica na tela antes de sumir sozinho.
+# Usado no timeout do LayoutView e no delay de excluir_mensagem.
+TEMPO_EFEMERA_SEGUNDOS = 120
 
 
 def buscar_id_do_canal(chave_do_canal: str) -> int:

@@ -3,18 +3,26 @@
 Painel de tutoriais — Guia do Estagiário (canal de tutoriais).
 
 Components V2: LayoutView + Container + Section/Thumbnail + Select.
-Cada opção do select abre um card efêmero (ephemeral=True, sem auto-exclusão).
+Cada opção do select abre um card efêmero com botão Fechar e
+auto-exclusão após TEMPO_EFEMERA_SEGUNDOS.
 """
 
 from __future__ import annotations
 
+import asyncio
+
 import discord
 
 from src.config import CARGOS, GUIA_DE_TUTORIAIS
-from src.guia.guia_helpers import montar_linha_de_botoes_link
+from src.guia.guia_helpers import (
+    TEMPO_EFEMERA_SEGUNDOS,
+    montar_linha_de_botoes_link,
+)
+from src.utils.ephemeral_botoes import linha_ephemeral
 from src.utils.error_handling import LoggingViewMixin
 from src.utils.formatacao import mencionar_cargo, mencionar_cargo_do_curso
 from src.utils.mensagens import (
+    excluir_mensagem,
     responder_erro,
     responder_view,
 )
@@ -245,7 +253,7 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
         ],
         "botoes": [
             {
-                "rotulo": "Call 🔇・INTERNA 12",
+                "rotulo": "🔇・INTERNA 12",
                 "chave_do_canal": "CALL_INTERNA_12",
             },
         ],
@@ -315,7 +323,7 @@ def montar_card_do_tutorial(chave_do_topico: str) -> discord.ui.LayoutView:
     """
     Monta o card efêmero (Components V2) do tópico escolhido no select.
 
-    A mensagem não some sozinha (o membro pode reler com calma).
+    Inclui botão Fechar e some sozinho após TEMPO_EFEMERA_SEGUNDOS.
     """
     dados_do_topico = OPCOES_DOS_TUTORIAIS[chave_do_topico]
 
@@ -324,7 +332,7 @@ def montar_card_do_tutorial(chave_do_topico: str) -> discord.ui.LayoutView:
     for indice, bloco_de_texto in enumerate(dados_do_topico["blocos"]):
         if indice > 0:
             componentes.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
             )
         componentes.append(discord.ui.TextDisplay(bloco_de_texto))
 
@@ -333,11 +341,15 @@ def montar_card_do_tutorial(chave_do_topico: str) -> discord.ui.LayoutView:
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(linha_dos_botoes)
 
+    # Fechar: apaga a ephemeral na hora (mesmo efeito de "Ignorar mensagem").
+    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    componentes.append(linha_ephemeral(fechar=True))
+
     container = discord.ui.Container(
         *componentes,
         accent_color=discord.Color.blurple(),
     )
-    view_do_card = discord.ui.LayoutView(timeout=None)
+    view_do_card = discord.ui.LayoutView(timeout=TEMPO_EFEMERA_SEGUNDOS)
     view_do_card.add_item(container)
     return view_do_card
 
@@ -405,7 +417,8 @@ class PainelTutoriaisLayout(LoggingViewMixin, discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 "> ℹ️ Cada tutorial é aberto **individualmente** em uma "
                 "mensagem privada.\n"
-                "> 🔒 O card permanece disponível **até você fechá-lo**.\n"
+                "> 🔒 Use o botão **Fechar** quando terminar; o card some "
+                "sozinho em **2 minutos**.\n"
                 "> 🔄 Use sempre que precisar relembrar um procedimento."
             )
         )
@@ -458,6 +471,16 @@ class PainelTutoriaisLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
-        # ephemeral=True e sem auto-exclusão (timeout=None no card)
         view_do_card = montar_card_do_tutorial(chave_escolhida)
-        await responder_view(interacao, view_do_card, ephemeral=True)
+        mensagem_efemera = await responder_view(
+            interacao,
+            view_do_card,
+            ephemeral=True,
+        )
+        if mensagem_efemera is not None:
+            asyncio.create_task(
+                excluir_mensagem(
+                    mensagem_efemera,
+                    delay=TEMPO_EFEMERA_SEGUNDOS,
+                )
+            )
