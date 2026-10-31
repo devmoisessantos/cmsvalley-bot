@@ -112,7 +112,7 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "`•` **2** — Tratamento: entrega tratamento (**somente na maca**)\n"
             "`•` **3** — Reanimar: reanima o jogador desmaiado\n"
             "`•` **0** — Uniforme: veste o uniforme do hospital\n"
-            "`•` **F7** — Toggle: entra / sai de serviço na cidade\n",
+            "`•` **F7** — Toggle: entra / sai de serviço na cidade\n"
             "`•` **F12** — Rádio: utilize para se conectar/desconectar da rádio\n\n",
             "## ⚙️ Configuração e Personalização\n"
             "`•` As binds já vêm **pré-definidas** no uniforme do CMS Valley.\n"
@@ -227,9 +227,8 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "## 🟢 Enfermeiro (a) → Paramédico\n"
             f"**Cargo:** {MENCAO_CARGO_ENFERMEIRO} → {MENCAO_CARGO_PARAMEDICO}\n\n"
             "### 📌 Requisitos Obrigatórios\n"
-            "`•` ⏱️ **Horas em serviço ativo:** 6 horas completas **dentro do "
-            "hospital** e Plantão ativo no Discord"
-            "(atendendo, auxiliando ou exercendo função — **não conta AFK**)\n"
+            "`•` ⏱️ **Horas em serviço ativo:** 6 horas completas **dentro do hospital**\n"
+            "Plantão ativo no Discord (atendendo, auxiliando ou exercendo função — **não conta AFK**)\n"
             "`•` 🎧 **Horas na call interna:** 6 horas completas na call 🔇・INTERNA 12\n"
             "`•` ✅ **Conduta:** boa conduta e respeito à hierarquia\n"
             "`•` ❌ **Advertências:** não possuir advertência ativa ( **ADV 01** / **ADV 02** )",
@@ -240,7 +239,7 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "`•` 🆓 **Gratuito:** após cumprir **6 horas de plantão ativo** no Discord",
             "## 🔓 Liberação de Atendimento Externo\n"
             "Após cumprir **todos os requisitos** e concluir o **Curso de Resgate**:\n"
-            "`•` ✅ **Permissão pra solicitar o**  → {MENCAO_CARGO_PARAMEDICO}\n"
+            f"`•` ✅ **Permissão pra solicitar o**  → {MENCAO_CARGO_PARAMEDICO}\n"
             "`•` ✅ **Atendimento externo autorizado**\n"
             "`•` 🚑 Pode atuar **fora do hospital**",
         ],
@@ -325,7 +324,7 @@ def montar_card_do_tutorial(chave_do_topico: str) -> discord.ui.LayoutView:
     for indice, bloco_de_texto in enumerate(dados_do_topico["blocos"]):
         if indice > 0:
             componentes.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
             )
         componentes.append(discord.ui.TextDisplay(bloco_de_texto))
 
@@ -338,7 +337,7 @@ def montar_card_do_tutorial(chave_do_topico: str) -> discord.ui.LayoutView:
         *componentes,
         accent_color=discord.Color.blurple(),
     )
-    view_do_card = discord.ui.LayoutView(timeout=120)
+    view_do_card = discord.ui.LayoutView(timeout=None)
     view_do_card.add_item(container)
     return view_do_card
 
