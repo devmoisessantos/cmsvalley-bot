@@ -97,7 +97,7 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "`•` **Cobrança acima do valor padrão** = reembolso obrigatório.\n"
             "`•` **Cobrança acima do valor padrão só é permitida** com "
             "autorização **explícita** do paciente.\n"
-            "`•` O descumprimento destas regras está sujeito a sanções disciplinares.",
+            "`•` O descumprimento destas regras está sujeito a punições disciplinares.",
         ],
         "botoes": [],
     },
@@ -112,7 +112,8 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "`•` **2** — Tratamento: entrega tratamento (**somente na maca**)\n"
             "`•` **3** — Reanimar: reanima o jogador desmaiado\n"
             "`•` **0** — Uniforme: veste o uniforme do hospital\n"
-            "`•` **F7** — Toggle: entra / sai de serviço na cidade",
+            "`•` **F7** — Toggle: entra / sai de serviço na cidade\n",
+            "`•` **F12** — Rádio: utilize para se conectar/desconectar da rádio\n\n",
             "## ⚙️ Configuração e Personalização\n"
             "`•` As binds já vêm **pré-definidas** no uniforme do CMS Valley.\n"
             "`•` Consulte o canal do seu uniforme para detalhes.\n\n"
@@ -161,26 +162,23 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "## ⚠️ Penalidade\n"
             "> O descumprimento das regras de rádio e comunicação acarreta: **ADV1**",
             "## 🤝 Benefícios da Call no Discord\n"
-            "A participação na call do Discord **não é obrigatória**, porém é "
+            "A participação na call do Discord **é obrigatória**, e é "
             "**altamente recomendada**, pois:\n"
             "`•` Facilita a comunicação entre a equipe\n"
-            "`•` Agiliza solicitações de ajuda (**UP**)\n"
+            "`•` Importante pra suas solicitações de **UP**\n"
             "`•` Permite contato rápido com outros membros\n"
             "`•` Você participa dos **sorteios** realizados pela equipe\n"
-            "`•` Demonstra maior **comprometimento** e presença na corporação\n\n"
+            "`•` Demonstra maior **comprometimento** e presença na organização\n\n"
             "> 💡 **A boa comunicação faz toda a diferença no atendimento e no trabalho "
             "em equipe.**",
-            "## 🚫 Conduta\n"
-            "### Art. 20\n"
-            "> **PROIBIDO** aceitar propina, seja dinheiro ou itens.",
         ],
         "botoes": [
             {
-                "rotulo": "Call INTERNA 12",
+                "rotulo": "🔇・INTERNA 12",
                 "chave_do_canal": "CALL_INTERNA_12",
             },
             {
-                "rotulo": "Call EXTERNA 13",
+                "rotulo": "🔇・EXTERNA 13",
                 "chave_do_canal": "CALL_EXTERNA_13",
             },
         ],
@@ -212,7 +210,7 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
         ],
         "botoes": [
             {
-                "rotulo": "Iniciar Plantão",
+                "rotulo": "🏥・Iniciar Plantão",
                 "chave_do_canal": "CANAL_PAINEL_PLANTAO_ID",
             },
         ],
@@ -226,36 +224,29 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
             "## 🎯 Visão Geral\n"
             "Para se tornar paramédico no **Centro Médico Sul Valley**, é necessário "
             "cumprir uma série de requisitos progressivos.",
-            "## 🟢 Estagiário → Enfermeiro\n"
+            "## 🟢 Enfermeiro (a) → Paramédico\n"
             f"**Cargo:** {MENCAO_CARGO_ENFERMEIRO} → {MENCAO_CARGO_PARAMEDICO}\n\n"
             "### 📌 Requisitos Obrigatórios\n"
-            "`•` ⏱️ **Horas em serviço ativo:** 2 horas completas **dentro do "
-            "hospital** "
+            "`•` ⏱️ **Horas em serviço ativo:** 6 horas completas **dentro do "
+            "hospital** e Plantão ativo no Discord"
             "(atendendo, auxiliando ou exercendo função — **não conta AFK**)\n"
-            "`•` 🎧 **Horas na call interna:** 2 horas completas na call INTERNA 12\n"
+            "`•` 🎧 **Horas na call interna:** 6 horas completas na call 🔇・INTERNA 12\n"
             "`•` ✅ **Conduta:** boa conduta e respeito à hierarquia\n"
-            "`•` ❌ **Advertências:** não possuir advertência ativa",
-            "## 🔴 Enfermeiro → Paramédico\n"
-            f"**Cargo:** {MENCAO_CARGO_PARAMEDICO}\n\n"
-            "### 📌 Requisitos Obrigatórios\n"
-            "`•` ⏱️ **Horas em serviço ativo:** mínimo de 2 horas **dentro do "
-            "hospital** "
-            "(atendendo ou exercendo função — **não conta AFK**)\n"
-            "`•` 🎧 **Horas na call interna:** mínimo de 2 horas na call INTERNA 12",
+            "`•` ❌ **Advertências:** não possuir advertência ativa ( **ADV 01** / **ADV 02** )",
             "## 🎓 Curso de Resgate\n"
             "> **OBRIGATÓRIO** para progressão a Paramédico.\n\n"
             "### 💰 Formas de Aquisição\n"
-            "`•` 💵 **Pago:** R$ 200.000 (duzentos mil)\n"
-            "`•` 🆓 **Gratuito:** após cumprir **2 horas de serviço ativo** dentro do "
-            "hospital",
+            "`•` 💵 **Pagamento:** R$ 200.000 (duzentos mil)\n"
+            "`•` 🆓 **Gratuito:** após cumprir **6 horas de plantão ativo** no Discord",
             "## 🔓 Liberação de Atendimento Externo\n"
             "Após cumprir **todos os requisitos** e concluir o **Curso de Resgate**:\n"
+            "`•` ✅ **Permissão pra solicitar o**  → {MENCAO_CARGO_PARAMEDICO}\n"
             "`•` ✅ **Atendimento externo autorizado**\n"
             "`•` 🚑 Pode atuar **fora do hospital**",
         ],
         "botoes": [
             {
-                "rotulo": "Call INTERNA 12",
+                "rotulo": "Call 🔇・INTERNA 12",
                 "chave_do_canal": "CALL_INTERNA_12",
             },
         ],
@@ -296,19 +287,19 @@ OPCOES_DOS_TUTORIAIS: dict[str, dict] = {
         ],
         "botoes": [
             {
-                "rotulo": "Solicitar Curso",
+                "rotulo": "⭕・Solicitar cursos",
                 "chave_do_canal": "SOLICITAR_CURSO_RESGATE",
             },
             {
-                "rotulo": "Call Aguardando Curso",
+                "rotulo": "🔊・Aguardando curso",
                 "chave_do_canal": "CALL_AGUARDANDO_CURSO",
             },
             {
-                "rotulo": "Material do Curso",
+                "rotulo": "📚・Material do curso",
                 "chave_do_canal": "MATERIAL_CURSO_RESGATE",
             },
             {
-                "rotulo": "Solicitar Promoção",
+                "rotulo": "🎉・Solicitar promoção",
                 "chave_do_canal": "SOLICITAR_PROMOCAO_PARAMEDICO",
             },
         ],
@@ -347,7 +338,7 @@ def montar_card_do_tutorial(chave_do_topico: str) -> discord.ui.LayoutView:
         *componentes,
         accent_color=discord.Color.blurple(),
     )
-    view_do_card = discord.ui.LayoutView(timeout=None)
+    view_do_card = discord.ui.LayoutView(timeout=120)
     view_do_card.add_item(container)
     return view_do_card
 
