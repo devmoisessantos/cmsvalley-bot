@@ -332,7 +332,7 @@ def montar_card_do_tutorial(chave_do_topico: str) -> discord.ui.LayoutView:
     for indice, bloco_de_texto in enumerate(dados_do_topico["blocos"]):
         if indice > 0:
             componentes.append(
-                discord.ui.Separator(spacing=discord.SeparatorSpacing.small)
+                discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
             )
         componentes.append(discord.ui.TextDisplay(bloco_de_texto))
 
@@ -340,10 +340,8 @@ def montar_card_do_tutorial(chave_do_topico: str) -> discord.ui.LayoutView:
     if linha_dos_botoes is not None:
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(linha_dos_botoes)
-
-    # Fechar: apaga a ephemeral na hora (mesmo efeito de "Ignorar mensagem").
-    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
-    componentes.append(linha_ephemeral(fechar=True))
+        # Fechar: apaga a ephemeral na hora (mesmo efeito de "Ignorar mensagem").
+        componentes.append(linha_ephemeral(fechar=True))
 
     container = discord.ui.Container(
         *componentes,

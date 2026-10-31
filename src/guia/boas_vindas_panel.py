@@ -133,18 +133,16 @@ def montar_resposta_da_opcao(chave_da_opcao: str) -> discord.ui.LayoutView:
 
         componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(linha_do_botao)
+        # Fechar: apaga a ephemeral na hora (mesmo efeito de "Ignorar mensagem").
+        componentes.append(linha_ephemeral(fechar=True))
     else:
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
         componentes.append(
             discord.ui.TextDisplay(
                 "-# Canal ainda não configurado. "
                 "Avise a staff se o link estiver ausente."
             )
         )
-
-    # Fechar: apaga a ephemeral na hora (mesmo efeito de "Ignorar mensagem").
-    componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
-    componentes.append(linha_ephemeral(fechar=True))
 
     container = discord.ui.Container(
         *componentes,
