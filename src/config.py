@@ -730,6 +730,32 @@ CANAIS = {
     "CANAL_ADEUS_SERVIDOR": 1546181970193809429,
     # Painel de status do servidor FiveM da cidade (preencher o ID real)
     "CANAL_STATUS_SERVIDOR": 1548437112678907954,
+    # Mensagem periódica de vantagens de booster
+    "CANAL_MENSAGEM_BOOSTER": 1486368987695808632,
+}
+
+# Horários em Brasília (hora, minuto) para republicar a mensagem de booster.
+# A cada slot a mensagem antiga é apagada e uma nova é enviada.
+HORARIOS_MENSAGENS_BOOSTER: list[tuple[int, int]] = [
+    (6, 0),
+    (11, 0),
+    (17, 0),
+    (22, 0),
+]
+
+# Dados fixos da mensagem de booster (cargo, emoji, imagem da galeria).
+BOOSTER = {
+    "CARGO_BOOSTER_ID": 1325479623642976482,
+    "EMOJI_BOOSTER": "<:booster:1565930760031182919>",
+    "URLS_GALERIA": [
+        (
+            "https://cdn.discordapp.com/attachments/"
+            "1535352666375462932/1565917732107583538/"
+            "1793413228875_1.jpg"
+            "?ex=6ae6a608&is=6ae55488"
+            "&hm=feeb3233fbcb63469189218e88240396608c6991067caf6252b12173ce8aa566&"
+        ),
+    ],
 }
 
 # ---------------------------------------------------------------------------

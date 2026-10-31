@@ -217,6 +217,7 @@ CAMINHOS_DOS_COGS = [
     "src.banco.banco_cogs",
     "src.status_servidor.status_servidor_cogs",
     "src.status_servidor.status_servidor_tasks",
+    "src.booster.booster_tasks",
 ]
 
 
