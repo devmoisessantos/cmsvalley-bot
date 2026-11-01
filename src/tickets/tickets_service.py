@@ -251,8 +251,13 @@ async def listar_tickets_abertos(limite: int = 100) -> list[Ticket]:
 
 
 def gerar_senha_transcript() -> str:
-    """Gera senha curta para visualização do transcript."""
-    return secrets.token_hex(3)
+    """
+    Gera senha para visualização do transcript.
+
+    token_urlsafe(8) ≈ 11 caracteres URL-safe (~66 bits de entropia),
+    bem mais resistente a brute-force do que o antigo token_hex(3).
+    """
+    return secrets.token_urlsafe(8)
 
 
 def nome_usuario_discord(membro: discord.Member | discord.User) -> str:
