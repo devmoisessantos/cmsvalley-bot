@@ -1741,7 +1741,7 @@ def montar_html_transcript(
 
     def renderizar_bloco_conteudo(dados: dict, autor_eh_bot: bool) -> list[str]:
         """
-        Renderiza o miolo de uma mensagem (v2 ou content-message + anexos).
+        Renderiza o miolo de uma mensagem (v2 ou message-text + anexos).
         No modelo, cada mensagem do bot vira um .message-container-v2.
         """
         saida: list[str] = []
@@ -1788,7 +1788,7 @@ def montar_html_transcript(
             saida.append("</div>")
         elif texto_bruto:
             saida.append(
-                f'<div class="content-message">'
+                f'<div class="message-text">'
                 f"{markdown_simples_para_html(texto_bruto, mapa_usuarios, mapa_cargos)}"
                 f"</div>"
             )
@@ -1918,7 +1918,7 @@ def montar_html_transcript(
             and not getattr(mensagem, "stickers", None)
         ):
             saida.append(
-                '<div class="content-message">'
+                '<div class="message-text">'
                 "<em>(mensagem sem texto legível)</em></div>"
             )
         return saida
@@ -1964,34 +1964,31 @@ def montar_html_transcript(
         avatar = esc(url_avatar(autor))
         quando = formatar_horario(mensagem_cabeca.created_at)
 
-        classes_mensagem = ["message"]
-        tags_html: list[str] = []
+        # Estrutura HTML idêntica ao PRO5M (message-row / message-body / badges)
+        avatar_classes = ["avatar"]
+        badges_html: list[str] = []
         if autor.bot:
-            classes_mensagem.append("bot")
-            tags_html.append('<span class="bot-tag">BOT</span>')
-        if autor.id == ticket.autor_discord_id:
-            classes_mensagem.append("autor")
-            tags_html.append("<span class='autor-tag'>Autor</span>")
+            avatar_classes.append("bot")
+            badges_html.append('<span class="author-badge bot">BOT</span>')
         eh_staff = autor.id in ids_staff
         if not eh_staff and isinstance(autor, discord.Member):
             eh_staff = membro_eh_staff_ticket(autor)
-        if eh_staff:
-            classes_mensagem.append("staff")
-            tags_html.append('<span class="staff-tag">STAFF</span>')
-        if not autor.bot and autor.id != ticket.autor_discord_id and not eh_staff:
-            classes_mensagem.append("membro")
+        if eh_staff and not autor.bot:
+            avatar_classes.append("staff")
+            badges_html.append('<span class="author-badge staff">STAFF</span>')
+        if autor.id == ticket.autor_discord_id and not autor.bot:
+            badges_html.append('<span class="author-badge autor">AUTOR</span>')
 
-        partes_mensagens.append('<div class="message-container">')
+        partes_mensagens.append('<div class="message-row">')
         partes_mensagens.append(
-            f'<img class="avatar" src="{avatar}" alt="" loading="lazy">'
+            f'<img class="{" ".join(avatar_classes)}" src="{avatar}" alt="" loading="lazy">'
         )
-        partes_mensagens.append('<div class="message-content">')
-        partes_mensagens.append(f'<div class="{" ".join(classes_mensagem)}">')
-        partes_mensagens.append('<div class="author-timestamp">')
-        partes_mensagens.append(f'<span class="author">{nome}</span>')
-        partes_mensagens.append(f'<span class="timestamp">{quando}</span>')
-        partes_mensagens.extend(tags_html)
-        partes_mensagens.append("</div>")
+        partes_mensagens.append('<div class="message-body">')
+        partes_mensagens.append('<div class="message-meta">')
+        partes_mensagens.append(f'<span class="author-name">{nome}</span>')
+        partes_mensagens.extend(badges_html)
+        partes_mensagens.append(f'<span class="message-time">{quando}</span>')
+        partes_mensagens.append("</div>")  # .message-meta
 
         for mensagem_do_grupo in grupo:
             dados = preparar_conteudo_mensagem(mensagem_do_grupo)
@@ -1999,14 +1996,20 @@ def montar_html_transcript(
                 renderizar_bloco_conteudo(dados, autor_eh_bot=bool(autor.bot))
             )
 
-        partes_mensagens.append("</div>")  # .message
-        partes_mensagens.append("</div>")  # .message-content
-        partes_mensagens.append("</div>")  # .message-container
+        partes_mensagens.append("</div>")  # .message-body
+        partes_mensagens.append("</div>")  # .message-row
 
     html_mensagens = "\n".join(partes_mensagens)
 
     titulo_pagina = f"Transcript #{ticket.id} — {ticket.categoria_rotulo or 'Ticket'}"
     info_canal = f"Transcript · {ticket.categoria_rotulo or 'Ticket'} · #{ticket.id}"
+    try:
+        total_msgs = str(sum(len(g) for g in grupos))
+    except Exception:
+        total_msgs = "0"
+    categoria = ticket.categoria_rotulo or "Ticket"
+    autor_nome = ticket.autor_nome or "—"
+    staff_nome = ticket.staff_finalizou_nome or "—"
 
     html_final = template_html
     html_final = html_final.replace("{{TITULO_PAGINA}}", esc(titulo_pagina))
@@ -2014,4 +2017,9 @@ def montar_html_transcript(
     html_final = html_final.replace("{{ICONE_GUILDA}}", icone)
     html_final = html_final.replace("{{INFO_CANAL}}", esc(info_canal))
     html_final = html_final.replace("{{MENSAGENS}}", html_mensagens)
+    html_final = html_final.replace("{{TOTAL_MSGS}}", esc(total_msgs))
+    html_final = html_final.replace("{{CATEGORIA}}", esc(categoria))
+    html_final = html_final.replace("{{TICKET_ID}}", str(int(ticket.id)))
+    html_final = html_final.replace("{{AUTOR_NOME}}", esc(autor_nome))
+    html_final = html_final.replace("{{STAFF_NOME}}", esc(staff_nome))
     return html_final
