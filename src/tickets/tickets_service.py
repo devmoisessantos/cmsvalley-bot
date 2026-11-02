@@ -1180,16 +1180,14 @@ async def montar_html_transcript(
         """Neutraliza caracteres HTML para que mensagens não alterem o transcript."""
         return modulo_html.escape(texto or "")
 
-    async def midia_estavel(
-        url: str, content_type: str | None = None, limite_bytes: int = 6_000_000
-    ) -> str:
+
+    async def midia_estavel(url: str, content_type: str | None = None, limite_bytes: int = 6_000_000) -> str:
         """
         Baixa a mídia e devolve data-URI (base64) para o transcript não depender
         de links assinados do Discord (ex/is/hm), que expiram e quebram a imagem.
         Se falhar ou for grande demais, devolve a URL original.
         """
         import base64
-
         import aiohttp
 
         if not url:
@@ -1199,24 +1197,14 @@ async def montar_html_transcript(
         try:
             timeout = aiohttp.ClientTimeout(total=25)
             headers = {"User-Agent": "CMSValley-Transcript/1.0"}
-            async with aiohttp.ClientSession(
-                timeout=timeout, headers=headers
-            ) as sessao:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as sessao:
                 async with sessao.get(url) as resp:
                     if resp.status != 200:
                         return url
                     dados = await resp.read()
                     if not dados or len(dados) > limite_bytes:
                         return url
-                    mime = (
-                        (
-                            content_type
-                            or resp.headers.get("Content-Type")
-                            or "application/octet-stream"
-                        )
-                        .split(";")[0]
-                        .strip()
-                    )
+                    mime = (content_type or resp.headers.get("Content-Type") or "application/octet-stream").split(";")[0].strip()
                     if not mime or mime == "application/octet-stream":
                         # tentativa por extensão
                         lower = url.lower().split("?")[0]
@@ -1246,11 +1234,7 @@ async def montar_html_transcript(
         try:
             dados = await anexo.read()
             if dados and len(dados) <= limite:
-                mime = (
-                    (anexo.content_type or "application/octet-stream")
-                    .split(";")[0]
-                    .strip()
-                )
+                mime = (anexo.content_type or "application/octet-stream").split(";")[0].strip()
                 if not mime or mime == "application/octet-stream":
                     nome = (anexo.filename or "").lower()
                     if nome.endswith(".png"):
@@ -1265,14 +1249,8 @@ async def montar_html_transcript(
                         mime = "video/mp4"
                 return f"data:{mime};base64,{base64.b64encode(dados).decode('ascii')}"
         except Exception as erro_anexo:
-            logging.warning(
-                "Attachment.read falhou (%s): %s",
-                getattr(anexo, "filename", "?"),
-                erro_anexo,
-            )
-        return await midia_estavel(
-            getattr(anexo, "url", "") or "", getattr(anexo, "content_type", None)
-        )
+            logging.warning("Attachment.read falhou (%s): %s", getattr(anexo, "filename", "?"), erro_anexo)
+        return await midia_estavel(getattr(anexo, "url", "") or "", getattr(anexo, "content_type", None))
 
     def url_avatar(usuario: discord.abc.User) -> str:
         """Obtém uma imagem de avatar com alternativa segura para falhas da API."""
@@ -1428,10 +1406,9 @@ async def montar_html_transcript(
         # --- Extrair blocos de código ANTES de qualquer outra coisa ---
         blocos_codigo: list[str] = []
 
-        def guardar_bloco(match) -> str:
-            lang = (match.group(1) or "").strip()
-            codigo = match.group(2)
-            # remove \n inicial residual
+        def _empilhar_codigo(lang: str, codigo: str) -> str:
+            lang = (lang or "").strip()
+            codigo = codigo or ""
             if codigo.startswith("\n"):
                 codigo = codigo[1:]
             if codigo.endswith("\n"):
@@ -1441,19 +1418,25 @@ async def montar_html_transcript(
             blocos_codigo.append(
                 f'<pre class="code-block"{lang_attr}><code>{codigo}</code></pre>'
             )
-            return f"\x00CODE{indice}\x00"
+            return f"@@CODE{indice}@@"
 
-        # ```lang\n...\n```  ou  ```...```
+        # ```lang\n...```
         seguro = modulo_re.sub(
-            r"```([^\n`]*)\n?([\s\S]*?)```",
-            guardar_bloco,
+            r"```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```",
+            lambda m: _empilhar_codigo(m.group(1), m.group(2)),
+            seguro,
+        )
+        # ```...``` sem linguagem / fence simples
+        seguro = modulo_re.sub(
+            r"```([\s\S]*?)```",
+            lambda m: _empilhar_codigo("", m.group(1)),
             seguro,
         )
 
         # Código inline (não atravessa linha)
         seguro = modulo_re.sub(
             r"`([^`\n]+)`",
-            r"<code>\1</code>",
+            r'<code>\1</code>',
             seguro,
         )
 
@@ -1507,7 +1490,9 @@ async def montar_html_transcript(
             from datetime import datetime, timezone
 
             data_e_hora = datetime.fromtimestamp(unix, tz=timezone.utc)
-            return f'<span class="timestamp">{data_e_hora.strftime("%d/%m/%Y %H:%M")}</span>'
+            return (
+                f'<span class="timestamp">{data_e_hora.strftime("%d/%m/%Y %H:%M")}</span>'
+            )
 
         seguro = modulo_re.sub(r"&lt;t:(\d+)(?::[a-zA-Z])?&gt;", html_timestamp, seguro)
 
@@ -1543,14 +1528,13 @@ async def montar_html_transcript(
                 ln = modulo_re.sub(r"^&gt;\s?", "", ln)
                 linhas.append(ln)
             inner = "<br>".join(linhas)
-            return f"<blockquote>{inner}</blockquote>"
+            return f'<blockquote>{inner}</blockquote>'
 
         seguro = modulo_re.sub(
             r"(?m)^&gt;&gt;&gt;\s?([\s\S]*?)(?=\n(?!&gt;)|$)",
             guardar_quote_multi,
             seguro,
         )
-
         # > linha única (ou sequências de > linhas → um blockquote)
         def guardar_quote_linhas(match) -> str:
             bloco = match.group(0)
@@ -1558,7 +1542,7 @@ async def montar_html_transcript(
             for ln in bloco.split("\n"):
                 ln = modulo_re.sub(r"^&gt;\s?", "", ln)
                 linhas.append(ln)
-            return f"<blockquote>{'<br>'.join(linhas)}</blockquote>"
+            return f'<blockquote>{"<br>".join(linhas)}</blockquote>'
 
         seguro = modulo_re.sub(
             r"(?m)^(?:&gt;\s?.+\n?)+",
@@ -1635,15 +1619,15 @@ async def montar_html_transcript(
 
         # Restaura blocos de código
         for indice, bloco in enumerate(blocos_codigo):
-            seguro = seguro.replace(f"\x00CODE{indice}\x00", bloco)
+            seguro = seguro.replace(f"@@CODE{indice}@@", bloco)
 
         # Quebras de linha → <br>, sem poluir blocos de bloco
-        # Protege tags de bloco
+        # Protege tags de bloco antes de fatiar linhas
         placeholders_bloco: list[str] = []
 
         def guardar_html_bloco(match) -> str:
             placeholders_bloco.append(match.group(0))
-            return f"\x00BLK{len(placeholders_bloco) - 1}\x00"
+            return f"@@BLK{len(placeholders_bloco)-1}@@"
 
         seguro = modulo_re.sub(
             r"<(?:pre|blockquote|ul|h[1-3]|hr)\b[\s\S]*?</(?:pre|blockquote|ul|h[1-3])>|<hr\b[^>]*>",
@@ -1651,19 +1635,18 @@ async def montar_html_transcript(
             seguro,
         )
 
-        # Parágrafos: linhas não vazias viram <p>
         partes_out: list[str] = []
         for linha in seguro.split("\n"):
             if linha.strip() == "":
                 continue
-            if linha.startswith("\x00BLK"):
+            if linha.startswith("@@BLK"):
                 partes_out.append(linha)
             else:
                 partes_out.append(f"<p>{linha}</p>")
         seguro = "".join(partes_out)
 
         for i, bloco in enumerate(placeholders_bloco):
-            seguro = seguro.replace(f"\x00BLK{i}\x00", bloco)
+            seguro = seguro.replace(f"@@BLK{i}@@", bloco)
 
         # Limpa <br> órfãos ao redor de blocos
         seguro = modulo_re.sub(r"(?:<br>\s*){3,}", "<br><br>", seguro)
@@ -1941,14 +1924,25 @@ async def montar_html_transcript(
             if embed.author and embed.author.name:
                 autor_do_embed = esc(embed.author.name)
 
+            url_embed = ""
+            if getattr(embed, "url", None):
+                url_embed = esc(str(embed.url))
+
+            provedor = ""
+            if getattr(embed, "provider", None) and embed.provider.name:
+                provedor = esc(embed.provider.name)
+
             tem_campos = bool(getattr(embed, "fields", None))
             tem_rodape = bool(embed.footer and getattr(embed.footer, "text", None))
             url_imagem = ""
             if embed.image and embed.image.url:
-                url_imagem = esc(embed.image.url)
+                url_imagem = str(embed.image.url)
+            url_thumb = ""
+            if embed.thumbnail and embed.thumbnail.url:
+                url_thumb = str(embed.thumbnail.url)
             url_video = ""
             if embed.video and embed.video.url:
-                url_video = esc(embed.video.url)
+                url_video = str(embed.video.url)
 
             tem_conteudo = any(
                 [
@@ -1959,16 +1953,35 @@ async def montar_html_transcript(
                     tem_rodape,
                     url_imagem,
                     url_video,
+                    url_thumb,
+                    url_embed,
+                    provedor,
                 ]
             )
             if not tem_conteudo:
                 continue
 
-            saida.append('<div class="embed">')
+            cor_barra = ""
+            try:
+                cor_val = getattr(getattr(embed, "colour", None) or getattr(embed, "color", None), "value", None)
+                if cor_val:
+                    cor_barra = f"border-left-color:#{int(cor_val):06x};"
+            except Exception:
+                cor_barra = ""
+
+            saida.append(f'<div class="embed" style="{cor_barra}">')
+            if provedor:
+                saida.append(f'<div class="embed-author">{provedor}</div>')
             if autor_do_embed:
                 saida.append(f'<div class="embed-author">{autor_do_embed}</div>')
             if titulo_do_embed:
-                saida.append(f'<div class="embed-title">{titulo_do_embed}</div>')
+                if url_embed:
+                    saida.append(
+                        f'<div class="embed-title"><a href="{url_embed}" target="_blank" '
+                        f'rel="noopener">{titulo_do_embed}</a></div>'
+                    )
+                else:
+                    saida.append(f'<div class="embed-title">{titulo_do_embed}</div>')
             if descricao_do_embed:
                 saida.append(
                     f'<div class="embed-description">{descricao_do_embed}</div>'
@@ -1988,6 +2001,14 @@ async def montar_html_transcript(
                 saida.append(
                     f'<div class="embed-footer">{esc(embed.footer.text)}</div>'
                 )
+            # thumbnail (card preview tipo medal.tv)
+            if url_thumb and not url_imagem:
+                url_th_est = await midia_estavel(url_thumb, "image/*")
+                saida.append(
+                    f'<a href="{url_embed or esc(url_th_est)}" target="_blank" rel="noopener">'
+                    f'<img class="component-thumbnail" src="{esc(url_th_est)}" alt="" loading="lazy">'
+                    f"</a>"
+                )
             if url_imagem:
                 url_img_est = await midia_estavel(url_imagem, "image/*")
                 saida.append(
@@ -1998,13 +2019,18 @@ async def montar_html_transcript(
                     f'alt="" loading="lazy" decoding="async">'
                     '<span class="enlarge-label">'
                     '<svg class="icon" aria-hidden="true"><use href="#i-expand"></use></svg>'
-                    "Ampliar imagem</span></button></div>"
+                    'Ampliar imagem</span></button></div>'
                 )
             if url_video:
                 url_vid_est = await midia_estavel(url_video, "video/*")
                 saida.append(
                     f'<video class="evidence-video" controls preload="metadata" '
                     f'src="{esc(url_vid_est)}"></video>'
+                )
+            if url_embed and not titulo_do_embed:
+                saida.append(
+                    f'<div class="embed-description"><a href="{url_embed}" target="_blank" '
+                    f'rel="noopener">{url_embed}</a></div>'
                 )
             saida.append("</div>")
 
@@ -2025,12 +2051,12 @@ async def montar_html_transcript(
                 tipo = (anexo.content_type or "").lower()
                 url_estavel = await anexo_estavel(anexo)
                 url_esc = esc(url_estavel)
-                is_img = tipo.startswith("image/") or (
-                    anexo.filename or ""
-                ).lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
-                is_vid = tipo.startswith("video/") or (
-                    anexo.filename or ""
-                ).lower().endswith((".mp4", ".webm", ".mov"))
+                is_img = tipo.startswith("image/") or (anexo.filename or "").lower().endswith(
+                    (".png", ".jpg", ".jpeg", ".gif", ".webp")
+                )
+                is_vid = tipo.startswith("video/") or (anexo.filename or "").lower().endswith(
+                    (".mp4", ".webm", ".mov")
+                )
                 is_aud = tipo.startswith("audio/")
                 if is_img:
                     saida.append(
@@ -2041,7 +2067,7 @@ async def montar_html_transcript(
                         f'alt="{nome_arq}" loading="lazy" decoding="async">'
                         '<span class="enlarge-label">'
                         '<svg class="icon" aria-hidden="true"><use href="#i-expand"></use></svg>'
-                        "Ampliar imagem</span></button>"
+                        'Ampliar imagem</span></button>'
                         '<div class="attachment-info">'
                         '<svg class="icon" aria-hidden="true"><use href="#i-image"></use></svg>'
                         f'<div><p class="attachment-name">{nome_arq}</p>'
@@ -2091,7 +2117,8 @@ async def montar_html_transcript(
             and not getattr(mensagem, "stickers", None)
         ):
             saida.append(
-                '<div class="message-text"><em>(mensagem sem texto legível)</em></div>'
+                '<div class="message-text">'
+                "<em>(mensagem sem texto legível)</em></div>"
             )
         return saida
 
@@ -2162,7 +2189,6 @@ async def montar_html_transcript(
         # Separador de data (tela-chat)
         try:
             from src.utils.formatacao import para_horario_brasilia
-
             local_dt = para_horario_brasilia(criado) if criado else None
         except Exception:
             local_dt = criado
@@ -2171,18 +2197,10 @@ async def montar_html_transcript(
             rotulo_dia = local_dt.strftime("%d de %B de %Y")
             # meses em pt-BR simples
             meses = {
-                "January": "janeiro",
-                "February": "fevereiro",
-                "March": "março",
-                "April": "abril",
-                "May": "maio",
-                "June": "junho",
-                "July": "julho",
-                "August": "agosto",
-                "September": "setembro",
-                "October": "outubro",
-                "November": "novembro",
-                "December": "dezembro",
+                "January": "janeiro", "February": "fevereiro", "March": "março",
+                "April": "abril", "May": "maio", "June": "junho",
+                "July": "julho", "August": "agosto", "September": "setembro",
+                "October": "outubro", "November": "novembro", "December": "dezembro",
             }
             for en, pt in meses.items():
                 rotulo_dia = rotulo_dia.replace(en, pt)
@@ -2233,11 +2251,7 @@ async def montar_html_transcript(
     autor_nome = ticket.autor_nome or "—"
     staff_nome = ticket.staff_finalizou_nome or "—"
     autor_id = getattr(ticket, "autor_discord_id", None) or ""
-    staff_id = (
-        getattr(ticket, "staff_finalizou_id", None)
-        or getattr(ticket, "staff_assumiu_id", None)
-        or ""
-    )
+    staff_id = getattr(ticket, "staff_finalizou_id", None) or getattr(ticket, "staff_assumiu_id", None) or ""
     autor_avatar = "https://cdn.discordapp.com/embed/avatars/0.png"
     staff_avatar = "https://cdn.discordapp.com/embed/avatars/1.png"
     try:
@@ -2251,14 +2265,16 @@ async def montar_html_transcript(
                 staff_avatar = str(membro_s.display_avatar.replace(size=128).url)
     except Exception:
         pass
-    aberto_em = formatar_horario(
-        getattr(ticket, "criado_em", None) or getattr(ticket, "aberto_em", None)
-    )
+    aberto_em = formatar_horario(getattr(ticket, "criado_em", None) or getattr(ticket, "aberto_em", None))
     finalizado_em = formatar_horario(getattr(ticket, "finalizado_em", None))
     anexos_count = "0"
     try:
         anexos_count = str(
-            sum(len(getattr(m, "attachments", None) or []) for g in grupos for m in g)
+            sum(
+                len(getattr(m, "attachments", None) or [])
+                for g in grupos
+                for m in g
+            )
         )
     except Exception:
         pass
@@ -2277,11 +2293,7 @@ async def montar_html_transcript(
     # Nome do canal do ticket (ex: 🙋・imguxta), não o rótulo da categoria
     titulo_canal = ""
     try:
-        canal_obj = (
-            guilda.get_channel(int(ticket.canal_id))
-            if guilda and ticket.canal_id
-            else None
-        )
+        canal_obj = guilda.get_channel(int(ticket.canal_id)) if guilda and ticket.canal_id else None
         if canal_obj is not None and getattr(canal_obj, "name", None):
             titulo_canal = str(canal_obj.name)
     except Exception:
