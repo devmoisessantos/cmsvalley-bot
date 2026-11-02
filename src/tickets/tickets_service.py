@@ -1775,7 +1775,7 @@ def montar_html_transcript(
                 for indice, botao in enumerate(botoes):
                     if indice > 0 and indice % 4 == 0:
                         saida.append('</div><div class="container-row">')
-                    classes_btn = f"container-button button-{botao['style']}"
+                    classes_btn = f"secondary-button archived-button button-{botao['style']}"
                     if botao["disabled"]:
                         classes_btn += " disabled"
                     saida.append(
@@ -2022,4 +2022,8 @@ def montar_html_transcript(
     html_final = html_final.replace("{{TICKET_ID}}", str(int(ticket.id)))
     html_final = html_final.replace("{{AUTOR_NOME}}", esc(autor_nome))
     html_final = html_final.replace("{{STAFF_NOME}}", esc(staff_nome))
+    titulo_canal = ticket.categoria_rotulo or f"Ticket #{ticket.id}"
+    html_final = html_final.replace("{{TITULO_CANAL}}", esc(titulo_canal))
+    html_final = html_final.replace("{{ANEXOS_COUNT}}", "0")
+    html_final = html_final.replace("{{TEMPO_ATENDIMENTO}}", "—")
     return html_final
