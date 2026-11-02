@@ -1539,68 +1539,116 @@ async def montar_html_transcript(
         """
         Converte markdown Discord para HTML (estrutura da tela-chat).
 
-        Suporta:
-        - # / ## / ### (títulos) e -# (subtexto)
-        - **negrito** / __sublinhado__ / *itálico* / _itálico_
-        - ~~riscado~~ / ||spoiler||
-        - `código` e ```bloco``` (com linguagem opcional)
-        - > quote e >>> quote multilinha
-        - listas - e 1.
-        - menções user/cargo, canais, timestamps, emoji custom
-        - links http(s)
+        Usa markdown-it-py para estrutura (títulos, listas, blockquotes,
+        negrito, itálico, código, links) e pós-processa menções, emojis,
+        canais, timestamps e sintaxes exclusivas do Discord (spoiler,
+        sublinhado, -# subtexto).
         """
         if not texto:
             return ""
 
+        from markdown_it import MarkdownIt
+
         preparado = preparar_texto_com_mencoes(texto, mapa_usuarios, mapa_cargos)
-        seguro = esc(preparado)
-        seguro = seguro.replace("\x00HR\x00", '<hr class="container-divider">')
+        preparado = preparado.replace("\x00HR\x00", "\n\n---\n\n")
 
-        # --- Extrair blocos de código ANTES de qualquer outra coisa ---
-        blocos_codigo: list[str] = []
+        # Sintaxes Discord que o CommonMark não cobre → placeholders seguros
+        placeholders_extra: list[str] = []
 
-        def _empilhar_codigo(lang: str, codigo: str) -> str:
-            lang = (lang or "").strip()
-            codigo = codigo or ""
-            if codigo.startswith("\n"):
-                codigo = codigo[1:]
-            if codigo.endswith("\n"):
-                codigo = codigo[:-1]
-            indice = len(blocos_codigo)
-            lang_attr = f' data-lang="{esc(lang)}"' if lang else ""
-            blocos_codigo.append(
-                f'<pre class="code-block"{lang_attr}><code>{codigo}</code></pre>'
-            )
-            return f"@@CODE{indice}@@"
+        def _guardar_extra(html_fragmento: str) -> str:
+            idx = len(placeholders_extra)
+            placeholders_extra.append(html_fragmento)
+            return f"@@XTRA{idx}@@"
 
-        # ```lang\n...```
-        seguro = modulo_re.sub(
-            r"```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```",
-            lambda m: _empilhar_codigo(m.group(1), m.group(2)),
-            seguro,
-        )
-        # ```...``` sem linguagem / fence simples
-        seguro = modulo_re.sub(
-            r"```([\s\S]*?)```",
-            lambda m: _empilhar_codigo("", m.group(1)),
-            seguro,
-        )
-
-        # Código inline (não atravessa linha)
-        seguro = modulo_re.sub(
-            r"`([^`\n]+)`",
-            r"<code>\1</code>",
-            seguro,
-        )
-
-        # Links http(s) — evita engolir src de <img> futuros
-        seguro = modulo_re.sub(
-            r'(?<!["\'=])(https?://[^\s<>"\']+)',
-            lambda m: (
-                f'<a href="{m.group(1)}" target="_blank" rel="noopener" '
-                f'class="msg-link">{m.group(1)}</a>'
+        # Spoilers ||texto||
+        preparado = modulo_re.sub(
+            r"\|\|(.+?)\|\|",
+            lambda m: _guardar_extra(
+                f'<span class="spoiler-text" aria-expanded="false">'
+                f"{esc(m.group(1))}</span>"
             ),
-            seguro,
+            preparado,
+        )
+
+        # Sublinhado Discord: __texto__ (CommonMark trata como strong)
+        # Evita pegar dentro de **...** já processado depois; aplica antes do MD
+        preparado = modulo_re.sub(
+            r"(?<!\*)__(?!_)(.+?)(?<!_)__(?!\*)",
+            lambda m: _guardar_extra(f"<u>{esc(m.group(1))}</u>"),
+            preparado,
+        )
+
+        # Subtexto Discord: -# linha
+        preparado = modulo_re.sub(
+            r"(?m)^-#\s+(.+)$",
+            lambda m: _guardar_extra(
+                f'<p class="small muted">{esc(m.group(1))}</p>'
+            ),
+            preparado,
+        )
+
+        md = MarkdownIt("commonmark", {"breaks": True, "html": False})
+        md.enable("strikethrough")
+        # linkify opcional: URLs soltas viram <a>
+        try:
+            md.enable("linkify")
+        except Exception:
+            pass
+
+        html = md.render(preparado)
+
+        # --- Pós-processamento Discord / classes da tela-chat ---
+
+        # Títulos com a classe usada no CSS
+        html = modulo_re.sub(
+            r"<h([1-3])>",
+            r'<h\1 class="message-heading">',
+            html,
+        )
+
+        # Listas → <p class="message-list-item"> (CSS ::before desenha o bullet;
+        # ul/li nativo + ::before geraria bullet duplo)
+        def _lista_para_itens(match: modulo_re.Match) -> str:
+            bloco = match.group(0)
+            itens = modulo_re.findall(r"<li>([\s\S]*?)</li>", bloco)
+            partes = []
+            for it in itens:
+                it = it.strip()
+                # markdown-it envolve conteúdo de li em <p> quando multilinha
+                it = modulo_re.sub(r"^<p>([\s\S]*?)</p>$", r"\1", it)
+                it = it.replace("<p>", "").replace("</p>", "<br>")
+                if it:
+                    partes.append(f'<p class="message-list-item">{it}</p>')
+            return "".join(partes)
+
+        html = modulo_re.sub(
+            r"<ul>[\s\S]*?</ul>|<ol>[\s\S]*?</ol>",
+            _lista_para_itens,
+            html,
+        )
+
+        # HR do markdown (---) → divisor do transcript
+        html = modulo_re.sub(
+            r"<hr\s*/?>",
+            '<hr class="container-divider">',
+            html,
+        )
+
+        # Blocos de código: adiciona classe usada no CSS
+        html = modulo_re.sub(
+            r"<pre><code(?:\s+class=\"language-([a-zA-Z0-9_+-]+)\")?>",
+            lambda m: (
+                f'<pre class="code-block"'
+                f'{f" data-lang=\"{m.group(1)}\"" if m.group(1) else ""}><code>'
+            ),
+            html,
+        )
+
+        # Links gerados pelo markdown/linkify
+        html = modulo_re.sub(
+            r'<a href="(https?://[^"]+)">',
+            r'<a href="\1" target="_blank" rel="noopener" class="msg-link">',
+            html,
         )
 
         # Emoji custom {{E:a|s:nome:id}}
@@ -1615,26 +1663,26 @@ async def montar_html_transcript(
                 f'alt=":{esc(nome)}:" loading="lazy">'
             )
 
-        seguro = modulo_re.sub(
+        html = modulo_re.sub(
             r"\{\{E:(a|s):([A-Za-z0-9_]+):(\d+)\}\}",
             html_emoji,
-            seguro,
+            html,
         )
 
-        # Canais <#id> já escapados
+        # Canais <#id> já escapados pelo markdown-it
         def html_canal(match) -> str:
             id_canal = match.group(1)
             canal_obj = guilda.get_channel(int(id_canal)) if guilda else None
             nome_canal = f"#{canal_obj.name}" if canal_obj else "#canal"
             return f'<span class="mention">{esc(nome_canal)}</span>'
 
-        seguro = modulo_re.sub(r"&lt;#(\d+)&gt;", html_canal, seguro)
+        html = modulo_re.sub(r"&lt;#(\d+)&gt;", html_canal, html)
 
         # Slash </cmd:id>
-        seguro = modulo_re.sub(
+        html = modulo_re.sub(
             r"&lt;/([a-zA-Z0-9_ -]+):(\d+)&gt;",
             lambda m: f'<span class="mention">/{esc(m.group(1))}</span>',
-            seguro,
+            html,
         )
 
         # Timestamps <t:UNIX:f>
@@ -1643,9 +1691,16 @@ async def montar_html_transcript(
             from datetime import datetime, timezone
 
             data_e_hora = datetime.fromtimestamp(unix, tz=timezone.utc)
-            return f'<span class="timestamp">{data_e_hora.strftime("%d/%m/%Y %H:%M")}</span>'
+            return (
+                f'<span class="timestamp">'
+                f'{data_e_hora.strftime("%d/%m/%Y %H:%M")}</span>'
+            )
 
-        seguro = modulo_re.sub(r"&lt;t:(\d+)(?::[a-zA-Z])?&gt;", html_timestamp, seguro)
+        html = modulo_re.sub(
+            r"&lt;t:(\d+)(?::[a-zA-Z])?&gt;",
+            html_timestamp,
+            html,
+        )
 
         # Usuários {{U:id}}
         def html_usuario(match) -> str:
@@ -1653,7 +1708,7 @@ async def montar_html_transcript(
             nome = mapa_usuarios.get(id_usuario) or "usuário"
             return f'<span class="mention">@{esc(nome)}</span>'
 
-        seguro = modulo_re.sub(r"\{\{U:(\d+)\}\}", html_usuario, seguro)
+        html = modulo_re.sub(r"\{\{U:(\d+)\}\}", html_usuario, html)
 
         # Cargos {{R:id}}
         def html_cargo(match) -> str:
@@ -1667,170 +1722,36 @@ async def montar_html_transcript(
                 )
             return '<span class="mention">@cargo</span>'
 
-        seguro = modulo_re.sub(r"\{\{R:(\d+)\}\}", html_cargo, seguro)
+        html = modulo_re.sub(r"\{\{R:(\d+)\}\}", html_cargo, html)
 
-        # --- Blockquotes ---
-        # >>> multilinha: do >>> até o fim do bloco (linhas seguintes)
-        def guardar_quote_multi(match) -> str:
-            corpo = match.group(1).strip("\n")
-            # linhas internas podem ter &gt; residual no começo
-            linhas = []
-            for ln in corpo.split("\n"):
-                ln = modulo_re.sub(r"^&gt;\s?", "", ln)
-                linhas.append(ln)
-            inner = "<br>".join(linhas)
-            return f"<blockquote>{inner}</blockquote>"
+        # Restaura placeholders de spoiler / underline / -#
+        for i, fragmento in enumerate(placeholders_extra):
+            html = html.replace(f"@@XTRA{i}@@", fragmento)
 
-        seguro = modulo_re.sub(
-            r"(?m)^&gt;&gt;&gt;\s?([\s\S]*?)(?=\n(?!&gt;)|$)",
-            guardar_quote_multi,
-            seguro,
+        # Espaçamento entre blocos estruturais (alinhado ao tela-chat)
+        html = modulo_re.sub(
+            r"(</(?:h[1-3]|p|blockquote)>)(\s*)(<blockquote\b)",
+            r"\1<br>\3",
+            html,
         )
+        html = modulo_re.sub(
+            r"(</(?:h[1-3]|blockquote)>)(\s*)(<p\b)",
+            r"\1<br>\3",
+            html,
+        )
+        html = modulo_re.sub(
+            r"(</p>)(\s*)(<h[1-3]\b)",
+            r"\1<br>\3",
+            html,
+        )
+        html = modulo_re.sub(r"(?:\s*<br>\s*){3,}", "<br><br>", html)
+        html = modulo_re.sub(r"^(?:\s*<br>\s*)+", "", html)
+        html = modulo_re.sub(r"(?:\s*<br>\s*)+$", "", html)
+        # Remove newlines soltos que o markdown-it deixa entre tags
+        html = modulo_re.sub(r">\s*\n\s*<", "><", html)
 
-        # > linha única (ou sequências de > linhas → um blockquote)
-        def guardar_quote_linhas(match) -> str:
-            bloco = match.group(0)
-            linhas = []
-            for ln in bloco.split("\n"):
-                ln = modulo_re.sub(r"^&gt;\s?", "", ln)
-                linhas.append(ln)
-            return f"<blockquote>{'<br>'.join(linhas)}</blockquote>"
+        return html
 
-        seguro = modulo_re.sub(
-            r"(?m)^(?:&gt;\s?.+\n?)+",
-            guardar_quote_linhas,
-            seguro,
-        )
-
-        # Títulos / subtexto
-        seguro = modulo_re.sub(
-            r"(?m)^-#\s+(.+)$",
-            r'<p class="small muted">\1</p>',
-            seguro,
-        )
-        seguro = modulo_re.sub(
-            r"(?m)^###\s+(.+)$",
-            r'<h3 class="message-heading">\1</h3>',
-            seguro,
-        )
-        seguro = modulo_re.sub(
-            r"(?m)^##\s+(.+)$",
-            r'<h2 class="message-heading">\1</h2>',
-            seguro,
-        )
-        seguro = modulo_re.sub(
-            r"(?m)^#\s+(.+)$",
-            r'<h1 class="message-heading">\1</h1>',
-            seguro,
-        )
-
-        # Listas — mesmo padrão do tela-chat: <p class="message-list-item">
-        # (o CSS ::before desenha o bullet; ul/li nativo + ::before = bullet duplo)
-        def wrap_lista(match) -> str:
-            itens = match.group(0).strip().split("\n")
-            partes = []
-            for it in itens:
-                it = modulo_re.sub(r"^-\s+", "", it)
-                it = modulo_re.sub(r"^\*\s+", "", it)
-                it = modulo_re.sub(r"^\d+\.\s+", "", it)
-                it = modulo_re.sub(r"^[•·●]\s+", "", it)
-                if it.strip():
-                    partes.append(f'<p class="message-list-item">{it}</p>')
-            return "".join(partes)
-
-        seguro = modulo_re.sub(
-            r"(?m)^(?:\d+\.\s+.+|\-\s+.+|\*\s+.+|[•·●]\s+.+)\n?"
-            r"(?:(?:\d+\.\s+.+|\-\s+.+|\*\s+.+|[•·●]\s+.+)\n?)*",
-            wrap_lista,
-            seguro,
-        )
-
-        # Formatação inline
-        seguro = modulo_re.sub(
-            r"\*\*\*(.+?)\*\*\*", r"<strong><em>\1</em></strong>", seguro
-        )
-        seguro = modulo_re.sub(
-            r"\*\*__(.+?)__\*\*", r"<strong><u>\1</u></strong>", seguro
-        )
-        seguro = modulo_re.sub(
-            r"__\*\*(.+?)\*\*__", r"<u><strong>\1</strong></u>", seguro
-        )
-        seguro = modulo_re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", seguro)
-        seguro = modulo_re.sub(r"__(.+?)__", r"<u>\1</u>", seguro)
-        seguro = modulo_re.sub(r"~~(.+?)~~", r"<s>\1</s>", seguro)
-        seguro = modulo_re.sub(
-            r"\|\|(.+?)\|\|",
-            r'<span class="spoiler-text" aria-expanded="false">\1</span>',
-            seguro,
-        )
-        seguro = modulo_re.sub(
-            r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
-            r"<em>\1</em>",
-            seguro,
-        )
-        seguro = modulo_re.sub(
-            r"(?<![A-Za-z0-9_])_(?!_)(.+?)(?<!_)_(?![A-Za-z0-9_])",
-            r"<em>\1</em>",
-            seguro,
-        )
-
-        # Restaura blocos de código
-        for indice, bloco in enumerate(blocos_codigo):
-            seguro = seguro.replace(f"@@CODE{indice}@@", bloco)
-
-        # Quebras de linha → <br>, sem poluir blocos de bloco
-        # Protege tags de bloco antes de fatiar linhas
-        placeholders_bloco: list[str] = []
-
-        def guardar_html_bloco(match) -> str:
-            placeholders_bloco.append(match.group(0))
-            return f"@@BLK{len(placeholders_bloco) - 1}@@"
-
-        seguro = modulo_re.sub(
-            r"<(?:pre|blockquote|ul|h[1-3]|hr)\b[\s\S]*?</(?:pre|blockquote|ul|h[1-3])>|<hr\b[^>]*>",
-            guardar_html_bloco,
-            seguro,
-        )
-
-        partes_out: list[str] = []
-        for linha in seguro.split("\n"):
-            if linha.strip() == "":
-                # Linha em branco → <br> (espaçamento do tela-chat)
-                partes_out.append("<br>")
-                continue
-            if linha.startswith("@@BLK"):
-                partes_out.append(linha)
-            else:
-                partes_out.append(f"<p>{linha}</p>")
-        seguro = "".join(partes_out)
-
-        for i, bloco in enumerate(placeholders_bloco):
-            seguro = seguro.replace(f"@@BLK{i}@@", bloco)
-
-        # Espaçamento entre blocos estruturais (heading / blockquote / lista)
-        # alinhado ao index.html do tela-chat: </p><br><blockquote>…
-        seguro = modulo_re.sub(
-            r"(</(?:h[1-3]|p|blockquote)>)(<blockquote\b)",
-            r"\1<br>\2",
-            seguro,
-        )
-        seguro = modulo_re.sub(
-            r"(</(?:h[1-3]|blockquote)>)(<p\b)",
-            r"\1<br>\2",
-            seguro,
-        )
-        seguro = modulo_re.sub(
-            r"(</p>)(<h[1-3]\b)",
-            r"\1<br>\2",
-            seguro,
-        )
-        # Não empilhar <br> demais
-        seguro = modulo_re.sub(r"(?:<br>\s*){3,}", "<br><br>", seguro)
-        # Remove <br> logo no início/fim do bloco
-        seguro = modulo_re.sub(r"^(?:<br>\s*)+", "", seguro)
-        seguro = modulo_re.sub(r"(?:<br>\s*)+$", "", seguro)
-
-        return seguro
 
     def html_emoji_botao(emoji_obj) -> str:
         """
