@@ -1571,15 +1571,15 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
         await interacao.response.defer(ephemeral=True)
 
         nome_canal_atual = canal.name
+        # Menção no Discord = apelido; texto após "/" = username global
         username_staff = nome_usuario_discord(membro)
-        nome_exibicao_staff = getattr(membro, "display_name", None) or membro.name
 
         await enviar_card_no_canal_ticket(
             canal,
             titulo="🎫 Ticket Finalizado",
             linhas=[
                 f"Este ticket acaba de ser finalizado pelo staff "
-                f"{membro.mention} / {nome_exibicao_staff}!",
+                f"{membro.mention} / {username_staff}!",
                 "",
                 "> **Considerações Finais:**",
                 f"- {texto_consideracoes}",
