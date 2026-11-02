@@ -1572,13 +1572,14 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
 
         nome_canal_atual = canal.name
         username_staff = nome_usuario_discord(membro)
+        nome_exibicao_staff = getattr(membro, "display_name", None) or membro.name
 
         await enviar_card_no_canal_ticket(
             canal,
             titulo="🎫 Ticket Finalizado",
             linhas=[
                 f"Este ticket acaba de ser finalizado pelo staff "
-                f"{membro.mention} / {username_staff}!",
+                f"{membro.mention} / {nome_exibicao_staff}!",
                 "",
                 "> **Considerações Finais:**",
                 f"- {texto_consideracoes}",
@@ -1592,19 +1593,15 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             titulo="🔄 Processando Finalização",
             linhas=[
                 "`Este canal está passando por algumas etapas de segurança como:`",
-                "",
-                "### 📦 Compactação de Mídia",
-                "> Comprimindo imagens e vídeos...",
-                "",
                 "### 🔒 Validação de Dados",
                 "> Verificando integridade dos arquivos anexados",
+                "- **Comprimindo imagens e vídeos**",
                 "- **Removendo metadados sensíveis**",
                 "- **Garantindo conformidade e privacidade**",
                 "",
                 "### 📄 Geração do Transcript",
                 "> Após a conclusão das etapas acima, o transcript será gerado "
                 "com segurança e o canal será deletado automaticamente.",
-                "",
                 "**⏳ Aguarde enquanto processamos as últimas etapas...**",
             ],
             cor=COR_INFO,

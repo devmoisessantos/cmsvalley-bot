@@ -389,8 +389,19 @@ def nome_usuario_discord(membro: discord.Member | discord.User) -> str:
     Retorna o username global do Discord (não o apelido do servidor).
 
     Ex.: 'guxta' em vez de '⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763'
+    Usado em nomes de canal (precisam ser estáveis e sanitizáveis).
     """
     return membro.name
+
+
+def nome_exibicao_discord(membro: discord.Member | discord.User) -> str:
+    """
+    Retorna o nome legível da pessoa: apelido do servidor, senão global_name, senão username.
+
+    Ex.: '⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763'
+    Usado em transcript (resumo e menções) e textos voltados ao humano.
+    """
+    return getattr(membro, "display_name", None) or membro.name
 
 
 def sanitizar_nome_canal(texto: str) -> str:
@@ -516,6 +527,7 @@ async def criar_ticket(
             return None
 
         username = nome_usuario_discord(autor)
+        nome_exibicao = nome_exibicao_discord(autor)
         nome_canal = sanitizar_nome_canal(f"{definicao['prefixo_canal']}-{username}")
         cargos_staff = _cargos_staff_na_guilda(guilda, categoria_chave)
         overwrite_staff = _overwrite_staff_texto()
@@ -569,7 +581,8 @@ async def criar_ticket(
                 categoria_rotulo=definicao["rotulo"],
                 status="aberto",
                 autor_discord_id=autor.id,
-                autor_nome=username,
+                # Apelido / nome de exibição para transcript e painéis
+                autor_nome=nome_exibicao,
                 canal_id=canal.id,
                 aberto_em=agora(),
             )
@@ -643,8 +656,7 @@ async def sincronizar_permissoes_do_canal_ticket(
         await canal.edit(
             overwrites=overwrites,
             reason=(
-                f"Sincronizar permissões do ticket "
-                f"(categoria={ticket.categoria_chave})"
+                f"Sincronizar permissões do ticket (categoria={ticket.categoria_chave})"
             ),
         )
         resultado["cargos_ok"] = len(nomes_ok)
@@ -682,6 +694,7 @@ async def assumir_ticket(
     Retorna (ticket, nome_aplicado).
     """
     username_staff = nome_usuario_discord(staff)
+    nome_exibicao_staff = nome_exibicao_discord(staff)
     definicao = TICKETS_CATEGORIAS.get(ticket.categoria_chave) or {}
     emoji = definicao.get("emoji") or "🎫"
     # Discord aceita unicode no nome; mantém pontos do username
@@ -712,7 +725,8 @@ async def assumir_ticket(
             return ticket, nome_aplicado
         ticket_db.status = "assumido"
         ticket_db.staff_assumiu_id = staff.id
-        ticket_db.staff_assumiu_nome = username_staff
+        # Apelido / nome de exibição para transcript e painéis
+        ticket_db.staff_assumiu_nome = nome_exibicao_staff
         ticket_db.assumido_em = agora()
         await sessao.commit()
         await sessao.refresh(ticket_db)
@@ -766,7 +780,8 @@ async def finalizar_ticket(
             return ticket
         ticket_db.status = "finalizado"
         ticket_db.staff_finalizou_id = staff.id
-        ticket_db.staff_finalizou_nome = nome_usuario_discord(staff)
+        # Apelido / nome de exibição para transcript e painéis
+        ticket_db.staff_finalizou_nome = nome_exibicao_discord(staff)
         ticket_db.consideracoes_finais = consideracoes
         ticket_db.senha_transcript = senha
         ticket_db.finalizado_em = agora()
@@ -1392,8 +1407,7 @@ async def montar_html_transcript(
                     return url_cdn
                 if len(dados) <= 6_000_000:
                     return (
-                        f"data:{mime};base64,"
-                        f"{base64.b64encode(dados).decode('ascii')}"
+                        f"data:{mime};base64,{base64.b64encode(dados).decode('ascii')}"
                     )
         except Exception as erro_anexo:
             logging.warning(
@@ -1443,12 +1457,12 @@ async def montar_html_transcript(
         mensagem: discord.Message,
         texto_extra: str = "",
     ) -> dict[str, str]:
-        """id → username Discord (não apelido do servidor)."""
+        """id → apelido / nome de exibição da pessoa (não o username global)."""
         mapa: dict[str, str] = {}
         for usuario in getattr(mensagem, "mentions", None) or []:
-            mapa[str(usuario.id)] = nome_usuario_discord(usuario)
+            mapa[str(usuario.id)] = nome_exibicao_discord(usuario)
         try:
-            mapa[str(mensagem.author.id)] = nome_usuario_discord(mensagem.author)
+            mapa[str(mensagem.author.id)] = nome_exibicao_discord(mensagem.author)
         except AttributeError as erro_sem_autor:
             # Mensagem de sistema pode nao ter autor utilizavel. O transcript
             # continua valido sem esse nome no mapa.
@@ -1466,7 +1480,7 @@ async def montar_html_transcript(
                     continue
                 membro = guilda.get_member(int(id_usuario))
                 if membro is not None:
-                    mapa[id_usuario] = nome_usuario_discord(membro)
+                    mapa[id_usuario] = nome_exibicao_discord(membro)
         return mapa
 
     def mapa_cargos_mencionados(
@@ -1581,9 +1595,7 @@ async def montar_html_transcript(
         # Subtexto Discord: -# linha
         preparado = modulo_re.sub(
             r"(?m)^-#\s+(.+)$",
-            lambda m: _guardar_extra(
-                f'<p class="small muted">{esc(m.group(1))}</p>'
-            ),
+            lambda m: _guardar_extra(f'<p class="small muted">{esc(m.group(1))}</p>'),
             preparado,
         )
 
@@ -1639,7 +1651,7 @@ async def montar_html_transcript(
             r"<pre><code(?:\s+class=\"language-([a-zA-Z0-9_+-]+)\")?>",
             lambda m: (
                 f'<pre class="code-block"'
-                f'{f" data-lang=\"{m.group(1)}\"" if m.group(1) else ""}><code>'
+                f"{f' data-lang="{m.group(1)}"' if m.group(1) else ''}><code>"
             ),
             html,
         )
@@ -1693,7 +1705,7 @@ async def montar_html_transcript(
             data_e_hora = datetime.fromtimestamp(unix, tz=timezone.utc)
             return (
                 f'<span class="timestamp">'
-                f'{data_e_hora.strftime("%d/%m/%Y %H:%M")}</span>'
+                f"{data_e_hora.strftime('%d/%m/%Y %H:%M')}</span>"
             )
 
         html = modulo_re.sub(
@@ -1751,7 +1763,6 @@ async def montar_html_transcript(
         html = modulo_re.sub(r">\s*\n\s*<", "><", html)
 
         return html
-
 
     def html_emoji_botao(emoji_obj) -> str:
         """
@@ -2026,7 +2037,9 @@ async def montar_html_transcript(
                 if url_thumb and html_txt:
                     # Layout tela-chat: texto à esquerda, avatar do autor à direita
                     saida.append('<div class="transcript-section">')
-                    saida.append(f'<div><div class="message-text">{html_txt}</div></div>')
+                    saida.append(
+                        f'<div><div class="message-text">{html_txt}</div></div>'
+                    )
                     saida.append(await html_thumbnail(url_thumb))
                     saida.append("</div>")
                 elif html_txt:
@@ -2194,25 +2207,15 @@ async def montar_html_transcript(
 
             saida.append('<div class="link-preview-body">')
             if dominio:
-                saida.append(
-                    f'<div class="link-preview-provider">{dominio}</div>'
-                )
+                saida.append(f'<div class="link-preview-provider">{dominio}</div>')
             elif provedor:
-                saida.append(
-                    f'<div class="link-preview-provider">{provedor}</div>'
-                )
+                saida.append(f'<div class="link-preview-provider">{provedor}</div>')
             if autor_do_embed and autor_do_embed != dominio:
-                saida.append(
-                    f'<div class="link-preview-author">{autor_do_embed}</div>'
-                )
+                saida.append(f'<div class="link-preview-author">{autor_do_embed}</div>')
             if titulo_do_embed:
-                saida.append(
-                    f'<div class="link-preview-title">{titulo_do_embed}</div>'
-                )
+                saida.append(f'<div class="link-preview-title">{titulo_do_embed}</div>')
             elif url_embed and not titulo_do_embed:
-                saida.append(
-                    f'<div class="link-preview-title">{url_embed}</div>'
-                )
+                saida.append(f'<div class="link-preview-title">{url_embed}</div>')
             if descricao_do_embed:
                 saida.append(
                     f'<div class="link-preview-desc">{descricao_do_embed}</div>'
@@ -2458,7 +2461,7 @@ async def montar_html_transcript(
         total_msgs = "0"
     categoria = ticket.categoria_rotulo or "Ticket"
     autor_nome = ticket.autor_nome or "—"
-    staff_nome = ticket.staff_finalizou_nome or "—"
+    staff_nome = ticket.staff_finalizou_nome or ticket.staff_assumiu_nome or "—"
     autor_id = getattr(ticket, "autor_discord_id", None) or ""
     staff_id = (
         getattr(ticket, "staff_finalizou_id", None)
@@ -2472,10 +2475,13 @@ async def montar_html_transcript(
             membro = guilda.get_member(int(autor_id))
             if membro is not None:
                 autor_avatar = str(membro.display_avatar.replace(size=128).url)
+                # Preferir apelido / nome de exibição no resumo do transcript
+                autor_nome = nome_exibicao_discord(membro)
         if guilda is not None and staff_id:
             membro_s = guilda.get_member(int(staff_id))
             if membro_s is not None:
                 staff_avatar = str(membro_s.display_avatar.replace(size=128).url)
+                staff_nome = nome_exibicao_discord(membro_s)
     except Exception:
         pass
     # Datas brutas (datetime) para cálculo de duração; strings formatadas só para HTML.
@@ -2578,4 +2584,3 @@ def formatar_tempo_atendimento(aberto_em, finalizado_em):
         partes.append(f"{minutos}min")
 
     return " ".join(partes)
-
