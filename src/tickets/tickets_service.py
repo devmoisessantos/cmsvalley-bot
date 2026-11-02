@@ -1119,7 +1119,7 @@ def carregar_template_transcript() -> str:
     return CAMINHO_TEMPLATE_TRANSCRIPT.read_text(encoding="utf-8")
 
 
-def montar_html_transcript(
+async def montar_html_transcript(
     ticket: Ticket,
     mensagens: list[discord.Message],
     guilda: discord.Guild,
@@ -1179,6 +1179,100 @@ def montar_html_transcript(
     def esc(texto: str) -> str:
         """Neutraliza caracteres HTML para que mensagens não alterem o transcript."""
         return modulo_html.escape(texto or "")
+
+    async def midia_estavel(
+        url: str, content_type: str | None = None, limite_bytes: int = 6_000_000
+    ) -> str:
+        """
+        Baixa a mídia e devolve data-URI (base64) para o transcript não depender
+        de links assinados do Discord (ex/is/hm), que expiram e quebram a imagem.
+        Se falhar ou for grande demais, devolve a URL original.
+        """
+        import base64
+
+        import aiohttp
+
+        if not url:
+            return ""
+        if url.startswith("data:"):
+            return url
+        try:
+            timeout = aiohttp.ClientTimeout(total=25)
+            headers = {"User-Agent": "CMSValley-Transcript/1.0"}
+            async with aiohttp.ClientSession(
+                timeout=timeout, headers=headers
+            ) as sessao:
+                async with sessao.get(url) as resp:
+                    if resp.status != 200:
+                        return url
+                    dados = await resp.read()
+                    if not dados or len(dados) > limite_bytes:
+                        return url
+                    mime = (
+                        (
+                            content_type
+                            or resp.headers.get("Content-Type")
+                            or "application/octet-stream"
+                        )
+                        .split(";")[0]
+                        .strip()
+                    )
+                    if not mime or mime == "application/octet-stream":
+                        # tentativa por extensão
+                        lower = url.lower().split("?")[0]
+                        if lower.endswith(".png"):
+                            mime = "image/png"
+                        elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
+                            mime = "image/jpeg"
+                        elif lower.endswith(".gif"):
+                            mime = "image/gif"
+                        elif lower.endswith(".webp"):
+                            mime = "image/webp"
+                        elif lower.endswith(".mp4"):
+                            mime = "video/mp4"
+                        elif lower.endswith(".webm"):
+                            mime = "video/webm"
+                    b64 = base64.b64encode(dados).decode("ascii")
+                    return f"data:{mime};base64,{b64}"
+        except Exception as erro_midia:
+            logging.warning("Falha ao embutir mídia %s: %s", url[:80], erro_midia)
+            return url
+
+    async def anexo_estavel(anexo: discord.Attachment) -> str:
+        """Prefere Attachment.read() (auth Discord); fallback HTTP."""
+        import base64
+
+        limite = 6_000_000
+        try:
+            dados = await anexo.read()
+            if dados and len(dados) <= limite:
+                mime = (
+                    (anexo.content_type or "application/octet-stream")
+                    .split(";")[0]
+                    .strip()
+                )
+                if not mime or mime == "application/octet-stream":
+                    nome = (anexo.filename or "").lower()
+                    if nome.endswith(".png"):
+                        mime = "image/png"
+                    elif nome.endswith((".jpg", ".jpeg")):
+                        mime = "image/jpeg"
+                    elif nome.endswith(".gif"):
+                        mime = "image/gif"
+                    elif nome.endswith(".webp"):
+                        mime = "image/webp"
+                    elif nome.endswith(".mp4"):
+                        mime = "video/mp4"
+                return f"data:{mime};base64,{base64.b64encode(dados).decode('ascii')}"
+        except Exception as erro_anexo:
+            logging.warning(
+                "Attachment.read falhou (%s): %s",
+                getattr(anexo, "filename", "?"),
+                erro_anexo,
+            )
+        return await midia_estavel(
+            getattr(anexo, "url", "") or "", getattr(anexo, "content_type", None)
+        )
 
     def url_avatar(usuario: discord.abc.User) -> str:
         """Obtém uma imagem de avatar com alternativa segura para falhas da API."""
@@ -1312,43 +1406,76 @@ def montar_html_transcript(
         mapa_cargos: dict[str, tuple[str, str]],
     ) -> str:
         """
-        Converte markdown Discord (o mesmo dos TextDisplay em tickets_views)
-        para HTML.
+        Converte markdown Discord para HTML (estrutura da tela-chat).
 
         Suporta:
-        - # / ## / ### (títulos)
-        - -# (subtexto muted)
+        - # / ## / ### (títulos) e -# (subtexto)
         - **negrito** / __sublinhado__ / *itálico* / _itálico_
         - ~~riscado~~ / ||spoiler||
-        - `código` / ```bloco```
-        - listas com - no início da linha
-        - menções user/cargo e emoji custom
+        - `código` e ```bloco``` (com linguagem opcional)
+        - > quote e >>> quote multilinha
+        - listas - e 1.
+        - menções user/cargo, canais, timestamps, emoji custom
+        - links http(s)
         """
+        if not texto:
+            return ""
+
         preparado = preparar_texto_com_mencoes(texto, mapa_usuarios, mapa_cargos)
         seguro = esc(preparado)
-        seguro = seguro.replace("\x00HR\x00", "<hr class='container-divider'>")
+        seguro = seguro.replace("\x00HR\x00", '<hr class="container-divider">')
 
-        # Links http(s) — ANTES de montar <img> de emoji/GIF
-        # (se rodar depois, o regex engole o src e quebra o GIF)
+        # --- Extrair blocos de código ANTES de qualquer outra coisa ---
+        blocos_codigo: list[str] = []
+
+        def guardar_bloco(match) -> str:
+            lang = (match.group(1) or "").strip()
+            codigo = match.group(2)
+            # remove \n inicial residual
+            if codigo.startswith("\n"):
+                codigo = codigo[1:]
+            if codigo.endswith("\n"):
+                codigo = codigo[:-1]
+            indice = len(blocos_codigo)
+            lang_attr = f' data-lang="{esc(lang)}"' if lang else ""
+            blocos_codigo.append(
+                f'<pre class="code-block"{lang_attr}><code>{codigo}</code></pre>'
+            )
+            return f"\x00CODE{indice}\x00"
+
+        # ```lang\n...\n```  ou  ```...```
         seguro = modulo_re.sub(
-            r"(?<![\"'=])(https?://[^\s<>\"']+)",
-            lambda trecho_encontrado: (
-                f'<a href="{trecho_encontrado.group(1)}" target="_blank" '
-                f'rel="noopener" class="msg-link">{trecho_encontrado.group(1)}</a>'
+            r"```([^\n`]*)\n?([\s\S]*?)```",
+            guardar_bloco,
+            seguro,
+        )
+
+        # Código inline (não atravessa linha)
+        seguro = modulo_re.sub(
+            r"`([^`\n]+)`",
+            r"<code>\1</code>",
+            seguro,
+        )
+
+        # Links http(s) — evita engolir src de <img> futuros
+        seguro = modulo_re.sub(
+            r'(?<!["\'=])(https?://[^\s<>"\']+)',
+            lambda m: (
+                f'<a href="{m.group(1)}" target="_blank" rel="noopener" '
+                f'class="msg-link">{m.group(1)}</a>'
             ),
             seguro,
         )
 
-        # Emoji custom Discord → <img>
+        # Emoji custom {{E:a|s:nome:id}}
         def html_emoji(match) -> str:
-            """Transforma marcações de emoji em imagens fora do Discord."""
             animado = match.group(1) == "a"
             nome = match.group(2)
             emoji_id = match.group(3)
             extensao = "gif" if animado else "png"
             url = f"https://cdn.discordapp.com/emojis/{emoji_id}.{extensao}"
             return (
-                f'<img class="emoji" src="{esc(url)}" '
+                f'<img class="discord-emoji" data-emoji="" src="{esc(url)}" '
                 f'alt=":{esc(nome)}:" loading="lazy">'
             )
 
@@ -1358,156 +1485,143 @@ def montar_html_transcript(
             seguro,
         )
 
-        # Canais <#id>
+        # Canais <#id> já escapados
         def html_canal(match) -> str:
-            """Renderiza a menção de canal com nome legível mesmo quando ele sumiu."""
             id_canal = match.group(1)
             canal_obj = guilda.get_channel(int(id_canal)) if guilda else None
-            nome_canal = f"#{canal_obj.name}" if canal_obj else "canal-desconhecido"
-            return f"<span class='channel'>{esc(nome_canal)}</span>"
+            nome_canal = f"#{canal_obj.name}" if canal_obj else "#canal"
+            return f'<span class="mention">{esc(nome_canal)}</span>'
 
         seguro = modulo_re.sub(r"&lt;#(\d+)&gt;", html_canal, seguro)
 
-        # Slash command mentions </comando:id>
+        # Slash </cmd:id>
         seguro = modulo_re.sub(
             r"&lt;/([a-zA-Z0-9_ -]+):(\d+)&gt;",
-            lambda trecho_encontrado: (
-                f"<span class='channel'>/{esc(trecho_encontrado.group(1))}</span>"
-            ),
+            lambda m: f'<span class="mention">/{esc(m.group(1))}</span>',
             seguro,
         )
 
-        # Timestamps <t:UNIX:formato>
+        # Timestamps <t:UNIX:f>
         def html_timestamp(match) -> str:
-            """Converte o horário Unix da mensagem em texto estável no transcript."""
             unix = int(match.group(1))
-            from datetime import (
-                datetime,
-                timezone,
-            )
+            from datetime import datetime, timezone
 
             data_e_hora = datetime.fromtimestamp(unix, tz=timezone.utc)
-            return f"<span class='timestamp' style='display:inline'>{data_e_hora.strftime('%d/%m/%Y %H:%M')}</span>"
+            return f'<span class="timestamp">{data_e_hora.strftime("%d/%m/%Y %H:%M")}</span>'
 
         seguro = modulo_re.sub(r"&lt;t:(\d+)(?::[a-zA-Z])?&gt;", html_timestamp, seguro)
 
+        # Usuários {{U:id}}
         def html_usuario(match) -> str:
-            """Renderiza usuários pelo mapa local sem acesso futuro ao Discord."""
             id_usuario = match.group(1)
             nome = mapa_usuarios.get(id_usuario) or "usuário"
-            return f"<span class='author'>@{esc(nome)}</span>"
+            return f'<span class="mention">@{esc(nome)}</span>'
 
         seguro = modulo_re.sub(r"\{\{U:(\d+)\}\}", html_usuario, seguro)
 
+        # Cargos {{R:id}}
         def html_cargo(match) -> str:
-            """Renderiza cargos com cor salva e alternativa para cargos removidos."""
             id_cargo = match.group(1)
             dados_cargo = mapa_cargos.get(id_cargo)
             if dados_cargo:
                 nome_cargo, cor_hex = dados_cargo
                 return (
-                    f"<span class='role' style='color:{esc(cor_hex)};"
-                    f"background-color:{esc(cor_hex)}22'>"
-                    f"@{esc(nome_cargo)}</span>"
+                    f'<span class="mention" style="color:{esc(cor_hex)};'
+                    f'background-color:{esc(cor_hex)}22">@{esc(nome_cargo)}</span>'
                 )
-            return "<span class='role'>@cargo</span>"
+            return '<span class="mention">@cargo</span>'
 
         seguro = modulo_re.sub(r"\{\{R:(\d+)\}\}", html_cargo, seguro)
 
-        # Blocos de código primeiro (não mexer no interior)
-        blocos_codigo: list[str] = []
-
-        def guardar_bloco(match) -> str:
-            """Isola código para preservar seu conteúdo durante substituições."""
-            indice = len(blocos_codigo)
-            blocos_codigo.append(f"<pre class='code-block'>{match.group(1)}</pre>")
-            return f"{{{{CODE{indice}}}}}"
+        # --- Blockquotes ---
+        # >>> multilinha: do >>> até o fim do bloco (linhas seguintes)
+        def guardar_quote_multi(match) -> str:
+            corpo = match.group(1).strip("\n")
+            # linhas internas podem ter &gt; residual no começo
+            linhas = []
+            for ln in corpo.split("\n"):
+                ln = modulo_re.sub(r"^&gt;\s?", "", ln)
+                linhas.append(ln)
+            inner = "<br>".join(linhas)
+            return f"<blockquote>{inner}</blockquote>"
 
         seguro = modulo_re.sub(
-            r"```(?:\w+)?\n?(.*?)```",
-            guardar_bloco,
-            seguro,
-            flags=modulo_re.DOTALL,
-        )
-        # Código inline
-        seguro = modulo_re.sub(r"`([^`\n]+)`", r"<code>\1</code>", seguro)
-
-        # Títulos e subtexto (ordem: -# → ### → ## → #)
-        # Tags alinhadas ao HTML final do modelo (h1/h2/h3 + classes)
-
-        # Blockquote >>> (multiline) — verifica primeiro
-        seguro = modulo_re.sub(
-            r"(?ms)^&gt;&gt;&gt;\s?(.+)",
-            r"<blockquote class='quote'>\1</blockquote>",
-            seguro,
-        )
-        # Blockquote > (linha única)
-        seguro = modulo_re.sub(
-            r"(?m)^&gt;\s+(.+)$",
-            r"<blockquote class='quote'>\1</blockquote>",
-            seguro,
-        )
-        # Lista numerada
-        seguro = modulo_re.sub(
-            r"(?m)^\d+\.\s+(.+)$",
-            r"<li class='list-item'>\1</li>",
+            r"(?m)^&gt;&gt;&gt;\s?([\s\S]*?)(?=\n(?!&gt;)|$)",
+            guardar_quote_multi,
             seguro,
         )
 
+        # > linha única (ou sequências de > linhas → um blockquote)
+        def guardar_quote_linhas(match) -> str:
+            bloco = match.group(0)
+            linhas = []
+            for ln in bloco.split("\n"):
+                ln = modulo_re.sub(r"^&gt;\s?", "", ln)
+                linhas.append(ln)
+            return f"<blockquote>{'<br>'.join(linhas)}</blockquote>"
+
+        seguro = modulo_re.sub(
+            r"(?m)^(?:&gt;\s?.+\n?)+",
+            guardar_quote_linhas,
+            seguro,
+        )
+
+        # Títulos / subtexto
         seguro = modulo_re.sub(
             r"(?m)^-#\s+(.+)$",
-            r"<span class='small-text'>\1</span>",
+            r'<p class="small muted">\1</p>',
             seguro,
         )
         seguro = modulo_re.sub(
             r"(?m)^###\s+(.+)$",
-            r"<h3 class='h3'>\1</h3>",
+            r'<h3 class="message-heading">\1</h3>',
             seguro,
         )
         seguro = modulo_re.sub(
             r"(?m)^##\s+(.+)$",
-            r"<h2 class='h2'>\1</h2>",
+            r'<h3 class="message-heading">\1</h3>',
             seguro,
         )
         seguro = modulo_re.sub(
             r"(?m)^#\s+(.+)$",
-            r"<h1 class='h1'>\1</h1>",
+            r'<h3 class="message-heading">\1</h3>',
             seguro,
         )
 
-        # Listas com hífen no início da linha (não confundir com -#)
+        # Listas — agrupa itens consecutivos
+        def wrap_ul(match) -> str:
+            itens = match.group(0).strip().split("\n")
+            lis = []
+            for it in itens:
+                it = modulo_re.sub(r"^-\s+", "", it)
+                it = modulo_re.sub(r"^\d+\.\s+", "", it)
+                lis.append(f'<li class="message-list-item">{it}</li>')
+            return "<ul>" + "".join(lis) + "</ul>"
+
         seguro = modulo_re.sub(
-            r"(?m)^-\s+(.+)$",
-            r"<li class='list-item'>\1</li>",
+            r"(?m)^(?:\d+\.\s+.+|\-\s+.+)\n?(?:(?:\d+\.\s+.+|\-\s+.+)\n?)*",
+            wrap_ul,
             seguro,
         )
 
-        # Formatação inline (mais externo → interno)
-        # **__texto__** e __**texto**__
-
+        # Formatação inline
         seguro = modulo_re.sub(
             r"\*\*\*(.+?)\*\*\*", r"<strong><em>\1</em></strong>", seguro
         )
-
         seguro = modulo_re.sub(
-            r"\*\*__(.+?)__\*\*",
-            r"<strong><u>\1</u></strong>",
-            seguro,
+            r"\*\*__(.+?)__\*\*", r"<strong><u>\1</u></strong>", seguro
         )
         seguro = modulo_re.sub(
-            r"__\*\*(.+?)\*\*__",
-            r"<u><strong>\1</strong></u>",
-            seguro,
+            r"__\*\*(.+?)\*\*__", r"<u><strong>\1</strong></u>", seguro
         )
         seguro = modulo_re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", seguro)
         seguro = modulo_re.sub(r"__(.+?)__", r"<u>\1</u>", seguro)
         seguro = modulo_re.sub(r"~~(.+?)~~", r"<s>\1</s>", seguro)
         seguro = modulo_re.sub(
             r"\|\|(.+?)\|\|",
-            r"<span class='spoiler'>\1</span>",
+            r'<span class="spoiler-text" aria-expanded="false">\1</span>',
             seguro,
         )
-        # Itálico: *texto* ou _texto_ (evitar confundir com **)
         seguro = modulo_re.sub(
             r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
             r"<em>\1</em>",
@@ -1521,21 +1635,38 @@ def montar_html_transcript(
 
         # Restaura blocos de código
         for indice, bloco in enumerate(blocos_codigo):
-            seguro = seguro.replace(f"{{{{CODE{indice}}}}}", bloco)
+            seguro = seguro.replace(f"\x00CODE{indice}\x00", bloco)
 
-        # Quebras de linha
-        seguro = seguro.replace("\n", "<br>")
-        # Limpa <br> excessivo em torno de títulos / listas / pre
+        # Quebras de linha → <br>, sem poluir blocos de bloco
+        # Protege tags de bloco
+        placeholders_bloco: list[str] = []
+
+        def guardar_html_bloco(match) -> str:
+            placeholders_bloco.append(match.group(0))
+            return f"\x00BLK{len(placeholders_bloco) - 1}\x00"
+
         seguro = modulo_re.sub(
-            r"<br>\s*(?=<(?:h[123]|li|pre|hr)\b)",
-            "",
+            r"<(?:pre|blockquote|ul|h[1-3]|hr)\b[\s\S]*?</(?:pre|blockquote|ul|h[1-3])>|<hr\b[^>]*>",
+            guardar_html_bloco,
             seguro,
         )
-        seguro = modulo_re.sub(
-            r"(</(?:h[123]|li|pre)>)<br>",
-            r"\1",
-            seguro,
-        )
+
+        # Parágrafos: linhas não vazias viram <p>
+        partes_out: list[str] = []
+        for linha in seguro.split("\n"):
+            if linha.strip() == "":
+                continue
+            if linha.startswith("\x00BLK"):
+                partes_out.append(linha)
+            else:
+                partes_out.append(f"<p>{linha}</p>")
+        seguro = "".join(partes_out)
+
+        for i, bloco in enumerate(placeholders_bloco):
+            seguro = seguro.replace(f"\x00BLK{i}\x00", bloco)
+
+        # Limpa <br> órfãos ao redor de blocos
+        seguro = modulo_re.sub(r"(?:<br>\s*){3,}", "<br><br>", seguro)
 
         return seguro
 
@@ -1739,7 +1870,7 @@ def montar_html_transcript(
             "mapa_cargos": mapa_cargos,
         }
 
-    def renderizar_bloco_conteudo(dados: dict, autor_eh_bot: bool) -> list[str]:
+    async def renderizar_bloco_conteudo(dados: dict, autor_eh_bot: bool) -> list[str]:
         """
         Renderiza o miolo de uma mensagem (v2 ou message-text + anexos).
         No modelo, cada mensagem do bot vira um .message-container-v2.
@@ -1858,13 +1989,22 @@ def montar_html_transcript(
                     f'<div class="embed-footer">{esc(embed.footer.text)}</div>'
                 )
             if url_imagem:
+                url_img_est = await midia_estavel(url_imagem, "image/*")
                 saida.append(
-                    f'<img class="embed-image" src="{url_imagem}" loading="lazy">'
+                    '<div class="evidence">'
+                    f'<button type="button" class="evidence-button" data-image-src="{esc(url_img_est)}" '
+                    f'data-image-name="embed" aria-label="Ampliar imagem">'
+                    f'<img class="evidence-image" data-evidence="" src="{esc(url_img_est)}" '
+                    f'alt="" loading="lazy" decoding="async">'
+                    '<span class="enlarge-label">'
+                    '<svg class="icon" aria-hidden="true"><use href="#i-expand"></use></svg>'
+                    "Ampliar imagem</span></button></div>"
                 )
             if url_video:
+                url_vid_est = await midia_estavel(url_video, "video/*")
                 saida.append(
-                    f'<video class="video-embed" controls preload="metadata" '
-                    f'src="{url_video}"></video>'
+                    f'<video class="evidence-video" controls preload="metadata" '
+                    f'src="{esc(url_vid_est)}"></video>'
                 )
             saida.append("</div>")
 
@@ -1879,36 +2019,63 @@ def montar_html_transcript(
             saida.append("</div>")
 
         if mensagem.attachments:
-            saida.append('<div class="attachments">')
+            saida.append('<div class="media-gallery">')
             for anexo in mensagem.attachments:
-                nome_arq = esc(anexo.filename)
-                url_anexo = esc(anexo.url)
+                nome_arq = esc(anexo.filename or "arquivo")
                 tipo = (anexo.content_type or "").lower()
-                eh_imagem = tipo.startswith("image/") or nome_arq.lower().endswith(
-                    (".png", ".jpg", ".jpeg", ".gif", ".webp")
-                )
-                eh_video = tipo.startswith("video/") or nome_arq.lower().endswith(
-                    (".mp4", ".webm", ".mov")
-                )
-                eh_audio = tipo.startswith("audio/") or nome_arq.lower().endswith(
-                    (".mp3", ".ogg", ".wav")
-                )
-                if eh_imagem:
+                url_estavel = await anexo_estavel(anexo)
+                url_esc = esc(url_estavel)
+                is_img = tipo.startswith("image/") or (
+                    anexo.filename or ""
+                ).lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+                is_vid = tipo.startswith("video/") or (
+                    anexo.filename or ""
+                ).lower().endswith((".mp4", ".webm", ".mov"))
+                is_aud = tipo.startswith("audio/")
+                if is_img:
                     saida.append(
-                        f'<a href="{url_anexo}" target="_blank" rel="noopener">'
-                        f'<img src="{url_anexo}" alt="{nome_arq}" loading="lazy"></a>'
+                        '<div class="evidence">'
+                        f'<button type="button" class="evidence-button" data-image-src="{url_esc}" '
+                        f'data-image-name="{nome_arq}" aria-label="Ampliar imagem {nome_arq}">'
+                        f'<img class="evidence-image" data-evidence="" src="{url_esc}" '
+                        f'alt="{nome_arq}" loading="lazy" decoding="async">'
+                        '<span class="enlarge-label">'
+                        '<svg class="icon" aria-hidden="true"><use href="#i-expand"></use></svg>'
+                        "Ampliar imagem</span></button>"
+                        '<div class="attachment-info">'
+                        '<svg class="icon" aria-hidden="true"><use href="#i-image"></use></svg>'
+                        f'<div><p class="attachment-name">{nome_arq}</p>'
+                        '<p class="attachment-details">Arquivo do atendimento</p></div>'
+                        f'<a class="attachment-download" href="{url_esc}" target="_blank" '
+                        f'rel="noopener noreferrer" download aria-label="Abrir arquivo {nome_arq}">Abrir</a>'
+                        "</div></div>"
                     )
-                elif eh_video:
+                elif is_vid:
                     saida.append(
-                        f'<video class="video-embed" controls preload="metadata" '
-                        f'src="{url_anexo}"></video>'
+                        '<div class="evidence">'
+                        f'<video class="evidence-video" controls preload="metadata" src="{url_esc}"></video>'
+                        '<div class="attachment-info">'
+                        '<svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>'
+                        f'<div><p class="attachment-name">{nome_arq}</p>'
+                        '<p class="attachment-details">Vídeo do atendimento</p></div></div></div>'
                     )
-                elif eh_audio:
-                    saida.append(f'<audio controls src="{url_anexo}"></audio>')
+                elif is_aud:
+                    saida.append(
+                        '<div class="evidence">'
+                        f'<audio class="evidence-audio" controls src="{url_esc}"></audio>'
+                        '<div class="attachment-info">'
+                        f'<div><p class="attachment-name">{nome_arq}</p>'
+                        '<p class="attachment-details">Áudio do atendimento</p></div></div></div>'
+                    )
                 else:
                     saida.append(
-                        f'<a class="file-link" href="{url_anexo}" '
-                        f'target="_blank" rel="noopener">📎 {nome_arq}</a>'
+                        '<div class="evidence">'
+                        '<div class="attachment-info">'
+                        '<svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>'
+                        f'<div><p class="attachment-name">{nome_arq}</p>'
+                        '<p class="attachment-details">Arquivo do atendimento</p></div>'
+                        f'<a class="attachment-download" href="{url_esc}" target="_blank" '
+                        f'rel="noopener noreferrer" download>Abrir</a></div></div>'
                     )
             saida.append("</div>")
 
@@ -1916,13 +2083,15 @@ def montar_html_transcript(
             not texto_bruto
             and not texto_opcoes_staff
             and not mensagem.attachments
-            and not any(erro.title or erro.description for erro in mensagem.embeds)
+            and not any(
+                (getattr(emb, "title", None) or getattr(emb, "description", None))
+                for emb in (mensagem.embeds or [])
+            )
             and not botoes
             and not getattr(mensagem, "stickers", None)
         ):
             saida.append(
-                '<div class="message-text">'
-                "<em>(mensagem sem texto legível)</em></div>"
+                '<div class="message-text"><em>(mensagem sem texto legível)</em></div>'
             )
         return saida
 
@@ -1993,6 +2162,7 @@ def montar_html_transcript(
         # Separador de data (tela-chat)
         try:
             from src.utils.formatacao import para_horario_brasilia
+
             local_dt = para_horario_brasilia(criado) if criado else None
         except Exception:
             local_dt = criado
@@ -2001,10 +2171,18 @@ def montar_html_transcript(
             rotulo_dia = local_dt.strftime("%d de %B de %Y")
             # meses em pt-BR simples
             meses = {
-                "January": "janeiro", "February": "fevereiro", "March": "março",
-                "April": "abril", "May": "maio", "June": "junho",
-                "July": "julho", "August": "agosto", "September": "setembro",
-                "October": "outubro", "November": "novembro", "December": "dezembro",
+                "January": "janeiro",
+                "February": "fevereiro",
+                "March": "março",
+                "April": "abril",
+                "May": "maio",
+                "June": "junho",
+                "July": "julho",
+                "August": "agosto",
+                "September": "setembro",
+                "October": "outubro",
+                "November": "novembro",
+                "December": "dezembro",
             }
             for en, pt in meses.items():
                 rotulo_dia = rotulo_dia.replace(en, pt)
@@ -2037,7 +2215,7 @@ def montar_html_transcript(
         for mensagem_do_grupo in grupo:
             dados = preparar_conteudo_mensagem(mensagem_do_grupo)
             partes_mensagens.extend(
-                renderizar_bloco_conteudo(dados, autor_eh_bot=bool(autor.bot))
+                await renderizar_bloco_conteudo(dados, autor_eh_bot=bool(autor.bot))
             )
 
         partes_mensagens.append("</div>")  # .message-body
@@ -2055,7 +2233,11 @@ def montar_html_transcript(
     autor_nome = ticket.autor_nome or "—"
     staff_nome = ticket.staff_finalizou_nome or "—"
     autor_id = getattr(ticket, "autor_discord_id", None) or ""
-    staff_id = getattr(ticket, "staff_finalizou_id", None) or getattr(ticket, "staff_assumiu_id", None) or ""
+    staff_id = (
+        getattr(ticket, "staff_finalizou_id", None)
+        or getattr(ticket, "staff_assumiu_id", None)
+        or ""
+    )
     autor_avatar = "https://cdn.discordapp.com/embed/avatars/0.png"
     staff_avatar = "https://cdn.discordapp.com/embed/avatars/1.png"
     try:
@@ -2069,16 +2251,14 @@ def montar_html_transcript(
                 staff_avatar = str(membro_s.display_avatar.replace(size=128).url)
     except Exception:
         pass
-    aberto_em = formatar_horario(getattr(ticket, "criado_em", None) or getattr(ticket, "aberto_em", None))
+    aberto_em = formatar_horario(
+        getattr(ticket, "criado_em", None) or getattr(ticket, "aberto_em", None)
+    )
     finalizado_em = formatar_horario(getattr(ticket, "finalizado_em", None))
     anexos_count = "0"
     try:
         anexos_count = str(
-            sum(
-                len(getattr(m, "attachments", None) or [])
-                for g in grupos
-                for m in g
-            )
+            sum(len(getattr(m, "attachments", None) or []) for g in grupos for m in g)
         )
     except Exception:
         pass
@@ -2094,7 +2274,27 @@ def montar_html_transcript(
     html_final = html_final.replace("{{TICKET_ID}}", str(int(ticket.id)))
     html_final = html_final.replace("{{AUTOR_NOME}}", esc(autor_nome))
     html_final = html_final.replace("{{STAFF_NOME}}", esc(staff_nome))
-    titulo_canal = ticket.categoria_rotulo or f"Ticket #{ticket.id}"
+    # Nome do canal do ticket (ex: 🙋・imguxta), não o rótulo da categoria
+    titulo_canal = ""
+    try:
+        canal_obj = (
+            guilda.get_channel(int(ticket.canal_id))
+            if guilda and ticket.canal_id
+            else None
+        )
+        if canal_obj is not None and getattr(canal_obj, "name", None):
+            titulo_canal = str(canal_obj.name)
+    except Exception:
+        titulo_canal = ""
+    if not titulo_canal:
+        # fallback: nome do canal nas mensagens coletadas
+        for msg in mensagens:
+            ch = getattr(msg, "channel", None)
+            if ch is not None and getattr(ch, "name", None):
+                titulo_canal = str(ch.name)
+                break
+    if not titulo_canal:
+        titulo_canal = f"Ticket #{ticket.id}"
     html_final = html_final.replace("{{TITULO_CANAL}}", esc(titulo_canal))
     html_final = html_final.replace("{{ANEXOS_COUNT}}", esc(anexos_count))
     html_final = html_final.replace("{{AUTOR_AVATAR}}", esc(autor_avatar))

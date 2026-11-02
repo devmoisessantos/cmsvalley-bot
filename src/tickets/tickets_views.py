@@ -1611,7 +1611,7 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             consideracoes=texto_consideracoes,
         )
         mensagens = await coletar_mensagens_do_canal(canal)
-        html_transcript = montar_html_transcript(
+        html_transcript = await montar_html_transcript(
             ticket_final, mensagens, interacao.guild
         )
 
