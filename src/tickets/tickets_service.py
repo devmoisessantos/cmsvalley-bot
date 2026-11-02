@@ -1714,19 +1714,24 @@ async def montar_html_transcript(
             seguro,
         )
 
-        # Listas — agrupa itens consecutivos
-        def wrap_ul(match) -> str:
+        # Listas — mesmo padrão do tela-chat: <p class="message-list-item">
+        # (o CSS ::before desenha o bullet; ul/li nativo + ::before = bullet duplo)
+        def wrap_lista(match) -> str:
             itens = match.group(0).strip().split("\n")
-            lis = []
+            partes = []
             for it in itens:
                 it = modulo_re.sub(r"^-\s+", "", it)
+                it = modulo_re.sub(r"^\*\s+", "", it)
                 it = modulo_re.sub(r"^\d+\.\s+", "", it)
-                lis.append(f'<li class="message-list-item">{it}</li>')
-            return "<ul>" + "".join(lis) + "</ul>"
+                it = modulo_re.sub(r"^[•·●]\s+", "", it)
+                if it.strip():
+                    partes.append(f'<p class="message-list-item">{it}</p>')
+            return "".join(partes)
 
         seguro = modulo_re.sub(
-            r"(?m)^(?:\d+\.\s+.+|\-\s+.+)\n?(?:(?:\d+\.\s+.+|\-\s+.+)\n?)*",
-            wrap_ul,
+            r"(?m)^(?:\d+\.\s+.+|\-\s+.+|\*\s+.+|[•·●]\s+.+)\n?"
+            r"(?:(?:\d+\.\s+.+|\-\s+.+|\*\s+.+|[•·●]\s+.+)\n?)*",
+            wrap_lista,
             seguro,
         )
 
@@ -2154,10 +2159,8 @@ async def montar_html_transcript(
             if embed.video and embed.video.url:
                 url_video = str(embed.video.url)
 
-            # Preferência: thumbnail do embed; senão ícone do autor (thumbnail.autor)
-            url_thumb_final = url_thumb or url_autor_icon
-            thumb_eh_autor = bool(url_autor_icon) and not url_thumb
-
+            # Imagem principal do preview (image > thumbnail > autor icon)
+            url_preview_img = url_imagem or url_thumb or url_autor_icon
             tem_conteudo = any(
                 [
                     titulo_do_embed,
@@ -2165,9 +2168,8 @@ async def montar_html_transcript(
                     autor_do_embed,
                     tem_campos,
                     tem_rodape,
-                    url_imagem,
+                    url_preview_img,
                     url_video,
-                    url_thumb_final,
                     url_embed,
                     provedor,
                 ]
@@ -2187,38 +2189,80 @@ async def montar_html_transcript(
             except Exception:
                 cor_barra = ""
 
-            # Card estilo Discord / Medal.tv: conteúdo + thumbnail lado a lado
-            saida.append(f'<div class="embed" style="{cor_barra}">')
-            usar_thumb_lateral = bool(url_thumb_final) and not url_imagem
+            # Domínio para o rodapé do card (medal.tv, youtube.com, …)
+            dominio = ""
+            try:
+                from urllib.parse import urlparse
 
-            if usar_thumb_lateral:
-                saida.append('<div class="transcript-section">')
-                saida.append('<div class="embed-content">')
+                bruto_url = str(
+                    getattr(embed, "url", None)
+                    or (url_embed.replace("&amp;", "&") if url_embed else "")
+                    or ""
+                )
+                if bruto_url:
+                    host = (urlparse(bruto_url).hostname or "").lower()
+                    if host.startswith("www."):
+                        host = host[4:]
+                    dominio = esc(host)
+            except Exception:
+                dominio = ""
+            if not dominio and provedor:
+                dominio = provedor
 
-            if provedor:
-                saida.append(f'<div class="embed-author">{provedor}</div>')
-            if autor_do_embed:
-                if url_autor_icon and not usar_thumb_lateral:
-                    url_ic_est = await midia_estavel(url_autor_icon, "image/*")
-                    saida.append(
-                        '<div class="embed-author embed-author-with-icon">'
-                        f'<img class="component-thumbnail autor" src="{esc(url_ic_est)}" '
-                        f'alt="" loading="lazy" width="20" height="20">'
-                        f"<span>{autor_do_embed}</span></div>"
-                    )
-                else:
-                    saida.append(f'<div class="embed-author">{autor_do_embed}</div>')
+            # Card de preview de link (estilo Discord / medal.tv)
+            estilo_attr = f' style="{cor_barra}"' if cor_barra else ""
+            if url_embed:
+                saida.append(
+                    f'<a class="link-preview embed" href="{url_embed}" '
+                    f'target="_blank" rel="noopener noreferrer"{estilo_attr}>'
+                )
+                tag_fecha = "a"
+            else:
+                saida.append(f'<div class="link-preview embed"{estilo_attr}>')
+                tag_fecha = "div"
+
+            if url_preview_img:
+                url_img_est = await midia_estavel(url_preview_img, "image/*")
+                saida.append(
+                    '<div class="link-preview-media">'
+                    f'<img class="link-preview-image" src="{esc(url_img_est)}" '
+                    f'alt="{titulo_do_embed or dominio or "preview"}" '
+                    f'loading="lazy" decoding="async">'
+                    "</div>"
+                )
+            elif url_video:
+                url_vid_est = await midia_estavel(url_video, "video/*")
+                saida.append(
+                    '<div class="link-preview-media">'
+                    f'<video class="link-preview-video" controls preload="metadata" '
+                    f'src="{esc(url_vid_est)}"></video>'
+                    "</div>"
+                )
+
+            saida.append('<div class="link-preview-body">')
+            if dominio:
+                saida.append(
+                    f'<div class="link-preview-provider">{dominio}</div>'
+                )
+            elif provedor:
+                saida.append(
+                    f'<div class="link-preview-provider">{provedor}</div>'
+                )
+            if autor_do_embed and autor_do_embed != dominio:
+                saida.append(
+                    f'<div class="link-preview-author">{autor_do_embed}</div>'
+                )
             if titulo_do_embed:
-                if url_embed:
-                    saida.append(
-                        f'<div class="embed-title"><a href="{url_embed}" target="_blank" '
-                        f'rel="noopener">{titulo_do_embed}</a></div>'
-                    )
-                else:
-                    saida.append(f'<div class="embed-title">{titulo_do_embed}</div>')
+                saida.append(
+                    f'<div class="link-preview-title">{titulo_do_embed}</div>'
+                )
+            elif url_embed and not titulo_do_embed:
+                saida.append(
+                    f'<div class="link-preview-title">{url_embed}</div>'
+                )
             if descricao_do_embed:
                 saida.append(
-                    f'<div class="embed-description">{descricao_do_embed}</div>'
+                    f'<div class="link-preview-desc">{descricao_do_embed}</div>'
                 )
             for campo in (embed.fields or [])[:25]:
                 nome_campo = esc(campo.name or "")
@@ -2233,49 +2277,10 @@ async def montar_html_transcript(
                 )
             if tem_rodape:
                 saida.append(
-                    f'<div class="embed-footer">{esc(embed.footer.text)}</div>'
+                    f'<div class="link-preview-footer">{esc(embed.footer.text)}</div>'
                 )
-            if url_embed and not titulo_do_embed:
-                saida.append(
-                    f'<div class="embed-description"><a href="{url_embed}" target="_blank" '
-                    f'rel="noopener">{url_embed}</a></div>'
-                )
-
-            if usar_thumb_lateral:
-                saida.append("</div>")  # .embed-content
-                url_th_est = await midia_estavel(url_thumb_final, "image/*")
-                cls_thumb = (
-                    "component-thumbnail autor"
-                    if thumb_eh_autor
-                    else "component-thumbnail"
-                )
-                saida.append(
-                    f'<a class="embed-thumbnail-link" href="{url_embed or esc(url_th_est)}" '
-                    f'target="_blank" rel="noopener">'
-                    f'<img class="{cls_thumb}" src="{esc(url_th_est)}" alt="" loading="lazy">'
-                    f"</a>"
-                )
-                saida.append("</div>")  # .transcript-section
-
-            if url_imagem:
-                url_img_est = await midia_estavel(url_imagem, "image/*")
-                saida.append(
-                    '<div class="evidence">'
-                    f'<button type="button" class="evidence-button" data-image-src="{esc(url_img_est)}" '
-                    f'data-image-name="embed" aria-label="Ampliar imagem">'
-                    f'<img class="evidence-image" data-evidence="" src="{esc(url_img_est)}" '
-                    f'alt="" loading="lazy" decoding="async">'
-                    '<span class="enlarge-label">'
-                    '<svg class="icon" aria-hidden="true"><use href="#i-expand"></use></svg>'
-                    "Ampliar imagem</span></button></div>"
-                )
-            if url_video:
-                url_vid_est = await midia_estavel(url_video, "video/*")
-                saida.append(
-                    f'<video class="evidence-video" controls preload="metadata" '
-                    f'src="{esc(url_vid_est)}"></video>'
-                )
-            saida.append("</div>")  # .embed
+            saida.append("</div>")  # .link-preview-body
+            saida.append(f"</{tag_fecha}>")
 
         if getattr(mensagem, "stickers", None):
             saida.append('<div class="attachments">')

@@ -64,10 +64,26 @@ class CardView(discord.ui.LayoutView):
     ):
         super().__init__(timeout=timeout)
 
-        if com_marcador:
-            texto_das_linhas = "\n".join(f"`•` {linha}" for linha in linhas)
-        else:
-            texto_das_linhas = "\n".join(linhas)
+        def _formatar_linha_card(linha: str) -> str:
+            """Um único marcador por linha — evita `•` + `-` (bullet duplicado)."""
+            if not com_marcador:
+                return linha
+            bruto = linha or ""
+            s = bruto.lstrip()
+            # Títulos / separadores estruturados: sem marcador extra
+            if s.startswith(("#", "##", "###", "-#", "---", "***")):
+                return bruto
+            # Já veio com bullet tipográfico
+            if s.startswith(("• ", "· ", "● ")):
+                return bruto
+            # Markdown de lista → vira um único `•`
+            if s.startswith(("- ", "* ")):
+                return f"`•` {s[2:]}"
+            if len(s) >= 3 and s[0].isdigit() and s[1:3] in (". ", ") "):
+                return f"`•` {s[3:]}"
+            return f"`•` {bruto}"
+
+        texto_das_linhas = "\n".join(_formatar_linha_card(linha) for linha in linhas)
 
         componentes = [
             discord.ui.TextDisplay(f"# {titulo}"),

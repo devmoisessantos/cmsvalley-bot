@@ -1675,6 +1675,102 @@
             margin-bottom: 6px
         }
 
+        /* Card de preview de link (embeds Discord / medal.tv / etc.) */
+        a.link-preview,
+        .link-preview {
+            display: block;
+            margin: 8px 0 10px;
+            max-width: 420px;
+            border: 1px solid var(--border-color);
+            border-left: 4px solid var(--accent-primary);
+            border-radius: 10px;
+            background: var(--bg-tertiary, #182136);
+            overflow: hidden;
+            text-decoration: none;
+            color: inherit;
+            transition: border-color .15s, box-shadow .15s
+        }
+
+        a.link-preview:hover {
+            border-color: rgba(0, 242, 255, .45);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, .25)
+        }
+
+        .link-preview-media {
+            display: block;
+            width: 100%;
+            background: #0a101c;
+            max-height: 240px;
+            overflow: hidden
+        }
+
+        .link-preview-image {
+            display: block;
+            width: 100%;
+            max-height: 240px;
+            object-fit: cover;
+            object-position: center
+        }
+
+        .link-preview-video {
+            display: block;
+            width: 100%;
+            max-height: 240px;
+            background: #000
+        }
+
+        .link-preview-body {
+            padding: 10px 12px 12px
+        }
+
+        .link-preview-provider,
+        .link-preview-author {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: .4px;
+            margin-bottom: 4px
+        }
+
+        .link-preview-title {
+            font-size: 14px;
+            font-weight: 650;
+            color: var(--accent-primary);
+            line-height: 1.35;
+            margin-bottom: 4px;
+            overflow-wrap: anywhere
+        }
+
+        a.link-preview:hover .link-preview-title {
+            text-decoration: underline
+        }
+
+        .link-preview-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.45;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden
+        }
+
+        .link-preview-footer {
+            margin-top: 8px;
+            font-size: 11px;
+            color: var(--text-muted)
+        }
+
+        .message-text ul {
+            list-style: none;
+            margin: 0;
+            padding: 0
+        }
+
+        .message-text ul>li.message-list-item {
+            list-style: none
+        }
+
         .discord-emoji {
             height: 20px;
             width: 20px;
