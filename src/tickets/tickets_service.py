@@ -146,6 +146,120 @@ def _eh_no_separador(objeto) -> bool:
     return tipo is not None and getattr(tipo, "value", tipo) == 14
 
 
+def _url_de_media_thumbnail(no) -> str | None:
+    """Extrai URL de um Thumbnail Components V2 (type 11) ou objeto media."""
+    if no is None:
+        return None
+
+    if isinstance(no, dict):
+        # type 11 = Thumbnail; media pode vir no próprio nó ou em "media"
+        media = no.get("media") if isinstance(no.get("media"), dict) else no
+        for chave in ("url", "proxy_url", "proxyUrl"):
+            valor = media.get(chave) if isinstance(media, dict) else None
+            if isinstance(valor, str) and valor.strip():
+                return valor.strip()
+        # accessory direto com url
+        for chave in ("url", "proxy_url", "proxyUrl"):
+            valor = no.get(chave)
+            if isinstance(valor, str) and valor.strip():
+                return valor.strip()
+        return None
+
+    media = getattr(no, "media", None)
+    if media is not None:
+        for atributo in ("url", "proxy_url", "proxyUrl"):
+            valor = getattr(media, atributo, None)
+            if isinstance(valor, str) and valor.strip():
+                return valor.strip()
+            if isinstance(media, dict) and isinstance(media.get(atributo), str):
+                return media[atributo].strip()
+
+    for atributo in ("url", "proxy_url", "proxyUrl"):
+        valor = getattr(no, atributo, None)
+        if isinstance(valor, str) and valor.strip():
+            return valor.strip()
+    return None
+
+
+def _extrair_urls_thumbnail_componente(
+    mensagem: discord.Message,
+) -> list[str]:
+    """
+    URLs das miniaturas (Thumbnail accessory) em Sections Components V2.
+
+    No Discord, Section (type 9) pode ter accessory=Thumbnail (type 11) —
+    é o avatar do autor no card "Ticket Criado com Sucesso".
+    """
+    urls: list[str] = []
+    vistos: set[str] = set()
+
+    def registrar(url: str | None) -> None:
+        if not url or url in vistos:
+            return
+        vistos.add(url)
+        urls.append(url)
+
+    def percorrer(no, profundidade: int = 0) -> None:
+        if no is None or profundidade > 14:
+            return
+
+        if isinstance(no, dict):
+            tipo = no.get("type")
+            # Thumbnail direto
+            if tipo == 11:
+                registrar(_url_de_media_thumbnail(no))
+            # Section / qualquer nó com accessory
+            accessory = no.get("accessory")
+            if accessory is not None:
+                registrar(_url_de_media_thumbnail(accessory))
+                if isinstance(accessory, dict) and accessory.get("type") == 11:
+                    registrar(_url_de_media_thumbnail(accessory))
+            for chave in ("components", "children", "items"):
+                filhos = no.get(chave)
+                if isinstance(filhos, list):
+                    for filho in filhos:
+                        percorrer(filho, profundidade + 1)
+                elif isinstance(filhos, dict):
+                    percorrer(filhos, profundidade + 1)
+            return
+
+        # Objetos tipados discord.py
+        tipo = getattr(no, "type", None)
+        tipo_val = getattr(tipo, "value", tipo)
+        nome = type(no).__name__.lower()
+        if tipo_val == 11 or "thumbnail" in nome:
+            registrar(_url_de_media_thumbnail(no))
+
+        accessory = getattr(no, "accessory", None)
+        if accessory is not None:
+            registrar(_url_de_media_thumbnail(accessory))
+
+        for atributo in ("children", "components", "items"):
+            filhos = getattr(no, atributo, None)
+            if not filhos:
+                continue
+            try:
+                lista = list(filhos)
+            except TypeError:
+                continue
+            for filho in lista:
+                percorrer(filho, profundidade + 1)
+
+        dados = getattr(no, "_data", None)
+        if isinstance(dados, dict):
+            percorrer(dados, profundidade + 1)
+
+    dados = getattr(mensagem, "_data", None)
+    if isinstance(dados, dict):
+        for comp in dados.get("components") or []:
+            percorrer(comp)
+
+    for comp in getattr(mensagem, "components", None) or []:
+        percorrer(comp)
+
+    return urls
+
+
 def membro_eh_staff_ticket(
     membro: discord.Member,
     categoria_chave: str | None = None,
@@ -430,6 +544,7 @@ async def criar_ticket(
             or "(nenhum)",
         )
 
+        # overwrites já vão no create — evita N set_permissions (rate limit).
         canal = await guilda.create_text_channel(
             name=nome_canal,
             category=categoria_discord,
@@ -437,22 +552,6 @@ async def criar_ticket(
             topic=f"Ticket criado para o usuário: {username}",
             reason=f"Ticket aberto por {username} — {definicao['rotulo']}",
         )
-
-        for cargo_staff in cargos_staff:
-            try:
-                await canal.set_permissions(
-                    cargo_staff,
-                    overwrite=overwrite_staff,
-                    reason="Reforço de staff após criar ticket",
-                )
-            except discord.HTTPException as erro:
-                registrador.warning(
-                    "Falha ao reforçar cargo %s (%s) no canal %s: %s",
-                    cargo_staff.name,
-                    cargo_staff.id,
-                    canal.id,
-                    erro,
-                )
 
         async with async_session() as sessao:
             ticket = Ticket(
@@ -478,7 +577,10 @@ async def sincronizar_permissoes_do_canal_ticket(
     """
     Garante que os cargos corretos veem e falam no canal do ticket.
 
-    Usado na criação, ao assumir e no comando manual de sincronizar.
+    Aplica tudo em um único channel.edit(overwrites=...) para evitar
+    rate limit de vários set_permissions em sequência.
+
+    Usado ao assumir e no comando manual de sincronizar.
     Retorna contagem e nomes aplicados para feedback ao staff.
     """
     guilda = canal.guild
@@ -491,93 +593,69 @@ async def sincronizar_permissoes_do_canal_ticket(
     if guilda is None:
         return resultado
 
-    autor = guilda.get_member(int(ticket.autor_discord_id))
-    if autor is not None:
-        try:
-            await canal.set_permissions(
-                autor,
-                view_channel=True,
-                send_messages=True,
-                attach_files=True,
-                embed_links=True,
-                read_message_history=True,
-                reason="Sincronizar autor do ticket",
-            )
-        except discord.HTTPException as erro:
-            registrador.warning(
-                "Falha ao sincronizar permissão do autor no ticket #%s: %s",
-                ticket.id,
-                erro,
-            )
-
-    if guilda.me is not None:
-        try:
-            await canal.set_permissions(
-                guilda.me,
-                view_channel=True,
-                send_messages=True,
-                manage_channels=True,
-                manage_messages=True,
-                attach_files=True,
-                embed_links=True,
-                read_message_history=True,
-                reason="Sincronizar bot no ticket",
-            )
-        except discord.HTTPException as erro:
-            registrador.warning(
-                "Falha ao sincronizar permissão do bot no ticket #%s: %s",
-                ticket.id,
-                erro,
-            )
-
-    try:
-        await canal.set_permissions(
-            guilda.default_role,
-            view_channel=False,
-            reason="Sincronizar @everyone oculto no ticket",
-        )
-    except discord.HTTPException as erro:
-        registrador.warning(
-            "Falha ao ocultar @everyone no ticket #%s: %s",
-            ticket.id,
-            erro,
-        )
-
     overwrite_staff = _overwrite_staff_texto()
     cargos_staff = _cargos_staff_na_guilda(guilda, ticket.categoria_chave)
+
+    overwrites: dict[
+        discord.Role | discord.Member,
+        discord.PermissionOverwrite,
+    ] = {
+        guilda.default_role: discord.PermissionOverwrite(view_channel=False),
+    }
+
+    autor = guilda.get_member(int(ticket.autor_discord_id))
+    if autor is not None:
+        overwrites[autor] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            attach_files=True,
+            embed_links=True,
+            read_message_history=True,
+        )
+
+    if guilda.me is not None:
+        overwrites[guilda.me] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            manage_channels=True,
+            manage_messages=True,
+            attach_files=True,
+            embed_links=True,
+            read_message_history=True,
+        )
+
     nomes_ok: list[str] = []
-    nomes_falha: list[str] = []
-
     for cargo_staff in cargos_staff:
-        try:
-            await canal.set_permissions(
-                cargo_staff,
-                overwrite=overwrite_staff,
-                reason=(
-                    f"Sincronizar staff do ticket (categoria={ticket.categoria_chave})"
-                ),
-            )
-            nomes_ok.append(f"{cargo_staff.name} ({cargo_staff.id})")
-        except discord.HTTPException as erro:
-            nomes_falha.append(f"{cargo_staff.name} ({cargo_staff.id})")
-            registrador.warning(
-                "Falha ao sincronizar cargo %s no ticket #%s: %s",
-                cargo_staff.id,
-                ticket.id,
-                erro,
-            )
+        overwrites[cargo_staff] = overwrite_staff
+        nomes_ok.append(f"{cargo_staff.name} ({cargo_staff.id})")
 
-    resultado["cargos_ok"] = len(nomes_ok)
-    resultado["cargos_falha"] = len(nomes_falha)
-    resultado["nomes_ok"] = nomes_ok
-    resultado["nomes_falha"] = nomes_falha
+    try:
+        await canal.edit(
+            overwrites=overwrites,
+            reason=(
+                f"Sincronizar permissões do ticket "
+                f"(categoria={ticket.categoria_chave})"
+            ),
+        )
+        resultado["cargos_ok"] = len(nomes_ok)
+        resultado["nomes_ok"] = nomes_ok
+    except discord.HTTPException as erro:
+        resultado["cargos_falha"] = len(nomes_ok)
+        resultado["nomes_falha"] = nomes_ok
+        registrador.warning(
+            "Falha ao sincronizar overwrites do ticket #%s canal=%s: %s",
+            ticket.id,
+            canal.id,
+            erro,
+        )
+        return resultado
 
     registrador.info(
         "Permissões sincronizadas no ticket #%s canal=%s ok=%s falha=%s",
         ticket.id,
         canal.id,
         len(nomes_ok),
-        len(nomes_falha),
+        0,
     )
     return resultado
 
@@ -1180,13 +1258,67 @@ async def montar_html_transcript(
         """Neutraliza caracteres HTML para que mensagens não alterem o transcript."""
         return modulo_html.escape(texto or "")
 
+    async def _persistir_bytes_midia(
+        dados: bytes,
+        mime: str,
+        filename: str,
+    ) -> str | None:
+        """
+        Envia bytes para a API (S3/R2). URL HTTPS permanente.
+        None se não configurado ou se o upload falhar.
+        """
+        from src.tickets.tickets_transcript_api import enviar_asset_para_api
+
+        try:
+            return await enviar_asset_para_api(
+                int(ticket.id),
+                dados,
+                content_type=mime,
+                filename=filename,
+            )
+        except Exception as erro_upload:
+            logging.warning(
+                "Upload asset ticket #%s falhou (%s): %s",
+                ticket.id,
+                filename,
+                erro_upload,
+            )
+            return None
+
+    def _mime_por_nome_ou_url(nome_ou_url: str, mime: str) -> str:
+        mime = (mime or "").split(";")[0].strip()
+        if mime and mime != "application/octet-stream":
+            return mime
+        lower = (nome_ou_url or "").lower().split("?")[0]
+        if lower.endswith(".png"):
+            return "image/png"
+        if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+            return "image/jpeg"
+        if lower.endswith(".gif"):
+            return "image/gif"
+        if lower.endswith(".webp"):
+            return "image/webp"
+        if lower.endswith(".mp4"):
+            return "video/mp4"
+        if lower.endswith(".webm"):
+            return "video/webm"
+        if lower.endswith(".mp3"):
+            return "audio/mpeg"
+        if lower.endswith(".ogg"):
+            return "audio/ogg"
+        if lower.endswith(".pdf"):
+            return "application/pdf"
+        return mime or "application/octet-stream"
+
     async def midia_estavel(
-        url: str, content_type: str | None = None, limite_bytes: int = 6_000_000
+        url: str, content_type: str | None = None, limite_bytes: int = 25_000_000
     ) -> str:
         """
-        Baixa a mídia e devolve data-URI (base64) para o transcript não depender
-        de links assinados do Discord (ex/is/hm), que expiram e quebram a imagem.
-        Se falhar ou for grande demais, devolve a URL original.
+        Baixa a mídia e grava no S3/API (URL permanente).
+
+        Fallback: data-URI base64 (só se o upload falhar e o arquivo for
+        pequeno o bastante). data: quebra o botão "Abrir" em muitos browsers —
+        por isso o S3 é o caminho preferido.
         """
         import base64
 
@@ -1196,8 +1328,11 @@ async def montar_html_transcript(
             return ""
         if url.startswith("data:"):
             return url
+        if url.startswith("http") and "discord" not in url and "/transcripts/" in url:
+            # Já é URL da nossa API/CDN
+            return url
         try:
-            timeout = aiohttp.ClientTimeout(total=25)
+            timeout = aiohttp.ClientTimeout(total=40)
             headers = {"User-Agent": "CMSValley-Transcript/1.0"}
             async with aiohttp.ClientSession(
                 timeout=timeout, headers=headers
@@ -1206,64 +1341,50 @@ async def montar_html_transcript(
                     if resp.status != 200:
                         return url
                     dados = await resp.read()
-                    if not dados or len(dados) > limite_bytes:
+                    if not dados:
                         return url
-                    mime = (
-                        (
-                            content_type
-                            or resp.headers.get("Content-Type")
-                            or "application/octet-stream"
-                        )
-                        .split(";")[0]
-                        .strip()
+                    mime = _mime_por_nome_ou_url(
+                        url,
+                        content_type
+                        or resp.headers.get("Content-Type")
+                        or "application/octet-stream",
                     )
-                    if not mime or mime == "application/octet-stream":
-                        # tentativa por extensão
-                        lower = url.lower().split("?")[0]
-                        if lower.endswith(".png"):
-                            mime = "image/png"
-                        elif lower.endswith(".jpg") or lower.endswith(".jpeg"):
-                            mime = "image/jpeg"
-                        elif lower.endswith(".gif"):
-                            mime = "image/gif"
-                        elif lower.endswith(".webp"):
-                            mime = "image/webp"
-                        elif lower.endswith(".mp4"):
-                            mime = "video/mp4"
-                        elif lower.endswith(".webm"):
-                            mime = "video/webm"
-                    b64 = base64.b64encode(dados).decode("ascii")
-                    return f"data:{mime};base64,{b64}"
+                    nome = url.split("?")[0].rstrip("/").split("/")[-1] or "midia.bin"
+                    if len(dados) <= limite_bytes:
+                        url_cdn = await _persistir_bytes_midia(dados, mime, nome)
+                        if url_cdn:
+                            return url_cdn
+                    # Fallback data-URI só para arquivos menores (lightbox/Abrir
+                    # com data: é frágil; preferimos CDN).
+                    if len(dados) <= 6_000_000:
+                        b64 = base64.b64encode(dados).decode("ascii")
+                        return f"data:{mime};base64,{b64}"
+                    return url
         except Exception as erro_midia:
-            logging.warning("Falha ao embutir mídia %s: %s", url[:80], erro_midia)
+            logging.warning("Falha ao processar mídia %s: %s", url[:80], erro_midia)
             return url
 
     async def anexo_estavel(anexo: discord.Attachment) -> str:
-        """Prefere Attachment.read() (auth Discord); fallback HTTP."""
+        """Lê o anexo via Discord e grava no S3/API; fallback data-URI/HTTP."""
         import base64
 
-        limite = 6_000_000
+        limite = 25_000_000
         try:
             dados = await anexo.read()
             if dados and len(dados) <= limite:
-                mime = (
-                    (anexo.content_type or "application/octet-stream")
-                    .split(";")[0]
-                    .strip()
+                mime = _mime_por_nome_ou_url(
+                    anexo.filename or "",
+                    anexo.content_type or "application/octet-stream",
                 )
-                if not mime or mime == "application/octet-stream":
-                    nome = (anexo.filename or "").lower()
-                    if nome.endswith(".png"):
-                        mime = "image/png"
-                    elif nome.endswith((".jpg", ".jpeg")):
-                        mime = "image/jpeg"
-                    elif nome.endswith(".gif"):
-                        mime = "image/gif"
-                    elif nome.endswith(".webp"):
-                        mime = "image/webp"
-                    elif nome.endswith(".mp4"):
-                        mime = "video/mp4"
-                return f"data:{mime};base64,{base64.b64encode(dados).decode('ascii')}"
+                nome = anexo.filename or "anexo.bin"
+                url_cdn = await _persistir_bytes_midia(dados, mime, nome)
+                if url_cdn:
+                    return url_cdn
+                if len(dados) <= 6_000_000:
+                    return (
+                        f"data:{mime};base64,"
+                        f"{base64.b64encode(dados).decode('ascii')}"
+                    )
         except Exception as erro_anexo:
             logging.warning(
                 "Attachment.read falhou (%s): %s",
@@ -1865,6 +1986,7 @@ async def montar_html_transcript(
 
         mapa_usuarios = mapa_usuarios_mencionados(mensagem, texto_extra=texto_bruto)
         mapa_cargos = mapa_cargos_mencionados(mensagem, texto_extra=texto_bruto)
+        urls_thumbnail = _extrair_urls_thumbnail_componente(mensagem)
         return {
             "mensagem": mensagem,
             "botoes": botoes,
@@ -1872,6 +1994,7 @@ async def montar_html_transcript(
             "texto_opcoes_staff": texto_opcoes_staff,
             "mapa_usuarios": mapa_usuarios,
             "mapa_cargos": mapa_cargos,
+            "urls_thumbnail": urls_thumbnail,
         }
 
     async def renderizar_bloco_conteudo(dados: dict, autor_eh_bot: bool) -> list[str]:
@@ -1886,9 +2009,29 @@ async def montar_html_transcript(
         texto_opcoes_staff = dados["texto_opcoes_staff"]
         mapa_usuarios = dados["mapa_usuarios"]
         mapa_cargos = dados["mapa_cargos"]
+        urls_thumbnail = dados.get("urls_thumbnail") or []
 
         # Painéis do bot / com botões → form-response + form-fields (tela-chat)
         usar_form = bool(botoes) or (bool(texto_bruto) and autor_eh_bot)
+
+        async def html_thumbnail(url: str) -> str:
+            """Miniatura lateral estilo tela-chat (Section accessory)."""
+            url_estavel = await midia_estavel(url, "image/*")
+            return (
+                f'<img class="component-thumbnail" data-evidence="" '
+                f'src="{esc(url_estavel)}" alt="Miniatura do painel" '
+                f'loading="lazy">'
+            )
+
+        def quebrar_por_separador(texto: str) -> tuple[str, str]:
+            """
+            Separa título (antes do HR) do corpo da Section (depois).
+            Espelha o layout do card de abertura: título + hr + section.
+            """
+            if "\x00HR\x00" not in texto:
+                return "", texto
+            partes = texto.split("\x00HR\x00", 1)
+            return partes[0].strip(), partes[1].strip()
 
         if usar_form:
             saida.append('<div class="message-text"></div>')
@@ -1901,13 +2044,46 @@ async def montar_html_transcript(
                     '<hr class="container-divider">'
                 )
             if texto_bruto:
+                titulo_bruto, corpo_bruto = quebrar_por_separador(texto_bruto)
+                url_thumb = urls_thumbnail[0] if urls_thumbnail else None
+
+                if titulo_bruto:
+                    html_titulo = markdown_simples_para_html(
+                        titulo_bruto, mapa_usuarios, mapa_cargos
+                    )
+                    if html_titulo and not html_titulo.lstrip().startswith("<"):
+                        html_titulo = f"<p>{html_titulo}</p>"
+                    saida.append(f'<div class="message-text">{html_titulo}</div>')
+                    saida.append('<hr class="container-divider">')
+                    texto_para_corpo = corpo_bruto
+                else:
+                    texto_para_corpo = texto_bruto
+
                 html_txt = markdown_simples_para_html(
-                    texto_bruto, mapa_usuarios, mapa_cargos
+                    texto_para_corpo, mapa_usuarios, mapa_cargos
                 )
-                # Garantir blocos em <p> quando o markdown não envolveu
                 if html_txt and not html_txt.lstrip().startswith("<"):
                     html_txt = f"<p>{html_txt}</p>"
-                saida.append(f'<div class="message-text">{html_txt}</div>')
+
+                if url_thumb and html_txt:
+                    # Layout tela-chat: texto à esquerda, avatar do autor à direita
+                    saida.append('<div class="transcript-section">')
+                    saida.append(f'<div><div class="message-text">{html_txt}</div></div>')
+                    saida.append(await html_thumbnail(url_thumb))
+                    saida.append("</div>")
+                elif html_txt:
+                    saida.append(f'<div class="message-text">{html_txt}</div>')
+                elif url_thumb:
+                    # Só thumbnail (raro) — ainda mostra a miniatura
+                    saida.append('<div class="transcript-section">')
+                    saida.append("<div></div>")
+                    saida.append(await html_thumbnail(url_thumb))
+                    saida.append("</div>")
+            elif urls_thumbnail:
+                saida.append('<div class="transcript-section">')
+                saida.append("<div></div>")
+                saida.append(await html_thumbnail(urls_thumbnail[0]))
+                saida.append("</div>")
             if botoes:
                 saida.append('<div class="archived-action-row">')
                 for botao in botoes:
@@ -1927,7 +2103,14 @@ async def montar_html_transcript(
             )
             if html_txt and not html_txt.lstrip().startswith("<"):
                 html_txt = f"<p>{html_txt}</p>"
-            saida.append(f'<div class="message-text">{html_txt}</div>')
+            url_thumb = urls_thumbnail[0] if urls_thumbnail else None
+            if url_thumb and html_txt:
+                saida.append('<div class="transcript-section">')
+                saida.append(f'<div><div class="message-text">{html_txt}</div></div>')
+                saida.append(await html_thumbnail(url_thumb))
+                saida.append("</div>")
+            else:
+                saida.append(f'<div class="message-text">{html_txt}</div>')
         else:
             saida.append('<div class="message-text"></div>')
 
@@ -2337,10 +2520,13 @@ async def montar_html_transcript(
                 staff_avatar = str(membro_s.display_avatar.replace(size=128).url)
     except Exception:
         pass
-    aberto_em = formatar_horario(
-        getattr(ticket, "criado_em", None) or getattr(ticket, "aberto_em", None)
+    # Datas brutas (datetime) para cálculo de duração; strings formatadas só para HTML.
+    aberto_em_dt = getattr(ticket, "criado_em", None) or getattr(
+        ticket, "aberto_em", None
     )
-    finalizado_em = formatar_horario(getattr(ticket, "finalizado_em", None))
+    finalizado_em_dt = getattr(ticket, "finalizado_em", None)
+    aberto_em = formatar_horario(aberto_em_dt)
+    finalizado_em = formatar_horario(finalizado_em_dt)
     anexos_count = "0"
     try:
         anexos_count = str(
@@ -2382,7 +2568,7 @@ async def montar_html_transcript(
     if not titulo_canal:
         titulo_canal = f"Ticket #{ticket.id}"
 
-    tempo_atendimento = formatar_tempo_atendimento(aberto_em, finalizado_em)
+    tempo_atendimento = formatar_tempo_atendimento(aberto_em_dt, finalizado_em_dt)
 
     html_final = html_final.replace("{{TITULO_CANAL}}", esc(titulo_canal))
     html_final = html_final.replace("{{ANEXOS_COUNT}}", esc(anexos_count))
@@ -2397,13 +2583,27 @@ async def montar_html_transcript(
 
 
 def formatar_tempo_atendimento(aberto_em, finalizado_em):
+    """Calcula duração legível entre abertura e finalização do ticket.
+
+    Espera objetos datetime (ou None). Strings formatadas não são aceitas.
+    """
+    from datetime import datetime
+
     if not aberto_em or not finalizado_em:
         return "—"
 
-    delta = finalizado_em - aberto_em
+    if not isinstance(aberto_em, datetime) or not isinstance(finalizado_em, datetime):
+        return "—"
+
+    try:
+        delta = finalizado_em - aberto_em
+    except TypeError:
+        # Ex.: um aware e outro naive
+        return "—"
+
     total_minutos = int(delta.total_seconds() // 60)
 
-    # Se quiser tratar caso negativo (finalizado antes de aberto)
+    # Finalizado antes de aberto (clock skew / dados inconsistentes)
     if total_minutos < 0:
         return "—"
 
@@ -2420,3 +2620,4 @@ def formatar_tempo_atendimento(aberto_em, finalizado_em):
         partes.append(f"{minutos}min")
 
     return " ".join(partes)
+

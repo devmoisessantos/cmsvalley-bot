@@ -19,7 +19,10 @@ from src.tickets.tickets_service import (
 from src.tickets.tickets_views import enviar_mensagens_abertura_ticket
 from src.utils.mensagens import (
     COR_AVISO,
+    COR_INFO,
     COR_SUCESSO,
+    editar_mensagem_original,
+    enviar_card,
     responder_card,
     responder_erro,
 )
@@ -47,10 +50,10 @@ async def abrir_ticket_por_categoria(
 ) -> None:
     """
     Fluxo comum: valida (1 aberto + cargos), cria canal e envia cards de abertura.
-    """
-    if interacao.response.is_done() is False:
-        await interacao.response.defer(ephemeral=True)
 
+    Mostra "Processando abertura" na hora e troca pelo card final com
+    botão de redirecionamento quando o canal estiver pronto.
+    """
     membro = interacao.user
     if not isinstance(membro, discord.Member):
         await responder_erro(
@@ -113,8 +116,22 @@ async def abrir_ticket_por_categoria(
             extra_row=_montar_linha_botao_canal_id(
                 ticket_existente.canal_id, interacao.guild
             ),
+            delay=None,
         )
         return
+
+    # Feedback imediato (<3s) — depois trocamos pelo card com o botão.
+    await enviar_card(
+        interacao,
+        titulo="🔄 Processando abertura",
+        linhas=[
+            f"Categoria: **{definicao['emoji']} {definicao['rotulo']}**",
+            "Criando o canal privado e aplicando permissões…",
+            "Aguarde um instante.",
+        ],
+        cor=COR_INFO,
+        delay=None,
+    )
 
     resultado = await criar_ticket(guilda, membro, categoria_chave)
     if resultado is None:
@@ -125,7 +142,7 @@ async def abrir_ticket_por_categoria(
             categoria_chave=None,
         )
         if ticket_existente is not None:
-            await responder_card(
+            await editar_mensagem_original(
                 interacao,
                 titulo="Você já tem um ticket aberto",
                 linhas=[
@@ -140,13 +157,14 @@ async def abrir_ticket_por_categoria(
                 ),
             )
             return
-        await responder_erro(
+        await editar_mensagem_original(
             interacao,
             titulo="Falha ao criar ticket",
             linhas=[
                 "Não foi possível criar o canal.",
                 "Verifique se as categorias estão configuradas corretamente.",
             ],
+            cor=discord.Color.red(),
         )
         return
 
@@ -164,7 +182,7 @@ async def abrir_ticket_por_categoria(
             f"⚠️ Falha ao enviar cards de abertura do ticket: {erro_envio}"
         )
 
-    await responder_card(
+    await editar_mensagem_original(
         interacao,
         titulo="Ticket aberto",
         linhas=[
@@ -174,7 +192,6 @@ async def abrir_ticket_por_categoria(
         ],
         cor=COR_SUCESSO,
         extra_row=_montar_linha_botao_canal(canal),
-        delay=None,
     )
 
 

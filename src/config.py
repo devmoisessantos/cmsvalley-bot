@@ -326,15 +326,14 @@ IDS_PRESERVADOS_NO_WIPE = [
 ATRASO_WIPE_SEGUNDOS = 1.2
 
 # Quem vê e interage nos tickets comuns (canal + botões).
-# Inclui equipe de ticket, equipes de diretoria/fiscal e hierarquia
-# a partir de Supervisor (coordenador, vice, diretor e acima).
+# Apenas as 4 equipes dedicadas — autor e bot entram por overwrite
+# individual; @everyone fica oculto (padrão Discord no create).
 CARGOS_TICKET_STAFF = [
     "⚠️ EQUIPE • TICKET",
     "🌫️ EQUIPE・DIRETORIA",
     "💌 EQUIPE・DIRETORIA GERAL",
     "🚨 EQUIPE・FISCAL",
-    "👑・SUPERVISOR",
-] + CARGOS_DIRETORIA
+]
 
 # Só estes cargos (além de administrador) tratam "Revogar Exoneração".
 CARGOS_TICKET_REVOGAR_EXO = [

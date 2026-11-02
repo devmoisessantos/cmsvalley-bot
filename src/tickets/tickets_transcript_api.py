@@ -160,3 +160,67 @@ async def enviar_transcript_para_api(
     logger.info("Transcript #%s publicado em %s", ticket.id, url_visualizacao)
     registrador.info(f"✅ [transcript] Ticket #{ticket.id} → {url_visualizacao}")
     return url_visualizacao
+
+
+async def enviar_asset_para_api(
+    ticket_id: int,
+    dados: bytes,
+    *,
+    content_type: str = "application/octet-stream",
+    filename: str = "arquivo.bin",
+) -> str | None:
+    """
+    POST /transcripts/{ticket_id}/assets — grava mídia no S3/R2 (ou disco) da API.
+
+    Retorna a URL pública permanente, ou None se falhar (o caller pode
+    cair no data-URI embutido).
+    """
+    if not CMSVALLEY_API_URL or not BACKUP_API_TOKEN:
+        return None
+    if not dados or ticket_id < 1:
+        return None
+
+    url = f"{CMSVALLEY_API_URL}/transcripts/{int(ticket_id)}/assets"
+    form = aiohttp.FormData()
+    form.add_field(
+        "file",
+        dados,
+        filename=filename or "arquivo.bin",
+        content_type=content_type or "application/octet-stream",
+    )
+    cabecalhos = {}
+    if BACKUP_API_TOKEN:
+        cabecalhos["X-Backup-Token"] = BACKUP_API_TOKEN
+
+    try:
+        async with aiohttp.ClientSession() as sessao_http:
+            async with sessao_http.post(
+                url,
+                data=form,
+                headers=cabecalhos,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resposta:
+                if resposta.status >= 400:
+                    texto = await resposta.text()
+                    registrador.warning(
+                        "Upload asset ticket #%s falhou HTTP %s: %s",
+                        ticket_id,
+                        resposta.status,
+                        texto[:200],
+                    )
+                    return None
+                corpo = await resposta.json(content_type=None)
+                url_publica = (corpo or {}).get("url")
+                if isinstance(url_publica, str) and url_publica.startswith("http"):
+                    return url_publica
+                registrador.warning(
+                    "Upload asset ticket #%s sem URL na resposta: %s",
+                    ticket_id,
+                    str(corpo)[:200],
+                )
+                return None
+    except Exception as erro:
+        registrador.warning(
+            "Erro de rede no upload asset ticket #%s: %s", ticket_id, erro
+        )
+        return None
