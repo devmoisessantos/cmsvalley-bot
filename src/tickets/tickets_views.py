@@ -1575,13 +1575,13 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
 
         await enviar_card_no_canal_ticket(
             canal,
-            titulo="🎫 Ticket Finalizado com Sucesso",
+            titulo="🎫 Ticket Finalizado",
             linhas=[
-                f"**Responsável pela finalização:** {membro.mention} "
-                f"(`{username_staff}`)\n",
-                "## 📝 Considerações Finais",
+                f"Este ticket acaba de ser finalizado pelo staff "
+                f"{membro.mention} / {username_staff}!",
+                "",
+                "> **Considerações Finais:**",
                 f"- {texto_consideracoes}",
-                "\n*O ticket foi encerrado e será processado para arquivamento.*",
             ],
             cor=COR_SUCESSO,
         )
@@ -1591,16 +1591,21 @@ class ModalFinalizarTicket(discord.ui.Modal, title="Finalizar ticket"):
             canal,
             titulo="🔄 Processando Finalização",
             linhas=[
-                "### ⚙️ Etapas de Segurança em Andamento",
-                "📦 **Compactação de Mídia**",
-                "Comprimindo imagens e vídeos...",
-                "🔒 **Validação de Dados**",
-                "Verificando integridade dos arquivos anexados",
-                "Removendo metadados sensíveis",
-                "## 📄 Geração do Transcript",
-                "*Após a conclusão das etapas acima, o transcript será gerado com "
-                "segurança e o canal será deletado automaticamente.*",
-                "⏳ Aguarde enquanto processamos as últimas etapas...",
+                "`Este canal está passando por algumas etapas de segurança como:`",
+                "",
+                "### 📦 Compactação de Mídia",
+                "> Comprimindo imagens e vídeos...",
+                "",
+                "### 🔒 Validação de Dados",
+                "> Verificando integridade dos arquivos anexados",
+                "- **Removendo metadados sensíveis**",
+                "- **Garantindo conformidade e privacidade**",
+                "",
+                "### 📄 Geração do Transcript",
+                "> Após a conclusão das etapas acima, o transcript será gerado "
+                "com segurança e o canal será deletado automaticamente.",
+                "",
+                "**⏳ Aguarde enquanto processamos as últimas etapas...**",
             ],
             cor=COR_INFO,
         )

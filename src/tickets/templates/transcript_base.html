@@ -1621,14 +1621,25 @@
             max-width: none
         }
 
+        .message-text>p {
+            margin: 0 0 4px
+        }
+
+        .message-text>br {
+            display: block;
+            content: "";
+            margin: 4px 0
+        }
+
         .message-heading {
-            margin: 8px 0;
+            margin: 10px 0 6px;
             color: var(--text-primary);
             font-size: 13px
         }
 
         .message-list-item {
-            padding-left: 12px
+            padding-left: 12px;
+            margin: 2px 0
         }
 
         .message-list-item:before {
@@ -1640,7 +1651,7 @@
         .message-text blockquote {
             border-left: 3px solid #3a526c;
             margin: 6px 0;
-            padding: 0 12px;
+            padding: 4px 12px;
             color: var(--text-muted)
         }
 

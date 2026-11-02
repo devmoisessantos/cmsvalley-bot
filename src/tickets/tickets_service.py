@@ -643,7 +643,8 @@ async def sincronizar_permissoes_do_canal_ticket(
         await canal.edit(
             overwrites=overwrites,
             reason=(
-                f"Sincronizar permissões do ticket (categoria={ticket.categoria_chave})"
+                f"Sincronizar permissões do ticket "
+                f"(categoria={ticket.categoria_chave})"
             ),
         )
         resultado["cargos_ok"] = len(nomes_ok)
@@ -1391,7 +1392,8 @@ async def montar_html_transcript(
                     return url_cdn
                 if len(dados) <= 6_000_000:
                     return (
-                        f"data:{mime};base64,{base64.b64encode(dados).decode('ascii')}"
+                        f"data:{mime};base64,"
+                        f"{base64.b64encode(dados).decode('ascii')}"
                     )
         except Exception as erro_anexo:
             logging.warning(
@@ -1793,6 +1795,8 @@ async def montar_html_transcript(
         partes_out: list[str] = []
         for linha in seguro.split("\n"):
             if linha.strip() == "":
+                # Linha em branco → <br> (espaçamento do tela-chat)
+                partes_out.append("<br>")
                 continue
             if linha.startswith("@@BLK"):
                 partes_out.append(linha)
@@ -1803,8 +1807,28 @@ async def montar_html_transcript(
         for i, bloco in enumerate(placeholders_bloco):
             seguro = seguro.replace(f"@@BLK{i}@@", bloco)
 
-        # Limpa <br> órfãos ao redor de blocos
+        # Espaçamento entre blocos estruturais (heading / blockquote / lista)
+        # alinhado ao index.html do tela-chat: </p><br><blockquote>…
+        seguro = modulo_re.sub(
+            r"(</(?:h[1-3]|p|blockquote)>)(<blockquote\b)",
+            r"\1<br>\2",
+            seguro,
+        )
+        seguro = modulo_re.sub(
+            r"(</(?:h[1-3]|blockquote)>)(<p\b)",
+            r"\1<br>\2",
+            seguro,
+        )
+        seguro = modulo_re.sub(
+            r"(</p>)(<h[1-3]\b)",
+            r"\1<br>\2",
+            seguro,
+        )
+        # Não empilhar <br> demais
         seguro = modulo_re.sub(r"(?:<br>\s*){3,}", "<br><br>", seguro)
+        # Remove <br> logo no início/fim do bloco
+        seguro = modulo_re.sub(r"^(?:<br>\s*)+", "", seguro)
+        seguro = modulo_re.sub(r"(?:<br>\s*)+$", "", seguro)
 
         return seguro
 
@@ -2081,9 +2105,7 @@ async def montar_html_transcript(
                 if url_thumb and html_txt:
                     # Layout tela-chat: texto à esquerda, avatar do autor à direita
                     saida.append('<div class="transcript-section">')
-                    saida.append(
-                        f'<div><div class="message-text">{html_txt}</div></div>'
-                    )
+                    saida.append(f'<div><div class="message-text">{html_txt}</div></div>')
                     saida.append(await html_thumbnail(url_thumb))
                     saida.append("</div>")
                 elif html_txt:
@@ -2251,15 +2273,25 @@ async def montar_html_transcript(
 
             saida.append('<div class="link-preview-body">')
             if dominio:
-                saida.append(f'<div class="link-preview-provider">{dominio}</div>')
+                saida.append(
+                    f'<div class="link-preview-provider">{dominio}</div>'
+                )
             elif provedor:
-                saida.append(f'<div class="link-preview-provider">{provedor}</div>')
+                saida.append(
+                    f'<div class="link-preview-provider">{provedor}</div>'
+                )
             if autor_do_embed and autor_do_embed != dominio:
-                saida.append(f'<div class="link-preview-author">{autor_do_embed}</div>')
+                saida.append(
+                    f'<div class="link-preview-author">{autor_do_embed}</div>'
+                )
             if titulo_do_embed:
-                saida.append(f'<div class="link-preview-title">{titulo_do_embed}</div>')
+                saida.append(
+                    f'<div class="link-preview-title">{titulo_do_embed}</div>'
+                )
             elif url_embed and not titulo_do_embed:
-                saida.append(f'<div class="link-preview-title">{url_embed}</div>')
+                saida.append(
+                    f'<div class="link-preview-title">{url_embed}</div>'
+                )
             if descricao_do_embed:
                 saida.append(
                     f'<div class="link-preview-desc">{descricao_do_embed}</div>'
@@ -2625,3 +2657,4 @@ def formatar_tempo_atendimento(aberto_em, finalizado_em):
         partes.append(f"{minutos}min")
 
     return " ".join(partes)
+
