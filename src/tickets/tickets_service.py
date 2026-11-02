@@ -366,12 +366,22 @@ async def listar_tickets_abertos(limite: int = 100) -> list[Ticket]:
 
 def gerar_senha_transcript() -> str:
     """
-    Gera senha para visualização do transcript.
+    Gera senha de 6 caracteres: maiúsculas + minúsculas + números.
 
-    token_urlsafe(8) ≈ 11 caracteres URL-safe (~66 bits de entropia),
-    bem mais resistente a brute-force do que o antigo token_hex(3).
+    Alfabeto completo A-Z / a-z / 0-9. Garante pelo menos 1 de cada tipo.
     """
-    return secrets.token_urlsafe(8)
+    maiusculas = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    minusculas = "abcdefghijklmnopqrstuvwxyz"
+    numeros = "0123456789"
+    chars = [
+        secrets.choice(maiusculas),
+        secrets.choice(minusculas),
+        secrets.choice(numeros),
+    ]
+    alfabeto = maiusculas + minusculas + numeros
+    chars.extend(secrets.choice(alfabeto) for _ in range(3))
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
 
 
 def nome_usuario_discord(membro: discord.Member | discord.User) -> str:
@@ -633,8 +643,7 @@ async def sincronizar_permissoes_do_canal_ticket(
         await canal.edit(
             overwrites=overwrites,
             reason=(
-                f"Sincronizar permissões do ticket "
-                f"(categoria={ticket.categoria_chave})"
+                f"Sincronizar permissões do ticket (categoria={ticket.categoria_chave})"
             ),
         )
         resultado["cargos_ok"] = len(nomes_ok)
@@ -1382,8 +1391,7 @@ async def montar_html_transcript(
                     return url_cdn
                 if len(dados) <= 6_000_000:
                     return (
-                        f"data:{mime};base64,"
-                        f"{base64.b64encode(dados).decode('ascii')}"
+                        f"data:{mime};base64,{base64.b64encode(dados).decode('ascii')}"
                     )
         except Exception as erro_anexo:
             logging.warning(
@@ -2073,7 +2081,9 @@ async def montar_html_transcript(
                 if url_thumb and html_txt:
                     # Layout tela-chat: texto à esquerda, avatar do autor à direita
                     saida.append('<div class="transcript-section">')
-                    saida.append(f'<div><div class="message-text">{html_txt}</div></div>')
+                    saida.append(
+                        f'<div><div class="message-text">{html_txt}</div></div>'
+                    )
                     saida.append(await html_thumbnail(url_thumb))
                     saida.append("</div>")
                 elif html_txt:
@@ -2241,25 +2251,15 @@ async def montar_html_transcript(
 
             saida.append('<div class="link-preview-body">')
             if dominio:
-                saida.append(
-                    f'<div class="link-preview-provider">{dominio}</div>'
-                )
+                saida.append(f'<div class="link-preview-provider">{dominio}</div>')
             elif provedor:
-                saida.append(
-                    f'<div class="link-preview-provider">{provedor}</div>'
-                )
+                saida.append(f'<div class="link-preview-provider">{provedor}</div>')
             if autor_do_embed and autor_do_embed != dominio:
-                saida.append(
-                    f'<div class="link-preview-author">{autor_do_embed}</div>'
-                )
+                saida.append(f'<div class="link-preview-author">{autor_do_embed}</div>')
             if titulo_do_embed:
-                saida.append(
-                    f'<div class="link-preview-title">{titulo_do_embed}</div>'
-                )
+                saida.append(f'<div class="link-preview-title">{titulo_do_embed}</div>')
             elif url_embed and not titulo_do_embed:
-                saida.append(
-                    f'<div class="link-preview-title">{url_embed}</div>'
-                )
+                saida.append(f'<div class="link-preview-title">{url_embed}</div>')
             if descricao_do_embed:
                 saida.append(
                     f'<div class="link-preview-desc">{descricao_do_embed}</div>'
@@ -2625,4 +2625,3 @@ def formatar_tempo_atendimento(aberto_em, finalizado_em):
         partes.append(f"{minutos}min")
 
     return " ".join(partes)
-
