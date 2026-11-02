@@ -1212,7 +1212,7 @@ def montar_html_transcript(
                 data_e_hora,
                 erro_ao_converter_fuso,
             )
-        return local.strftime("%d/%m/%Y, %H:%M:%S")
+        return local.strftime("%d/%m/%Y %H:%M")
 
     def mapa_usuarios_mencionados(
         mensagem: discord.Message,
@@ -1752,46 +1752,49 @@ def montar_html_transcript(
         mapa_usuarios = dados["mapa_usuarios"]
         mapa_cargos = dados["mapa_cargos"]
 
-        usar_bloco_v2 = bool(botoes) or (bool(texto_bruto) and autor_eh_bot)
+        # Painéis do bot / com botões → form-response + form-fields (tela-chat)
+        usar_form = bool(botoes) or (bool(texto_bruto) and autor_eh_bot)
 
-        if usar_bloco_v2:
-            saida.append('<div class="message-container-v2">')
+        if usar_form:
+            saida.append('<div class="message-text"></div>')
+            saida.append('<div class="form-response"><div class="form-fields">')
             if texto_opcoes_staff:
                 saida.append(
-                    '<div class="container-text-block">'
-                    f'<span class="small-text">{esc(texto_opcoes_staff)}</span>'
+                    '<div class="message-text">'
+                    f'<p class="small muted">{esc(texto_opcoes_staff)}</p>'
                     "</div>"
-                    '<hr class="container-divider" style="margin: 2rem 0;">'
+                    '<hr class="container-divider">'
                 )
-            elif texto_bruto:
-                saida.append(
-                    '<div class="container-text-block">'
-                    f"{markdown_simples_para_html(texto_bruto, mapa_usuarios, mapa_cargos)}"
-                    "</div>"
+            if texto_bruto:
+                html_txt = markdown_simples_para_html(
+                    texto_bruto, mapa_usuarios, mapa_cargos
                 )
-
+                # Garantir blocos em <p> quando o markdown não envolveu
+                if html_txt and not html_txt.lstrip().startswith("<"):
+                    html_txt = f"<p>{html_txt}</p>"
+                saida.append(f'<div class="message-text">{html_txt}</div>')
             if botoes:
-                saida.append('<div class="container-row">')
-                for indice, botao in enumerate(botoes):
-                    if indice > 0 and indice % 4 == 0:
-                        saida.append('</div><div class="container-row">')
-                    classes_btn = f"secondary-button archived-button button-{botao['style']}"
-                    if botao["disabled"]:
-                        classes_btn += " disabled"
+                saida.append('<div class="archived-action-row">')
+                for botao in botoes:
+                    disabled = " disabled" if botao["disabled"] else ""
                     saida.append(
-                        f'<div class="{classes_btn}">'
+                        f'<button class="secondary-button archived-button" type="button"'
+                        f'{disabled} title="Botão disponível somente no Discord">'
                         f"{botao.get('emoji_html') or ''}"
                         f"{esc(botao['label'])}"
-                        f"</div>"
+                        f"</button>"
                     )
                 saida.append("</div>")
-            saida.append("</div>")
+            saida.append("</div></div>")  # form-fields + form-response
         elif texto_bruto:
-            saida.append(
-                f'<div class="message-text">'
-                f"{markdown_simples_para_html(texto_bruto, mapa_usuarios, mapa_cargos)}"
-                f"</div>"
+            html_txt = markdown_simples_para_html(
+                texto_bruto, mapa_usuarios, mapa_cargos
             )
+            if html_txt and not html_txt.lstrip().startswith("<"):
+                html_txt = f"<p>{html_txt}</p>"
+            saida.append(f'<div class="message-text">{html_txt}</div>')
+        else:
+            saida.append('<div class="message-text"></div>')
 
         for embed in mensagem.embeds[:6]:
             titulo_do_embed = esc(getattr(embed, "title", None) or "")
@@ -1957,6 +1960,7 @@ def montar_html_transcript(
         indice_msg += 1
 
     partes_mensagens: list[str] = []
+    montar_html_transcript._ultimo_dia = None  # type: ignore[attr-defined]
     for grupo in grupos:
         mensagem_cabeca = grupo[0]
         autor = mensagem_cabeca.author
@@ -1964,7 +1968,7 @@ def montar_html_transcript(
         avatar = esc(url_avatar(autor))
         quando = formatar_horario(mensagem_cabeca.created_at)
 
-        # Estrutura HTML idêntica ao PRO5M (message-row / message-body / badges)
+        # article.message-row — estrutura da tela-chat
         avatar_classes = ["avatar"]
         badges_html: list[str] = []
         if autor.bot:
@@ -1979,15 +1983,55 @@ def montar_html_transcript(
         if autor.id == ticket.autor_discord_id and not autor.bot:
             badges_html.append('<span class="author-badge autor">AUTOR</span>')
 
-        partes_mensagens.append('<div class="message-row">')
+        criado = mensagem_cabeca.created_at
+        iso_dt = ""
+        try:
+            iso_dt = criado.isoformat().replace("+00:00", "Z") if criado else ""
+        except Exception:
+            iso_dt = ""
+
+        # Separador de data (tela-chat)
+        try:
+            from src.utils.formatacao import para_horario_brasilia
+            local_dt = para_horario_brasilia(criado) if criado else None
+        except Exception:
+            local_dt = criado
+        if local_dt is not None:
+            chave_dia = local_dt.strftime("%Y-%m-%d")
+            rotulo_dia = local_dt.strftime("%d de %B de %Y")
+            # meses em pt-BR simples
+            meses = {
+                "January": "janeiro", "February": "fevereiro", "March": "março",
+                "April": "abril", "May": "maio", "June": "junho",
+                "July": "julho", "August": "agosto", "September": "setembro",
+                "October": "outubro", "November": "novembro", "December": "dezembro",
+            }
+            for en, pt in meses.items():
+                rotulo_dia = rotulo_dia.replace(en, pt)
+            if not hasattr(montar_html_transcript, "_ultimo_dia"):
+                montar_html_transcript._ultimo_dia = None  # type: ignore[attr-defined]
+            if montar_html_transcript._ultimo_dia != chave_dia:  # type: ignore[attr-defined]
+                partes_mensagens.append(
+                    f'<div class="date-divider">{esc(rotulo_dia)}</div>'
+                )
+                montar_html_transcript._ultimo_dia = chave_dia  # type: ignore[attr-defined]
+
+        partes_mensagens.append('<article class="message-row" data-message="">')
         partes_mensagens.append(
-            f'<img class="{" ".join(avatar_classes)}" src="{avatar}" alt="" loading="lazy">'
+            f'<img class="{" ".join(avatar_classes)}" data-avatar="" '
+            f'src="{avatar}" alt="Avatar de {nome}" loading="lazy" '
+            f'decoding="async" referrerpolicy="no-referrer">'
         )
         partes_mensagens.append('<div class="message-body">')
         partes_mensagens.append('<div class="message-meta">')
         partes_mensagens.append(f'<span class="author-name">{nome}</span>')
         partes_mensagens.extend(badges_html)
-        partes_mensagens.append(f'<span class="message-time">{quando}</span>')
+        if iso_dt:
+            partes_mensagens.append(
+                f'<time class="message-time" datetime="{esc(iso_dt)}">{quando}</time>'
+            )
+        else:
+            partes_mensagens.append(f'<time class="message-time">{quando}</time>')
         partes_mensagens.append("</div>")  # .message-meta
 
         for mensagem_do_grupo in grupo:
@@ -1997,7 +2041,7 @@ def montar_html_transcript(
             )
 
         partes_mensagens.append("</div>")  # .message-body
-        partes_mensagens.append("</div>")  # .message-row
+        partes_mensagens.append("</article>")  # .message-row
 
     html_mensagens = "\n".join(partes_mensagens)
 
@@ -2010,6 +2054,34 @@ def montar_html_transcript(
     categoria = ticket.categoria_rotulo or "Ticket"
     autor_nome = ticket.autor_nome or "—"
     staff_nome = ticket.staff_finalizou_nome or "—"
+    autor_id = getattr(ticket, "autor_discord_id", None) or ""
+    staff_id = getattr(ticket, "staff_finalizou_id", None) or getattr(ticket, "staff_assumiu_id", None) or ""
+    autor_avatar = "https://cdn.discordapp.com/embed/avatars/0.png"
+    staff_avatar = "https://cdn.discordapp.com/embed/avatars/1.png"
+    try:
+        if guilda is not None and autor_id:
+            membro = guilda.get_member(int(autor_id))
+            if membro is not None:
+                autor_avatar = str(membro.display_avatar.replace(size=128).url)
+        if guilda is not None and staff_id:
+            membro_s = guilda.get_member(int(staff_id))
+            if membro_s is not None:
+                staff_avatar = str(membro_s.display_avatar.replace(size=128).url)
+    except Exception:
+        pass
+    aberto_em = formatar_horario(getattr(ticket, "criado_em", None) or getattr(ticket, "aberto_em", None))
+    finalizado_em = formatar_horario(getattr(ticket, "finalizado_em", None))
+    anexos_count = "0"
+    try:
+        anexos_count = str(
+            sum(
+                len(getattr(m, "attachments", None) or [])
+                for g in grupos
+                for m in g
+            )
+        )
+    except Exception:
+        pass
 
     html_final = template_html
     html_final = html_final.replace("{{TITULO_PAGINA}}", esc(titulo_pagina))
@@ -2024,6 +2096,12 @@ def montar_html_transcript(
     html_final = html_final.replace("{{STAFF_NOME}}", esc(staff_nome))
     titulo_canal = ticket.categoria_rotulo or f"Ticket #{ticket.id}"
     html_final = html_final.replace("{{TITULO_CANAL}}", esc(titulo_canal))
-    html_final = html_final.replace("{{ANEXOS_COUNT}}", "0")
+    html_final = html_final.replace("{{ANEXOS_COUNT}}", esc(anexos_count))
+    html_final = html_final.replace("{{AUTOR_AVATAR}}", esc(autor_avatar))
+    html_final = html_final.replace("{{STAFF_AVATAR}}", esc(staff_avatar))
+    html_final = html_final.replace("{{AUTOR_ID}}", esc(str(autor_id or "—")))
+    html_final = html_final.replace("{{STAFF_ID}}", esc(str(staff_id or "—")))
+    html_final = html_final.replace("{{ABERTO_EM}}", esc(aberto_em))
+    html_final = html_final.replace("{{FINALIZADO_EM}}", esc(finalizado_em))
     html_final = html_final.replace("{{TEMPO_ATENDIMENTO}}", "—")
     return html_final
