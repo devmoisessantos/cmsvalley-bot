@@ -341,9 +341,7 @@ async def _t_plantao(membro, estado):
             ).total_seconds()
         )
         nome = NOMES_CANAIS_PLANTAO.get(estado.canal_atual_id, "?")
-        status = (
-            f"✅ `em serviço` · call `{formatar_hms(segundos_na_call)}` · `{nome}`"
-        )
+        status = f"✅ `em serviço` · call `{formatar_hms(segundos_na_call)}` · `{nome}`"
     elif online:
         status = "✅ `em serviço` · _aguardando call_"
     else:
@@ -434,8 +432,31 @@ async def _t_hist_p(membro):
     return "\n".join(linhas)
 
 
+def _emoji_tipo_punicao(punicao) -> str:
+    """Emoji conforme o tipo da punição (advertência / exo / rebaixamento)."""
+    tipo = (getattr(punicao, "tipo", None) or "ADVERTENCIA").upper()
+    if tipo == "REBAIXAMENTO":
+        return "⬇️"
+    if tipo == "EXONERACAO":
+        return "⛔"
+    return "⚠️"
+
+
+def _rotulo_tipo_punicao(punicao) -> str:
+    """Rótulo curto do tipo para a ficha."""
+    tipo = (getattr(punicao, "tipo", None) or "ADVERTENCIA").upper()
+    if tipo == "REBAIXAMENTO":
+        return "Rebaixamento"
+    if tipo == "EXONERACAO":
+        return "Exoneração"
+    return "Advertência"
+
+
 async def _t_pun(membro):
-    """Bloco de punições na ficha: ativas com motivo e histórico recente."""
+    """Bloco de punições na ficha: ativas com motivo e histórico recente.
+
+    Inclui advertências, exonerações e rebaixamentos (Punicao.tipo).
+    """
     ativas = await listar_punicoes(membro.id, so_ativas=True, limite=10)
     recentes = await listar_punicoes(membro.id, so_ativas=None, limite=12)
     linhas = [
@@ -446,12 +467,15 @@ async def _t_pun(membro):
     if ativas:
         for p in ativas:
             motivo_curto = (p.motivo or "—")[:120]
+            emoji = _emoji_tipo_punicao(p)
+            tipo_txt = _rotulo_tipo_punicao(p)
+            titulo = (p.cargo_nome or tipo_txt).strip() or tipo_txt
             linhas.append(
                 _linha_bloco(
-                    "⛔",
-                    f"`#{p.id}`",
+                    emoji,
+                    f"`#{p.id}` · {tipo_txt}",
                     (
-                        f"**{p.cargo_nome}** · "
+                        f"**{titulo}** · "
                         f"{formatar_timestamp(p.criada_em)} · "
                         f"<@{p.executor_id}>\n"
                         f"-# Motivo: {motivo_curto}"
@@ -469,12 +493,15 @@ async def _t_pun(membro):
             status_rem = ""
             if p.motivo_remocao:
                 status_rem = f" · rem: {(p.motivo_remocao or '')[:60]}"
+            emoji = _emoji_tipo_punicao(p)
+            tipo_txt = _rotulo_tipo_punicao(p)
+            titulo = (p.cargo_nome or tipo_txt).strip() or tipo_txt
             linhas.append(
                 _linha_bloco(
-                    "📝",
-                    f"`#{p.id}`",
+                    emoji,
+                    f"`#{p.id}` · {tipo_txt}",
                     (
-                        f"~~{p.cargo_nome}~~ · "
+                        f"~~{titulo}~~ · "
                         f"{formatar_timestamp(p.criada_em)}"
                         f"{status_rem}\n"
                         f"-# {motivo_curto}"
@@ -1298,6 +1325,18 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                     r2.add_item(b)
                 comps.append(r2)
 
+                # Linha 2b — rebaixamento (Diretor++)
+                r2b = discord.ui.ActionRow()
+                botao_rebaixar = discord.ui.Button(
+                    label="Rebaixar",
+                    style=discord.ButtonStyle.danger,
+                    emoji="⬇️",
+                    disabled=not no,
+                )
+                botao_rebaixar.callback = self._rebaixar
+                r2b.add_item(botao_rebaixar)
+                comps.append(r2b)
+
             # Linha 3 — status / identidade / navegação
             r3 = discord.ui.ActionRow()
             for label, style, emoji, cb, dis in [
@@ -1537,6 +1576,27 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             return
         await i.response.send_modal(ModalDemitirMembro(self.alvo, self.bloco_ativo))
 
+    async def _rebaixar(self, i):
+        """Abre o fluxo efêmero de rebaixamento hospitalar (Diretor++)."""
+        from src.rebaixamento.rebaixamento_service import (
+            membro_pode_rebaixar,
+        )
+        from src.rebaixamento.rebaixamento_views import (
+            abrir_rebaixamento_para_membro,
+        )
+
+        if not isinstance(i.user, discord.Member) or not membro_pode_rebaixar(i.user):
+            await responder_erro(
+                i,
+                titulo="Sem permissão",
+                linhas=[mensagem_sem_permissao("rebaixar membros (apenas Diretor++)")],
+            )
+            return
+        if not isinstance(self.alvo, discord.Member):
+            await responder_erro(i, titulo="Alvo", linhas=["Precisa estar no server."])
+            return
+        await abrir_rebaixamento_para_membro(i, self.alvo)
+
     async def _voltar(self, i):
         if not await self._perm_diretoria(i):
             return
@@ -1611,8 +1671,7 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
                     titulo="Tempo no ciclo inválido",
                     linhas=[
                         str(erro_valor),
-                        "Campo opcional. Exemplos: `00:00`, `01:30`, "
-                        "`02:23:08`.",
+                        "Campo opcional. Exemplos: `00:00`, `01:30`, `02:23:08`.",
                     ],
                 )
                 return
@@ -1661,10 +1720,7 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
             executor=i.user,
             alvo=self.alvo,
             acao="AJUSTAR_HORAS",
-            detalhes=(
-                f"historico {antes}->{depois}; "
-                f"ciclo={segundos_no_ciclo}"
-            ),
+            detalhes=(f"historico {antes}->{depois}; ciclo={segundos_no_ciclo}"),
             cor=discord.Color.green(),
         )
         await _abrir_ficha(

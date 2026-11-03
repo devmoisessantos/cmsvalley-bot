@@ -4,3 +4,8 @@
 __pycache__/
 backup-flies
 src/tickets/NEW.HTML
+AGENTS.md
+DIVIDA_TECNICA.md
+tests.py
+ferramentas/
+tests.py

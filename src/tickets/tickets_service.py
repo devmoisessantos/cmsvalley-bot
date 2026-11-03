@@ -398,7 +398,7 @@ def nome_exibicao_discord(membro: discord.Member | discord.User) -> str:
     """
     Retorna o nome legível da pessoa: apelido do servidor, senão global_name, senão username.
 
-    Ex.: '⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763'
+    Ex.: '⟦RESP · HP⟧ Guxta ᵛᵃˡˡᵉʸ | 1763' ou '! Kuromi'
     Usado em transcript (resumo e menções) e textos voltados ao humano.
     """
     return getattr(membro, "display_name", None) or membro.name
@@ -656,7 +656,8 @@ async def sincronizar_permissoes_do_canal_ticket(
         await canal.edit(
             overwrites=overwrites,
             reason=(
-                f"Sincronizar permissões do ticket (categoria={ticket.categoria_chave})"
+                f"Sincronizar permissões do ticket "
+                f"(categoria={ticket.categoria_chave})"
             ),
         )
         resultado["cargos_ok"] = len(nomes_ok)
@@ -1407,7 +1408,8 @@ async def montar_html_transcript(
                     return url_cdn
                 if len(dados) <= 6_000_000:
                     return (
-                        f"data:{mime};base64,{base64.b64encode(dados).decode('ascii')}"
+                        f"data:{mime};base64,"
+                        f"{base64.b64encode(dados).decode('ascii')}"
                     )
         except Exception as erro_anexo:
             logging.warning(
@@ -1595,7 +1597,9 @@ async def montar_html_transcript(
         # Subtexto Discord: -# linha
         preparado = modulo_re.sub(
             r"(?m)^-#\s+(.+)$",
-            lambda m: _guardar_extra(f'<p class="small muted">{esc(m.group(1))}</p>'),
+            lambda m: _guardar_extra(
+                f'<p class="small muted">{esc(m.group(1))}</p>'
+            ),
             preparado,
         )
 
@@ -1651,7 +1655,7 @@ async def montar_html_transcript(
             r"<pre><code(?:\s+class=\"language-([a-zA-Z0-9_+-]+)\")?>",
             lambda m: (
                 f'<pre class="code-block"'
-                f"{f' data-lang="{m.group(1)}"' if m.group(1) else ''}><code>"
+                f'{f" data-lang=\"{m.group(1)}\"" if m.group(1) else ""}><code>'
             ),
             html,
         )
@@ -1705,7 +1709,7 @@ async def montar_html_transcript(
             data_e_hora = datetime.fromtimestamp(unix, tz=timezone.utc)
             return (
                 f'<span class="timestamp">'
-                f"{data_e_hora.strftime('%d/%m/%Y %H:%M')}</span>"
+                f'{data_e_hora.strftime("%d/%m/%Y %H:%M")}</span>'
             )
 
         html = modulo_re.sub(
@@ -1763,6 +1767,7 @@ async def montar_html_transcript(
         html = modulo_re.sub(r">\s*\n\s*<", "><", html)
 
         return html
+
 
     def html_emoji_botao(emoji_obj) -> str:
         """
@@ -2037,9 +2042,7 @@ async def montar_html_transcript(
                 if url_thumb and html_txt:
                     # Layout tela-chat: texto à esquerda, avatar do autor à direita
                     saida.append('<div class="transcript-section">')
-                    saida.append(
-                        f'<div><div class="message-text">{html_txt}</div></div>'
-                    )
+                    saida.append(f'<div><div class="message-text">{html_txt}</div></div>')
                     saida.append(await html_thumbnail(url_thumb))
                     saida.append("</div>")
                 elif html_txt:
@@ -2207,15 +2210,25 @@ async def montar_html_transcript(
 
             saida.append('<div class="link-preview-body">')
             if dominio:
-                saida.append(f'<div class="link-preview-provider">{dominio}</div>')
+                saida.append(
+                    f'<div class="link-preview-provider">{dominio}</div>'
+                )
             elif provedor:
-                saida.append(f'<div class="link-preview-provider">{provedor}</div>')
+                saida.append(
+                    f'<div class="link-preview-provider">{provedor}</div>'
+                )
             if autor_do_embed and autor_do_embed != dominio:
-                saida.append(f'<div class="link-preview-author">{autor_do_embed}</div>')
+                saida.append(
+                    f'<div class="link-preview-author">{autor_do_embed}</div>'
+                )
             if titulo_do_embed:
-                saida.append(f'<div class="link-preview-title">{titulo_do_embed}</div>')
+                saida.append(
+                    f'<div class="link-preview-title">{titulo_do_embed}</div>'
+                )
             elif url_embed and not titulo_do_embed:
-                saida.append(f'<div class="link-preview-title">{url_embed}</div>')
+                saida.append(
+                    f'<div class="link-preview-title">{url_embed}</div>'
+                )
             if descricao_do_embed:
                 saida.append(
                     f'<div class="link-preview-desc">{descricao_do_embed}</div>'
@@ -2584,3 +2597,4 @@ def formatar_tempo_atendimento(aberto_em, finalizado_em):
         partes.append(f"{minutos}min")
 
     return " ".join(partes)
+

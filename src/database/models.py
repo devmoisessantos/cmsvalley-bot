@@ -69,6 +69,13 @@ class Usuario(Base):
     data_ultima_reprovacao: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Após rebaixamento: até quando o membro não pode solicitar promoção.
+    bloqueio_promocao_ate: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Snapshot JSON das contagens de meta no momento do rebaixamento.
+    # A promoção passa a exigir progresso *acima* deste baseline.
+    metas_baseline_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     recrutamentos: Mapped[list[Recrutamento]] = relationship(back_populates="candidato")
     historico_cargos: Mapped[list[HistoricoCargo]] = relationship(
@@ -420,15 +427,18 @@ class RankingHistorico(Base):
 
 
 class Punicao(Base):
-    """Registro de advertência ou punição aplicada a um membro."""
+    """Registro de advertência, exoneração ou rebaixamento aplicado a um membro."""
 
     __tablename__ = "punicoes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
     id_fivem: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    cargo_id: Mapped[int] = mapped_column(BigInteger)
-    cargo_nome: Mapped[str] = mapped_column(String(80))
+    # ADVERTENCIA | EXONERACAO | REBAIXAMENTO
+    tipo: Mapped[str] = mapped_column(String(20), default="ADVERTENCIA", index=True)
+    # Em REBAIXAMENTO pode ficar nulo (não há cargo 🚫 aplicado).
+    cargo_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cargo_nome: Mapped[str] = mapped_column(String(80), default="")
     motivo: Mapped[str] = mapped_column(String(1500))
     # Um link por linha
     links: Mapped[str | None] = mapped_column(String(2000), nullable=True)
@@ -452,6 +462,33 @@ class Punicao(Base):
     # JSON com os IDs dos cargos do membro ANTES da exoneração.
     # Usado no recurso: ao remover o Exonerado, devolve esses cargos.
     cargos_antes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class HistoricoPunicao(Base):
+    """
+    Histórico detalhado de punições estruturadas (rebaixamento).
+
+    Separado de HistoricoPromocao: rebaixamento não é promoção.
+    """
+
+    __tablename__ = "historico_punicoes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    discord_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # REBAIXAMENTO (reservado para outros tipos futuros)
+    tipo: Mapped[str] = mapped_column(String(20), index=True)
+    cargo_de: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    cargo_para: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    motivo: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    executado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dias_bloqueio: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bloqueio_ate: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    punicao_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # um_degrau | livre
+    modo: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
 
 
 

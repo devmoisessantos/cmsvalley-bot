@@ -286,6 +286,54 @@ CREATE INDEX IF NOT EXISTS ix_blacklists_discord_id ON blacklists (discord_id);
 CREATE INDEX IF NOT EXISTS ix_blacklists_ativa ON blacklists (ativa);
 """,
     ),
+    Migracao(
+        numero=17,
+        descricao=(
+            "Punição tipada: ADVERTENCIA / EXONERACAO / REBAIXAMENTO. "
+            "cargo_id passa a aceitar NULL (rebaixamento não aplica cargo 🚫)."
+        ),
+        comando_sql="""
+ALTER TABLE punicoes ADD COLUMN IF NOT EXISTS tipo VARCHAR(20) NOT NULL DEFAULT 'ADVERTENCIA';
+CREATE INDEX IF NOT EXISTS ix_punicoes_tipo ON punicoes (tipo);
+ALTER TABLE punicoes ALTER COLUMN cargo_id DROP NOT NULL;
+""",
+    ),
+    Migracao(
+        numero=18,
+        descricao=(
+            "Usuário: bloqueio de promoção e baseline de metas após rebaixamento."
+        ),
+        comando_sql="""
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueio_promocao_ate TIMESTAMPTZ;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS metas_baseline_json TEXT;
+""",
+    ),
+    Migracao(
+        numero=19,
+        descricao=(
+            "Histórico detalhado de punições estruturadas (rebaixamento)."
+        ),
+        comando_sql="""
+CREATE TABLE IF NOT EXISTS historico_punicoes (
+    id SERIAL PRIMARY KEY,
+    discord_id BIGINT NOT NULL,
+    tipo VARCHAR(20) NOT NULL,
+    cargo_de VARCHAR(80),
+    cargo_para VARCHAR(80),
+    motivo VARCHAR(500),
+    executado_por BIGINT,
+    dias_bloqueio INTEGER,
+    bloqueio_ate TIMESTAMPTZ,
+    punicao_id INTEGER,
+    modo VARCHAR(20),
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_historico_punicoes_discord_id
+    ON historico_punicoes (discord_id);
+CREATE INDEX IF NOT EXISTS ix_historico_punicoes_tipo
+    ON historico_punicoes (tipo);
+""",
+    ),
 ]
 
 

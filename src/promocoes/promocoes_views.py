@@ -109,6 +109,22 @@ class PainelPromocaoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=["Use o painel dentro do Discord do hospital."],
             )
             return
+        from src.rebaixamento.rebaixamento_service import (
+            membro_esta_bloqueado_promocao,
+        )
+
+        bloqueado, ate = await membro_esta_bloqueado_promocao(membro.id)
+        if bloqueado and ate is not None:
+            ts = int(ate.timestamp())
+            await responder_erro(
+                interacao,
+                titulo="Promoção bloqueada",
+                linhas=[
+                    "Você foi rebaixado e ainda não pode solicitar promoção.",
+                    f"Bloqueio válido até <t:{ts}:f> (<t:{ts}:R>).",
+                ],
+            )
+            return
         try:
             await responder_view(
                 interacao,
@@ -313,11 +329,7 @@ class ViewSelectTrilha(LoggingViewMixin, discord.ui.LayoutView):
         lista_de_trilhas = "\n".join(
             f"• **{trilha_disponivel['rotulo']}**" for trilha_disponivel in trilhas
         )
-        cabecalho = (
-            f"Cargo atual: **`{cargo_atual}`**\n"
-            if cargo_atual
-            else ""
-        )
+        cabecalho = f"Cargo atual: **`{cargo_atual}`**\n" if cargo_atual else ""
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
@@ -717,9 +729,7 @@ async def processar_escolha_trilha(
                 # Garante que Aprovar/Reprovar sobrevivem a reinício do bot
                 interacao.client.add_view(view_decisao_persistente(registro.id))
                 mensagem = await canal.send(view=view_pedido)
-                await atualizar_mensagem_solicitacao(
-                    registro.id, canal.id, mensagem.id
-                )
+                await atualizar_mensagem_solicitacao(registro.id, canal.id, mensagem.id)
             except discord.HTTPException as erro:
                 await enviar_erro_para_log_erros(
                     guilda,

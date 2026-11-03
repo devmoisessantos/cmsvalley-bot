@@ -814,11 +814,18 @@ async def remover_punicao(
             else:
                 texto_motivo = motivo_remocao or ""
             row.motivo_remocao = texto_motivo[:500]
-            removidos.append(row.cargo_nome)
+            rotulo = row.cargo_nome or getattr(row, "tipo", None) or "punição"
+            removidos.append(rotulo)
             punicao_ids.append(row.id)
             if row.id_fivem and not id_fivem:
                 id_fivem = row.id_fivem
-            cargo_ids_marcados.add(row.cargo_id)
+            # REBAIXAMENTO grava cargo hospitalar em cargo_id — nunca remover
+            # esse role ao “baixar” o registro.
+            tipo_row = (getattr(row, "tipo", None) or "ADVERTENCIA").upper()
+            if tipo_row == "REBAIXAMENTO":
+                continue
+            if row.cargo_id:
+                cargo_ids_marcados.add(int(row.cargo_id))
 
         try:
             await session.commit()

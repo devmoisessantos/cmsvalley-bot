@@ -392,9 +392,7 @@ def listar_cargos_area_por_cursos_do_membro(
             continue
         if membro_tem_cargo_nome(membro, nome_cargo):
             continue
-        pode, _faltando = membro_pode_receber_cargo_area_por_curso(
-            membro, chave_curso
-        )
+        pode, _faltando = membro_pode_receber_cargo_area_por_curso(membro, chave_curso)
         if not pode:
             continue
         nomes.append(nome_cargo)
@@ -422,9 +420,7 @@ def listar_cargos_area_bloqueados_por_curso(
         # Só mostra bloqueio se já tem o curso de função (senão não tentou)
         if not membro_tem_curso(membro, chave_curso):
             continue
-        pode, faltando = membro_pode_receber_cargo_area_por_curso(
-            membro, chave_curso
-        )
+        pode, faltando = membro_pode_receber_cargo_area_por_curso(membro, chave_curso)
         if pode:
             continue
         bloqueados.append((nome_cargo, faltando))
@@ -713,8 +709,7 @@ def montar_checklist_trilha(
             )
         if bloqueados:
             bloco_extras.append(
-                "- ❌ **Não serão concedidos** (curso de função ok, "
-                "faltam práticos):"
+                "- ❌ **Não serão concedidos** (curso de função ok, faltam práticos):"
             )
             for nome_bloqueado, chaves_faltando in bloqueados:
                 lista_faltando = "\n".join(
@@ -739,9 +734,7 @@ def montar_checklist_trilha(
         bloco_resumo.append("- ✅ **Todos os pré-requisitos foram atendidos.**")
         if cargos_extras:
             lista_extras = ", ".join(f"`{nome}`" for nome in cargos_extras)
-            bloco_resumo.append(
-                f"- 🎁 **Também serão concedidos:** {lista_extras}"
-            )
+            bloco_resumo.append(f"- 🎁 **Também serão concedidos:** {lista_extras}")
     else:
         bloco_resumo = ["## 🎯 Resumo das Pendências"]
         for indice, item in enumerate(pendencias, start=1):
@@ -849,9 +842,7 @@ async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
 
         resultado = await sessao.execute(
             select(SolicitacaoCurso).where(
-                SolicitacaoCurso.status.in_(
-                    ["CONCLUIDO", "APROVADO", "FINALIZADO"]
-                ),
+                SolicitacaoCurso.status.in_(["CONCLUIDO", "APROVADO", "FINALIZADO"]),
                 or_(
                     SolicitacaoCurso.instrutor_id == discord_id,
                     SolicitacaoCurso.aplicado_por == discord_id,
@@ -880,6 +871,19 @@ async def _contar_metas_do_membro(discord_id: int) -> dict[str, int]:
             )
         )
         contagens["meta_tickets"] = int(resultado.scalar_one() or 0)
+
+    # Após rebaixamento: só conta o progresso acima do baseline gravado.
+    try:
+        from src.rebaixamento.rebaixamento_service import (
+            obter_metas_baseline,
+        )
+
+        baseline = await obter_metas_baseline(discord_id)
+        for chave, valor_base in baseline.items():
+            if chave in contagens:
+                contagens[chave] = max(0, int(contagens[chave]) - int(valor_base))
+    except Exception:
+        pass
 
     return contagens
 
@@ -1235,10 +1239,7 @@ async def aplicar_promocao_cargos(
         lista = ", ".join(f"`{nome}`" for nome in adicionados)
         return (
             True,
-            (
-                f"Cargos adicionados: {lista} "
-                f"(origem `{cargo_de_nome}` mantida)."
-            ),
+            (f"Cargos adicionados: {lista} (origem `{cargo_de_nome}` mantida)."),
             adicionados,
         )
     return (

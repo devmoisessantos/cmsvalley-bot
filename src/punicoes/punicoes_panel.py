@@ -592,10 +592,20 @@ def _fmt_membro_info(membro: discord.Member) -> str:
     )
 
 
+def _emoji_e_rotulo_tipo_punicao(punicao) -> tuple[str, str]:
+    """(emoji, rótulo) para Select e textos de punição tipada."""
+    tipo = (getattr(punicao, "tipo", None) or "ADVERTENCIA").upper()
+    if tipo == "REBAIXAMENTO":
+        return "⬇️", "Rebaixamento"
+    if tipo == "EXONERACAO":
+        return "⛔", "Exoneração"
+    return "⚠️", "Advertência"
+
+
 async def _montar_view_escolher_adv(
     membro: discord.Member,
 ) -> discord.ui.LayoutView | None:
-    """View com Select das advertências ativas. Retorna None se não houver ativas."""
+    """View com Select das punições ativas (adv / exo / rebaixamento)."""
     ativas = await listar_punicoes_membro(membro.id, apenas_ativas=True)
     if not ativas:
         return None
@@ -605,14 +615,16 @@ async def _montar_view_escolher_adv(
         marca_de_tempo = (
             f"<t:{int(punicao.criada_em.timestamp())}:d>" if punicao.criada_em else "—"
         )
-        label = f"#{punicao.id} · {punicao.cargo_nome.strip()}"[:100]
-        desc = f"{marca_de_tempo} · {(punicao.motivo or '')[:80]}"[:100]
+        emoji, rotulo_tipo = _emoji_e_rotulo_tipo_punicao(punicao)
+        nome = (punicao.cargo_nome or rotulo_tipo).strip() or rotulo_tipo
+        label = f"#{punicao.id} · {rotulo_tipo} · {nome}"[:100]
+        desc = f"{marca_de_tempo} · {(punicao.motivo or '')[:70]}"[:100]
         opcoes.append(
             discord.SelectOption(
                 label=label,
                 value=str(punicao.id),
                 description=desc,
-                emoji="⚠️",
+                emoji=emoji,
             )
         )
 
@@ -771,9 +783,10 @@ def _view_sem_adv_ativas(membro: discord.Member) -> discord.ui.LayoutView:
     view.add_item(
         discord.ui.Container(
             discord.ui.TextDisplay(
-                f"# 🧹 Remover Punições\n"
+                f"# 🧹 Punições\n"
                 f"{membro.mention} (`{membro.id}`)\n\n"
-                "❌ Este membro **não possui advertências ativas** no banco."
+                "❌ Este membro **não possui punições ativas** no banco "
+                "(advertências, exonerações ou rebaixamentos)."
             ),
             accent_color=discord.Color.red(),
         )
@@ -782,7 +795,7 @@ def _view_sem_adv_ativas(membro: discord.Member) -> discord.ui.LayoutView:
 
 
 class EscolherAdvertenciaRemoverView(LoggingViewMixin, discord.ui.LayoutView):
-    """Select das advertências ativas → modal de motivo → remove."""
+    """Select das punições ativas (adv / exo / rebaixamento) → motivo → remove."""
 
     def __init__(
         self,
@@ -797,7 +810,7 @@ class EscolherAdvertenciaRemoverView(LoggingViewMixin, discord.ui.LayoutView):
 
         row = discord.ui.ActionRow()
         sel = discord.ui.Select(
-            placeholder="Escolha a advertência ativa para remover…",
+            placeholder="Escolha a punição ativa…",
             options=opcoes,
             min_values=1,
             max_values=1,
@@ -805,26 +818,31 @@ class EscolherAdvertenciaRemoverView(LoggingViewMixin, discord.ui.LayoutView):
         sel.callback = self._on_select_adv
         row.add_item(sel)
 
-        lista_de_texto = "\n".join(
-            f"• `#{punicao.id}` **{punicao.cargo_nome.strip()}** — "
-            f"{(punicao.motivo or '')[:80]}"
-            for punicao in ativas[:10]
-        )
+        partes_lista: list[str] = []
+        for punicao in ativas[:10]:
+            emoji, rotulo = _emoji_e_rotulo_tipo_punicao(punicao)
+            nome = (punicao.cargo_nome or rotulo).strip() or rotulo
+            partes_lista.append(
+                f"• {emoji} `#{punicao.id}` **{rotulo}** — **{nome}** — "
+                f"{(punicao.motivo or '')[:70]}"
+            )
+        lista_de_texto = "\n".join(partes_lista)
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# 🧹 Remover Punições"),
+                discord.ui.TextDisplay("# 🧹 Punições ativas"),
                 discord.ui.TextDisplay(
                     f"**Usuário:** {membro.mention} (`{membro.id}`)\n"
                     f"{_fmt_membro_info(membro)}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 discord.ui.TextDisplay(
-                    f"### ⚠️ Advertências ativas ({len(ativas)})\n{lista_de_texto}"
+                    f"### 📋 Lista ({len(ativas)})\n{lista_de_texto}"
                 ),
                 discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
                 discord.ui.TextDisplay(
-                    "Selecione abaixo qual advertência deseja remover:"
+                    "Selecione abaixo para **baixar** o registro "
+                    "(rebaixamento não devolve cargo — só encerra o registro):"
                 ),
                 row,
                 accent_color=discord.Color.dark_grey(),
