@@ -1195,6 +1195,7 @@ async def finalizar_pedido(
                 return
 
         if pedido_aberto is not None:
+            desconto_extra = int(cobranca.get("desconto_em_reais") or 0)
             registro = await mesclar_cursos_no_pedido(
                 solicitacao_id=pedido_aberto.id,
                 novas_chaves=chaves_para_adicionar,
@@ -1202,6 +1203,7 @@ async def finalizar_pedido(
                 moedas_extra=moedas,
                 observacao_aluno=observacao_aluno,
                 cotacao_moeda=cotacao,
+                desconto_extra_reais=desconto_extra,
             )
             if registro is None:
                 await responder_erro(
@@ -1250,7 +1252,8 @@ async def finalizar_pedido(
                 f"Forma: `{forma}` · A pagar: "
                 f"`{formatar_reais(int(registro.valor_ingame or 0))}`"
                 + (
-                    f" · Desconto: `{moedas}` moeda(s) · Saldo: `{saldo_restante}`"
+                    f" · Desconto: `{moedas}` moeda(s) usadas"
+                    f" · Saldo: `{saldo_restante}`"
                     if moedas
                     else ""
                 ),
@@ -1274,12 +1277,18 @@ async def finalizar_pedido(
                 registro=registro,
             )
             titulo_ok = "Pedido enviado ao agendamento"
+            desconto_txt = int(cobranca.get("desconto_em_reais") or 0)
             linhas_ok = [
                 f"Pedido `#{registro.id}` publicado.",
                 f"Forma: `{forma}` · A pagar: `{formatar_reais(valor_a_pagar)}`"
                 + (
-                    f" · Desconto: `{moedas}` moeda(s) "
-                    f"({formatar_reais(cotacao)} cada) · Saldo: `{saldo_restante}`"
+                    f" · Desconto: `{moedas}` moeda(s) usadas"
+                    + (
+                        f" · (abate `{formatar_reais(desconto_txt)}`)"
+                        if desconto_txt > 0
+                        else ""
+                    )
+                    + f" · Saldo: `{saldo_restante}`"
                     if moedas
                     else ""
                 ),
@@ -3039,10 +3048,17 @@ async def processar_registrar_repasse_curso(
         f"**Repasse ao hospital:** `{repasse_txt}`\n"
     )
     if moedas > 0 and grupo["id"] == "praticos":
-        texto_card += (
-            f"**Desconto do pedido:** `{moedas}` moeda(s) "
-            f"({formatar_reais(cotacao)} cada)\n"
+        chaves_pedido = parse_chaves_json(
+            registro.chaves_cursos_json, registro.chave_curso
         )
+        bruto_pedido = soma_valor_ingame(chaves_pedido)
+        abate = max(0, bruto_pedido - int(registro.valor_ingame or 0))
+        texto_card += (
+            f"**Desconto do pedido:** `{moedas}` moeda(s) usadas"
+        )
+        if abate > 0:
+            texto_card += f" · (abate `{formatar_reais(abate)}`)"
+        texto_card += "\n"
     texto_card += f"**Status do repasse:** registrado por {membro.mention}"
 
     import io

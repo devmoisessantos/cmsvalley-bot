@@ -666,6 +666,56 @@ async def segundos_fechados_no_ciclo(discord_id: int) -> int:
         return int(resultado.scalar_one() or 0)
 
 
+def _segundos_ao_vivo_ciclo(estado: EstadoPlantao | None) -> int:
+    """Trecho ainda aberto em call (mesmo critério do ranking tempo real)."""
+    if estado is None:
+        return 0
+    if not estado.toggle_ligado or not estado.em_call_valida:
+        return 0
+    entrada = estado.call_entrada_em
+    if entrada is None:
+        return 0
+    if entrada.tzinfo is None:
+        entrada = entrada.replace(tzinfo=timezone.utc)
+    decorrido = int((datetime.now(timezone.utc) - entrada).total_seconds())
+    return max(0, decorrido)
+
+
+async def segundos_tempo_no_ciclo(
+    discord_id: int,
+    estado: EstadoPlantao | None = None,
+) -> int:
+    """
+    Tempo no ciclo semanal atual = logs fechados no período + ao vivo.
+
+    É a métrica correta para a ficha e para admin zerar/ajustar ciclo.
+    Não confundir com ``segundos_plantao_ciclo_atual`` em cursos_service
+    (lá devolve total histórico para isenção de resgate).
+    """
+    fechados = await segundos_fechados_no_ciclo(discord_id)
+    if estado is None:
+        async with async_session() as sessao:
+            resultado = await sessao.execute(
+                select(EstadoPlantao).where(
+                    EstadoPlantao.discord_id == int(discord_id)
+                )
+            )
+            estado = resultado.scalar_one_or_none()
+    return max(0, int(fechados) + _segundos_ao_vivo_ciclo(estado))
+
+
+def _reiniciar_segmento_ao_vivo(
+    estado: EstadoPlantao | None,
+    agora: datetime,
+) -> None:
+    """Zera o trecho ao vivo do ciclo sem mexer no cronômetro de moeda."""
+    if estado is None:
+        return
+    if estado.toggle_ligado and estado.em_call_valida:
+        estado.call_entrada_em = agora
+        estado.segmento_iniciado_em = agora
+
+
 async def zerar_ciclo_plantao(discord_id: int) -> bool:
     """
     Zera o Tempo no ciclo (ranking semanal), sem mexer no histórico
@@ -679,7 +729,6 @@ async def zerar_ciclo_plantao(discord_id: int) -> bool:
     inicio = _inicio_ciclo_semanal_atual()
     fora_do_ciclo = inicio - timedelta(seconds=1)
     agora = datetime.now(timezone.utc)
-    ciclo_fechado = await segundos_fechados_no_ciclo(discord_id)
 
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -689,40 +738,45 @@ async def zerar_ciclo_plantao(discord_id: int) -> bool:
         )
         estado = resultado.scalar_one_or_none()
 
-        if ciclo_fechado != 0:
-            sessao.add(
-                LogPlantao(
-                    discord_id=int(discord_id),
-                    evento="AJUSTE_ADMIN",
-                    duracao_segundos=-int(ciclo_fechado),
-                    detalhes=(
-                        "zerar_ciclo; dentro do ciclo; "
-                        f"compensacao={-int(ciclo_fechado)}"
-                    )[:300],
-                    criado_em=agora,
-                )
-            )
-            sessao.add(
-                LogPlantao(
-                    discord_id=int(discord_id),
-                    evento="AJUSTE_ADMIN",
-                    duracao_segundos=int(ciclo_fechado),
-                    detalhes=(
-                        "zerar_ciclo; fora do ciclo; "
-                        "restaura historico"
-                    )[:300],
-                    criado_em=fora_do_ciclo,
-                )
-            )
+        # Fecha o trecho ao vivo no cálculo antes de zerar, para o
+        # compensador bater com o que a ficha/ranking mostram.
+        ciclo_fechado = await segundos_fechados_no_ciclo(discord_id)
+        ao_vivo = _segundos_ao_vivo_ciclo(estado)
+        ciclo_visivel = int(ciclo_fechado) + int(ao_vivo)
 
-        if estado is not None:
-            # Reinicia só o trecho ao vivo do ciclo; não toca
-            # segundos_acumulados (cronômetro da próxima moeda).
-            if estado.toggle_ligado and estado.em_call_valida:
-                estado.call_entrada_em = agora
-                estado.segmento_iniciado_em = agora
+        if ciclo_visivel != 0:
+            # Só os logs fechados entram no AJUSTE; o ao vivo some ao
+            # reiniciar call_entrada_em. Compensa apenas o fechado.
+            if ciclo_fechado != 0:
+                sessao.add(
+                    LogPlantao(
+                        discord_id=int(discord_id),
+                        evento="AJUSTE_ADMIN",
+                        duracao_segundos=-int(ciclo_fechado),
+                        detalhes=(
+                            "zerar_ciclo; dentro do ciclo; "
+                            f"compensacao={-int(ciclo_fechado)}; "
+                            f"ao_vivo_descartado={ao_vivo}"
+                        )[:300],
+                        criado_em=agora,
+                    )
+                )
+                sessao.add(
+                    LogPlantao(
+                        discord_id=int(discord_id),
+                        evento="AJUSTE_ADMIN",
+                        duracao_segundos=int(ciclo_fechado),
+                        detalhes=(
+                            "zerar_ciclo; fora do ciclo; "
+                            "restaura historico"
+                        )[:300],
+                        criado_em=fora_do_ciclo,
+                    )
+                )
 
-        if ciclo_fechado == 0 and estado is None:
+        _reiniciar_segmento_ao_vivo(estado, agora)
+
+        if ciclo_visivel == 0 and estado is None:
             return False
 
         await sessao.commit()
@@ -737,10 +791,13 @@ async def ajustar_tempo_ciclo_plantao(
     motivo: str | None = None,
 ) -> tuple[int, int]:
     """
-    Define o Tempo no ciclo para o valor pedido, sem alterar o
-    Total (histórico).
+    Define o Tempo no ciclo (fechados + ao vivo) para o valor pedido,
+    sem alterar o Total (histórico).
 
-    Devolve (ciclo_antes_fechado, ciclo_depois_fechado).
+    Após o ajuste, reinicia o segmento ao vivo para o valor não
+    “continuar subindo” em cima do alvo.
+
+    Devolve (ciclo_antes_visivel, ciclo_depois_alvo).
     """
     if segundos_absolutos < 0:
         raise ValueError("Tempo no ciclo não pode ser negativo.")
@@ -748,42 +805,56 @@ async def ajustar_tempo_ciclo_plantao(
     inicio = _inicio_ciclo_semanal_atual()
     fora_do_ciclo = inicio - timedelta(seconds=1)
     agora = datetime.now(timezone.utc)
-    ciclo_antes = await segundos_fechados_no_ciclo(discord_id)
-    diferenca = int(segundos_absolutos) - int(ciclo_antes)
 
-    if diferenca == 0:
-        return int(ciclo_antes), int(ciclo_antes)
-
-    texto_motivo = (motivo or "ajuste ciclo admin").strip()[:200]
     async with async_session() as sessao:
-        # Dentro do ciclo: muda o que o ranking enxerga.
-        sessao.add(
-            LogPlantao(
-                discord_id=int(discord_id),
-                evento="AJUSTE_ADMIN",
-                duracao_segundos=int(diferenca),
-                detalhes=(
-                    f"ajuste_ciclo; executor={executor_id or 0}; "
-                    f"antes={ciclo_antes}; depois={segundos_absolutos}; "
-                    f"{texto_motivo}"
-                )[:300],
-                criado_em=agora,
+        resultado = await sessao.execute(
+            select(EstadoPlantao).where(
+                EstadoPlantao.discord_id == int(discord_id)
             )
         )
-        # Fora do ciclo: cancela o efeito no histórico total.
-        sessao.add(
-            LogPlantao(
-                discord_id=int(discord_id),
-                evento="AJUSTE_ADMIN",
-                duracao_segundos=-int(diferenca),
-                detalhes=(
-                    f"ajuste_ciclo; fora do ciclo; "
-                    f"executor={executor_id or 0}; "
-                    "compensa historico"
-                )[:300],
-                criado_em=fora_do_ciclo,
+        estado = resultado.scalar_one_or_none()
+
+        ciclo_fechado = await segundos_fechados_no_ciclo(discord_id)
+        ao_vivo = _segundos_ao_vivo_ciclo(estado)
+        ciclo_antes = int(ciclo_fechado) + int(ao_vivo)
+
+        # Alvo absoluto no que a ficha mostra: após reiniciar ao vivo,
+        # os logs fechados precisam valer exatamente segundos_absolutos.
+        diferenca = int(segundos_absolutos) - int(ciclo_fechado)
+
+        texto_motivo = (motivo or "ajuste ciclo admin").strip()[:200]
+        if diferenca != 0:
+            sessao.add(
+                LogPlantao(
+                    discord_id=int(discord_id),
+                    evento="AJUSTE_ADMIN",
+                    duracao_segundos=int(diferenca),
+                    detalhes=(
+                        f"ajuste_ciclo; executor={executor_id or 0}; "
+                        f"antes_visivel={ciclo_antes}; "
+                        f"antes_fechado={ciclo_fechado}; "
+                        f"ao_vivo={ao_vivo}; "
+                        f"depois={segundos_absolutos}; "
+                        f"{texto_motivo}"
+                    )[:300],
+                    criado_em=agora,
+                )
             )
-        )
+            sessao.add(
+                LogPlantao(
+                    discord_id=int(discord_id),
+                    evento="AJUSTE_ADMIN",
+                    duracao_segundos=-int(diferenca),
+                    detalhes=(
+                        f"ajuste_ciclo; fora do ciclo; "
+                        f"executor={executor_id or 0}; "
+                        "compensa historico"
+                    )[:300],
+                    criado_em=fora_do_ciclo,
+                )
+            )
+
+        _reiniciar_segmento_ao_vivo(estado, agora)
         await sessao.commit()
 
     return int(ciclo_antes), int(segundos_absolutos)

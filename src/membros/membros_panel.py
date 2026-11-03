@@ -44,6 +44,7 @@ from src.membros.membros_service import (
     membro_esta_no_servidor,
     resolver_discord_id_por_fivem,
     resolver_id_fivem_do_membro,
+    segundos_tempo_no_ciclo,
     tempo_total_segundos_plantao,
     ultimos_logs_plantao,
     zerar_ciclo_plantao,
@@ -319,13 +320,8 @@ async def _t_plantao(membro, estado):
     saldo = estado.saldo_moedas if estado else 0
     segundos_acumulados_moeda = estado.segundos_acumulados if estado else 0
     total = await tempo_total_segundos_plantao(membro.id)
-    # Mesma métrica do Resgate grátis / ranking tempo real (ciclo semanal).
-    from src.cursos.cursos_service import segundos_plantao_ciclo_atual
-
-    segundos_no_ciclo = await segundos_plantao_ciclo_atual(
-        membro.id,
-        guild=None,
-    )
+    # Ciclo semanal do ranking tempo real (logs do período + ao vivo).
+    segundos_no_ciclo = await segundos_tempo_no_ciclo(membro.id, estado)
     cotacao = cotacao_moeda_do_membro(membro)
     try:
         from src.plantao.carteira_service import obter_valor_total_lotes
@@ -1241,11 +1237,12 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             mostra_diretoria = executor is None or e_equipe_diretoria(executor)
 
             # Linha 1 — plantão (admin / Responsável HP)
+            # [🔴 Forçar desligar] [⚙️ Zerar ciclo] [💰 Moedas] [⏳ Ajustar horas]
             if mostra_admin:
                 r1 = discord.ui.ActionRow()
                 for label, style, emoji, cb, dis in [
                     (
-                        "Forcar desligar",
+                        "Forçar desligar",
                         discord.ButtonStyle.danger,
                         "🔴",
                         self._pedir_desligar,
@@ -1254,7 +1251,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                     (
                         "Zerar ciclo",
                         discord.ButtonStyle.secondary,
-                        "⏱️",
+                        "⚙️",
                         self._zerar,
                         False,
                     ),
@@ -1268,7 +1265,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                     (
                         "Ajustar horas",
                         discord.ButtonStyle.primary,
-                        "⌛",
+                        "⏳",
                         self._horas,
                         False,
                     ),
@@ -1280,29 +1277,16 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                     r1.add_item(b)
                 comps.append(r1)
 
-            # Linha 2 — punição / cargos / demissão (diretoria)
+            # Linha 2 — punições / disciplinar (diretoria)
+            # [⚠️ Advertencia] [⛔ Exonerar] [⬇️ Rebaixar] [📋 Ver punições]
             if mostra_diretoria:
                 r2 = discord.ui.ActionRow()
                 for label, style, emoji, cb, dis in [
-                    (
-                        "Ver punicoes",
-                        discord.ButtonStyle.secondary,
-                        "📋",
-                        self._ver_pun,
-                        False,
-                    ),
                     (
                         "Advertencia",
                         discord.ButtonStyle.danger,
                         "⚠️",
                         self._adv,
-                        not no,
-                    ),
-                    (
-                        "Ajustar cargos",
-                        discord.ButtonStyle.primary,
-                        "🏷️",
-                        self._cargos,
                         not no,
                     ),
                     (
@@ -1313,10 +1297,17 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                         not no,
                     ),
                     (
-                        "Demitir",
+                        "Rebaixar",
                         discord.ButtonStyle.danger,
-                        "🚪",
-                        self._demitir,
+                        "⬇️",
+                        self._rebaixar,
+                        not no,
+                    ),
+                    (
+                        "Ver punições",
+                        discord.ButtonStyle.secondary,
+                        "📋",
+                        self._ver_pun,
                         False,
                     ),
                 ]:
@@ -1327,25 +1318,40 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                     r2.add_item(b)
                 comps.append(r2)
 
-                # Linha 2b — rebaixamento (Diretor++)
+                # Linha 2b — demissão / cargos
+                # [🪵 Demitir] [🏷️ Ajustar cargos]
                 r2b = discord.ui.ActionRow()
-                botao_rebaixar = discord.ui.Button(
-                    label="Rebaixar",
-                    style=discord.ButtonStyle.danger,
-                    emoji="⬇️",
-                    disabled=not no,
-                )
-                botao_rebaixar.callback = self._rebaixar
-                r2b.add_item(botao_rebaixar)
+                for label, style, emoji, cb, dis in [
+                    (
+                        "Demitir",
+                        discord.ButtonStyle.danger,
+                        "🪵",
+                        self._demitir,
+                        False,
+                    ),
+                    (
+                        "Ajustar cargos",
+                        discord.ButtonStyle.primary,
+                        "🏷️",
+                        self._cargos,
+                        not no,
+                    ),
+                ]:
+                    b = discord.ui.Button(
+                        label=label, style=style, emoji=emoji, disabled=dis
+                    )
+                    b.callback = cb
+                    r2b.add_item(b)
                 comps.append(r2b)
 
             # Linha 3 — status / identidade / navegação
+            # [🗄️ Status DB] [🪪 FiveM ID] [🔄 Atualizar] [➡️ Nova busca]
             r3 = discord.ui.ActionRow()
             for label, style, emoji, cb, dis in [
                 (
                     "Status DB",
                     discord.ButtonStyle.secondary,
-                    "📝",
+                    "🗄️",
                     self._status,
                     not mostra_diretoria,
                 ),
@@ -1366,7 +1372,7 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
                 (
                     "Nova busca",
                     discord.ButtonStyle.secondary,
-                    "↩️",
+                    "➡️",
                     self._voltar,
                     not mostra_diretoria,
                 ),
@@ -1475,14 +1481,25 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             return
         await i.response.defer(ephemeral=True)
         ok = await zerar_ciclo_plantao(self.alvo.id)
+        ciclo_depois = await segundos_tempo_no_ciclo(self.alvo.id)
         await registrar_auditoria_admin(
             i.guild,
             executor=i.user,
             alvo=self.alvo,
             acao="ZERAR_CICLO",
-            detalhes="0" if ok else "sem estado",
+            detalhes=(
+                f"ok={ok}; ciclo_depois={ciclo_depois}"
+                if ok
+                else "sem estado"
+            ),
         )
-        await self._refresh(i, "Ciclo zerado." if ok else "Sem estado de plantao.")
+        if ok:
+            await self._refresh(
+                i,
+                f"Ciclo zerado · agora `{formatar_hms(ciclo_depois)}`.",
+            )
+        else:
+            await self._refresh(i, "Sem estado de plantão para zerar.")
 
     async def _moedas(self, i):
         if not await self._perm_admin(i):
@@ -1613,21 +1630,21 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
 
 class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar horas"):
     modo = discord.ui.TextInput(
-        label="Modo ABSOLUTO ou DELTA (histórico)",
+        label="Modo: ABSOLUTO ou DELTA (vale nos 2)",
         default="DELTA",
         max_length=10,
     )
     valor = discord.ui.TextInput(
-        label="Total histórico (05:02 | -00:30)",
-        required=True,
-        max_length=16,
-        placeholder="Ex: 05:02  ou  -00:30  ou  02:23:08",
-    )
-    tempo_ciclo = discord.ui.TextInput(
-        label="Tempo no ciclo (opcional, absoluto)",
+        label="Total histórico (vazio = não mexer)",
         required=False,
         max_length=16,
-        placeholder="Deixe vazio para não mexer. Ex: 01:30:00",
+        placeholder="ABS: 48:04:36 | DELTA: +01:00 ou -00:14:36",
+    )
+    tempo_ciclo = discord.ui.TextInput(
+        label="Tempo no ciclo (vazio = não mexer)",
+        required=False,
+        max_length=16,
+        placeholder="ABS: 01:30:00 | DELTA: -00:14:36",
     )
     motivo = discord.ui.TextInput(
         label="Motivo",
@@ -1654,84 +1671,119 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
             )
             return
         modo = (self.modo.value or "DELTA").strip().upper()
-        try:
-            segundos = parsear_tempo_para_segundos(self.valor.value or "")
-        except ValueError as erro_valor:
+        absoluto = modo.startswith("ABS")
+        texto_historico = (self.valor.value or "").strip()
+        texto_ciclo = (self.tempo_ciclo.value or "").strip()
+
+        if not texto_historico and not texto_ciclo:
             await responder_erro(
                 i,
-                titulo="Valor inválido",
+                titulo="Nada para ajustar",
                 linhas=[
-                    str(erro_valor),
-                    "Exemplos: `05:02` (5h2m), `00:15` (15m), "
-                    "`02:23:08`, `03` (3s). Em DELTA use `-00:30`.",
+                    "Preencha o **total histórico** e/ou o **tempo no ciclo**.",
                 ],
             )
             return
 
-        segundos_ciclo_alvo = None
-        texto_ciclo = (self.tempo_ciclo.value or "").strip()
-        if texto_ciclo:
+        segundos = None
+        if texto_historico:
             try:
-                segundos_ciclo_alvo = parsear_tempo_para_segundos(texto_ciclo)
+                segundos = parsear_tempo_para_segundos(texto_historico)
             except ValueError as erro_valor:
                 await responder_erro(
                     i,
-                    titulo="Tempo no ciclo inválido",
+                    titulo="Histórico inválido",
                     linhas=[
                         str(erro_valor),
-                        "Campo opcional. Exemplos: `00:00`, `01:30`, "
-                        "`02:23:08`.",
+                        "ABSOLUTO: `48:04:36` (valor final ≥ 0).",
+                        "DELTA: `+01:00` ou `-00:14:36` (soma/subtrai).",
                     ],
                 )
                 return
-            if segundos_ciclo_alvo < 0:
+            if absoluto and segundos < 0:
                 await responder_erro(
                     i,
-                    titulo="Tempo no ciclo inválido",
-                    linhas=["Tempo no ciclo deve ser absoluto (≥ 0)."],
+                    titulo="Histórico inválido",
+                    linhas=[
+                        "Em **ABSOLUTO** o total não pode ser negativo. "
+                        "Use **DELTA** com valor negativo para subtrair."
+                    ],
+                )
+                return
+
+        segundos_ciclo_input = None
+        if texto_ciclo:
+            try:
+                segundos_ciclo_input = parsear_tempo_para_segundos(texto_ciclo)
+            except ValueError as erro_valor:
+                await responder_erro(
+                    i,
+                    titulo="Ciclo inválido",
+                    linhas=[
+                        str(erro_valor),
+                        "ABSOLUTO: `01:30:00` ou `00:00` (valor final ≥ 0).",
+                        "DELTA: `-00:14:36` ou `+00:30` (soma/subtrai).",
+                    ],
+                )
+                return
+            if absoluto and segundos_ciclo_input < 0:
+                await responder_erro(
+                    i,
+                    titulo="Ciclo inválido",
+                    linhas=[
+                        "Em **ABSOLUTO** o ciclo não pode ser negativo. "
+                        "Use **DELTA** com valor negativo para subtrair."
+                    ],
                 )
                 return
 
         await i.response.defer(ephemeral=True)
+        antes = await tempo_total_segundos_plantao(self.alvo.id)
+        depois = antes
+        ciclo_antes = await segundos_tempo_no_ciclo(self.alvo.id)
+        ciclo_depois = ciclo_antes
         try:
-            if modo.startswith("ABS"):
-                antes, depois = await ajustar_horas_plantao(
+            if segundos is not None:
+                if absoluto:
+                    antes, depois = await ajustar_horas_plantao(
+                        self.alvo.id,
+                        segundos_absolutos=max(0, segundos),
+                        executor_id=i.user.id,
+                        motivo=self.motivo.value or "historico absoluto",
+                    )
+                else:
+                    antes, depois = await ajustar_horas_plantao(
+                        self.alvo.id,
+                        delta_segundos=segundos,
+                        executor_id=i.user.id,
+                        motivo=self.motivo.value or "historico delta",
+                    )
+            if segundos_ciclo_input is not None:
+                if absoluto:
+                    ciclo_alvo = max(0, int(segundos_ciclo_input))
+                else:
+                    ciclo_alvo = max(0, int(ciclo_antes) + int(segundos_ciclo_input))
+                ciclo_antes, ciclo_depois = await ajustar_tempo_ciclo_plantao(
                     self.alvo.id,
-                    segundos_absolutos=max(0, segundos),
+                    segundos_absolutos=int(ciclo_alvo),
                     executor_id=i.user.id,
-                    motivo=self.motivo.value or "absoluto",
-                )
-            else:
-                antes, depois = await ajustar_horas_plantao(
-                    self.alvo.id,
-                    delta_segundos=segundos,
-                    executor_id=i.user.id,
-                    motivo=self.motivo.value or "delta",
-                )
-            if segundos_ciclo_alvo is not None:
-                await ajustar_tempo_ciclo_plantao(
-                    self.alvo.id,
-                    segundos_absolutos=int(segundos_ciclo_alvo),
-                    executor_id=i.user.id,
-                    motivo=self.motivo.value or "ciclo modal",
+                    motivo=self.motivo.value
+                    or ("ciclo absoluto" if absoluto else "ciclo delta"),
                 )
         except ValueError as erro_valor:
             await responder_erro(i, titulo="Recusado", linhas=[str(erro_valor)])
             return
-        from src.cursos.cursos_service import segundos_plantao_ciclo_atual
 
-        segundos_no_ciclo = await segundos_plantao_ciclo_atual(
-            self.alvo.id,
-            guild=None,
-        )
+        # Releitura real após commit (ao vivo reiniciado).
+        ciclo_depois = await segundos_tempo_no_ciclo(self.alvo.id)
         await registrar_auditoria_admin(
             i.guild,
             executor=i.user,
             alvo=self.alvo,
             acao="AJUSTAR_HORAS",
             detalhes=(
-                f"historico {antes}->{depois}; "
-                f"ciclo={segundos_no_ciclo}"
+                f"modo={modo}; historico {antes}->{depois}; "
+                f"ciclo {ciclo_antes}->{ciclo_depois}"
             ),
             cor=discord.Color.green(),
         )
@@ -1740,9 +1792,9 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
             self.alvo,
             bloco=self.bloco,
             status=(
-                f"Histórico `{formatar_hms(antes)}` → "
-                f"`{formatar_hms(depois)}` · "
-                f"Ciclo `{formatar_hms(segundos_no_ciclo)}`"
+                f"**{modo}** · "
+                f"Histórico `{formatar_hms(antes)}` → `{formatar_hms(depois)}` · "
+                f"Ciclo `{formatar_hms(ciclo_antes)}` → `{formatar_hms(ciclo_depois)}`"
             ),
         )
 

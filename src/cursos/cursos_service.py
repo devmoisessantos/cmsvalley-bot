@@ -93,6 +93,17 @@ def membro_e_equipe_diretoria_geral(membro: discord.Member) -> bool:
     return any(cargo.id == int(id_geral) for cargo in membro.roles)
 
 
+def membro_e_responsavel_hp(membro: discord.Member) -> bool:
+    """True se o membro tem o cargo Responsavel HP (topo da hierarquia).
+
+    Administrador do Discord **não** conta — o cargo é exigido de fato.
+    """
+    id_cargo = CARGOS.get("Responsavel HP")
+    if id_cargo is None:
+        return False
+    return any(cargo.id == int(id_cargo) for cargo in membro.roles)
+
+
 # Cargo de responsável por cada curso de área (nome em CARGOS).
 CARGO_RESPONSAVEL_POR_AREA = {
     "doutor": "👑・Responsável Doutor・🥼",
@@ -128,17 +139,31 @@ def membro_pode_aplicar_chave(
 
     - Práticos 1.0 e 2.0: Instrutor ou Diretoria
     - Área: Equipe Diretoria **ou** responsável da área
-    - Diretoria / Diretoria Geral: só Equipe Diretoria Geral
+    - Diretoria: só Equipe Diretoria Geral
+    - Diretoria Geral: só **Responsavel HP** (admin Discord **não** libera)
     """
+    rotulo = rotulo_curso(chave)
+
+    # Diretoria Geral: exclusivo do cargo Responsavel HP.
+    # Administrador do Discord também é bloqueado sem o cargo.
+    if chave == "diretoria_geral":
+        if membro_e_responsavel_hp(membro):
+            return True, ""
+        return (
+            False,
+            f"O curso **{rotulo}** só pode ser aplicado pelo "
+            f"**Responsavel HP**.",
+        )
+
     if membro.guild_permissions.administrator:
         return True, ""
 
     tem_diretoria_geral = membro_e_equipe_diretoria_geral(membro)
     tem_diretoria = membro_e_equipe_diretoria(membro) or tem_diretoria_geral
     tem_instrutor = membro_e_instrutor(membro)
-    rotulo = rotulo_curso(chave)
 
-    if curso_e_diretoria(chave):
+    # Diretoria (comum): Equipe Diretoria Geral.
+    if chave == "diretoria":
         if tem_diretoria_geral:
             return True, ""
         return (
@@ -205,13 +230,15 @@ def membro_pode_aplicar_chaves(
     Basta ter autorização para **ao menos um** curso do pacote.
     Os demais (ex.: doutor num pacote misto aceito por instrutor) são
     auto-reprovados no aceite, sem exigir registro de pagamento.
+
+    Diretoria Geral continua restrita ao Responsavel HP mesmo para
+    administradores do Discord.
     """
     if not chaves:
         return False, "Este pedido não tem cursos."
 
-    if membro.guild_permissions.administrator:
-        return True, ""
-
+    # Sem bypass de administrador: cada chave passa por membro_pode_aplicar_chave
+    # (que já libera admin nos demais cursos, mas bloqueia diretoria_geral).
     autorizadas, negadas = separar_chaves_por_autorizacao(membro, chaves)
     if autorizadas:
         return True, ""
@@ -513,7 +540,8 @@ async def calcular_cobranca_pacote(
     - Resgate: enfermeiro com ≥ 6h no total histórico de plantão
       → grátis (sem desconto). Com < 6h → desconto máximo de 5 moedas.
     - Demais cursos / pacotes: desconto máximo de 10 moedas.
-    - Abatimento em R$ = moedas × cotação do aluno, sem passar do total.
+    - Abatimento em R$ = soma do valor real dos lotes debitados (FIFO),
+      sem passar do total do catálogo.
     """
     chaves_validas = [chave for chave in chaves if obter_curso(chave)]
     cotacao = cotacao_moeda_do_membro(membro)
@@ -556,11 +584,11 @@ async def calcular_cobranca_pacote(
     desejadas = max(0, int(moedas_desconto_desejadas))
     moedas_usadas = min(desejadas, teto_moedas)
 
-    # Desconto real pelos lotes (menor cotação → maior), não pela cotação atual
+    # Abatimento = soma do valor real dos lotes debitados (FIFO na carteira).
+    # Ex.: 2×25k + 4×20k + 4×10k = R$ 170.000, não moedas × cotação do cargo.
     from src.plantao.carteira_service import simular_valor_debito
 
     if moedas_usadas > 0 and valor_bruto > 0:
-        # Ajusta quantidade para não passar do valor do curso
         while moedas_usadas > 0:
             desconto_tentativa = await simular_valor_debito(
                 membro.id, moedas_usadas
@@ -940,10 +968,14 @@ async def mesclar_cursos_no_pedido(
     moedas_extra: int,
     observacao_aluno: str | None,
     cotacao_moeda: int = 0,
+    desconto_extra_reais: int = 0,
 ) -> SolicitacaoCurso | None:
     """
     Acrescenta cursos a um pedido aberto.
     Só adiciona chaves que ainda não estavam no pacote.
+
+    O desconto acumulado preserva o abatimento já gravado (valor dos lotes
+    debitados) e soma ``desconto_extra_reais`` das moedas novas.
     """
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -961,18 +993,21 @@ async def mesclar_cursos_no_pedido(
             if chave not in unidas:
                 unidas.append(chave)
 
+        valor_bruto_antigo = soma_valor_ingame(atuais)
+        desconto_anterior = max(
+            0, valor_bruto_antigo - int(registro.valor_ingame or 0)
+        )
+        valor_bruto = soma_valor_ingame(unidas)
+        desconto_total = desconto_anterior + max(0, int(desconto_extra_reais))
+
         registro.chaves_cursos_json = json.dumps(unidas, ensure_ascii=False)
         registro.chave_curso = unidas[0] if len(unidas) == 1 else "pacote"
-        # Valor a pagar: bruto do pacote menos desconto já acumulado
-        valor_bruto = soma_valor_ingame(unidas)
         registro.moedas_debitadas = int(registro.moedas_debitadas or 0) + int(
             moedas_extra
         )
         if cotacao_moeda > 0 and int(getattr(registro, "cotacao_moeda", 0) or 0) == 0:
             registro.cotacao_moeda = int(cotacao_moeda)
-        cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
-        desconto = int(registro.moedas_debitadas or 0) * cotacao
-        registro.valor_ingame = max(0, valor_bruto - desconto)
+        registro.valor_ingame = max(0, valor_bruto - desconto_total)
         if int(registro.moedas_debitadas or 0) > 0:
             if forma_pagamento == "MOEDAS":
                 registro.forma_pagamento = "MOEDAS"
@@ -1033,12 +1068,17 @@ async def redefinir_chaves_do_pedido(
             await sessao.refresh(registro)
             return registro
 
+        # Preserva o desconto já aplicado (valor real dos lotes debitados).
+        atuais = parse_chaves_json(registro.chaves_cursos_json, registro.chave_curso)
+        valor_bruto_antigo = soma_valor_ingame(atuais)
+        desconto_anterior = max(
+            0, valor_bruto_antigo - int(registro.valor_ingame or 0)
+        )
+        valor_bruto = soma_valor_ingame(unidas)
+
         registro.chaves_cursos_json = json.dumps(unidas, ensure_ascii=False)
         registro.chave_curso = unidas[0] if len(unidas) == 1 else "pacote"
-        valor_bruto = soma_valor_ingame(unidas)
-        cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
-        desconto = int(registro.moedas_debitadas or 0) * cotacao
-        registro.valor_ingame = max(0, valor_bruto - desconto)
+        registro.valor_ingame = max(0, valor_bruto - desconto_anterior)
         if int(registro.moedas_debitadas or 0) > 0:
             registro.forma_pagamento = "IN_GAME_COM_DESCONTO"
         elif (registro.forma_pagamento or "") == "GRATUITO":
@@ -1493,13 +1533,9 @@ def montar_linhas_corpo_pedido(
     valor_bruto = soma_valor_ingame(chaves)
     valor_a_pagar = int(registro.valor_ingame or 0)
     moedas = int(registro.moedas_debitadas or 0)
-    cotacao = int(getattr(registro, "cotacao_moeda", 0) or 0)
 
-    desconto_reais = moedas * cotacao if moedas and cotacao else 0
-
-    # Se a cotação antiga não foi gravada, deduz pelo valor que falta no total.
-    if moedas > 0 and desconto_reais == 0 and valor_bruto > valor_a_pagar:
-        desconto_reais = valor_bruto - valor_a_pagar
+    # Desconto real = diferença catálogo − valor a pagar (soma dos lotes debitados).
+    desconto_reais = max(0, valor_bruto - valor_a_pagar) if moedas > 0 else 0
 
     # ==========================================================
     # CURSO / PACOTE
@@ -1602,16 +1638,12 @@ def montar_linhas_corpo_pedido(
 
     else:
         if moedas > 0:
-            texto_cotacao = (
-                formatar_reais(cotacao) if cotacao > 0 else "cotação do aluno"
+            corpo += (
+                f"**🪙 Desconto:** `{moedas}` moeda(s) usadas"
             )
-
-            corpo += f"**🪙 Desconto:** `{moedas}` moeda(s) ({texto_cotacao} cada"
-
             if desconto_reais > 0:
-                corpo += f" · abate `{formatar_reais(desconto_reais)}`"
-
-            corpo += ")\n"
+                corpo += f" · (abate `{formatar_reais(desconto_reais)}`)"
+            corpo += "\n"
 
         corpo += f"**💵 Valor a pagar in-game:** `{formatar_reais(valor_a_pagar)}`\n"
 
