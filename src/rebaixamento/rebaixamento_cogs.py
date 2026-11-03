@@ -13,8 +13,8 @@ from src.rebaixamento.rebaixamento_views import (
     PainelBuscaRebaixarLayout,
     abrir_fluxo_rebaixamento,
 )
+from src.plantao.plantao_permissoes import mensagem_sem_permissao
 from src.utils.mensagens import (
-    mensagem_sem_permissao,
     responder_erro,
     responder_view,
 )

@@ -341,7 +341,9 @@ async def _t_plantao(membro, estado):
             ).total_seconds()
         )
         nome = NOMES_CANAIS_PLANTAO.get(estado.canal_atual_id, "?")
-        status = f"✅ `em serviço` · call `{formatar_hms(segundos_na_call)}` · `{nome}`"
+        status = (
+            f"✅ `em serviço` · call `{formatar_hms(segundos_na_call)}` · `{nome}`"
+        )
     elif online:
         status = "✅ `em serviço` · _aguardando call_"
     else:
@@ -1589,11 +1591,17 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             await responder_erro(
                 i,
                 titulo="Sem permissão",
-                linhas=[mensagem_sem_permissao("rebaixar membros (apenas Diretor++)")],
+                linhas=[
+                    mensagem_sem_permissao(
+                        "rebaixar membros (apenas Diretor++)"
+                    )
+                ],
             )
             return
         if not isinstance(self.alvo, discord.Member):
-            await responder_erro(i, titulo="Alvo", linhas=["Precisa estar no server."])
+            await responder_erro(
+                i, titulo="Alvo", linhas=["Precisa estar no server."]
+            )
             return
         await abrir_rebaixamento_para_membro(i, self.alvo)
 
@@ -1671,7 +1679,8 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
                     titulo="Tempo no ciclo inválido",
                     linhas=[
                         str(erro_valor),
-                        "Campo opcional. Exemplos: `00:00`, `01:30`, `02:23:08`.",
+                        "Campo opcional. Exemplos: `00:00`, `01:30`, "
+                        "`02:23:08`.",
                     ],
                 )
                 return
@@ -1720,7 +1729,10 @@ class ModalAjustarHoras(LoggingModalMixin, discord.ui.Modal, title="Ajustar hora
             executor=i.user,
             alvo=self.alvo,
             acao="AJUSTAR_HORAS",
-            detalhes=(f"historico {antes}->{depois}; ciclo={segundos_no_ciclo}"),
+            detalhes=(
+                f"historico {antes}->{depois}; "
+                f"ciclo={segundos_no_ciclo}"
+            ),
             cor=discord.Color.green(),
         )
         await _abrir_ficha(
