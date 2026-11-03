@@ -14,16 +14,16 @@ from datetime import (
 )
 
 import discord
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from src.config import (
-    CARGOS,
-    CARGOS_HIERARQUIA,
     CARGO_DIRETOR,
     CARGO_RESP_DOUTOR,
     CARGO_RESP_INSTRUTOR,
     CARGO_RESP_PSICOLOGO,
     CARGO_RESP_RECRUTAMENTO,
+    CARGOS,
+    CARGOS_HIERARQUIA,
 )
 from src.database.conexao import async_session
 from src.database.models import (
@@ -63,6 +63,7 @@ CARGOS_AREA_REMOVER: tuple[str, ...] = (
 ID_EQUIPE_DIRETORIA_GERAL = 1491000030138732656
 
 DIAS_BLOQUEIO_OPCOES: tuple[int, ...] = (7, 15, 21)
+
 
 def membro_pode_rebaixar(membro: discord.Member) -> bool:
     """True se o executor tem algum cargo de Diretor++."""
@@ -231,7 +232,9 @@ async def obter_bloqueio_promocao(
         return usuario.bloqueio_promocao_ate
 
 
-async def membro_esta_bloqueado_promocao(discord_id: int) -> tuple[bool, datetime | None]:
+async def membro_esta_bloqueado_promocao(
+    discord_id: int,
+) -> tuple[bool, datetime | None]:
     """(bloqueado?, ate). Compara com agora UTC."""
     ate = await obter_bloqueio_promocao(discord_id)
     if ate is None:
@@ -315,7 +318,10 @@ async def aplicar_rebaixamento(
     if modo == "um_degrau":
         esperado = cargo_um_degrau_abaixo(cargo_de)
         if esperado is None or esperado != cargo_para:
-            return False, "No modo um degrau o destino deve ser o cargo imediatamente abaixo."
+            return (
+                False,
+                "No modo um degrau o destino deve ser o cargo imediatamente abaixo.",
+            )
 
     role_destino = _resolver_role(guild, cargo_para)
     if role_destino is None:
@@ -361,7 +367,9 @@ async def aplicar_rebaixamento(
             "Rebaixamento OK mas sem permissão de nick para %s", alvo.id
         )
     except discord.HTTPException as erro:
-        registrador.warning("Falha ao editar nick no rebaixamento de %s: %s", alvo.id, erro)
+        registrador.warning(
+            "Falha ao editar nick no rebaixamento de %s: %s", alvo.id, erro
+        )
 
     canceladas = await cancelar_solicitacoes_promocao_pendentes(alvo.id)
 
@@ -539,7 +547,10 @@ async def revogar_rebaixamento(
                 cargo_para = bruto[1].strip()
 
         if not cargo_de:
-            return False, "Não foi possível identificar o cargo de origem para restaurar."
+            return (
+                False,
+                "Não foi possível identificar o cargo de origem para restaurar.",
+            )
 
         role_origem = _resolver_role(guild, cargo_de)
         if role_origem is None:
@@ -551,7 +562,9 @@ async def revogar_rebaixamento(
             if role_destino is not None and role_destino in alvo.roles:
                 roles_remover.append(role_destino)
 
-        motivo_discord = f"Revogação de rebaixamento por {executor} — {motivo_limpo[:200]}"
+        motivo_discord = (
+            f"Revogação de rebaixamento por {executor} — {motivo_limpo[:200]}"
+        )
         try:
             if roles_remover:
                 await alvo.remove_roles(*roles_remover, reason=motivo_discord)
