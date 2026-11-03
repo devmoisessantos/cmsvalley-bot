@@ -1,4 +1,4 @@
-"""Views efêmeras do fluxo de rebaixamento (estilo painel de ausência)."""
+"""Views efêmeras do fluxo de rebaixamento (estilo Gerenciar Membros)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,14 @@ import logging
 import discord
 from sqlalchemy import select
 
+from src.config import METAS_POR_CARGO
 from src.database.conexao import async_session
 from src.database.models import Usuario
 from src.plantao.plantao_permissoes import mensagem_sem_permissao
+from src.rebaixamento.rebaixamento_logger import (
+    publicar_log_rebaixamento,
+    publicar_log_revogacao_rebaixamento,
+)
 from src.rebaixamento.rebaixamento_service import (
     DIAS_BLOQUEIO_OPCOES,
     alvo_pode_ser_rebaixado,
@@ -21,11 +26,11 @@ from src.rebaixamento.rebaixamento_service import (
     membro_pode_rebaixar,
     membro_pode_revogar_rebaixamento,
     obter_historico_do_rebaixamento,
-    publicar_log_rebaixamento,
-    publicar_log_revogacao_rebaixamento,
     revogar_rebaixamento,
 )
+from src.utils.ephemeral_botoes import linha_ephemeral
 from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
+from src.utils.formatacao import formatar_hms
 from src.utils.mensagens import (
     responder_erro,
     responder_sucesso,
@@ -57,6 +62,53 @@ async def _contar_metas_baseline(discord_id: int) -> dict[str, int]:
         return {}
 
 
+def _mencao_cargo(guild: discord.Guild | None, nome_cargo: str) -> str:
+    """
+    Mostra o cargo como menção do Discord quando o role existe no servidor.
+
+    Se o role não for encontrado, cai no nome em negrito para não quebrar o card.
+    """
+    if guild is None:
+        return f"**{nome_cargo}**"
+    cargo = discord.utils.get(guild.roles, name=nome_cargo)
+    if cargo is None:
+        return f"**{nome_cargo}**"
+    return cargo.mention
+
+
+def _texto_metas_do_cargo(nome_cargo: str) -> str:
+    """
+    Lista legível das metas cadastradas para o cargo de destino.
+
+    Só mostra linhas com valor maior que zero, para o card não ficar poluído.
+    """
+    metas = METAS_POR_CARGO.get(nome_cargo) or {}
+    linhas: list[str] = []
+
+    segundos = int(metas.get("segundos_minimos_plantao") or 0)
+    if segundos > 0:
+        linhas.append(f"- Plantão acumulado: `{formatar_hms(segundos)}`")
+
+    mapa_rotulos = (
+        ("meta_laudos", "Laudos"),
+        ("meta_recrutamentos", "Recrutamentos"),
+        ("meta_chamadas", "Chamadas"),
+        ("meta_cursos_aplicados", "Cursos aplicados"),
+        ("meta_tickets", "Tickets finalizados"),
+    )
+    for chave, rotulo in mapa_rotulos:
+        valor = int(metas.get(chave) or 0)
+        if valor > 0:
+            linhas.append(f"- {rotulo}: `{valor}`")
+
+    if metas.get("exige_avaliacao_hp"):
+        linhas.append("- Exige avaliação do Responsável HP")
+
+    if not linhas:
+        return "- Nenhuma meta cadastrada para este cargo."
+    return "\n".join(linhas)
+
+
 def _checar_executor(interacao: discord.Interaction) -> discord.Member | None:
     if not isinstance(interacao.user, discord.Member):
         return None
@@ -71,18 +123,26 @@ def _checar_executor(interacao: discord.Interaction) -> discord.Member | None:
 
 
 class PainelBuscaRebaixarLayout(LoggingViewMixin, discord.ui.LayoutView):
-    """Painel efêmero inicial do /rebaixar."""
+    """Painel efêmero inicial do /rebaixar (estilo Gerenciar Membros)."""
 
     def __init__(self) -> None:
         super().__init__(timeout=300)
+
         componentes: list = [
             discord.ui.TextDisplay(
                 "# ⬇️ Rebaixar membro\n"
-                "> Selecione o membro ou busque por Discord ID / FiveM.\n"
-                "Acesso restrito a **Diretor++**."
+                "> 🔒 Painel Administrativo – Diretoria++\n"
+                "Selecione o membro ou busque por **Discord ID** / **FiveM**.\n"
+                "Todas as ações ficam registradas em auditoria."
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay(
+                "### Buscar membro\n"
+                "Escolha na lista ou use um dos botões de busca abaixo."
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         ]
+
         linha_user = discord.ui.ActionRow()
         seletor = discord.ui.UserSelect(
             placeholder="Selecione o membro…",
@@ -94,38 +154,45 @@ class PainelBuscaRebaixarLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(linha_user)
 
         linha_busca = discord.ui.ActionRow()
-        b_discord = discord.ui.Button(
+        botao_discord = discord.ui.Button(
             label="Discord ID",
             style=discord.ButtonStyle.secondary,
             emoji="🔍",
         )
-        b_discord.callback = self._ao_discord_id
-        b_fivem = discord.ui.Button(
+        botao_discord.callback = self._ao_discord_id
+        botao_fivem = discord.ui.Button(
             label="FiveM",
             style=discord.ButtonStyle.secondary,
             emoji="🪪",
         )
-        b_fivem.callback = self._ao_fivem
-        linha_busca.add_item(b_discord)
-        linha_busca.add_item(b_fivem)
+        botao_fivem.callback = self._ao_fivem
+        linha_busca.add_item(botao_discord)
+        linha_busca.add_item(botao_fivem)
         componentes.append(linha_busca)
 
-        componentes.append(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        componentes.append(
+            discord.ui.TextDisplay(
+                "### Outras ações\n"
+                "Revogar rebaixamento ativo (acesso restrito)."
+            )
+        )
         linha_revogar = discord.ui.ActionRow()
-        b_revogar = discord.ui.Button(
+        botao_revogar = discord.ui.Button(
             label="Revogar rebaixamento",
             style=discord.ButtonStyle.secondary,
             emoji="♻️",
         )
-        b_revogar.callback = self._ao_abrir_revogar
-        linha_revogar.add_item(b_revogar)
+        botao_revogar.callback = self._ao_abrir_revogar
+        linha_revogar.add_item(botao_revogar)
         componentes.append(linha_revogar)
+
         componentes.append(
-            discord.ui.TextDisplay(
-                "-# Revogar: apenas **EQUIPE・DIRETORIA GERAL**, "
-                "**Responsavel HP** ou **Administrador**."
-            )
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
+        componentes.append(linha_ephemeral(fechar=True))
 
         self.add_item(
             discord.ui.Container(
@@ -193,7 +260,7 @@ class PainelBuscaRebaixarLayout(LoggingViewMixin, discord.ui.LayoutView):
                 linhas=[
                     mensagem_sem_permissao(
                         "revogar rebaixamento "
-                        "(EQUIPE・DIRETORIA GERAL, Responsavel HP ou Administrador)"
+                        "(EQUIPE・DIRETORIA GERAL ou Responsavel HP)"
                     )
                 ],
             )
@@ -205,9 +272,7 @@ class PainelBuscaRebaixarLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
 
-class ModalBuscarDiscordRebaixar(
-    LoggingModalMixin, discord.ui.Modal, title="Discord ID"
-):
+class ModalBuscarDiscordRebaixar(LoggingModalMixin, discord.ui.Modal, title="Discord ID"):
     discord_id_input = discord.ui.TextInput(
         label="Discord ID", required=True, max_length=20
     )
@@ -342,18 +407,33 @@ class PainelDestinoRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         self.cargo_degrau = cargo_degrau
         self.pode_livre = pode_livre
 
+        guilda = alvo.guild
+        mencao_atual = _mencao_cargo(guilda, cargo_atual)
+        if cargo_degrau:
+            mencao_degrau = _mencao_cargo(guilda, cargo_degrau)
+            texto_degrau = (
+                f"**Um degrau abaixo:** {mencao_degrau}\n\n"
+                f"### Metas do cargo de destino\n"
+                f"{_texto_metas_do_cargo(cargo_degrau)}"
+            )
+        else:
+            texto_degrau = (
+                "**Um degrau abaixo:** _(já no cargo mais baixo da hierarquia)_"
+            )
+
         texto = (
             f"# ⬇️ Rebaixar {alvo.display_name}\n"
+            f"> 🔒 Confira os dados antes de escolher o destino.\n\n"
             f"**Membro:** {alvo.mention} (`{alvo.id}`)\n"
             f"**FiveM:** `{id_fivem or '—'}`\n"
-            f"**Cargo atual:** {cargo_atual}\n"
+            f"**Cargo atual:** {mencao_atual}\n\n"
+            f"{texto_degrau}"
         )
-        if cargo_degrau:
-            texto += f"**Um degrau:** {cargo_degrau}\n"
-        else:
-            texto += "**Um degrau:** _(já no cargo mais baixo)_\n"
         if pode_livre:
-            texto += "\nVocê tem **EQUIPE・DIRETORIA GERAL** — pode escolher qualquer cargo inferior."
+            texto += (
+                "\n\nVocê tem **EQUIPE・DIRETORIA GERAL** — "
+                "pode escolher qualquer cargo inferior."
+            )
 
         componentes: list = [
             discord.ui.TextDisplay(texto),
@@ -390,12 +470,18 @@ class PainelDestinoRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 seletor.callback = self._ao_livre
                 linha_select = discord.ui.ActionRow()
                 linha_select.add_item(seletor)
-                componentes.append(linha)
+                if linha.children:
+                    componentes.append(linha)
                 componentes.append(linha_select)
-            else:
+            elif linha.children:
                 componentes.append(linha)
-        else:
+        elif linha.children:
             componentes.append(linha)
+
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        componentes.append(linha_ephemeral(fechar=True))
 
         self.add_item(
             discord.ui.Container(
@@ -489,14 +575,23 @@ class PainelBloqueioRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         self.cargo_para = cargo_para
         self.modo = modo
 
+        guilda = alvo.guild
+        mencao_de = _mencao_cargo(guilda, cargo_de)
+        mencao_para = _mencao_cargo(guilda, cargo_para)
         texto = (
             f"# ⬇️ Bloqueio de promoção\n"
-            f"**{alvo.mention}**: `{cargo_de}` → `{cargo_para}`\n"
-            f"Escolha quantos dias o membro **não poderá solicitar promoção**."
+            f"> Defina o período em que o membro **não poderá solicitar promoção**.\n\n"
+            f"**Membro:** {alvo.mention}\n"
+            f"**De:** {mencao_de}\n"
+            f"**Para:** {mencao_para}\n\n"
+            f"### Metas do novo cargo\n"
+            f"{_texto_metas_do_cargo(cargo_para)}"
         )
         componentes: list = [
             discord.ui.TextDisplay(texto),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay("### Duração do bloqueio"),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         ]
         linha = discord.ui.ActionRow()
         for dias in DIAS_BLOQUEIO_OPCOES:
@@ -508,6 +603,10 @@ class PainelBloqueioRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
             botao.callback = self._bind_dias(dias)
             linha.add_item(botao)
         componentes.append(linha)
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        componentes.append(linha_ephemeral(fechar=True))
         self.add_item(
             discord.ui.Container(
                 *componentes,
@@ -537,9 +636,7 @@ class PainelBloqueioRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         return _callback
 
 
-class ModalMotivoRebaixamento(
-    LoggingModalMixin, discord.ui.Modal, title="Motivo do rebaixamento"
-):
+class ModalMotivoRebaixamento(LoggingModalMixin, discord.ui.Modal, title="Motivo do rebaixamento"):
     motivo_input = discord.ui.TextInput(
         label="Motivo (obrigatório)",
         style=discord.TextStyle.paragraph,
@@ -595,7 +692,7 @@ class ModalMotivoRebaixamento(
 
 
 class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
-    """Confirmação final antes de aplicar."""
+    """Confirmação final antes de aplicar — mostra metas e efeitos."""
 
     def __init__(
         self,
@@ -615,16 +712,26 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
         self.dias_bloqueio = dias_bloqueio
         self.motivo = motivo
 
+        guilda = alvo.guild
+        mencao_de = _mencao_cargo(guilda, cargo_de)
+        mencao_para = _mencao_cargo(guilda, cargo_para)
+        rotulo_modo = "Um degrau" if modo == "um_degrau" else "Cargo livre"
+
         texto = (
             f"# ⚠️ Confirmar rebaixamento\n"
+            f"> Revise tudo antes de aplicar. Esta ação é registrada.\n\n"
             f"**Membro:** {alvo.mention}\n"
-            f"**De:** {cargo_de}\n"
-            f"**Para:** {cargo_para}\n"
-            f"**Modo:** {modo}\n"
-            f"**Bloqueio:** {dias_bloqueio} dias\n"
+            f"**De:** {mencao_de}\n"
+            f"**Para:** {mencao_para}\n"
+            f"**Modo:** {rotulo_modo}\n"
+            f"**Bloqueio de promoção:** **{dias_bloqueio} dias**\n"
             f"**Motivo:** {motivo}\n\n"
-            f"Cargos de área (RESP.*) serão **removidos**. "
-            f"Solicitação de promoção pendente será **cancelada**."
+            f"### Metas do novo cargo ({mencao_para})\n"
+            f"{_texto_metas_do_cargo(cargo_para)}\n\n"
+            f"### Efeitos ao confirmar\n"
+            f"- Cargos de área (RESP.*) serão **removidos**\n"
+            f"- Solicitação de promoção pendente será **cancelada**\n"
+            f"- Baseline de metas será gravado para o período de bloqueio"
         )
         componentes: list = [
             discord.ui.TextDisplay(texto),
@@ -640,11 +747,16 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
         botao_no = discord.ui.Button(
             label="Cancelar",
             style=discord.ButtonStyle.secondary,
+            emoji="❌",
         )
         botao_no.callback = self._ao_cancelar
         linha.add_item(botao_ok)
         linha.add_item(botao_no)
         componentes.append(linha)
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        componentes.append(linha_ephemeral(fechar=True))
         self.add_item(
             discord.ui.Container(
                 *componentes,
@@ -741,11 +853,16 @@ class PainelBuscaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         componentes: list = [
             discord.ui.TextDisplay(
                 "# ♻️ Revogar rebaixamento\n"
-                "> Busque o membro que possui **rebaixamento ativo**.\n"
-                "Acesso: **EQUIPE・DIRETORIA GERAL**, **Responsavel HP** "
-                "ou **Administrador**."
+                "> 🔒 Painel Administrativo\n"
+                "Busque o membro que possui **rebaixamento ativo**.\n"
+                "Acesso: **EQUIPE・DIRETORIA GERAL** ou **Responsavel HP**."
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            discord.ui.TextDisplay(
+                "### Buscar membro\n"
+                "Escolha na lista ou use um dos botões de busca abaixo."
+            ),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         ]
         linha_user = discord.ui.ActionRow()
         seletor = discord.ui.UserSelect(
@@ -758,21 +875,26 @@ class PainelBuscaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         componentes.append(linha_user)
 
         linha_busca = discord.ui.ActionRow()
-        b_discord = discord.ui.Button(
+        botao_discord = discord.ui.Button(
             label="Discord ID",
             style=discord.ButtonStyle.secondary,
             emoji="🔍",
         )
-        b_discord.callback = self._ao_discord_id
-        b_fivem = discord.ui.Button(
+        botao_discord.callback = self._ao_discord_id
+        botao_fivem = discord.ui.Button(
             label="FiveM",
             style=discord.ButtonStyle.secondary,
             emoji="🪪",
         )
-        b_fivem.callback = self._ao_fivem
-        linha_busca.add_item(b_discord)
-        linha_busca.add_item(b_fivem)
+        botao_fivem.callback = self._ao_fivem
+        linha_busca.add_item(botao_discord)
+        linha_busca.add_item(botao_fivem)
         componentes.append(linha_busca)
+
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        componentes.append(linha_ephemeral(fechar=True))
 
         self.add_item(
             discord.ui.Container(
@@ -827,9 +949,7 @@ class PainelBuscaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         await interacao.response.send_modal(ModalBuscarFivemRevogar())
 
 
-class ModalBuscarDiscordRevogar(
-    LoggingModalMixin, discord.ui.Modal, title="Discord ID"
-):
+class ModalBuscarDiscordRevogar(LoggingModalMixin, discord.ui.Modal, title="Discord ID"):
     discord_id_input = discord.ui.TextInput(
         label="Discord ID", required=True, max_length=20
     )
@@ -928,7 +1048,9 @@ async def abrir_lista_rebaixamentos_ativos(
         else:
             resumo = (punicao.cargo_nome or "Rebaixamento").strip()
         quando = (
-            f"<t:{int(punicao.criada_em.timestamp())}:d>" if punicao.criada_em else "—"
+            f"<t:{int(punicao.criada_em.timestamp())}:d>"
+            if punicao.criada_em
+            else "—"
         )
         opcoes.append(
             discord.SelectOption(
@@ -962,8 +1084,9 @@ class PainelListaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
 
         linhas = []
         for punicao in ativas[:10]:
+            nome_cargo = (punicao.cargo_nome or "Rebaixamento").strip()
             linhas.append(
-                f"• `#{punicao.id}` **{(punicao.cargo_nome or 'Rebaixamento').strip()}** — "
+                f"• `#{punicao.id}` {nome_cargo} — "
                 f"{(punicao.motivo or '')[:80]}"
             )
         lista = "\n".join(linhas)
@@ -971,7 +1094,8 @@ class PainelListaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         componentes: list = [
             discord.ui.TextDisplay(
                 f"# ♻️ Rebaixamentos ativos — {alvo.display_name}\n"
-                f"{alvo.mention} (`{alvo.id}`)\n\n"
+                f"> Escolha qual registro revogar.\n\n"
+                f"**Membro:** {alvo.mention} (`{alvo.id}`)\n\n"
                 f"{lista}"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
@@ -986,6 +1110,10 @@ class PainelListaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         seletor.callback = self._ao_escolher
         linha.add_item(seletor)
         componentes.append(linha)
+        componentes.append(
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
+        )
+        componentes.append(linha_ephemeral(fechar=True))
 
         self.add_item(
             discord.ui.Container(
@@ -1059,7 +1187,7 @@ class ModalMotivoRevogarRebaixamento(
             return
 
         await interacao.response.defer(ephemeral=True)
-        ok, detalhe = await revogar_rebaixamento(
+        ok, detalhe, cargo_restaurado = await revogar_rebaixamento(
             guild=interacao.guild,
             alvo=alvo,
             executor=executor,
@@ -1076,6 +1204,7 @@ class ModalMotivoRevogarRebaixamento(
             executor=executor,
             punicao_id=self.punicao_id,
             motivo=motivo,
+            cargo_restaurado=cargo_restaurado,
             detalhe=detalhe,
         )
         await responder_sucesso(

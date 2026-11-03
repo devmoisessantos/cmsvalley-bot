@@ -14,17 +14,19 @@ from datetime import (
 )
 
 import discord
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from src.config import (
+    CARGOS,
+    CARGOS_HIERARQUIA,
     CARGO_DIRETOR,
     CARGO_RESP_DOUTOR,
     CARGO_RESP_INSTRUTOR,
     CARGO_RESP_PSICOLOGO,
     CARGO_RESP_RECRUTAMENTO,
-    CARGOS,
-    CARGOS_HIERARQUIA,
 )
+
+# Id do cargo EQUIPE・DIRETORIA GERAL — sempre via config, nunca solto no código.
 from src.database.conexao import async_session
 from src.database.models import (
     HistoricoPunicao,
@@ -60,10 +62,9 @@ CARGOS_AREA_REMOVER: tuple[str, ...] = (
     "👑・Responsável Destaque・👑",
 )
 
-ID_EQUIPE_DIRETORIA_GERAL = 1491000030138732656
+ID_EQUIPE_DIRETORIA_GERAL = int(CARGOS["💌 EQUIPE・DIRETORIA GERAL"])
 
 DIAS_BLOQUEIO_OPCOES: tuple[int, ...] = (7, 15, 21)
-
 
 def membro_pode_rebaixar(membro: discord.Member) -> bool:
     """True se o executor tem algum cargo de Diretor++."""
@@ -232,9 +233,7 @@ async def obter_bloqueio_promocao(
         return usuario.bloqueio_promocao_ate
 
 
-async def membro_esta_bloqueado_promocao(
-    discord_id: int,
-) -> tuple[bool, datetime | None]:
+async def membro_esta_bloqueado_promocao(discord_id: int) -> tuple[bool, datetime | None]:
     """(bloqueado?, ate). Compara com agora UTC."""
     ate = await obter_bloqueio_promocao(discord_id)
     if ate is None:
@@ -318,10 +317,7 @@ async def aplicar_rebaixamento(
     if modo == "um_degrau":
         esperado = cargo_um_degrau_abaixo(cargo_de)
         if esperado is None or esperado != cargo_para:
-            return (
-                False,
-                "No modo um degrau o destino deve ser o cargo imediatamente abaixo.",
-            )
+            return False, "No modo um degrau o destino deve ser o cargo imediatamente abaixo."
 
     role_destino = _resolver_role(guild, cargo_para)
     if role_destino is None:
@@ -367,9 +363,7 @@ async def aplicar_rebaixamento(
             "Rebaixamento OK mas sem permissão de nick para %s", alvo.id
         )
     except discord.HTTPException as erro:
-        registrador.warning(
-            "Falha ao editar nick no rebaixamento de %s: %s", alvo.id, erro
-        )
+        registrador.warning("Falha ao editar nick no rebaixamento de %s: %s", alvo.id, erro)
 
     canceladas = await cancelar_solicitacoes_promocao_pendentes(alvo.id)
 
@@ -426,43 +420,6 @@ async def aplicar_rebaixamento(
     return True, " ".join(partes)
 
 
-async def publicar_log_rebaixamento(
-    guild: discord.Guild,
-    *,
-    alvo: discord.Member,
-    executor: discord.Member,
-    cargo_de: str,
-    cargo_para: str,
-    motivo: str,
-    dias_bloqueio: int,
-    detalhe: str,
-) -> None:
-    """Publica nos canais CANAL_REBAIXADOS e LOG_REBAIXAMENTOS."""
-    from src.config import CANAIS
-
-    texto = (
-        f"## ⬇️ Rebaixamento\n"
-        f"**Membro:** {alvo.mention} (`{alvo.id}`)\n"
-        f"**De:** {cargo_de}\n"
-        f"**Para:** {cargo_para}\n"
-        f"**Motivo:** {motivo}\n"
-        f"**Bloqueio promoção:** {dias_bloqueio} dias\n"
-        f"**Executor:** {executor.mention}\n"
-        f"-# {detalhe}"
-    )
-    for chave in ("CANAL_REBAIXADOS", "LOG_REBAIXAMENTOS"):
-        canal_id = CANAIS.get(chave) or 0
-        if not canal_id:
-            continue
-        canal = guild.get_channel(int(canal_id))
-        if canal is None or not hasattr(canal, "send"):
-            continue
-        try:
-            await canal.send(texto)
-        except (discord.Forbidden, discord.HTTPException) as erro:
-            registrador.warning("Falha ao logar rebaixamento em %s: %s", chave, erro)
-
-
 async def listar_rebaixamentos_ativos(
     discord_id: int | None = None,
     *,
@@ -502,7 +459,7 @@ async def revogar_rebaixamento(
     executor: discord.Member,
     punicao_id: int,
     motivo: str,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str | None]:
     """
     Revoga um rebaixamento ativo.
 
@@ -511,9 +468,12 @@ async def revogar_rebaixamento(
     - Remove o cargo de destino se ainda for o cargo hierárquico do membro
     - Limpa bloqueio de promoção e baseline de metas
     - Atualiza tag do nick
+
+    Retorno: (ok, detalhe, cargo_restaurado).
+    Em falha, cargo_restaurado vem None.
     """
     if not membro_pode_revogar_rebaixamento(executor):
-        return False, "Sem permissão para revogar rebaixamento."
+        return False, "Sem permissão para revogar rebaixamento.", None
 
     motivo_limpo = (motivo or "").strip() or "Revogação de rebaixamento"
     async with async_session() as sessao:
@@ -527,7 +487,11 @@ async def revogar_rebaixamento(
         )
         punicao = resultado.scalar_one_or_none()
         if punicao is None:
-            return False, "Rebaixamento ativo não encontrado para este membro."
+            return (
+                False,
+                "Rebaixamento ativo não encontrado para este membro.",
+                None,
+            )
 
         resultado_hist = await sessao.execute(
             select(HistoricoPunicao).where(
@@ -550,11 +514,16 @@ async def revogar_rebaixamento(
             return (
                 False,
                 "Não foi possível identificar o cargo de origem para restaurar.",
+                None,
             )
 
         role_origem = _resolver_role(guild, cargo_de)
         if role_origem is None:
-            return False, f"Cargo de origem `{cargo_de}` não encontrado no servidor."
+            return (
+                False,
+                f"Cargo de origem `{cargo_de}` não encontrado no servidor.",
+                None,
+            )
 
         roles_remover: list[discord.Role] = []
         if cargo_para:
@@ -571,12 +540,14 @@ async def revogar_rebaixamento(
             if role_origem not in alvo.roles:
                 await alvo.add_roles(role_origem, reason=motivo_discord)
         except discord.Forbidden:
-            return False, (
+            return (
+                False,
                 "Sem permissão para alterar cargos deste membro "
-                "(hierarquia do bot abaixo do cargo?)."
+                "(hierarquia do bot abaixo do cargo?).",
+                None,
             )
         except discord.HTTPException as erro:
-            return False, f"Erro Discord ao restaurar cargos: {erro}"
+            return False, f"Erro Discord ao restaurar cargos: {erro}", None
 
         try:
             nick_atual = alvo.nick or alvo.display_name or alvo.name
@@ -605,39 +576,5 @@ async def revogar_rebaixamento(
         + (f" (removido **{cargo_para}**)." if cargo_para else ".")
         + " Bloqueio de promoção e baseline de metas limpos."
     )
-    return True, detalhe
-
-
-async def publicar_log_revogacao_rebaixamento(
-    guild: discord.Guild,
-    *,
-    alvo: discord.Member,
-    executor: discord.Member,
-    punicao_id: int,
-    motivo: str,
-    detalhe: str,
-) -> None:
-    """Log da revogação nos mesmos canais de rebaixamento."""
-    from src.config import CANAIS
-
-    texto = (
-        f"## ♻️ Revogação de rebaixamento\n"
-        f"**Membro:** {alvo.mention} (`{alvo.id}`)\n"
-        f"**Punição:** `#{punicao_id}`\n"
-        f"**Motivo:** {motivo}\n"
-        f"**Executor:** {executor.mention}\n"
-        f"-# {detalhe}"
-    )
-    for chave in ("CANAL_REBAIXADOS", "LOG_REBAIXAMENTOS"):
-        canal_id = CANAIS.get(chave) or 0
-        if not canal_id:
-            continue
-        canal = guild.get_channel(int(canal_id))
-        if canal is None or not hasattr(canal, "send"):
-            continue
-        try:
-            await canal.send(texto)
-        except (discord.Forbidden, discord.HTTPException) as erro:
-            registrador.warning(
-                "Falha ao logar revogação de rebaixamento em %s: %s", chave, erro
-            )
+    # Terceiro valor: cargo restaurado (para o logger visual usar mention).
+    return True, detalhe, cargo_de
