@@ -57,7 +57,7 @@ def _view_rebaixamento_publico(
     motivo: str,
     dias_bloqueio: int,
 ) -> discord.ui.LayoutView:
-    """Card do canal público de rebaixamento."""
+    """Card do canal público de rebaixamento (com thumbnail do membro)."""
     mencao_de = _mencao_cargo(guild, cargo_de)
     mencao_para = _mencao_cargo(guild, cargo_para)
     corpo = (
@@ -72,7 +72,10 @@ def _view_rebaixamento_publico(
         discord.ui.Container(
             discord.ui.TextDisplay("# ⬇️ Rebaixamento"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(corpo),
+            discord.ui.Section(
+                corpo,
+                accessory=discord.ui.Thumbnail(url=alvo.display_avatar.url),
+            ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(_rodape(guild)),
             accent_color=discord.Color.dark_red(),
@@ -90,7 +93,7 @@ def _view_revogacao_publico(
     motivo: str,
     cargo_restaurado: str | None,
 ) -> discord.ui.LayoutView:
-    """Card do canal público de revogação de rebaixamento."""
+    """Card do canal público de revogação (com thumbnail do membro)."""
     mencao_cargo = _mencao_cargo(guild, cargo_restaurado)
     corpo = (
         f"`👤` **Membro:** {alvo.mention} (`{alvo.id}`)\n"
@@ -104,7 +107,10 @@ def _view_revogacao_publico(
         discord.ui.Container(
             discord.ui.TextDisplay("# ♻️ Revogação de rebaixamento"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            discord.ui.TextDisplay(corpo),
+            discord.ui.Section(
+                corpo,
+                accessory=discord.ui.Thumbnail(url=alvo.display_avatar.url),
+            ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(_rodape(guild)),
             accent_color=discord.Color.dark_green(),

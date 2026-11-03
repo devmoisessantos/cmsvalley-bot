@@ -28,12 +28,12 @@ from src.rebaixamento.rebaixamento_service import (
     obter_historico_do_rebaixamento,
     revogar_rebaixamento,
 )
-from src.utils.ephemeral_botoes import linha_ephemeral
+from src.utils.ephemeral_botoes import botao_fechar, linha_ephemeral
 from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
 from src.utils.formatacao import formatar_hms
 from src.utils.mensagens import (
+    editar_mensagem_original,
     responder_erro,
-    responder_sucesso,
     responder_view,
 )
 
@@ -78,9 +78,11 @@ def _mencao_cargo(guild: discord.Guild | None, nome_cargo: str) -> str:
 
 def _texto_metas_do_cargo(nome_cargo: str) -> str:
     """
-    Lista legível das metas cadastradas para o cargo de destino.
+    Lista legível das metas do cargo de destino no contexto de rebaixamento.
 
-    Só mostra linhas com valor maior que zero, para o card não ficar poluído.
+    Plantão fica no valor cheio. Metas de produção (laudos, recrutamentos,
+    chamadas, cursos, tickets) entram pela metade (divisão inteira), porque
+    no rebaixamento a exigência de produção é reduzida.
     """
     metas = METAS_POR_CARGO.get(nome_cargo) or {}
     linhas: list[str] = []
@@ -97,9 +99,14 @@ def _texto_metas_do_cargo(nome_cargo: str) -> str:
         ("meta_tickets", "Tickets finalizados"),
     )
     for chave, rotulo in mapa_rotulos:
-        valor = int(metas.get(chave) or 0)
-        if valor > 0:
-            linhas.append(f"- {rotulo}: `{valor}`")
+        valor_cheio = int(metas.get(chave) or 0)
+        if valor_cheio <= 0:
+            continue
+        valor_metade = valor_cheio // 2
+        linhas.append(
+            f"- {rotulo}: `{valor_metade}` "
+            f"(meta cheia `{valor_cheio}`, metade no rebaixamento)"
+        )
 
     if metas.get("exige_avaliacao_hp"):
         linhas.append("- Exige avaliação do Responsável HP")
@@ -107,6 +114,24 @@ def _texto_metas_do_cargo(nome_cargo: str) -> str:
     if not linhas:
         return "- Nenhuma meta cadastrada para este cargo."
     return "\n".join(linhas)
+
+
+async def _mostrar_painel(
+    interacao: discord.Interaction,
+    view: discord.ui.LayoutView,
+) -> None:
+    """
+    Mostra o painel na mesma ephemeral, sem abrir mensagem nova.
+
+    - Comando slash (sem mensagem ainda): cria a ephemeral.
+    - Clique / modal: edita a mensagem atual.
+    """
+    tem_mensagem = interacao.message is not None
+    ja_respondeu = interacao.response.is_done()
+    if tem_mensagem or ja_respondeu:
+        await editar_mensagem_original(interacao, view=view, texto=None)
+        return
+    await responder_view(interacao, view, ephemeral=True)
 
 
 def _checar_executor(interacao: discord.Interaction) -> discord.Member | None:
@@ -173,26 +198,16 @@ class PainelBuscaRebaixarLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-        componentes.append(
-            discord.ui.TextDisplay(
-                "### Outras ações\n"
-                "Revogar rebaixamento ativo (acesso restrito)."
-            )
-        )
-        linha_revogar = discord.ui.ActionRow()
+        linha_rodape = discord.ui.ActionRow()
         botao_revogar = discord.ui.Button(
             label="Revogar rebaixamento",
             style=discord.ButtonStyle.secondary,
             emoji="♻️",
         )
         botao_revogar.callback = self._ao_abrir_revogar
-        linha_revogar.add_item(botao_revogar)
-        componentes.append(linha_revogar)
-
-        componentes.append(
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
-        )
-        componentes.append(linha_ephemeral(fechar=True))
+        linha_rodape.add_item(botao_revogar)
+        linha_rodape.add_item(botao_fechar())
+        componentes.append(linha_rodape)
 
         self.add_item(
             discord.ui.Container(
@@ -265,11 +280,7 @@ class PainelBuscaRebaixarLayout(LoggingViewMixin, discord.ui.LayoutView):
                 ],
             )
             return
-        await responder_view(
-            interacao,
-            PainelBuscaRevogarRebaixamentoLayout(),
-            ephemeral=True,
-        )
+        await _mostrar_painel(interacao, PainelBuscaRevogarRebaixamentoLayout())
 
 
 class ModalBuscarDiscordRebaixar(LoggingModalMixin, discord.ui.Modal, title="Discord ID"):
@@ -376,7 +387,7 @@ async def abrir_fluxo_rebaixamento(
     pode_livre = membro_e_diretoria_geral(executor)
     fid = await _resolver_id_fivem(alvo.id)
 
-    await responder_view(
+    await _mostrar_painel(
         interacao,
         PainelDestinoRebaixamentoLayout(
             alvo=alvo,
@@ -385,7 +396,6 @@ async def abrir_fluxo_rebaixamento(
             pode_livre=pode_livre,
             id_fivem=fid,
         ),
-        ephemeral=True,
     )
 
 
@@ -481,7 +491,9 @@ class PainelDestinoRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-        componentes.append(linha_ephemeral(fechar=True))
+        componentes.append(
+            linha_ephemeral(fechar=True, on_voltar=self._ao_voltar)
+        )
 
         self.add_item(
             discord.ui.Container(
@@ -489,6 +501,9 @@ class PainelDestinoRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 accent_color=discord.Color.dark_red(),
             )
         )
+
+    async def _ao_voltar(self, interacao: discord.Interaction) -> None:
+        await _mostrar_painel(interacao, PainelBuscaRebaixarLayout())
 
     async def _ao_um_degrau(self, interacao: discord.Interaction) -> None:
         if _checar_executor(interacao) is None:
@@ -546,7 +561,7 @@ async def _abrir_escolha_bloqueio(
     cargo_para: str,
     modo: str,
 ) -> None:
-    await responder_view(
+    await _mostrar_painel(
         interacao,
         PainelBloqueioRebaixamentoLayout(
             alvo=alvo,
@@ -554,7 +569,6 @@ async def _abrir_escolha_bloqueio(
             cargo_para=cargo_para,
             modo=modo,
         ),
-        ephemeral=True,
     )
 
 
@@ -606,12 +620,32 @@ class PainelBloqueioRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-        componentes.append(linha_ephemeral(fechar=True))
+        componentes.append(
+            linha_ephemeral(fechar=True, on_voltar=self._ao_voltar)
+        )
         self.add_item(
             discord.ui.Container(
                 *componentes,
                 accent_color=discord.Color.dark_red(),
             )
+        )
+
+    async def _ao_voltar(self, interacao: discord.Interaction) -> None:
+        fid = await _resolver_id_fivem(self.alvo.id)
+        degrau = cargo_um_degrau_abaixo(self.cargo_de)
+        executor = _checar_executor(interacao)
+        pode_livre = (
+            membro_e_diretoria_geral(executor) if executor is not None else False
+        )
+        await _mostrar_painel(
+            interacao,
+            PainelDestinoRebaixamentoLayout(
+                alvo=self.alvo,
+                cargo_atual=self.cargo_de,
+                cargo_degrau=degrau,
+                pode_livre=pode_livre,
+                id_fivem=fid,
+            ),
         )
 
     def _bind_dias(self, dias: int):
@@ -677,7 +711,7 @@ class ModalMotivoRebaixamento(LoggingModalMixin, discord.ui.Modal, title="Motivo
             )
             return
 
-        await responder_view(
+        await _mostrar_painel(
             interacao,
             PainelConfirmarRebaixamentoLayout(
                 alvo=self.alvo,
@@ -687,7 +721,6 @@ class ModalMotivoRebaixamento(LoggingModalMixin, discord.ui.Modal, title="Motivo
                 dias_bloqueio=self.dias_bloqueio,
                 motivo=motivo,
             ),
-            ephemeral=True,
         )
 
 
@@ -744,19 +777,14 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
             emoji="⬇️",
         )
         botao_ok.callback = self._ao_confirmar
-        botao_no = discord.ui.Button(
-            label="Cancelar",
-            style=discord.ButtonStyle.secondary,
-            emoji="❌",
-        )
-        botao_no.callback = self._ao_cancelar
         linha.add_item(botao_ok)
-        linha.add_item(botao_no)
         componentes.append(linha)
         componentes.append(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-        componentes.append(linha_ephemeral(fechar=True))
+        componentes.append(
+            linha_ephemeral(fechar=True, on_voltar=self._ao_voltar)
+        )
         self.add_item(
             discord.ui.Container(
                 *componentes,
@@ -764,30 +792,40 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
             )
         )
 
-    async def _ao_cancelar(self, interacao: discord.Interaction) -> None:
-        await responder_sucesso(
+    async def _ao_voltar(self, interacao: discord.Interaction) -> None:
+        await _mostrar_painel(
             interacao,
-            titulo="Cancelado",
-            linhas=["Rebaixamento não aplicado."],
+            PainelBloqueioRebaixamentoLayout(
+                alvo=self.alvo,
+                cargo_de=self.cargo_de,
+                cargo_para=self.cargo_para,
+                modo=self.modo,
+            ),
         )
 
     async def _ao_confirmar(self, interacao: discord.Interaction) -> None:
         executor = _checar_executor(interacao)
         if executor is None or interacao.guild is None:
-            await responder_erro(
+            await _mostrar_painel(
                 interacao,
-                titulo="Sem permissão",
-                linhas=[mensagem_sem_permissao("rebaixar membros")],
+                PainelResultadoRebaixamentoLayout(
+                    titulo="Sem permissão",
+                    corpo=mensagem_sem_permissao("rebaixar membros"),
+                    sucesso=False,
+                ),
             )
             return
 
         # Revalida alvo ainda no servidor com o cargo esperado
         alvo = interacao.guild.get_member(self.alvo.id)
         if alvo is None:
-            await responder_erro(
+            await _mostrar_painel(
                 interacao,
-                titulo="Alvo",
-                linhas=["O membro saiu do servidor."],
+                PainelResultadoRebaixamentoLayout(
+                    titulo="Alvo",
+                    corpo="O membro saiu do servidor.",
+                    sucesso=False,
+                ),
             )
             return
 
@@ -804,7 +842,15 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
             metas_atuais=metas,
         )
         if not ok:
-            await responder_erro(interacao, titulo="Falha", linhas=[detalhe])
+            await editar_mensagem_original(
+                interacao,
+                view=PainelResultadoRebaixamentoLayout(
+                    titulo="Falha",
+                    corpo=detalhe,
+                    sucesso=False,
+                ),
+                texto=None,
+            )
             return
 
         await publicar_log_rebaixamento(
@@ -817,10 +863,39 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
             dias_bloqueio=self.dias_bloqueio,
             detalhe=detalhe,
         )
-        await responder_sucesso(
+        await editar_mensagem_original(
             interacao,
-            titulo="Rebaixamento aplicado",
-            linhas=[detalhe],
+            view=PainelResultadoRebaixamentoLayout(
+                titulo="Rebaixamento aplicado",
+                corpo=detalhe,
+                sucesso=True,
+            ),
+            texto=None,
+        )
+
+
+class PainelResultadoRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
+    """Resultado final na mesma ephemeral (sucesso ou falha)."""
+
+    def __init__(
+        self,
+        *,
+        titulo: str,
+        corpo: str,
+        sucesso: bool,
+    ) -> None:
+        super().__init__(timeout=120)
+        emoji = "✅" if sucesso else "❌"
+        cor = (
+            discord.Color.dark_green() if sucesso else discord.Color.dark_red()
+        )
+        componentes: list = [
+            discord.ui.TextDisplay(f"# {emoji} {titulo}\n\n{corpo}"),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            linha_ephemeral(fechar=True),
+        ]
+        self.add_item(
+            discord.ui.Container(*componentes, accent_color=cor)
         )
 
 
@@ -894,7 +969,9 @@ class PainelBuscaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         componentes.append(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-        componentes.append(linha_ephemeral(fechar=True))
+        componentes.append(
+            linha_ephemeral(fechar=True, on_voltar=self._ao_voltar)
+        )
 
         self.add_item(
             discord.ui.Container(
@@ -902,6 +979,9 @@ class PainelBuscaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
                 accent_color=discord.Color.dark_green(),
             )
         )
+
+    async def _ao_voltar(self, interacao: discord.Interaction) -> None:
+        await _mostrar_painel(interacao, PainelBuscaRebaixarLayout())
 
     async def _ao_user_select(self, interacao: discord.Interaction) -> None:
         if _checar_revogar(interacao) is None:
@@ -1031,12 +1111,15 @@ async def abrir_lista_rebaixamentos_ativos(
     """Lista rebaixamentos ativos do membro e oferece para escolher."""
     ativas = await listar_rebaixamentos_ativos(alvo.id, limite=25)
     if not ativas:
-        await responder_erro(
+        await _mostrar_painel(
             interacao,
-            titulo="Nenhum rebaixamento ativo",
-            linhas=[
-                f"{alvo.mention} não possui rebaixamento ativo no banco.",
-            ],
+            PainelResultadoRebaixamentoLayout(
+                titulo="Nenhum rebaixamento ativo",
+                corpo=(
+                    f"{alvo.mention} não possui rebaixamento ativo no banco."
+                ),
+                sucesso=False,
+            ),
         )
         return
 
@@ -1061,10 +1144,11 @@ async def abrir_lista_rebaixamentos_ativos(
             )
         )
 
-    await responder_view(
+    await _mostrar_painel(
         interacao,
-        PainelListaRevogarRebaixamentoLayout(alvo=alvo, opcoes=opcoes, ativas=ativas),
-        ephemeral=True,
+        PainelListaRevogarRebaixamentoLayout(
+            alvo=alvo, opcoes=opcoes, ativas=ativas
+        ),
     )
 
 
@@ -1113,13 +1197,20 @@ class PainelListaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         componentes.append(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large)
         )
-        componentes.append(linha_ephemeral(fechar=True))
+        componentes.append(
+            linha_ephemeral(fechar=True, on_voltar=self._ao_voltar)
+        )
 
         self.add_item(
             discord.ui.Container(
                 *componentes,
                 accent_color=discord.Color.dark_green(),
             )
+        )
+
+    async def _ao_voltar(self, interacao: discord.Interaction) -> None:
+        await _mostrar_painel(
+            interacao, PainelBuscaRevogarRebaixamentoLayout()
         )
 
     async def _ao_escolher(self, interacao: discord.Interaction) -> None:
@@ -1164,25 +1255,36 @@ class ModalMotivoRevogarRebaixamento(
     async def on_submit(self, interacao: discord.Interaction) -> None:
         executor = _checar_revogar(interacao)
         if executor is None or interacao.guild is None:
-            await responder_erro(
+            await _mostrar_painel(
                 interacao,
-                titulo="Sem permissão",
-                linhas=[mensagem_sem_permissao("revogar rebaixamento")],
+                PainelResultadoRebaixamentoLayout(
+                    titulo="Sem permissão",
+                    corpo=mensagem_sem_permissao("revogar rebaixamento"),
+                    sucesso=False,
+                ),
             )
             return
         motivo = (self.motivo_input.value or "").strip()
         if not motivo:
-            await responder_erro(
-                interacao, titulo="Motivo", linhas=["Informe o motivo da revogação."]
+            await _mostrar_painel(
+                interacao,
+                PainelResultadoRebaixamentoLayout(
+                    titulo="Motivo",
+                    corpo="Informe o motivo da revogação.",
+                    sucesso=False,
+                ),
             )
             return
 
         alvo = interacao.guild.get_member(self.alvo.id)
         if alvo is None:
-            await responder_erro(
+            await _mostrar_painel(
                 interacao,
-                titulo="Alvo",
-                linhas=["O membro saiu do servidor."],
+                PainelResultadoRebaixamentoLayout(
+                    titulo="Alvo",
+                    corpo="O membro saiu do servidor.",
+                    sucesso=False,
+                ),
             )
             return
 
@@ -1195,7 +1297,15 @@ class ModalMotivoRevogarRebaixamento(
             motivo=motivo,
         )
         if not ok:
-            await responder_erro(interacao, titulo="Falha", linhas=[detalhe])
+            await editar_mensagem_original(
+                interacao,
+                view=PainelResultadoRebaixamentoLayout(
+                    titulo="Falha",
+                    corpo=detalhe,
+                    sucesso=False,
+                ),
+                texto=None,
+            )
             return
 
         await publicar_log_revogacao_rebaixamento(
@@ -1207,8 +1317,12 @@ class ModalMotivoRevogarRebaixamento(
             cargo_restaurado=cargo_restaurado,
             detalhe=detalhe,
         )
-        await responder_sucesso(
+        await editar_mensagem_original(
             interacao,
-            titulo="Rebaixamento revogado",
-            linhas=[detalhe],
+            view=PainelResultadoRebaixamentoLayout(
+                titulo="Rebaixamento revogado",
+                corpo=detalhe,
+                sucesso=True,
+            ),
+            texto=None,
         )
