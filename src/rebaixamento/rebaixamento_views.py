@@ -103,10 +103,7 @@ def _texto_metas_do_cargo(nome_cargo: str) -> str:
         if valor_cheio <= 0:
             continue
         valor_metade = valor_cheio // 2
-        linhas.append(
-            f"- {rotulo}: `{valor_metade}` "
-            f"(meta cheia `{valor_cheio}`, metade no rebaixamento)"
-        )
+        linhas.append(f"- {rotulo}: **{valor_metade}** (meta `{valor_cheio}`)")
 
     if metas.get("exige_avaliacao_hp"):
         linhas.append("- Exige avaliação do Responsável HP")

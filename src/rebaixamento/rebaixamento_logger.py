@@ -74,7 +74,7 @@ def _view_rebaixamento_publico(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.Section(
                 corpo,
-                accessory=discord.ui.Thumbnail(url=alvo.display_avatar.url),
+                accessory=discord.ui.Thumbnail(alvo.display_avatar.url),
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(_rodape(guild)),
@@ -109,7 +109,7 @@ def _view_revogacao_publico(
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.Section(
                 corpo,
-                accessory=discord.ui.Thumbnail(url=alvo.display_avatar.url),
+                accessory=discord.ui.Thumbnail(alvo.display_avatar.url),
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             discord.ui.TextDisplay(_rodape(guild)),
