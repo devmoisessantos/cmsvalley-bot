@@ -208,7 +208,7 @@ CAMINHOS_DOS_COGS = [
     "src.cursos.cursos_tasks",
     "src.promocoes.promocoes_cogs",
     "src.promocoes.avaliacao_hp.avaliacao_hp_cogs",
-    "src.promocoes.rebaixamento.rebaixamento_cogs",
+    "src.rebaixamento.rebaixamento_cogs",
     "src.demissao.demissao_cogs",
     "src.ausencia.ausencia_cogs",
     "src.tickets.tickets_cogs",
