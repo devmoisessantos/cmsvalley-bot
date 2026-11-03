@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 
 import discord
+from sqlalchemy import select
 
 from src.database.conexao import async_session
 from src.database.models import Usuario
+from src.plantao.plantao_permissoes import mensagem_sem_permissao
 from src.rebaixamento.rebaixamento_service import (
     DIAS_BLOQUEIO_OPCOES,
+    alvo_pode_ser_rebaixado,
     aplicar_rebaixamento,
     cargo_um_degrau_abaixo,
     listar_cargos_inferiores,
@@ -21,16 +24,13 @@ from src.rebaixamento.rebaixamento_service import (
     publicar_log_rebaixamento,
     publicar_log_revogacao_rebaixamento,
     revogar_rebaixamento,
-    alvo_pode_ser_rebaixado,
 )
 from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
-from src.plantao.plantao_permissoes import mensagem_sem_permissao
 from src.utils.mensagens import (
     responder_erro,
     responder_sucesso,
     responder_view,
 )
-from sqlalchemy import select
 
 registrador = logging.getLogger(__name__)
 
@@ -205,7 +205,9 @@ class PainelBuscaRebaixarLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
 
 
-class ModalBuscarDiscordRebaixar(LoggingModalMixin, discord.ui.Modal, title="Discord ID"):
+class ModalBuscarDiscordRebaixar(
+    LoggingModalMixin, discord.ui.Modal, title="Discord ID"
+):
     discord_id_input = discord.ui.TextInput(
         label="Discord ID", required=True, max_length=20
     )
@@ -299,7 +301,7 @@ async def abrir_fluxo_rebaixamento(
         )
         return
 
-    ok, detalhe = alvo_pode_ser_rebaixado(alvo)
+    ok, detalhe = alvo_pode_ser_rebaixado(alvo, executor)
     if not ok:
         await responder_erro(interacao, titulo="Não rebaixável", linhas=[detalhe])
         return
@@ -535,7 +537,9 @@ class PainelBloqueioRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         return _callback
 
 
-class ModalMotivoRebaixamento(LoggingModalMixin, discord.ui.Modal, title="Motivo do rebaixamento"):
+class ModalMotivoRebaixamento(
+    LoggingModalMixin, discord.ui.Modal, title="Motivo do rebaixamento"
+):
     motivo_input = discord.ui.TextInput(
         label="Motivo (obrigatório)",
         style=discord.TextStyle.paragraph,
@@ -823,7 +827,9 @@ class PainelBuscaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         await interacao.response.send_modal(ModalBuscarFivemRevogar())
 
 
-class ModalBuscarDiscordRevogar(LoggingModalMixin, discord.ui.Modal, title="Discord ID"):
+class ModalBuscarDiscordRevogar(
+    LoggingModalMixin, discord.ui.Modal, title="Discord ID"
+):
     discord_id_input = discord.ui.TextInput(
         label="Discord ID", required=True, max_length=20
     )
@@ -922,9 +928,7 @@ async def abrir_lista_rebaixamentos_ativos(
         else:
             resumo = (punicao.cargo_nome or "Rebaixamento").strip()
         quando = (
-            f"<t:{int(punicao.criada_em.timestamp())}:d>"
-            if punicao.criada_em
-            else "—"
+            f"<t:{int(punicao.criada_em.timestamp())}:d>" if punicao.criada_em else "—"
         )
         opcoes.append(
             discord.SelectOption(

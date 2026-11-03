@@ -14,16 +14,16 @@ from datetime import (
 )
 
 import discord
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from src.config import (
-    CARGOS,
-    CARGOS_HIERARQUIA,
     CARGO_DIRETOR,
     CARGO_RESP_DOUTOR,
     CARGO_RESP_INSTRUTOR,
     CARGO_RESP_PSICOLOGO,
     CARGO_RESP_RECRUTAMENTO,
+    CARGOS,
+    CARGOS_HIERARQUIA,
 )
 from src.database.conexao import async_session
 from src.database.models import (
@@ -63,12 +63,6 @@ CARGOS_AREA_REMOVER: tuple[str, ...] = (
 ID_EQUIPE_DIRETORIA_GERAL = 1491000030138732656
 
 DIAS_BLOQUEIO_OPCOES: tuple[int, ...] = (7, 15, 21)
-
-# Índice de DIRETOR em CARGOS_HIERARQUIA (alvo precisa estar *abaixo*).
-try:
-    INDICE_DIRETOR = CARGOS_HIERARQUIA.index(CARGO_DIRETOR)
-except ValueError:
-    INDICE_DIRETOR = CARGOS_HIERARQUIA.index("👑・DIRETOR")
 
 
 def membro_pode_rebaixar(membro: discord.Member) -> bool:
@@ -117,6 +111,21 @@ def indice_hierarquia(nome_cargo: str) -> int | None:
         return None
 
 
+def indice_hierarquia_do_executor(membro: discord.Member) -> int | None:
+    """
+    Índice do maior cargo do executor na hierarquia.
+
+    Administrador Discord = -1 (acima de todos).
+    None = sem cargo na hierarquia e sem admin.
+    """
+    if membro.guild_permissions.administrator:
+        return -1
+    cargo = cargo_hierarquia_do_membro(membro)
+    if cargo is None:
+        return None
+    return indice_hierarquia(cargo)
+
+
 def cargo_um_degrau_abaixo(nome_cargo: str) -> str | None:
     """Próximo cargo abaixo na hierarquia, ou None se já for o mais baixo."""
     indice = indice_hierarquia(nome_cargo)
@@ -127,26 +136,47 @@ def cargo_um_degrau_abaixo(nome_cargo: str) -> str | None:
     return CARGOS_HIERARQUIA[indice + 1]
 
 
-def alvo_pode_ser_rebaixado(membro: discord.Member) -> tuple[bool, str]:
+def alvo_pode_ser_rebaixado(
+    alvo: discord.Member,
+    executor: discord.Member,
+) -> tuple[bool, str]:
     """
-    Alvo precisa ter cargo hospitalar *abaixo* de Diretor.
+    O alvo só pode ser rebaixado se estiver **estritamente abaixo**
+    do executor na hierarquia hospitalar.
 
-    Não rebaixa quem está em Diretor ou acima.
+    - Mesmo cargo → bloqueado
+    - Cargo acima do executor → bloqueado
+    - Administrador pode rebaixar qualquer um abaixo do topo
+    - Quem rebaixa precisa ser Diretor++ (checado em membro_pode_rebaixar)
     """
-    cargo = cargo_hierarquia_do_membro(membro)
-    if cargo is None:
+    if not membro_pode_rebaixar(executor):
+        return False, "Você não tem permissão para rebaixar (apenas Diretor++)."
+
+    cargo_alvo = cargo_hierarquia_do_membro(alvo)
+    if cargo_alvo is None:
         return False, "O membro não possui cargo na hierarquia hospitalar."
-    indice = indice_hierarquia(cargo)
-    if indice is None:
-        return False, f"Cargo `{cargo}` fora da hierarquia."
-    if indice <= INDICE_DIRETOR:
+
+    indice_alvo = indice_hierarquia(cargo_alvo)
+    if indice_alvo is None:
+        return False, f"Cargo `{cargo_alvo}` fora da hierarquia."
+
+    if indice_alvo >= len(CARGOS_HIERARQUIA) - 1:
+        return False, f"**{cargo_alvo}** já é o cargo mais baixo da hierarquia."
+
+    indice_executor = indice_hierarquia_do_executor(executor)
+    if indice_executor is None:
+        return False, "Você não possui cargo na hierarquia hospitalar."
+
+    # Índice menor = cargo mais alto. Só gerencia quem está abaixo (índice maior).
+    if indice_alvo <= indice_executor:
+        cargo_exec = cargo_hierarquia_do_membro(executor) or "Administrador"
         return False, (
-            f"Não é permitido rebaixar quem está em **{cargo}** "
-            f"(Diretor ou acima)."
+            f"Não é permitido rebaixar **{cargo_alvo}**: "
+            f"seu cargo (**{cargo_exec}**) só gerencia cargos **abaixo** na hierarquia "
+            f"(mesmo nível ou acima bloqueados)."
         )
-    if indice >= len(CARGOS_HIERARQUIA) - 1:
-        return False, f"**{cargo}** já é o cargo mais baixo da hierarquia."
-    return True, cargo
+
+    return True, cargo_alvo
 
 
 def listar_cargos_inferiores(cargo_atual: str) -> list[str]:
@@ -202,7 +232,9 @@ async def obter_bloqueio_promocao(
         return usuario.bloqueio_promocao_ate
 
 
-async def membro_esta_bloqueado_promocao(discord_id: int) -> tuple[bool, datetime | None]:
+async def membro_esta_bloqueado_promocao(
+    discord_id: int,
+) -> tuple[bool, datetime | None]:
     """(bloqueado?, ate). Compara com agora UTC."""
     ate = await obter_bloqueio_promocao(discord_id)
     if ate is None:
@@ -268,7 +300,7 @@ async def aplicar_rebaixamento(
     if dias_bloqueio not in DIAS_BLOQUEIO_OPCOES:
         return False, f"Dias de bloqueio inválidos: {dias_bloqueio}."
 
-    ok, detalhe = alvo_pode_ser_rebaixado(alvo)
+    ok, detalhe = alvo_pode_ser_rebaixado(alvo, executor)
     if not ok:
         return False, detalhe
     cargo_de = detalhe
@@ -286,7 +318,10 @@ async def aplicar_rebaixamento(
     if modo == "um_degrau":
         esperado = cargo_um_degrau_abaixo(cargo_de)
         if esperado is None or esperado != cargo_para:
-            return False, "No modo um degrau o destino deve ser o cargo imediatamente abaixo."
+            return (
+                False,
+                "No modo um degrau o destino deve ser o cargo imediatamente abaixo.",
+            )
 
     role_destino = _resolver_role(guild, cargo_para)
     if role_destino is None:
@@ -332,7 +367,9 @@ async def aplicar_rebaixamento(
             "Rebaixamento OK mas sem permissão de nick para %s", alvo.id
         )
     except discord.HTTPException as erro:
-        registrador.warning("Falha ao editar nick no rebaixamento de %s: %s", alvo.id, erro)
+        registrador.warning(
+            "Falha ao editar nick no rebaixamento de %s: %s", alvo.id, erro
+        )
 
     canceladas = await cancelar_solicitacoes_promocao_pendentes(alvo.id)
 
@@ -510,7 +547,10 @@ async def revogar_rebaixamento(
                 cargo_para = bruto[1].strip()
 
         if not cargo_de:
-            return False, "Não foi possível identificar o cargo de origem para restaurar."
+            return (
+                False,
+                "Não foi possível identificar o cargo de origem para restaurar.",
+            )
 
         role_origem = _resolver_role(guild, cargo_de)
         if role_origem is None:
@@ -522,7 +562,9 @@ async def revogar_rebaixamento(
             if role_destino is not None and role_destino in alvo.roles:
                 roles_remover.append(role_destino)
 
-        motivo_discord = f"Revogação de rebaixamento por {executor} — {motivo_limpo[:200]}"
+        motivo_discord = (
+            f"Revogação de rebaixamento por {executor} — {motivo_limpo[:200]}"
+        )
         try:
             if roles_remover:
                 await alvo.remove_roles(*roles_remover, reason=motivo_discord)
