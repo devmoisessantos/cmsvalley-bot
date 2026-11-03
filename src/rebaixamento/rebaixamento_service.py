@@ -323,6 +323,10 @@ async def aplicar_rebaixamento(
     if role_destino is None:
         return False, f"Cargo `{cargo_para}` não encontrado no servidor."
 
+    # O destino já estava no membro? Se sim, na revogação não podemos
+    # removê-lo — ele fazia parte do estado anterior.
+    destino_ja_existia = role_destino in alvo.roles
+
     # Roles a remover: todos da hierarquia com índice < destino (mais altos
     # que o novo nível, inclusive o atual) + cargos de área.
     roles_remover: list[discord.Role] = []
@@ -338,11 +342,17 @@ async def aplicar_rebaixamento(
             roles_remover.append(role)
             nomes_removidos.append(nome)
 
+    snapshot = {
+        "removidos": list(nomes_removidos),
+        "adicionou_destino": not destino_ja_existia,
+    }
+    snapshot_json = json.dumps(snapshot, ensure_ascii=False)
+
     motivo_discord = f"Rebaixamento por {executor} — {motivo[:200]}"
     try:
         if roles_remover:
             await alvo.remove_roles(*roles_remover, reason=motivo_discord)
-        if role_destino not in alvo.roles:
+        if not destino_ja_existia:
             await alvo.add_roles(role_destino, reason=motivo_discord)
     except discord.Forbidden:
         return False, (
@@ -402,6 +412,7 @@ async def aplicar_rebaixamento(
             bloqueio_ate=bloqueio_ate,
             punicao_id=punicao.id,
             modo=modo,
+            cargos_snapshot_json=snapshot_json,
             criado_em=agora(),
         )
         sessao.add(historico)
@@ -517,19 +528,54 @@ async def revogar_rebaixamento(
                 None,
             )
 
-        role_origem = _resolver_role(guild, cargo_de)
-        if role_origem is None:
-            return (
-                False,
-                f"Cargo de origem `{cargo_de}` não encontrado no servidor.",
-                None,
-            )
+        # Snapshot gravado no rebaixamento: lista do que tirou e se o
+        # destino foi cargo novo (só aí a revogação pode remover o destino).
+        nomes_restaurar: list[str] = []
+        deve_remover_destino = True
+        if historico is not None and historico.cargos_snapshot_json:
+            try:
+                dados_snap = json.loads(historico.cargos_snapshot_json)
+                if isinstance(dados_snap, dict):
+                    bruto_rem = dados_snap.get("removidos") or []
+                    if isinstance(bruto_rem, list):
+                        nomes_restaurar = [
+                            str(nome) for nome in bruto_rem if nome
+                        ]
+                    if "adicionou_destino" in dados_snap:
+                        deve_remover_destino = bool(
+                            dados_snap.get("adicionou_destino")
+                        )
+            except (TypeError, ValueError, json.JSONDecodeError) as erro_snap:
+                registrador.warning(
+                    "Snapshot de cargos inválido na punição %s: %s",
+                    punicao_id,
+                    erro_snap,
+                )
+
+        # Sem snapshot (rebaixamento antigo): restaura só o cargo de origem
+        # e remove o destino — comportamento anterior, com risco menor.
+        if not nomes_restaurar:
+            nomes_restaurar = [cargo_de]
+
+        roles_adicionar: list[discord.Role] = []
+        for nome in nomes_restaurar:
+            role = _resolver_role(guild, nome)
+            if role is None:
+                registrador.warning(
+                    "Revogação: cargo `%s` não existe no servidor.", nome
+                )
+                continue
+            if role not in alvo.roles and role not in roles_adicionar:
+                roles_adicionar.append(role)
 
         roles_remover: list[discord.Role] = []
-        if cargo_para:
+        if deve_remover_destino and cargo_para:
             role_destino = _resolver_role(guild, cargo_para)
             if role_destino is not None and role_destino in alvo.roles:
-                roles_remover.append(role_destino)
+                # Não remove se o destino também estava na lista a restaurar
+                # (membro já tinha esse cargo antes do rebaixamento).
+                if cargo_para not in nomes_restaurar:
+                    roles_remover.append(role_destino)
 
         motivo_discord = (
             f"Revogação de rebaixamento por {executor} — {motivo_limpo[:200]}"
@@ -537,8 +583,8 @@ async def revogar_rebaixamento(
         try:
             if roles_remover:
                 await alvo.remove_roles(*roles_remover, reason=motivo_discord)
-            if role_origem not in alvo.roles:
-                await alvo.add_roles(role_origem, reason=motivo_discord)
+            if roles_adicionar:
+                await alvo.add_roles(*roles_adicionar, reason=motivo_discord)
         except discord.Forbidden:
             return (
                 False,
@@ -570,11 +616,17 @@ async def revogar_rebaixamento(
         usuario.metas_baseline_json = None
         await sessao.commit()
 
+    nomes_restaurados = ", ".join(f"**{n}**" for n in nomes_restaurar) or (
+        f"**{cargo_de}**"
+    )
     detalhe = (
         f"Rebaixamento `#{punicao_id}` revogado. "
-        f"Cargo restaurado: **{cargo_de}**"
-        + (f" (removido **{cargo_para}**)." if cargo_para else ".")
+        f"Cargos restaurados: {nomes_restaurados}."
+        + (
+            f" Destino **{cargo_para}** removido."
+            if deve_remover_destino and cargo_para
+            else ""
+        )
         + " Bloqueio de promoção e baseline de metas limpos."
     )
-    # Terceiro valor: cargo restaurado (para o logger visual usar mention).
     return True, detalhe, cargo_de

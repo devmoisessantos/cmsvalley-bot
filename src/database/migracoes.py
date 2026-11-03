@@ -334,6 +334,17 @@ CREATE INDEX IF NOT EXISTS ix_historico_punicoes_tipo
     ON historico_punicoes (tipo);
 """,
     ),
+    Migracao(
+        numero=20,
+        descricao=(
+            "Histórico de rebaixamento: snapshot dos cargos removidos "
+            "para a revogação restaurar o membro como estava."
+        ),
+        comando_sql="""
+ALTER TABLE historico_punicoes
+    ADD COLUMN IF NOT EXISTS cargos_snapshot_json TEXT;
+""",
+    ),
 ]
 
 

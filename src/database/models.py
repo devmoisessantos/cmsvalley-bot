@@ -488,6 +488,10 @@ class HistoricoPunicao(Base):
     punicao_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # um_degrau | livre
     modo: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # JSON: cargos removidos + se o destino foi adicionado (para a revogação
+    # devolver o membro exatamente como estava).
+    # Ex.: {"removidos": ["🥼・Doutor"], "adicionou_destino": true}
+    cargos_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=agora)
 
 

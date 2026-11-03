@@ -11,13 +11,11 @@ from discord.ext import commands
 from src.rebaixamento.rebaixamento_service import membro_pode_rebaixar
 from src.rebaixamento.rebaixamento_views import (
     PainelBuscaRebaixarLayout,
+    _mostrar_painel,
     abrir_fluxo_rebaixamento,
 )
 from src.plantao.plantao_permissoes import mensagem_sem_permissao
-from src.utils.mensagens import (
-    responder_erro,
-    responder_view,
-)
+from src.utils.mensagens import responder_erro
 
 registrador = logging.getLogger(__name__)
 
@@ -65,11 +63,7 @@ class RebaixamentoCog(commands.Cog):
             await abrir_fluxo_rebaixamento(interacao, membro)
             return
 
-        await responder_view(
-            interacao,
-            PainelBuscaRebaixarLayout(),
-            ephemeral=True,
-        )
+        await _mostrar_painel(interacao, PainelBuscaRebaixarLayout())
 
 
 async def setup(bot: commands.Bot) -> None:

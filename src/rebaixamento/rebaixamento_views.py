@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -33,11 +34,15 @@ from src.utils.error_handling import LoggingModalMixin, LoggingViewMixin
 from src.utils.formatacao import formatar_hms
 from src.utils.mensagens import (
     editar_mensagem_original,
+    excluir_mensagem,
     responder_erro,
     responder_view,
 )
 
 registrador = logging.getLogger(__name__)
+
+# Tempo de vida da ephemeral: auto-apaga ou some pelo botão Fechar.
+SEGUNDOS_EPHEMERAL_REBAIXAMENTO = 80
 
 
 async def _resolver_id_fivem(discord_id: int) -> str | None:
@@ -113,6 +118,28 @@ def _texto_metas_do_cargo(nome_cargo: str) -> str:
     return "\n".join(linhas)
 
 
+async def _agendar_exclusao_ephemeral(
+    interacao: discord.Interaction,
+) -> None:
+    """
+    Agenda a exclusão da ephemeral após SEGUNDOS_EPHEMERAL_REBAIXAMENTO.
+
+    Cada nova interação reinicia o prazo (a task antiga tenta apagar e
+    ignora se a mensagem já sumiu ou foi trocada).
+    """
+    try:
+        mensagem = await interacao.original_response()
+    except (discord.NotFound, discord.HTTPException) as erro:
+        registrador.debug(
+            "Não foi possível obter a ephemeral para agendar exclusão: %s",
+            erro,
+        )
+        return
+    asyncio.create_task(
+        excluir_mensagem(mensagem, delay=SEGUNDOS_EPHEMERAL_REBAIXAMENTO)
+    )
+
+
 async def _mostrar_painel(
     interacao: discord.Interaction,
     view: discord.ui.LayoutView,
@@ -122,13 +149,16 @@ async def _mostrar_painel(
 
     - Comando slash (sem mensagem ainda): cria a ephemeral.
     - Clique / modal: edita a mensagem atual.
+    - Em ambos os casos agenda auto-exclusão em 80 segundos.
     """
     tem_mensagem = interacao.message is not None
     ja_respondeu = interacao.response.is_done()
     if tem_mensagem or ja_respondeu:
         await editar_mensagem_original(interacao, view=view, texto=None)
+        await _agendar_exclusao_ephemeral(interacao)
         return
     await responder_view(interacao, view, ephemeral=True)
+    await _agendar_exclusao_ephemeral(interacao)
 
 
 def _checar_executor(interacao: discord.Interaction) -> discord.Member | None:
@@ -148,7 +178,7 @@ class PainelBuscaRebaixarLayout(LoggingViewMixin, discord.ui.LayoutView):
     """Painel efêmero inicial do /rebaixar (estilo Gerenciar Membros)."""
 
     def __init__(self) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=SEGUNDOS_EPHEMERAL_REBAIXAMENTO)
 
         componentes: list = [
             discord.ui.TextDisplay(
@@ -408,7 +438,7 @@ class PainelDestinoRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         pode_livre: bool,
         id_fivem: str | None,
     ) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=SEGUNDOS_EPHEMERAL_REBAIXAMENTO)
         self.alvo = alvo
         self.cargo_atual = cargo_atual
         self.cargo_degrau = cargo_degrau
@@ -580,7 +610,7 @@ class PainelBloqueioRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
         cargo_para: str,
         modo: str,
     ) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=SEGUNDOS_EPHEMERAL_REBAIXAMENTO)
         self.alvo = alvo
         self.cargo_de = cargo_de
         self.cargo_para = cargo_para
@@ -734,7 +764,7 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
         dias_bloqueio: int,
         motivo: str,
     ) -> None:
-        super().__init__(timeout=180)
+        super().__init__(timeout=SEGUNDOS_EPHEMERAL_REBAIXAMENTO)
         self.alvo = alvo
         self.cargo_de = cargo_de
         self.cargo_para = cargo_para
@@ -848,6 +878,7 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
                 ),
                 texto=None,
             )
+            await _agendar_exclusao_ephemeral(interacao)
             return
 
         await publicar_log_rebaixamento(
@@ -869,6 +900,7 @@ class PainelConfirmarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
             ),
             texto=None,
         )
+        await _agendar_exclusao_ephemeral(interacao)
 
 
 class PainelResultadoRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView):
@@ -881,7 +913,7 @@ class PainelResultadoRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutView)
         corpo: str,
         sucesso: bool,
     ) -> None:
-        super().__init__(timeout=120)
+        super().__init__(timeout=SEGUNDOS_EPHEMERAL_REBAIXAMENTO)
         emoji = "✅" if sucesso else "❌"
         cor = (
             discord.Color.dark_green() if sucesso else discord.Color.dark_red()
@@ -921,7 +953,7 @@ class PainelBuscaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
     """Busca membro com rebaixamento ativo para revogar."""
 
     def __init__(self) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=SEGUNDOS_EPHEMERAL_REBAIXAMENTO)
         componentes: list = [
             discord.ui.TextDisplay(
                 "# ♻️ Revogar rebaixamento\n"
@@ -1159,7 +1191,7 @@ class PainelListaRevogarRebaixamentoLayout(LoggingViewMixin, discord.ui.LayoutVi
         opcoes: list[discord.SelectOption],
         ativas: list,
     ) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=SEGUNDOS_EPHEMERAL_REBAIXAMENTO)
         self.alvo = alvo
         self.ativas = ativas
 
@@ -1303,6 +1335,7 @@ class ModalMotivoRevogarRebaixamento(
                 ),
                 texto=None,
             )
+            await _agendar_exclusao_ephemeral(interacao)
             return
 
         await publicar_log_revogacao_rebaixamento(
@@ -1323,3 +1356,4 @@ class ModalMotivoRevogarRebaixamento(
             ),
             texto=None,
         )
+        await _agendar_exclusao_ephemeral(interacao)
