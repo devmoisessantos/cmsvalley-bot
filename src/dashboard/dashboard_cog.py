@@ -61,6 +61,8 @@ class DashboardCog(commands.Cog):
             DASHBOARD_API_URL,
             self._id_canal_padrao() or "não configurado",
         )
+        # Primeiro heartbeat logo após ficar pronto (não espera 1 min).
+        # O before_loop do task já espera wait_until_ready.
 
     async def cog_unload(self) -> None:
         if self.heartbeat.is_running():
@@ -124,7 +126,7 @@ class DashboardCog(commands.Cog):
     async def heartbeat(self) -> None:
         latencia = int((self.bot.latency or 0) * 1000)
         total_membros = sum(g.member_count or 0 for g in self.bot.guilds)
-        await self._post(
+        resposta = await self._post(
             "/internal/heartbeat",
             {
                 "latencia_ms": latencia,
@@ -134,6 +136,12 @@ class DashboardCog(commands.Cog):
                 "versao": VERSAO_BOT,
             },
         )
+        if resposta is None:
+            registrador.warning(
+                "Heartbeat do dashboard falhou (URL/token ou API fora do ar). "
+                "Confira DASHBOARD_API_URL e se DASHBOARD_API_TOKEN = JWT_SECRET "
+                "da API."
+            )
 
     @heartbeat.before_loop
     async def _esperar_pronto_heartbeat(self) -> None:
