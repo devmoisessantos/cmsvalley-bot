@@ -2,10 +2,9 @@
 .vscode/
 .env
 __pycache__/
-backup-flies
-src/tickets/NEW.HTML
 AGENTS.md
 DIVIDA_TECNICA.md
-tests.py
+test.py
 ferramentas/
-tests.py
+tests/
+estrutura.yaml

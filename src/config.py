@@ -107,6 +107,17 @@ if not DATABASE_URL:
         "DATABASE_URL nao definida. Crie um arquivo .env baseado em .env.example."
     )
 
+# ---------------------------------------------------------------------------
+# Dashboard web (cmsvalley-api) — heartbeat + fila de comandos
+#
+# DASHBOARD_API_URL  = URL pública da API (ex.: https://ems-ocr-api.onrender.com)
+# DASHBOARD_API_TOKEN = o MESMO valor do JWT_SECRET da API do dashboard
+# DASHBOARD_CANAL_PADRAO = ID do canal onde embeds/metas do dashboard são postados
+# ---------------------------------------------------------------------------
+DASHBOARD_API_URL = _ler_texto_do_ambiente("DASHBOARD_API_URL").rstrip("/")
+DASHBOARD_API_TOKEN = _ler_texto_do_ambiente("DASHBOARD_API_TOKEN")
+DASHBOARD_CANAL_PADRAO = _ler_numero_do_ambiente("DASHBOARD_CANAL_PADRAO", 0)
+
 # Canal onde o painel de recrutamento fica fixado.
 # Continua com um padrao para nao quebrar o deploy atual, mas agora pode ser
 # trocado pelo .env sem mexer no codigo.
@@ -593,6 +604,8 @@ CANAIS = {
     "CANAL_PAINEL_BAU": 1536397321074511872,
     # 0 ate o canal ser criado no deploy
     "CANAL_PAINEL_SCREENSHARE": 1543655341110067200,
+    # Canal padrão para embeds/metas do dashboard web (sobrescrito por DASHBOARD_CANAL_PADRAO)
+    "CANAL_DASHBOARD": 0,
     "CANAL_TICKETS_BAU": 1486369093769760843,  # ← canal/categoria de tickets (link DM)
     "CANAL_TICKET_VALLEY": 1077995758785138758,
     "CANAL_FINANCAS": 1486369137021161472,

@@ -219,6 +219,7 @@ CAMINHOS_DOS_COGS = [
     "src.status_servidor.status_servidor_cogs",
     "src.status_servidor.status_servidor_tasks",
     "src.booster.booster_tasks",
+    "src.dashboard.dashboard_cog",
 ]
 
 
