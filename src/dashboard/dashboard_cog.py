@@ -18,6 +18,7 @@ Sem essas variáveis o cog carrega, mas fica inativo (só loga um aviso).
 from __future__ import annotations
 
 import logging
+import os
 
 import aiohttp
 import discord
@@ -118,6 +119,57 @@ class DashboardCog(commands.Cog):
             registrador.warning("dashboard GET %s falhou: %s", caminho, falha)
             return None
 
+
+    # ------------------------------------------------------------------
+    # 0) Snapshot real do servidor (cargos, canais, guild)
+    # ------------------------------------------------------------------
+
+    def _snapshot_guild(self) -> tuple[list[dict], list[dict], dict]:
+        """Cargos e canais REAIS (nome, id, cor, posição) do servidor."""
+        guild = None
+        bruto = getattr(DASHBOARD_CANAL_PADRAO, "__self__", None)
+        if bruto is not None:
+            guild = bruto.guild
+        if guild is None:
+            alvo = (os.environ.get("GUILD_ID") or "").strip()
+            guild = self.bot.get_guild(int(alvo)) if alvo.isdigit() else (
+                self.bot.guilds[0] if self.bot.guilds else None
+            )
+        if guild is None:
+            return [], [], {}
+
+        cargos = [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "color": f"#{c.colour.value:06x}" if c.colour.value else "",
+                "position": c.position,
+                "hoist": bool(c.hoist),
+                "mentionable": bool(c.mentionable),
+                "managed": bool(c.managed),
+                "memberCount": len(c.members),
+            }
+            for c in guild.roles
+        ]
+        canais = [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "type": int(c.type),
+                "position": c.position,
+                "parent_id": str(c.category_id) if c.category_id else None,
+            }
+            for c in guild.channels
+        ]
+        info = {
+            "id": str(guild.id),
+            "name": guild.name,
+            "icon": guild.icon.key if guild.icon else None,
+            "memberCount": guild.member_count or len(guild.members),
+            "description": guild.description or "",
+        }
+        return cargos, canais, info
+
     # ------------------------------------------------------------------
     # 1) Heartbeat (1 min)
     # ------------------------------------------------------------------
@@ -126,16 +178,24 @@ class DashboardCog(commands.Cog):
     async def heartbeat(self) -> None:
         latencia = int((self.bot.latency or 0) * 1000)
         total_membros = sum(g.member_count or 0 for g in self.bot.guilds)
-        resposta = await self._post(
-            "/internal/heartbeat",
-            {
-                "latencia_ms": latencia,
-                "guilds": len(self.bot.guilds),
-                "membros": total_membros,
-                "cogs": len(self.bot.cogs),
-                "versao": VERSAO_BOT,
-            },
-        )
+        corpo = {
+            "latencia_ms": latencia,
+            "guilds": len(self.bot.guilds),
+            "membros": total_membros,
+            "cogs": len(self.bot.cogs),
+            "versao": VERSAO_BOT,
+        }
+        # Snapshot real de cargos/canais: o dashboard usa se a REST do Discord
+        # falhar (nada de cargo fictício no painel em nenhuma hipótese).
+        try:
+            cargos, canais, info = self._snapshot_guild()
+            if cargos:
+                corpo["cargos"] = cargos
+                corpo["canais"] = canais
+                corpo["guild_info"] = info
+        except Exception as falha:  # noqa: BLE001
+            registrador.debug("snapshot de guild indisponível: %s", falha)
+        resposta = await self._post("/internal/heartbeat", corpo)
         if resposta is None:
             registrador.warning(
                 "Heartbeat do dashboard falhou (URL/token ou API fora do ar). "
