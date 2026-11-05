@@ -605,7 +605,7 @@ CANAIS = {
     # 0 ate o canal ser criado no deploy
     "CANAL_PAINEL_SCREENSHARE": 1543655341110067200,
     # Canal padrão para embeds/metas do dashboard web (sobrescrito por DASHBOARD_CANAL_PADRAO)
-    "CANAL_DASHBOARD": 0,
+    "CANAL_DASHBOARD": 1567747672415281202,
     "CANAL_TICKETS_BAU": 1486369093769760843,  # ← canal/categoria de tickets (link DM)
     "CANAL_TICKET_VALLEY": 1077995758785138758,
     "CANAL_FINANCAS": 1486369137021161472,
