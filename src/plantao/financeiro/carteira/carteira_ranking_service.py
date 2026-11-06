@@ -1,4 +1,4 @@
-# src/plantao/carteira_ranking.py
+# src/plantao/financeiro/carteira/carteira_ranking_service.py
 """Ranking de moedas em tempo real (edita a mesma mensagem no canal)."""
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from src.database.models import (
     PainelPostado,
     Usuario,
 )
-from src.plantao.carteira_service import (
+from src.plantao.financeiro.carteira.carteira_service import (
     cotacao_moeda_do_membro,
     membro_elegivel_ranking_moedas,
     ranking_top_moedas,

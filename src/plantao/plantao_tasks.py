@@ -139,7 +139,7 @@ class PlantaoTasks(commands.Cog):
             if not _membro_conta_tempo_moeda(membro):
                 continue
             try:
-                from src.plantao.carteira_service import cotacao_moeda_do_membro
+                from src.plantao.financeiro.carteira.carteira_service import cotacao_moeda_do_membro
 
                 cotacao = cotacao_moeda_do_membro(membro)
                 segundos, moedas = await fechar_segmento_parcial_do_ciclo(
@@ -400,7 +400,7 @@ class PlantaoTasks(commands.Cog):
         saldo_antes_penalidade = int(estado.saldo_moedas or 0)
         qtd_penalidade = min(int(PENALIDADE_AFK_MOEDAS), saldo_antes_penalidade)
         if qtd_penalidade > 0:
-            from src.plantao.carteira_service import debitar_lotes
+            from src.plantao.financeiro.carteira.carteira_service import debitar_lotes
 
             await debitar_lotes(
                 session,

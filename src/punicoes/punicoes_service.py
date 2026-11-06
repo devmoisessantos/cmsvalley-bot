@@ -507,7 +507,7 @@ async def executar_exoneracao(
             ajustar_horas_plantao,
             zerar_ciclo_plantao,
         )
-        from src.plantao.carteira_service import zerar_saldo_moedas
+        from src.plantao.financeiro.carteira.carteira_service import zerar_saldo_moedas
 
         await zerar_ciclo_plantao(alvo.id)
         await ajustar_horas_plantao(

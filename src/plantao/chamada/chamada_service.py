@@ -371,7 +371,7 @@ async def _debitar_moedas_falta(discord_id: int, quantidade: int) -> int:
     """Remove moedas do saldo de plantão (nunca fica negativo). Retorna saldo final."""
     if quantidade <= 0:
         return 0
-    from src.plantao.carteira_service import debitar_lotes
+    from src.plantao.financeiro.carteira.carteira_service import debitar_lotes
 
     async with async_session() as session:
         resultado = await session.execute(

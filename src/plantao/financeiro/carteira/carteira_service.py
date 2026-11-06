@@ -1,4 +1,4 @@
-# src/plantao/carteira_service.py
+# src/plantao/financeiro/carteira/carteira_service.py
 """
 Regras da carteira de moedas (plantão).
 

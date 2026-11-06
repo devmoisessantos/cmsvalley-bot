@@ -186,7 +186,7 @@ class RankingPlantaoTasks(commands.Cog):
             )
             return
 
-        from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
+        from src.plantao.financeiro.carteira.carteira_ranking_service import atualizar_ranking_moedas
 
         self._numero_ciclo_moedas += 1
         numero = self._numero_ciclo_moedas
@@ -206,7 +206,7 @@ class RankingPlantaoTasks(commands.Cog):
             return
         data = interacao.data or {}
         custom_id = str(data.get("custom_id") or "")
-        from src.plantao.carteira_panel import (
+        from src.plantao.financeiro.carteira.carteira_panel import (
             CUSTOM_ID_DEP_APROVAR,
             CUSTOM_ID_DEP_RECUSAR,
             _processar_decisao_deposito,
@@ -620,7 +620,7 @@ class RankingPlantaoTasks(commands.Cog):
         #    que está encerrando (e o ciclo novo começar limpo).
         try:
             from src.database.models import EstadoPlantao
-            from src.plantao.carteira_service import cotacao_moeda_do_membro
+            from src.plantao.financeiro.carteira.carteira_service import cotacao_moeda_do_membro
             from src.plantao.plantao_service import fechar_segmento_parcial_do_ciclo
 
             async with async_session() as sessao:

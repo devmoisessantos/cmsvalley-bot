@@ -345,6 +345,27 @@ ALTER TABLE historico_punicoes
     ADD COLUMN IF NOT EXISTS cargos_snapshot_json TEXT;
 """,
     ),
+    Migracao(
+        numero=21,
+        descricao=(
+            "Regras de moeda do plantão editáveis pelo painel financeiro "
+            "(segundos por moeda, tetos diário e semanal, limite de sábado)."
+        ),
+        comando_sql="""
+CREATE TABLE IF NOT EXISTS regras_moeda_plantao (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    segundos_para_moeda INTEGER NOT NULL DEFAULT 1800,
+    teto_moedas_por_dia INTEGER NOT NULL DEFAULT 14,
+    teto_moedas_por_semana INTEGER NOT NULL DEFAULT 84,
+    hora_limite_moeda_sabado INTEGER NOT NULL DEFAULT 12,
+    atualizado_em TIMESTAMPTZ,
+    atualizado_por BIGINT
+);
+INSERT INTO regras_moeda_plantao (id)
+VALUES (1)
+ON CONFLICT (id) DO NOTHING;
+""",
+    ),
 ]
 
 

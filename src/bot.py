@@ -282,6 +282,17 @@ class CmsValleyBot(commands.Bot):
         inicio_deploy()
 
         await self._preparar_banco_de_dados()
+        try:
+            from src.plantao.financeiro.regras_moeda_service import (
+                carregar_regras_do_banco,
+            )
+
+            await carregar_regras_do_banco()
+        except Exception as falha_regras_moeda:
+            registrador.exception(
+                "Não carregou regras de moeda do plantão: %s",
+                falha_regras_moeda,
+            )
         await self._carregar_todos_os_cogs()
         await self._sincronizar_comandos_de_barra()
 

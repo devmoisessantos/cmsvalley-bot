@@ -951,7 +951,7 @@ async def ajustar_saldo_moedas(
             await session.flush()
 
         from src.config import VALOR_MOEDA_INGAME
-        from src.plantao.carteira_service import (
+        from src.plantao.financeiro.carteira.carteira_service import (
             creditar_lotes,
             debitar_lotes,
             zerar_lotes,

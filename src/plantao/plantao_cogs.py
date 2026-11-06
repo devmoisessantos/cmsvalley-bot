@@ -254,6 +254,24 @@ class PlantaoCog(commands.Cog):
             ],
         )
 
+    @grupo_plantao.command(
+        name="painel-financeiro",
+        description="[Admin] Painel de gestão de moedas, auditoria e extratos",
+    )
+    @apenas_administrador()
+    async def plantao_painel_financeiro(
+        self,
+        interacao: discord.Interaction,
+    ):
+        """Abre o hub efêmero de gestão financeira do plantão.
+
+        Permite buscar membro (menção, ID Discord ou FiveM), ver carteira,
+        cruzar horas de call com moedas creditadas e baixar YAML completo.
+        """
+        from src.plantao.financeiro.financeiro_panel import abrir_painel_financeiro
+
+        await abrir_painel_financeiro(interacao)
+
 
 async def setup(bot: commands.Bot):
     """Registra os comandos de plantão quando o bot carrega este domínio."""

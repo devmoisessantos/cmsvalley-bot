@@ -2199,7 +2199,7 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             # Moeda do doutor é creditada abaixo (só uma vez)
             continue
         async with async_session() as session:
-            from src.plantao.carteira_service import (
+            from src.plantao.financeiro.carteira.carteira_service import (
                 cotacao_moeda_do_membro,
                 creditar_lotes,
             )
@@ -2218,7 +2218,7 @@ async def _ao_finalizar_chamada(interaction: discord.Interaction):
             await session.commit()
 
     async with async_session() as session:
-        from src.plantao.carteira_service import (
+        from src.plantao.financeiro.carteira.carteira_service import (
             cotacao_moeda_do_membro,
             creditar_lotes,
         )

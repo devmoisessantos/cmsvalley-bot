@@ -404,7 +404,7 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         return botao
 
     async def _ao_carteira(self, interaction: discord.Interaction):
-        from src.plantao.carteira_panel import abrir_carteira
+        from src.plantao.financeiro.carteira.carteira_panel import abrir_carteira
 
         await abrir_carteira(interaction)
 
@@ -516,7 +516,7 @@ class PainelPlantaoLayout(LoggingViewMixin, discord.ui.LayoutView):
         )
         tempo_total = await calcular_segundos_historico_fechado(interaction.user.id)
         try:
-            from src.plantao.carteira_service import (
+            from src.plantao.financeiro.carteira.carteira_service import (
                 cotacao_moeda_do_membro,
                 obter_valor_total_lotes,
             )
@@ -639,7 +639,7 @@ class InformacoesPlantaoView(LoggingViewMixin, discord.ui.LayoutView):
                 '🔴 Offline (clique em "Entrar em Serviço" para iniciar o cronômetro)'
             )
 
-        from src.plantao.carteira_service import cotacao_moeda_do_membro
+        from src.plantao.financeiro.carteira.carteira_service import cotacao_moeda_do_membro
 
         cotacao = cotacao_moeda_do_membro(self.membro)
         if self.valor_equivalente is not None:

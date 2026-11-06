@@ -1086,3 +1086,24 @@ class Ticket(Base):
     finalizado_em: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class RegraMoedaPlantao(Base):
+    """
+    Regras de recompensa de moeda do plantão (singleton id=1).
+
+    Valores editáveis pelo painel financeiro. O código usa o cache em
+    regras_moeda_service; esta tabela é a fonte persistida.
+    """
+
+    __tablename__ = "regras_moeda_plantao"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    segundos_para_moeda: Mapped[int] = mapped_column(Integer, default=1800)
+    teto_moedas_por_dia: Mapped[int] = mapped_column(Integer, default=14)
+    teto_moedas_por_semana: Mapped[int] = mapped_column(Integer, default=84)
+    hora_limite_moeda_sabado: Mapped[int] = mapped_column(Integer, default=12)
+    atualizado_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    atualizado_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

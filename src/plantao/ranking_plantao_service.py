@@ -49,7 +49,7 @@ from src.database.models import (
     agora,
 )
 from src.utils.relogio import timestamp_unix_agora
-from src.plantao.carteira_service import membro_elegivel_ranking_moedas
+from src.plantao.financeiro.carteira.carteira_service import membro_elegivel_ranking_moedas
 from src.recrutamento.ranking_service import (
     obter_periodo_ciclo_mensal,
     obter_periodo_ciclo_semanal,

@@ -29,84 +29,89 @@ registrador = logging.getLogger(__name__)
 # Cada item: (enunciado, lista de opções, letra da resposta correta)
 PERGUNTAS = [
     (
-        'Para que serve o comando "Toggle" (F7)?',
-        ["Guardar veículos", "Praticar ações ilegais", "Entrar e sair de serviço"],
-        "C",
-    ),
-    (
-        "Sobre o uso do uniforme e toggle:",
+        "É permitido desligar o toggle apenas para evitar ser saqueado?",
         [
-            "Pode usar uniforme fora de serviço se estiver sem cometer crimes",
-            "O uniforme só deve ser usado com toggle ligado e em serviço",
-            "O toggle é opcional durante o expediente",
+            "Sim, é uma estratégia válida",
+            "Não, é proibido usar o toggle para evitar saque",
+            "Depende do horário",
         ],
         "B",
     ),
     (
-        "Um enfermeiro decide sair do hospital uniformizado para ajudar na rua. Isso "
-        "é:",
+        "Qual é a punição para assédio, intolerância ou discriminação?",
         [
-            "Permitido em emergências",
-            "Permitido com autorização",
-            "Proibido, enfermeiros atuam apenas no hospital",
-        ],
-        "C",
-    ),
-    (
-        "Se o paciente recusar a cobrança, você deve NEGAR atendimento?",
-        [
-            "Sim, não sou obrigado",
-            "Talvez, se eu não conhecer a pessoa",
-            "Apenas em atendimento externo",
-        ],
-        "C",
-    ),
-    (
-        "Você saiu do hospital rapidamente para resolver algo fora e esqueceu o "
-        "toggle ligado. O correto seria:",
-        [
-            "Manter ligado pois foi rápido",
-            "Desligar o toggle antes de sair do hospital",
-            "Ignorar, pois não afeta o serviço",
+            "Apenas um aviso verbal",
+            "Punição imediata",
+            "Nada, desde que seja fora do HP",
         ],
         "B",
     ),
     (
-        "O que NÃO é permitido durante o serviço?",
-        ["Atender pacientes", "Ficar ausente farmando salário", "Usar rádio"],
+        "Ao sair para atendimento EXTERNO, em qual rádio você deve estar?",
+        ["Rádio 12", "Rádio 13", "Qualquer rádio"],
         "B",
     ),
     (
-        "Qual o valor correto de reanimação no hospital?",
-        ["5.000", "8.000", "10.000"],
-        "B",
-    ),
-    (
-        "O que acontece na 3ª advertência?",
+        "Qual dessas ações é PROIBIDA durante o serviço?",
         [
-            "Após 2 advertências ocorre exoneração",
-            "3ª advertência resulta em exoneração",
-            "Advertências são apenas avisos sem punição",
-        ],
-        "B",
-    ),
-    (
-        "Você sendo membro do HP, pode se envolver com outras organizações (ilegais) "
-        "durante o serviço?",
-        ["Sim, se não for pego", "Não, é totalmente proibido", "Depende da situação"],
-        "B",
-    ),
-    (
-        "Durante atendimento interno, qual conduta é obrigatória?",
-        [
-            "Permanecer na rádio 12 e, se possível, na call do hospital",
-            "Usar qualquer rádio disponível",
-            "Não é necessário comunicação",
+            "Carregar pessoas sem autorização (comando H)",
+            "Usar estetoscópio de cor diferente",
+            "Usar óculos",
         ],
         "A",
     ),
     (
-        "Ao prosseguir, você confirma que leu e concorda com todas as regras do HP?",
+        "É permitido guardar itens pessoais no baú do hospital?",
+        [
+            "Sim, se estiverem identificados",
+            "Sim, desde que não atrapalhe",
+            "Não, é proibido colocar itens pessoais no baú do HP",
+        ],
+        "C",
+    ),
+    (
+        "Sobre o uniforme, o que é PERMITIDO?",
+        [
+            "Qualquer máscara e chapéu exagerado",
+            "Óculos, chapéu sem exageros, estetoscópio de cor diferente e sapatos brancos",
+            "Modificar o uniforme livremente",
+        ],
+        "B",
+    ),
+    (
+        "Você pode reanimar um paciente fora da enfermaria (saguão/hall)?",
+        [
+            "Não, somente dentro da enfermaria",
+            "Sim, é permitido; mas se for cobrar, leve o paciente para a enfermaria",
+            "Sim, e pode cobrar no próprio saguão",
+        ],
+        "B",
+    ),
+    (
+        "Qual é o valor padrão de reanimação em atendimento EXTERNO?",
+        ["8.000", "10.000", "16.000"],
+        "C",
+    ),
+    (
+        "O que fazer em caso de ausência prolongada?",
+        [
+            "Apenas avisar no rádio",
+            "Registrar no canal de registrar-ausência",
+            "Não é necessário avisar",
+        ],
+        "B",
+    ),
+    (
+        "É permitido aceitar propina (dinheiro ou itens)?",
+        [
+            "Sim, se for de paciente",
+            "Sim, se for fora de serviço",
+            "Não, é totalmente proibido",
+        ],
+        "C",
+    ),
+    (
+        "Ao prosseguir, você confirma que leu e concorda com todas as regras do CMS VALLEY.",
         ["Estou ciente e concordo com todas as regras", "Não concordo"],
         "A",
     ),

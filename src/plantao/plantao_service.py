@@ -28,22 +28,24 @@ from src.config import (
     CARGOS,
     CARGOS_DOUTOR_OU_ACIMA,
     CARGOS_HIERARQUIA,
-    HORA_LIMITE_MOEDA_SABADO,
-    SEGUNDOS_PARA_MOEDA,
-    TETO_MOEDAS_POR_DIA,
-    TETO_MOEDAS_POR_SEMANA,
     TIMEZONE_LOCAL,
     VALOR_MOEDA_INGAME,
     obter_todos_ids_canais_plantao,
 )
 from src.database.conexao import async_session
 from src.database.models import EstadoPlantao
-from src.plantao.carteira_service import (
+from src.plantao.financeiro.carteira.carteira_service import (
     cotacao_moeda_do_membro,
     creditar_lotes,
     debitar_lotes,
     obter_valor_total_lotes,
     zerar_lotes,
+)
+from src.plantao.financeiro.regras_moeda_service import (
+    hora_limite_moeda_sabado,
+    segundos_para_moeda,
+    teto_moedas_por_dia,
+    teto_moedas_por_semana,
 )
 from src.plantao.plantao_logger import registrar_evento_plantao
 from src.utils.error_handling import capturar_erro_e_logar
@@ -129,7 +131,7 @@ def _janela_permite_moeda(agora_local: datetime) -> bool:
     # weekday: segunda=0 … domingo=6
     if agora_local.weekday() == 6:
         return False
-    if agora_local.weekday() == 5 and agora_local.hour >= HORA_LIMITE_MOEDA_SABADO:
+    if agora_local.weekday() == 5 and agora_local.hour >= hora_limite_moeda_sabado():
         return False
     return True
 
@@ -150,40 +152,68 @@ def _garantir_contadores_de_teto(
         estado.moedas_ganhas_na_semana = 0
 
 
+def _descartar_blocos_completos_sem_credito(estado: EstadoPlantao) -> None:
+    """
+    Mantém só o progresso incompleto da próxima moeda.
+
+    Blocos de 30 min que não puderam virar moeda (teto diário/semanal ou
+    janela fechada) não ficam guardados para o dia seguinte. Sem isso, o
+    membro ligava o plantão, entrava na call e recebia até 14 moedas de
+    uma vez — crédito sem trabalho novo.
+    """
+    acumulado = int(estado.segundos_acumulados or 0)
+    limite = segundos_para_moeda()
+    if acumulado < limite:
+        return
+    estado.segundos_acumulados = acumulado % limite
+
+
 def _creditar_moedas_de_acumulado(
     estado: EstadoPlantao,
 ) -> int:
     """
-    Converte segundos_acumulados em moedas (1 / SEGUNDOS_PARA_MOEDA).
+    Converte segundos_acumulados em moedas (1 / segundos_para_moeda).
 
     Respeita:
-    - domingo sem moeda; sábado só antes do meio-dia
-    - teto diário e semanal
+    - domingo sem moeda; sábado só antes do limite configurado
+    - teto diário e semanal (regras do painel financeiro)
 
-    Os segundos além do teto **não são descartados**: ficam no acumulado
-    para o próximo dia/semana em que ainda houver cota. Horas de ranking
-    vêm dos logs de plantão, não deste contador.
+    Blocos completos que não cabem na cota do dia **são descartados**
+    (fica só o resto incompleto). Horas de ranking continuam nos logs
+    de plantão, independentes deste contador.
     """
     agora_local = _agora_local()
     if not _janela_permite_moeda(agora_local):
+        _descartar_blocos_completos_sem_credito(estado)
         return 0
 
     _garantir_contadores_de_teto(estado, agora_local)
 
+    limite = segundos_para_moeda()
+    teto_dia = teto_moedas_por_dia()
+    teto_semana = teto_moedas_por_semana()
+
     moedas_ganhas = 0
-    while int(estado.segundos_acumulados or 0) >= SEGUNDOS_PARA_MOEDA:
+    while int(estado.segundos_acumulados or 0) >= limite:
         ja_no_dia = int(estado.moedas_ganhas_no_dia or 0)
         ja_na_semana = int(estado.moedas_ganhas_na_semana or 0)
-        if ja_no_dia >= TETO_MOEDAS_POR_DIA:
+        if ja_no_dia >= teto_dia:
             break
-        if ja_na_semana >= TETO_MOEDAS_POR_SEMANA:
+        if ja_na_semana >= teto_semana:
             break
 
-        estado.segundos_acumulados -= SEGUNDOS_PARA_MOEDA
+        estado.segundos_acumulados -= limite
         estado.saldo_moedas = int(estado.saldo_moedas or 0) + 1
         estado.moedas_ganhas_no_dia = ja_no_dia + 1
         estado.moedas_ganhas_na_semana = ja_na_semana + 1
         moedas_ganhas += 1
+
+    # Se parou por teto, não banco o excesso para o próximo dia.
+    ja_no_dia = int(estado.moedas_ganhas_no_dia or 0)
+    ja_na_semana = int(estado.moedas_ganhas_na_semana or 0)
+    bateu_teto = ja_no_dia >= teto_dia or ja_na_semana >= teto_semana
+    if bateu_teto:
+        _descartar_blocos_completos_sem_credito(estado)
 
     return moedas_ganhas
 
@@ -466,7 +496,7 @@ async def _finalizar_periodo_em_call(
             },
         )
         try:
-            from src.plantao.carteira_service import (
+            from src.plantao.financeiro.carteira.carteira_service import (
                 registrar_ganhos_plantao_no_extrato,
             )
 
@@ -581,7 +611,7 @@ async def fechar_segmento_parcial_do_ciclo(
 
     if moedas_ganhas > 0:
         try:
-            from src.plantao.carteira_service import (
+            from src.plantao.financeiro.carteira.carteira_service import (
                 registrar_ganhos_plantao_no_extrato,
             )
 
@@ -764,7 +794,7 @@ async def admin_definir_moedas(
         await session.refresh(estado)
 
     try:
-        from src.plantao.carteira_service import registrar_movimentacao
+        from src.plantao.financeiro.carteira.carteira_service import registrar_movimentacao
 
         if delta != 0:
             await registrar_movimentacao(
@@ -828,7 +858,7 @@ async def solicitar_troca_moedas(
         id_fivem = estado.id_fivem
 
     try:
-        from src.plantao.carteira_service import registrar_movimentacao
+        from src.plantao.financeiro.carteira.carteira_service import registrar_movimentacao
 
         await registrar_movimentacao(
             discord_id=membro.id,

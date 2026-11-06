@@ -24,7 +24,7 @@ from src.laudos.ranking_laudos_service import (
     listar_historico_laudos,
     salvar_historico_laudos,
 )
-from src.plantao.carteira_ranking_service import montar_view_ranking_moedas
+from src.plantao.financeiro.carteira.carteira_ranking_service import montar_view_ranking_moedas
 from src.plantao.ranking_plantao_service import (
     gerar_view_ranking_chamadas,
     gerar_view_ranking_horas,

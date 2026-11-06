@@ -1,4 +1,4 @@
-# src/plantao/carteira_panel.py
+# src/plantao/financeiro/carteira/carteira_panel.py
 """Painéis ephemeral da carteira de moedas (Components V2)."""
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import discord
 from src.config import (
     CANAIS,
 )
-from src.plantao.carteira_service import (
+from src.plantao.financeiro.carteira.carteira_service import (
     aprovar_deposito,
     cargo_principal_hierarquia,
     cotacao_moeda_do_membro,
@@ -815,7 +815,7 @@ class ViewConfirmarEnvioTransferencia(LoggingViewMixin, discord.ui.LayoutView):
         )
 
         try:
-            from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
+            from src.plantao.financeiro.carteira.carteira_ranking_service import atualizar_ranking_moedas
 
             await atualizar_ranking_moedas(interacao.client)
         except Exception as erro_ao_atualizar_ranking:
@@ -1130,7 +1130,7 @@ async def _processar_decisao_deposito(
                 guilda=interacao.guild,
             )
         try:
-            from src.plantao.carteira_ranking_service import atualizar_ranking_moedas
+            from src.plantao.financeiro.carteira.carteira_ranking_service import atualizar_ranking_moedas
 
             await atualizar_ranking_moedas(interacao.client)
         except Exception as erro_ao_atualizar_ranking:

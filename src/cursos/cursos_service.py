@@ -25,7 +25,7 @@ from src.database.models import (
     SolicitacaoCurso,
     agora,
 )
-from src.plantao.carteira_service import cotacao_moeda_do_membro
+from src.plantao.financeiro.carteira.carteira_service import cotacao_moeda_do_membro
 from src.plantao.plantao_permissoes import e_diretoria
 from src.utils.error_handling import ignorar_falha_cosmetica
 from src.utils.formatacao import formatar_reais
@@ -586,7 +586,7 @@ async def calcular_cobranca_pacote(
 
     # Abatimento = soma do valor real dos lotes debitados (FIFO na carteira).
     # Ex.: 2×25k + 4×20k + 4×10k = R$ 170.000, não moedas × cotação do cargo.
-    from src.plantao.carteira_service import simular_valor_debito
+    from src.plantao.financeiro.carteira.carteira_service import simular_valor_debito
 
     if moedas_usadas > 0 and valor_bruto > 0:
         while moedas_usadas > 0:
@@ -729,7 +729,7 @@ async def debitar_moedas_curso(
     if quantidade <= 0:
         return True, await consultar_saldo_moedas(discord_id), ""
 
-    from src.plantao.carteira_service import debitar_lotes
+    from src.plantao.financeiro.carteira.carteira_service import debitar_lotes
 
     async with async_session() as sessao:
         resultado = await sessao.execute(
@@ -779,7 +779,7 @@ async def creditar_moedas_instrutor(
         return await consultar_saldo_moedas(discord_id)
 
     from src.config import VALOR_MOEDA_INGAME
-    from src.plantao.carteira_service import creditar_lotes
+    from src.plantao.financeiro.carteira.carteira_service import creditar_lotes
 
     cotacao_usar = int(cotacao) if cotacao and cotacao > 0 else int(VALOR_MOEDA_INGAME)
 
