@@ -13,7 +13,7 @@ import discord
 
 from src.config import CANAIS
 from src.utils.log_container import LogContainerView
-from src.utils.mensagens import COR_AVISO, COR_ERRO, COR_INFO, COR_SUCESSO
+from src.utils.mensagens import COR_AVISO, COR_ERRO, COR_SUCESSO
 
 registrador = logging.getLogger(__name__)
 

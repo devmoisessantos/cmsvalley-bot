@@ -4,6 +4,7 @@ Cliente HTTP do bot para a API do dashboard (cmsvalley-api).
 Todas as chamadas internas (/internal/*) passam por aqui. O token é o
 mesmo JWT_SECRET da API (variável DASHBOARD_API_TOKEN no bot).
 
+Rotas apenas em português.
 """
 
 from __future__ import annotations
