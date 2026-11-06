@@ -28,6 +28,7 @@ from src.dashboard.dashboard_service import (
     montar_corpo_do_sinal,
     montar_snapshot_da_guild,
     publicar_painel_de_metas,
+    sincronizar_metas_por_cargo_do_dashboard,
 )
 from src.utils.mensagens import (
     responder_erro,
@@ -86,98 +87,78 @@ class DashboardCogs(commands.Cog):
         view = montar_painel_de_status(bot_info)
         await responder_view(interacao, view, ephemeral=True)
 
-        extras = (
-            f"API: `{DASHBOARD_API_URL or '—'}`\n"
-            f"Canal padrão: `{id_canal_padrao() or 'não configurado'}`\n"
-            f"Token configurado: `{'sim' if DASHBOARD_API_TOKEN else 'não'}`"
-        )
-        try:
-            await interacao.followup.send(extras, ephemeral=True)
-        except Exception:  # noqa: BLE001
-            pass
-
     @grupo.command(
         name="sync",
-        description="Força a republicação do painel de KPIs no canal do dashboard.",
+        description="Sincroniza metas por cargo e republica o painel de KPIs.",
     )
     @esta_autorizado()
     async def comando_sync(
         self,
         interacao: discord.Interaction,
     ) -> None:
-        """Busca overview na API e atualiza o card de metas no Discord."""
+        """Puxa metas da API e atualiza o card de KPIs no Discord."""
         await interacao.response.defer(ephemeral=True)
         if not self.cliente.ativo:
             await responder_erro(
                 interacao,
-                "Integração desligada: configure DASHBOARD_API_URL e "
-                "DASHBOARD_API_TOKEN no .env do bot.",
-            )
-            return
-        try:
-            quantidade = await publicar_painel_de_metas(
-                self.bot,
-                self.cliente,
-            )
-        except Exception as falha:  # noqa: BLE001
-            registrador.exception("Falha no /dashboard sync")
-            await responder_erro(
-                interacao,
-                f"Não consegui sincronizar as metas: {falha}",
+                "Integração desligada",
+                [
+                    "Configure `DASHBOARD_API_URL` e "
+                    "`DASHBOARD_API_TOKEN` no ambiente do bot."
+                ],
             )
             return
 
-        if quantidade == 0:
-            await responder_info(
-                interacao,
-                "Sincronização ok, mas nenhuma meta foi renderizada "
-                "(canal ausente ou overview vazio).",
-            )
-            return
+        cargos = await sincronizar_metas_por_cargo_do_dashboard(self.cliente)
+        quantidade = await publicar_painel_de_metas(self.bot, self.cliente)
+        canal = id_canal_padrao()
         await responder_sucesso(
             interacao,
-            f"Painel de KPIs atualizado com {quantidade} meta(s).",
+            "Sincronização concluída",
+            [
+                f"Metas por cargo aplicadas: **{cargos}**.",
+                f"Painel de KPIs com **{quantidade}** meta(s).",
+                f"Canal padrão: `{canal or 'não configurado'}`.",
+            ],
         )
 
     @grupo.command(
         name="catalogo",
-        description="Lista o que cada métrica significa e de qual tabela vem.",
+        description="Lista metas e fontes de dados do dashboard.",
     )
     @esta_autorizado()
     async def comando_catalogo(
         self,
         interacao: discord.Interaction,
     ) -> None:
-        """Ensina a equipe (e a API) de onde saem os números do dashboard."""
-        linhas_metas = []
+        """Ensina a equipe de onde saem os números do dashboard."""
+        linhas: list[str] = ["## Metas de referência"]
         for chave, meta in METAS_CATALOGO.items():
             origem = meta["origem"]
             tabelas = ", ".join(origem["tabelas"])
-            linhas_metas.append(
-                f"**{meta['rotulo']}** (`{chave}`)\n"
-                f"Tabelas: `{tabelas}`\n"
-                f"{origem['regra']}"
+            linhas.append(
+                f"**{meta['rotulo']}** (`{chave}`) — tabelas: `{tabelas}`"
             )
+            linhas.append(origem["regra"])
 
-        linhas_fontes = []
+        linhas.append("## Fontes no banco do bot")
         for nome, fonte in FONTES_DE_DADOS.items():
-            linhas_fontes.append(
-                f"**{nome}** → `{fonte['tabela']}`\n"
-                f"{fonte['descricao']}"
+            linhas.append(
+                f"**{nome}** → `{fonte['tabela']}` — {fonte['descricao']}"
             )
 
-        texto = (
-            "# Catálogo do dashboard\n"
-            "## Metas\n"
-            + "\n\n".join(linhas_metas)
-            + "\n\n## Fontes no banco do bot\n"
-            + "\n\n".join(linhas_fontes)
-        )
-        # Resposta longa: cortamos se passar do limite do Discord.
-        if len(texto) > 1800:
-            texto = texto[:1800] + "\n…"
+        # Cards não gostam de texto infinito; corta com segurança.
+        texto_cheio = "\n".join(linhas)
+        if len(texto_cheio) > 3500:
+            linhas = linhas[:40]
+            linhas.append("… (catálogo truncado)")
 
-        await responder_info(interacao, texto)
+        await responder_info(
+            interacao,
+            "Catálogo do dashboard",
+            linhas,
+            delay=30,
+        )
 
     @grupo.command(
         name="snapshot",
@@ -193,28 +174,46 @@ class DashboardCogs(commands.Cog):
         if not self.cliente.ativo:
             await responder_erro(
                 interacao,
-                "Integração desligada: configure URL e token do dashboard.",
+                "Integração desligada",
+                [
+                    "Configure URL e token do dashboard no ambiente do bot."
+                ],
+            )
+            return
+
+        try:
+            cargos, canais, info = montar_snapshot_da_guild(self.bot)
+        except Exception as falha:  # noqa: BLE001
+            registrador.exception("Falha ao montar snapshot: %s", falha)
+            await responder_erro(
+                interacao,
+                "Snapshot falhou",
+                [f"Não consegui montar cargos/canais: `{falha}`."],
             )
             return
 
         corpo = montar_corpo_do_sinal(self.bot)
-        cargos, canais, info = montar_snapshot_da_guild(self.bot)
         resposta = await self.cliente.enviar_sinal_do_bot(corpo)
         if resposta is None:
             await responder_erro(
                 interacao,
-                "A API não aceitou o sinal do bot. "
-                "Confira URL, token e se o banco da API está no ar.",
+                "API não respondeu",
+                [
+                    "O sinal do bot não foi aceito.",
+                    "Confira URL, token e se a API está no ar "
+                    "(rotas `/internal/*`).",
+                ],
             )
             return
 
         await responder_sucesso(
             interacao,
-            (
-                f"Snapshot enviado: {len(cargos)} cargos, "
-                f"{len(canais)} canais, guild `{info.get('name', '—')}`. "
-                f"Catálogo v{montar_catalogo_para_api()['versao_catalogo']}."
-            ),
+            "Snapshot enviado",
+            [
+                f"**{len(cargos)}** cargos, **{len(canais)}** canais.",
+                f"Guild: `{info.get('name', '—')}`.",
+                f"Catálogo v{montar_catalogo_para_api()['versao_catalogo']}.",
+            ],
         )
 
 

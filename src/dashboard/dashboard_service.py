@@ -92,7 +92,7 @@ def montar_snapshot_da_guild(
             {
                 "id": str(canal.id),
                 "name": canal.name,
-                "type": int(canal.type),
+                "type": getattr(canal.type, "value", canal.type),
                 "position": canal.position,
                 "parent_id": (
                     str(canal.category_id) if canal.category_id else None
