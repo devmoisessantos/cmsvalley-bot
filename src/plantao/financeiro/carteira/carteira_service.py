@@ -12,6 +12,7 @@ Troca e desconto consomem lotes da menor cotação para a maior.
 
 from __future__ import annotations
 
+import logging
 from datetime import (
     datetime,
     timedelta,
@@ -36,6 +37,8 @@ from src.database.models import (
     PedidoDepositoMoeda,
 )
 from src.utils.formatacao import formatar_dinheiro
+
+registrador = logging.getLogger(__name__)
 
 
 def membro_na_hierarquia(membro: discord.Member) -> bool:
@@ -544,12 +547,16 @@ async def registrar_movimentacao(
     saldo_apos: int,
     outro_discord_id: int | None = None,
     referencia: str | None = None,
+    guild: discord.Guild | None = None,
+    id_fivem: str | None = None,
 ) -> None:
     """Registra no banco uma alteração já calculada no saldo de moedas.
 
-    Guarda o saldo resultante, a contraparte e uma referência curta quando existirem,
-    formando o extrato auditável. Não altera o saldo: quem chama deve fazê-lo na mesma
-    regra de negócio para que o histórico não substitua a operação financeira real.
+    Guarda o saldo resultante, a contraparte e uma referência curta quando
+    existirem, formando o extrato auditável. Não altera o saldo: quem chama
+    deve fazê-lo na mesma regra de negócio.
+
+    Se `guild` for informada, publica também no canal LOG_CARTEIRA.
     """
     async with async_session() as sessao:
         sessao.add(
@@ -563,6 +570,30 @@ async def registrar_movimentacao(
             )
         )
         await sessao.commit()
+
+    if guild is not None:
+        try:
+            from src.plantao.financeiro.carteira.carteira_logger import (
+                publicar_log_carteira,
+            )
+
+            await publicar_log_carteira(
+                guild,
+                discord_id=discord_id,
+                tipo=tipo,
+                valor=int(valor),
+                saldo_apos=int(saldo_apos),
+                outro_discord_id=outro_discord_id,
+                referencia=referencia,
+                id_fivem=id_fivem,
+            )
+        except Exception as erro_log_carteira:
+            registrador.exception(
+                "Extrato gravado, mas o log visual da carteira falhou "
+                "para %s: %s",
+                discord_id,
+                erro_log_carteira,
+            )
 
 
 async def registrar_ganhos_plantao_no_extrato(

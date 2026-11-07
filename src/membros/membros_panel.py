@@ -324,9 +324,7 @@ async def _t_plantao(membro, estado):
     segundos_no_ciclo = await segundos_tempo_no_ciclo(membro.id, estado)
     cotacao = cotacao_moeda_do_membro(membro)
     try:
-        from src.plantao.financeiro.carteira.carteira_service import (
-            obter_valor_total_lotes,
-        )
+        from src.plantao.financeiro.carteira.carteira_service import obter_valor_total_lotes
 
         valor_reais = formatar_dinheiro(await obter_valor_total_lotes(membro.id))
     except Exception:
@@ -339,7 +337,9 @@ async def _t_plantao(membro, estado):
             ).total_seconds()
         )
         nome = NOMES_CANAIS_PLANTAO.get(estado.canal_atual_id, "?")
-        status = f"✅ `em serviço` · call `{formatar_hms(segundos_na_call)}` · `{nome}`"
+        status = (
+            f"✅ `em serviço` · call `{formatar_hms(segundos_na_call)}` · `{nome}`"
+        )
     elif online:
         status = "✅ `em serviço` · _aguardando call_"
     else:
@@ -1487,7 +1487,11 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             executor=i.user,
             alvo=self.alvo,
             acao="ZERAR_CICLO",
-            detalhes=(f"ok={ok}; ciclo_depois={ciclo_depois}" if ok else "sem estado"),
+            detalhes=(
+                f"ok={ok}; ciclo_depois={ciclo_depois}"
+                if ok
+                else "sem estado"
+            ),
         )
         if ok:
             await self._refresh(
@@ -1604,11 +1608,17 @@ class FichaMembroAdminView(LoggingViewMixin, discord.ui.LayoutView):
             await responder_erro(
                 i,
                 titulo="Sem permissão",
-                linhas=[mensagem_sem_permissao("rebaixar membros (apenas Diretor++)")],
+                linhas=[
+                    mensagem_sem_permissao(
+                        "rebaixar membros (apenas Diretor++)"
+                    )
+                ],
             )
             return
         if not isinstance(self.alvo, discord.Member):
-            await responder_erro(i, titulo="Alvo", linhas=["Precisa estar no server."])
+            await responder_erro(
+                i, titulo="Alvo", linhas=["Precisa estar no server."]
+            )
             return
         await abrir_rebaixamento_para_membro(i, self.alvo)
 

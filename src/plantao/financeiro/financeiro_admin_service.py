@@ -138,6 +138,7 @@ async def ajustar_saldo_com_motivo(
                 valor=delta,
                 saldo_apos=saldo_depois,
                 referencia=referencia,
+                guild=executor.guild,
             )
     except Exception as erro_extrato:
         await capturar_erro_e_logar(
@@ -299,3 +300,43 @@ async def zerar_segundos_acumulados_excesso(
         f"Acumulado de <@{discord_id}>: `{antes}s` → `{depois}s` "
         f"(blocos ≥ {limite}s removidos)."
     )
+
+
+
+async def corrigir_todos_acumulados_excesso(
+    executor: discord.Member,
+    *,
+    apenas_discord_ids: list[int] | None = None,
+    limite: int = 80,
+) -> tuple[int, int, list[str]]:
+    """
+    Limpa blocos completos de segundos_acumulados em lote.
+
+    Se `apenas_discord_ids` for passado, só esses membros.
+    Senão, todos com acumulado >= 1 bloco.
+
+    Retorna (ok_count, falha_count, linhas de relatório).
+    Não credita moeda — só descarta bloco completo parado.
+    """
+    from src.plantao.financeiro.financeiro_service import (
+        listar_alertas_acumulado_travado,
+    )
+
+    if apenas_discord_ids is not None:
+        ids = list(dict.fromkeys(int(i) for i in apenas_discord_ids))[:limite]
+    else:
+        alertas = await listar_alertas_acumulado_travado(limite=limite)
+        ids = [a.discord_id for a in alertas]
+
+    ok_count = 0
+    falha_count = 0
+    linhas: list[str] = []
+    for discord_id in ids:
+        ok, msg = await zerar_segundos_acumulados_excesso(discord_id, executor)
+        if ok:
+            ok_count += 1
+            linhas.append(f"OK · {msg}")
+        else:
+            falha_count += 1
+            linhas.append(f"FALHA · {msg}")
+    return ok_count, falha_count, linhas

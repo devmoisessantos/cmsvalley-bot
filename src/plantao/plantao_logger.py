@@ -19,6 +19,37 @@ from src.database.models import (
     LogPlantao,
     Recrutamento,
 )
+from src.plantao.eventos_plantao import (
+    AFK_AVISO,
+    AJUSTE_SALDO_STAFF,
+    CALL_ENCERRADA,
+    CALL_ENCERRADA_POR_AFK,
+    DESLIGAMENTO_AUTOMATICO,
+    ENTROU_CALL,
+    ENTROU_CALL_VALIDA,
+    EVENTOS_LOG_CARTEIRA,
+    HOUSEKEEPING,
+    LEMBRETE_10,
+    LEMBRETE_15,
+    LEMBRETE_25,
+    LIMPEZA_ACUMULADO,
+    MEMBRO_AFK,
+    MOEDA_CREDITADA,
+    MOEDA_PAUSADA,
+    MOEDA_RETOMADA,
+    OCIOSO_ENCERRADO,
+    PENALIDADE_AFK,
+    RECALCULO_MOEDAS,
+    SAIU_CALL,
+    SAIU_CALL_VALIDA,
+    TEMPO_MOEDA_FINALIZADO,
+    TEMPO_MOEDA_INICIADO,
+    TOGGLE_OFF,
+    TOGGLE_ON,
+    TROCA_MOEDAS_SOLICITADA,
+    TROCOU_CALL,
+    TROCOU_CALL_VALIDA,
+)
 from src.utils.formatacao import formatar_hms
 
 EVENTOS_PLANTAO = {
@@ -98,7 +129,13 @@ async def registrar_evento_plantao(
         )
         await session.commit()
 
-    canal = guild.get_channel(CANAIS["LOG_PLANTAO"])
+    # Moedas e extrato vão para LOG_CARTEIRA; toggle/call ficam no LOG_PLANTAO.
+    chave_canal = (
+        "LOG_CARTEIRA" if evento in EVENTOS_LOG_CARTEIRA else "LOG_PLANTAO"
+    )
+    canal = guild.get_channel(CANAIS.get(chave_canal) or 0)
+    if canal is None and chave_canal == "LOG_CARTEIRA":
+        canal = guild.get_channel(CANAIS.get("LOG_PLANTAO") or 0)
     if canal is None:
         # canal ainda não configurado — o registro no banco já aconteceu, só não posta
         return

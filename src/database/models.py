@@ -1099,10 +1099,18 @@ class RegraMoedaPlantao(Base):
     __tablename__ = "regras_moeda_plantao"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    segundos_para_moeda: Mapped[int] = mapped_column(Integer, default=1800)
-    teto_moedas_por_dia: Mapped[int] = mapped_column(Integer, default=14)
-    teto_moedas_por_semana: Mapped[int] = mapped_column(Integer, default=84)
-    hora_limite_moeda_sabado: Mapped[int] = mapped_column(Integer, default=12)
+    segundos_para_moeda: Mapped[int] = mapped_column(
+        Integer, default=1800, server_default="1800"
+    )
+    teto_moedas_por_dia: Mapped[int] = mapped_column(
+        Integer, default=14, server_default="14"
+    )
+    teto_moedas_por_semana: Mapped[int] = mapped_column(
+        Integer, default=84, server_default="84"
+    )
+    hora_limite_moeda_sabado: Mapped[int] = mapped_column(
+        Integer, default=12, server_default="12"
+    )
     atualizado_em: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

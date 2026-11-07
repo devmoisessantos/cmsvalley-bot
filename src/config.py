@@ -702,6 +702,8 @@ CANAIS = {
     "LOG_WHITELIST": 1546202991806128188,
     "LOG_PUNICOES": 1534935830378840145,
     "LOG_PLANTAO": 1545982136761450540,
+    # Movimentações de moedas (ganho, troca, ajuste, transferência, depósito)
+    "LOG_CARTEIRA": 1568439164901531759,
     "LOG_CARGOS": 1545980093283696781,
     # Auditoria geral do servidor
     "LOG_CANAIS": 1540387277027410020,

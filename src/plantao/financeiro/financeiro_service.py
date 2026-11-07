@@ -28,6 +28,32 @@ from src.database.models import (
     LoteMoeda,
     MovimentacaoMoeda,
 )
+from src.plantao.eventos_plantao import (
+    CALL_ENCERRADA,
+    CALL_ENCERRADA_POR_AFK,
+    CICLO_MINUTO,
+    CICLO_PERIODO,
+    EVENTOS_AFK as EVENTOS_AFK_CANONICOS,
+    EVENTOS_DURACAO_CALL_UTIL,
+    HOUSEKEEPING,
+    MOEDA_PAUSADA,
+    SAIU_CALL,
+    SAIU_CALL_VALIDA,
+    TEMPO_MOEDA_FINALIZADO,
+    TROCOU_CALL,
+    TROCOU_CALL_VALIDA,
+)
+from src.plantao.financeiro.moeda_helper import (
+    AnomaliaMoeda,
+    ORDEM_SEVERIDADE,
+    SEVERIDADE_CRITICO,
+    SEVERIDADE_GRAVE,
+    SEVERIDADE_LEVE,
+    anomalia_acumulado,
+    anomalia_credito_lote,
+    credito_em_lote_e_invalido,
+    pior_severidade,
+)
 from src.plantao.financeiro.regras_moeda_service import (
     segundos_para_moeda,
     teto_moedas_por_dia,
@@ -39,28 +65,26 @@ from src.utils.formatacao import (
 )
 
 
-# Eventos que fecham um trecho contável de call (têm duracao_segundos útil)
+# Eventos que fecham trecho contável (legado + nomes canônicos)
 EVENTOS_COM_DURACAO_CALL = frozenset(
-    {
-        "SAIU_CALL",
-        "CALL_ENCERRADA",
-        "CALL_ENCERRADA_POR_AFK",
-        "TROCOU_CALL",
-        "CICLO_MINUTO",
+    set(EVENTOS_DURACAO_CALL_UTIL)
+    | {
+        CALL_ENCERRADA,
+        CALL_ENCERRADA_POR_AFK,
+        TROCOU_CALL,
+        TROCOU_CALL_VALIDA,
+        CICLO_MINUTO,
+        CICLO_PERIODO,
+        HOUSEKEEPING,
         "HOUSEKEEPING_CALL_ENCERRADA",
-        "MOEDA_PAUSADA",
+        MOEDA_PAUSADA,
+        TEMPO_MOEDA_FINALIZADO,
+        SAIU_CALL,
+        SAIU_CALL_VALIDA,
     }
 )
 
-# Eventos de pausa AFK (não geram moeda no trecho)
-EVENTOS_AFK = frozenset(
-    {
-        "AFK_AVISO",
-        "CALL_ENCERRADA_POR_AFK",
-        "PENALIDADE_AFK",
-        "MOEDA_PAUSADA",
-    }
-)
+EVENTOS_AFK = frozenset(EVENTOS_AFK_CANONICOS)
 
 
 @dataclass
@@ -239,36 +263,50 @@ async def analisar_membro_completo(discord_id: int) -> AnaliseCompletaMembro:
 
     segundos_call = 0
     segundos_afk = 0
+    logs_importados_ignorados = 0
     for log in logs:
+        detalhes_txt = (log.detalhes or "").lower()
+        # Importações do Discord duplicam duração dos eventos nativos.
+        # Contar os dois infla horas e moedas esperadas.
+        if detalhes_txt.startswith("import_log:"):
+            logs_importados_ignorados += 1
+            continue
         duracao = int(log.duracao_segundos or 0)
         if duracao <= 0:
             continue
         if log.evento in EVENTOS_AFK:
             segundos_afk += duracao
         if log.evento in EVENTOS_COM_DURACAO_CALL:
-            # CICLO_MINUTO e saídas de call são tempo em call contável
+            # CICLO_MINUTO e saídas de call são tempo em call contável.
             # MOEDA_PAUSADA fecha o trecho antes do AFK — conta como útil
-            # até a pausa; o AFK em si entra em segundos_afk
-            if log.evento == "CALL_ENCERRADA_POR_AFK":
-                # duração costuma ser o trecho AFK, não o útil
-                segundos_afk += 0  # já contado acima
-            else:
+            # até a pausa; o AFK em si entra em segundos_afk.
+            if log.evento != "CALL_ENCERRADA_POR_AFK":
                 segundos_call += duracao
 
-    # Tempo útil estimado: soma dos fechamentos de segmento (inclui CICLO_MINUTO)
-    # menos o que foi explicitamente marcado como AFK/pausa além do útil.
+    # Tempo útil estimado: soma dos fechamentos de segmento (sem import_log).
     segundos_uteis = max(0, segundos_call)
     moedas_brutas = segundos_uteis // segundos_para_moeda()
 
     moedas_plantao = 0
     moedas_outras = 0
+    moedas_em_lote_suspeito = 0
+    creditos_lote_suspeitos = 0
     extrato_recente: list[dict[str, Any]] = []
     for mov in movs:
         valor = int(mov.valor or 0)
         tipo = (mov.tipo or "").upper()
-        if tipo == "GANHO_PLANTAO" or "plantão" in (mov.referencia or "").lower() or "plantao" in (mov.referencia or "").lower():
+        e_plantao = (
+            tipo == "GANHO_PLANTAO"
+            or "plantão" in (mov.referencia or "").lower()
+            or "plantao" in (mov.referencia or "").lower()
+        )
+        if e_plantao:
             if valor > 0:
                 moedas_plantao += valor
+            # Crédito de 5+ de uma vez = padrão do bug de segundos_acumulados
+            if valor >= 5:
+                moedas_em_lote_suspeito += valor
+                creditos_lote_suspeitos += 1
         else:
             moedas_outras += valor
 
@@ -300,6 +338,12 @@ async def analisar_membro_completo(discord_id: int) -> AnaliseCompletaMembro:
         )
 
     avisos: list[str] = []
+    if logs_importados_ignorados > 0:
+        avisos.append(
+            f"{logs_importados_ignorados} log(s) `import_log` ignorados no "
+            "cálculo de tempo (duplicata do evento nativo)."
+        )
+
     diferenca = moedas_brutas - moedas_plantao
     if diferenca > 0:
         avisos.append(
@@ -310,6 +354,13 @@ async def analisar_membro_completo(discord_id: int) -> AnaliseCompletaMembro:
         avisos.append(
             f"Extrato tem {abs(diferenca)} moeda(s) a mais que a estimativa "
             f"bruta — possível crédito em lote ou ajuste manual."
+        )
+
+    if creditos_lote_suspeitos > 0:
+        avisos.append(
+            f"{creditos_lote_suspeitos} crédito(s) de plantão em lote "
+            f"(≥5 de uma vez), total `{moedas_em_lote_suspeito}` moedas — "
+            "padrão do bug de segundos_acumulados / teto."
         )
 
     if estado and int(estado.segundos_acumulados or 0) >= segundos_para_moeda():
@@ -618,3 +669,138 @@ async def listar_suspeitos_dump_moedas(
 
     suspeitos.sort(key=lambda item: (-item.moedas_no_dia, item.data_local))
     return suspeitos[:limite]
+
+
+
+@dataclass
+class MembroIrregular:
+    """Resumo de anomalias de um membro, com a pior severidade."""
+
+    discord_id: int
+    id_fivem: str | None
+    severidade: str
+    segundos_acumulados: int
+    saldo_moedas: int
+    qtd_creditos_lote: int
+    moedas_em_lote: int
+    anomalias: list[AnomaliaMoeda] = field(default_factory=list)
+
+
+async def listar_membros_irregulares(
+    *,
+    limite: int = 60,
+) -> list[MembroIrregular]:
+    """
+    Varre estado + extrato e devolve membros com falha de regra.
+
+    Severidade:
+    - LEVE: 1 bloco parado ou lote pequeno (>=5 e <10)
+    - GRAVE: 2+ blocos parados ou lote 10–13
+    - CRITICO: 10+ blocos parados ou lote >= teto diário
+    """
+    limite_bloco = segundos_para_moeda()
+    membros: dict[int, MembroIrregular] = {}
+
+    async with async_session() as sessao:
+        resultado_estado = await sessao.execute(select(EstadoPlantao))
+        estados = list(resultado_estado.scalars().all())
+
+        resultado_mov = await sessao.execute(
+            select(MovimentacaoMoeda)
+            .where(MovimentacaoMoeda.valor >= 5)
+            .order_by(MovimentacaoMoeda.criado_em.asc())
+        )
+        movs = list(resultado_mov.scalars().all())
+
+    for estado in estados:
+        discord_id = int(estado.discord_id)
+        acumulado = int(estado.segundos_acumulados or 0)
+        achado = anomalia_acumulado(discord_id, acumulado)
+        if achado is None:
+            continue
+        membro = membros.get(discord_id)
+        if membro is None:
+            membro = MembroIrregular(
+                discord_id=discord_id,
+                id_fivem=estado.id_fivem,
+                severidade=achado.severidade,
+                segundos_acumulados=acumulado,
+                saldo_moedas=int(estado.saldo_moedas or 0),
+                qtd_creditos_lote=0,
+                moedas_em_lote=0,
+                anomalias=[],
+            )
+            membros[discord_id] = membro
+        membro.anomalias.append(achado)
+        membro.severidade = pior_severidade(
+            [membro.severidade, achado.severidade]
+        ) or achado.severidade
+        membro.segundos_acumulados = acumulado
+
+    for mov in movs:
+        tipo = (mov.tipo or "").upper()
+        ref = (mov.referencia or "").lower()
+        e_plantao = (
+            tipo == "GANHO_PLANTAO"
+            or "plantão" in ref
+            or "plantao" in ref
+        )
+        if not e_plantao:
+            continue
+        quantidade = int(mov.valor or 0)
+        if not credito_em_lote_e_invalido(quantidade):
+            continue
+        discord_id = int(mov.discord_id)
+        achado = anomalia_credito_lote(
+            discord_id,
+            quantidade,
+            movimento_id=int(mov.id) if mov.id else None,
+            criado_em=formatar_data_hora_local(mov.criado_em),
+        )
+        if achado is None:
+            continue
+        membro = membros.get(discord_id)
+        if membro is None:
+            membro = MembroIrregular(
+                discord_id=discord_id,
+                id_fivem=None,
+                severidade=achado.severidade,
+                segundos_acumulados=0,
+                saldo_moedas=int(mov.saldo_apos or 0),
+                qtd_creditos_lote=0,
+                moedas_em_lote=0,
+                anomalias=[],
+            )
+            membros[discord_id] = membro
+        membro.anomalias.append(achado)
+        membro.qtd_creditos_lote += 1
+        membro.moedas_em_lote += quantidade
+        membro.severidade = pior_severidade(
+            [membro.severidade, achado.severidade]
+        ) or achado.severidade
+
+    lista = list(membros.values())
+    lista.sort(
+        key=lambda item: (
+            -ORDEM_SEVERIDADE.get(item.severidade, 0),
+            -item.segundos_acumulados,
+            -item.moedas_em_lote,
+            item.discord_id,
+        )
+    )
+    return lista[:limite]
+
+
+
+def filtrar_irregulares_da_hierarquia(
+    irregulares: list[MembroIrregular],
+    ids_na_hierarquia: set[int],
+) -> list[MembroIrregular]:
+    """Mantém só quem ainda está na hierarquia do servidor."""
+    if not ids_na_hierarquia:
+        return list(irregulares)
+    return [
+        item
+        for item in irregulares
+        if int(item.discord_id) in ids_na_hierarquia
+    ]

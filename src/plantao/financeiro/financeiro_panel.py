@@ -16,9 +16,13 @@ import logging
 import discord
 
 from src.config import VALOR_MOEDA_POR_CARGO
+from src.plantao.financeiro.carteira.carteira_service import (
+    membro_na_hierarquia,
+)
 from src.plantao.financeiro.financeiro_admin_service import (
     ajustar_saldo_com_motivo,
     aplicar_recalculo_por_logs,
+    corrigir_todos_acumulados_excesso,
     simular_recalculo_por_logs,
     zerar_segundos_acumulados_excesso,
 )
@@ -28,9 +32,16 @@ from src.plantao.financeiro.financeiro_service import (
     analisar_membro_completo,
     buscar_discord_id_por_fivem,
     buscar_estado_e_carteira,
+    filtrar_irregulares_da_hierarquia,
     gerar_yaml_completo_membro,
     listar_alertas_acumulado_travado,
+    listar_membros_irregulares,
     listar_suspeitos_dump_moedas,
+)
+from src.plantao.financeiro.moeda_helper import (
+    SEVERIDADE_CRITICO,
+    SEVERIDADE_GRAVE,
+    SEVERIDADE_LEVE,
 )
 from src.plantao.financeiro.regras_moeda_service import (
     carregar_regras_do_banco,
@@ -188,6 +199,94 @@ class BotaoAlertasAcumulado(discord.ui.Button):
         await interacao.followup.send(view=view, ephemeral=True)
 
 
+class BotaoMembrosIrregulares(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Membros irregulares",
+            style=discord.ButtonStyle.danger,
+            custom_id="fin:irregulares",
+        )
+
+    async def callback(self, interacao: discord.Interaction) -> None:
+        await interacao.response.defer(ephemeral=True)
+        guilda = interacao.guild
+        irregulares = await listar_membros_irregulares(limite=80)
+
+        so_hierarquia = False
+        if guilda is not None:
+            ids_hierarquia = {
+                membro.id
+                for membro in guilda.members
+                if isinstance(membro, discord.Member)
+                and membro_na_hierarquia(membro)
+            }
+            filtrados = filtrar_irregulares_da_hierarquia(
+                irregulares, ids_hierarquia
+            )
+            if filtrados:
+                irregulares = filtrados
+                so_hierarquia = True
+
+        if not irregulares:
+            await interacao.followup.send(
+                content=(
+                    "Nenhum membro irregular na hierarquia. "
+                    "Acumulado limpo e sem crédito em lote no extrato."
+                ),
+                ephemeral=True,
+            )
+            return
+
+        por_nivel = {
+            SEVERIDADE_CRITICO: [],
+            SEVERIDADE_GRAVE: [],
+            SEVERIDADE_LEVE: [],
+        }
+        for item in irregulares:
+            por_nivel.setdefault(item.severidade, []).append(item)
+
+        blocos: list[str] = []
+        for nivel in (SEVERIDADE_CRITICO, SEVERIDADE_GRAVE, SEVERIDADE_LEVE):
+            lista = por_nivel.get(nivel) or []
+            if not lista:
+                continue
+            titulo_nivel = {
+                SEVERIDADE_CRITICO: "CRITICO",
+                SEVERIDADE_GRAVE: "GRAVE",
+                SEVERIDADE_LEVE: "LEVE",
+            }[nivel]
+            linhas_nivel = [f"**{titulo_nivel}** ({len(lista)})"]
+            for item in lista[:12]:
+                fivem = f"`{item.id_fivem}`" if item.id_fivem else "—"
+                linhas_nivel.append(
+                    f"• <@{item.discord_id}> · FID {fivem} · "
+                    f"acum `{item.segundos_acumulados}s` · "
+                    f"lotes `{item.qtd_creditos_lote}` "
+                    f"({item.moedas_em_lote} moedas) · "
+                    f"saldo `{item.saldo_moedas}`"
+                )
+            blocos.append("\n".join(linhas_nivel))
+
+        texto = "\n\n".join(blocos)
+        ids_com_acumulado = [
+            item.discord_id
+            for item in irregulares
+            if int(item.segundos_acumulados or 0) >= segundos_para_moeda()
+        ]
+        escopo = (
+            "hierarquia online no servidor"
+            if so_hierarquia
+            else "todos com estado irregular"
+        )
+        view = PainelIrregularesLote(
+            administrador=interacao.user,  # type: ignore[arg-type]
+            ids_para_limpar=ids_com_acumulado,
+            texto=texto,
+            escopo=escopo,
+        )
+        await interacao.followup.send(view=view, ephemeral=True)
+
+
 class BotaoFilaDump(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
@@ -247,26 +346,115 @@ class PainelFinanceiroHub(LoggingViewMixin, discord.ui.LayoutView):
         linha1.add_item(BotaoCotacoes())
 
         linha2 = discord.ui.ActionRow()
+        linha2.add_item(BotaoMembrosIrregulares())
         linha2.add_item(BotaoAlertasAcumulado())
         linha2.add_item(BotaoFilaDump())
 
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    "# 💼 Painel financeiro — Plantão\n"
-                    "Gestão completa de moedas, regras, auditoria e correções.\n\n"
+                    "# Painel financeiro — Plantão\n"
+                    "Prova de falhas: regras, auditoria, correção e extrato.\n\n"
                     "**Regra vigente**\n"
                     f"{_texto_regras()}\n\n"
                     "**Ações**\n"
                     "• Buscar membro — carteira, análise, ajuste, YAML\n"
-                    "• Configurar regras — teto e segundos por moeda\n"
-                    "• Alertas acumulado — blocos travados no banco\n"
-                    "• Fila dump 14 — dias suspeitos no extrato"
+                    "• Configurar regras — segundos/moeda e tetos\n"
+                    "• Membros irregulares — LEVE / GRAVE / CRITICO\n"
+                    "• Alertas acumulado — blocos travados no estado\n"
+                    "• Fila dump 14 — créditos em lote no extrato"
                 ),
                 linha1,
                 linha2,
                 discord.ui.TextDisplay(
                     "-# Somente administradores · respostas efêmeras"
+                ),
+            )
+        )
+
+    async def interaction_check(
+        self, interacao: discord.Interaction
+    ) -> bool:
+        return await _checar_dono_painel(interacao, self.administrador_id)
+
+
+class PainelIrregularesLote(LoggingViewMixin, discord.ui.LayoutView):
+    """Lista irregulares por severidade + correção em massa do acumulado."""
+
+    def __init__(
+        self,
+        administrador: discord.Member,
+        ids_para_limpar: list[int],
+        texto: str,
+        escopo: str,
+    ):
+        super().__init__(timeout=420)
+        self.administrador_id = administrador.id
+        self.ids_para_limpar = list(ids_para_limpar)
+
+        linha = discord.ui.ActionRow()
+        botao_limpar = discord.ui.Button(
+            label="Corrigir acumulados listados",
+            style=discord.ButtonStyle.danger,
+            custom_id="fin:corrigir_acumulados_lote",
+        )
+
+        async def ao_corrigir(interacao: discord.Interaction) -> None:
+            if not await _checar_dono_painel(interacao, self.administrador_id):
+                return
+            if not isinstance(interacao.user, discord.Member):
+                await responder_erro(
+                    interacao,
+                    titulo="Fora do servidor",
+                    linhas=["Só funciona dentro do servidor."],
+                )
+                return
+            await interacao.response.defer(ephemeral=True)
+            if not self.ids_para_limpar:
+                await interacao.followup.send(
+                    content=(
+                        "Nenhum da lista tem bloco completo parado. "
+                        "Créditos em lote no extrato exigem ajuste manual "
+                        "membro a membro (decisão da diretoria)."
+                    ),
+                    ephemeral=True,
+                )
+                return
+            ok_n, falha_n, relatorio = await corrigir_todos_acumulados_excesso(
+                interacao.user,
+                apenas_discord_ids=self.ids_para_limpar,
+                limite=80,
+            )
+            cabecalho = (
+                f"**Correção em lote** — OK `{ok_n}` · falha `{falha_n}`\n"
+                "Só removeu blocos completos de `segundos_acumulados`. "
+                "Não creditou moeda e não reescreveu extrato antigo.\n\n"
+            )
+            corpo = "\n".join(relatorio[:30])
+            await interacao.followup.send(
+                content=(cabecalho + corpo)[:1900],
+                ephemeral=True,
+            )
+
+        botao_limpar.callback = ao_corrigir  # type: ignore[method-assign]
+        linha.add_item(botao_limpar)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# Prova de falhas — membros irregulares\n"
+                    f"Escopo: **{escopo}**\n"
+                    "Severidade pela regra vigente "
+                    "(1 moeda/bloco · teto · acumulado só com resto).\n\n"
+                    f"{texto}\n\n"
+                    "**Corrigir acumulados listados** descarta blocos "
+                    "completos parados (não paga moeda). "
+                    "Histórico de lote no extrato → Fila dump / ajuste "
+                    "manual com motivo."
+                ),
+                linha,
+                discord.ui.TextDisplay(
+                    "-# Ordenado do mais crítico · Buscar membro para YAML"
                 ),
             )
         )
