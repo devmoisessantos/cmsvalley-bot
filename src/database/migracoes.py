@@ -152,8 +152,7 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "área um a um) em repasses_json."
         ),
         comando_sql=(
-            "ALTER TABLE solicitacoes_curso "
-            "ADD COLUMN IF NOT EXISTS repasses_json TEXT"
+            "ALTER TABLE solicitacoes_curso ADD COLUMN IF NOT EXISTS repasses_json TEXT"
         ),
     ),
     Migracao(
@@ -176,8 +175,7 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
             "(JSON de IDs), para devolvê-los se o recurso for aceito."
         ),
         comando_sql=(
-            "ALTER TABLE punicoes "
-            "ADD COLUMN IF NOT EXISTS cargos_antes_json TEXT"
+            "ALTER TABLE punicoes ADD COLUMN IF NOT EXISTS cargos_antes_json TEXT"
         ),
     ),
     Migracao(
@@ -202,9 +200,7 @@ CREATE TABLE IF NOT EXISTS solicitacoes_ingresso_gate (
     ),
     Migracao(
         numero=12,
-        descricao=(
-            "Laudos: tabela de respostas da prova teórica de porte."
-        ),
+        descricao=("Laudos: tabela de respostas da prova teórica de porte."),
         comando_sql="""
 CREATE TABLE IF NOT EXISTS respostas_prova_laudo (
     id SERIAL PRIMARY KEY,
@@ -218,9 +214,7 @@ CREATE TABLE IF NOT EXISTS respostas_prova_laudo (
     ),
     Migracao(
         numero=13,
-        descricao=(
-            "Laudos: índice de consulta_id em respostas_prova_laudo."
-        ),
+        descricao=("Laudos: índice de consulta_id em respostas_prova_laudo."),
         comando_sql=(
             "CREATE INDEX IF NOT EXISTS "
             "ix_respostas_prova_laudo_consulta_id "
@@ -310,9 +304,7 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS metas_baseline_json TEXT;
     ),
     Migracao(
         numero=19,
-        descricao=(
-            "Histórico detalhado de punições estruturadas (rebaixamento)."
-        ),
+        descricao=("Histórico detalhado de punições estruturadas (rebaixamento)."),
         comando_sql="""
 CREATE TABLE IF NOT EXISTS historico_punicoes (
     id SERIAL PRIMARY KEY,
@@ -361,8 +353,14 @@ CREATE TABLE IF NOT EXISTS regras_moeda_plantao (
     atualizado_em TIMESTAMPTZ,
     atualizado_por BIGINT
 );
-INSERT INTO regras_moeda_plantao (id)
-VALUES (1)
+INSERT INTO regras_moeda_plantao (
+    id,
+    segundos_para_moeda,
+    teto_moedas_por_dia,
+    teto_moedas_por_semana,
+    hora_limite_moeda_sabado
+)
+VALUES (1, 1800, 14, 84, 12)
 ON CONFLICT (id) DO NOTHING;
 """,
     ),
