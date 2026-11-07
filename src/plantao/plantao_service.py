@@ -384,10 +384,14 @@ async def desligar_servico(membro: discord.Member) -> str:
 
     try:
         valor_lotes = await obter_valor_total_lotes(membro.id)
-        saldo_txt = f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
+        saldo_txt = (
+            f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
+        )
     except Exception:
         cotacao = cotacao_moeda_do_membro(membro)
-        saldo_txt = f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
+        saldo_txt = (
+            f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
+        )
     await registrar_evento_plantao(
         membro.guild,
         membro.id,
@@ -492,10 +496,13 @@ async def _finalizar_periodo_em_call(
             },
         )
         try:
+            from src.plantao.financeiro.carteira.carteira_service import (
+                registrar_ganhos_plantao_no_extrato,
+            )
+
             # Uma linha por moeda: o extrato mostra +1, nunca +14 de uma vez.
             from src.plantao.financeiro.carteira.carteira_service import (
                 cargo_principal_hierarquia,
-                registrar_ganhos_plantao_no_extrato,
             )
 
             cargo_credito = (
@@ -505,9 +512,9 @@ async def _finalizar_periodo_em_call(
                 discord_id=discord_id,
                 quantidade=moedas_ganhas,
                 saldo_apos=int(estado.saldo_moedas),
-                referencia=(f"+1 plantão · {formatar_dinheiro(cotacao_ganho)}/moeda")[
-                    :200
-                ],
+                referencia=(
+                    f"+1 plantão · {formatar_dinheiro(cotacao_ganho)}/moeda"
+                )[:200],
                 cotacao=cotacao_ganho,
                 cargo_no_credito=cargo_credito if cargo_credito != "—" else None,
             )
@@ -801,9 +808,7 @@ async def admin_definir_moedas(
         await session.refresh(estado)
 
     try:
-        from src.plantao.financeiro.carteira.carteira_service import (
-            registrar_movimentacao,
-        )
+        from src.plantao.financeiro.carteira.carteira_service import registrar_movimentacao
 
         if delta != 0:
             await registrar_movimentacao(
@@ -867,9 +872,7 @@ async def solicitar_troca_moedas(
         id_fivem = estado.id_fivem
 
     try:
-        from src.plantao.financeiro.carteira.carteira_service import (
-            registrar_movimentacao,
-        )
+        from src.plantao.financeiro.carteira.carteira_service import registrar_movimentacao
 
         await registrar_movimentacao(
             discord_id=membro.id,

@@ -22,6 +22,7 @@ from src.plantao.financeiro.carteira.carteira_service import (
 from src.plantao.financeiro.financeiro_admin_service import (
     ajustar_saldo_com_motivo,
     aplicar_recalculo_por_logs,
+    corrigir_extrato_lotes_membro,
     corrigir_todos_acumulados_excesso,
     simular_recalculo_por_logs,
     zerar_segundos_acumulados_excesso,
@@ -279,12 +280,9 @@ class BotaoMembrosIrregulares(discord.ui.Button):
             ids_hierarquia = {
                 membro.id
                 for membro in guilda.members
-                if isinstance(membro, discord.Member)
-                and membro_na_hierarquia(membro)
+                if isinstance(membro, discord.Member) and membro_na_hierarquia(membro)
             }
-            filtrados = filtrar_irregulares_da_hierarquia(
-                irregulares, ids_hierarquia
-            )
+            filtrados = filtrar_irregulares_da_hierarquia(irregulares, ids_hierarquia)
             if filtrados:
                 irregulares = filtrados
                 so_hierarquia = True
@@ -443,9 +441,7 @@ class PainelFinanceiroHub(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
-    async def interaction_check(
-        self, interacao: discord.Interaction
-    ) -> bool:
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
         return await _checar_dono_painel(interacao, self.administrador_id)
 
 
@@ -530,9 +526,7 @@ class PainelIrregularesLote(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
-    async def interaction_check(
-        self, interacao: discord.Interaction
-    ) -> bool:
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
         return await _checar_dono_painel(interacao, self.administrador_id)
 
 
@@ -593,9 +587,7 @@ class PainelListaAlertas(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
-    async def interaction_check(
-        self, interacao: discord.Interaction
-    ) -> bool:
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
         return await _checar_dono_painel(interacao, self.administrador_id)
 
 
@@ -717,9 +709,7 @@ class ModalConfigurarRegras(discord.ui.Modal, title="Configurar regras de moeda"
             atualizado_por=interacao.user.id,
         )
 
-        if interacao.guild is not None and isinstance(
-            interacao.user, discord.Member
-        ):
+        if interacao.guild is not None and isinstance(interacao.user, discord.Member):
             try:
                 from src.plantao.auditoria_service import registrar_auditoria_admin
 
@@ -878,20 +868,14 @@ async def _resolver_discord_id(
 
 
 def _linhas_carteira(resumo: ResumoCarteiraMembro) -> str:
-    canal = (
-        f"<#{resumo.canal_atual_id}>"
-        if resumo.canal_atual_id
-        else "_fora de call_"
-    )
+    canal = f"<#{resumo.canal_atual_id}>" if resumo.canal_atual_id else "_fora de call_"
     afk = (
         f"`desde {formatar_data_hora_local(resumo.afk_desde)}`"
         if resumo.afk_desde
         else "`não`"
     )
     lotes_txt = (
-        ", ".join(
-            f"{qtd}@{formatar_dinheiro(cot)}" for cot, qtd in resumo.lotes
-        )
+        ", ".join(f"{qtd}@{formatar_dinheiro(cot)}" for cot, qtd in resumo.lotes)
         if resumo.lotes
         else "nenhum lote"
     )
@@ -1070,6 +1054,32 @@ class BotaoLimparAcumulado(discord.ui.Button):
             )
 
 
+class BotaoCorrigirExtrato(discord.ui.Button):
+    """Alinha extrato (+1), limpa acumulado e marca caso resolvido."""
+
+    def __init__(self, discord_id: int) -> None:
+        super().__init__(
+            label="Corrigir",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"fin:corrigir_extrato:{discord_id}",
+        )
+        self.discord_id_alvo = discord_id
+
+    async def callback(self, interacao: discord.Interaction) -> None:
+        if not isinstance(interacao.user, discord.Member):
+            await responder_erro(
+                interacao,
+                titulo="Fora do servidor",
+                linhas=["Só funciona dentro do servidor."],
+            )
+            return
+        view = PainelConfirmacaoCorrigirExtrato(
+            administrador=interacao.user,
+            discord_id=self.discord_id_alvo,
+        )
+        await responder_view(interacao, view, ephemeral=True)
+
+
 class BotaoReanalisar(discord.ui.Button):
     def __init__(self, discord_id: int) -> None:
         super().__init__(
@@ -1164,9 +1174,7 @@ class PainelConfirmacaoRecalculo(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
-    async def interaction_check(
-        self, interacao: discord.Interaction
-    ) -> bool:
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
         return await _checar_dono_painel(interacao, self.administrador_id)
 
 
@@ -1217,11 +1225,86 @@ def _linhas_cobranca_lotes(estimativa: EstimativaCobrancaLotes) -> str:
         f"`historico_promocoes` + `VALOR_MOEDA_POR_CARGO`\n"
         f"> Saldo 0 não zera a conta: $ já saiu nas trocas; "
         f"isto é a **base** se a diretoria cobrar o irregular.\n"
-        f"> **Detalhe por crédito:**\n"
-        + "\n".join(linhas_itens)
-        + extra
-        + sem_cotacao
+        f"> **Detalhe por crédito:**\n" + "\n".join(linhas_itens) + extra + sem_cotacao
     )
+
+
+class PainelConfirmacaoCorrigirExtrato(LoggingViewMixin, discord.ui.LayoutView):
+    """Confirma alinhamento do extrato: caso resolvido, sem mudar saldo."""
+
+    def __init__(self, administrador: discord.Member, discord_id: int):
+        super().__init__(timeout=120)
+        self.administrador_id = administrador.id
+        self.discord_id_alvo = discord_id
+
+        linha = discord.ui.ActionRow()
+        botao_ok = discord.ui.Button(
+            label="Confirmar alinhamento",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"fin:confirma_corrigir:{discord_id}",
+        )
+
+        async def ao_confirmar(interacao: discord.Interaction) -> None:
+            if not await _checar_dono_painel(interacao, self.administrador_id):
+                return
+            if not isinstance(interacao.user, discord.Member):
+                await responder_erro(
+                    interacao,
+                    titulo="Fora do servidor",
+                    linhas=["Só funciona dentro do servidor."],
+                )
+                return
+            await interacao.response.defer(ephemeral=True)
+            ok, mensagem = await corrigir_extrato_lotes_membro(
+                self.discord_id_alvo, interacao.user
+            )
+            if not ok:
+                await interacao.followup.send(
+                    content=f"Falha: {mensagem}",
+                    ephemeral=True,
+                )
+                return
+            try:
+                view = await montar_painel_membro(interacao, self.discord_id_alvo)
+                await interacao.followup.send(
+                    content=mensagem,
+                    ephemeral=True,
+                )
+                await interacao.followup.send(view=view, ephemeral=True)
+            except Exception as erro_painel:
+                registrador.exception(
+                    "Alinhou extrato mas falhou ao reabrir painel: %s",
+                    erro_painel,
+                )
+                await interacao.followup.send(
+                    content=(mensagem + "\nReabra o membro para ver o extrato limpo."),
+                    ephemeral=True,
+                )
+
+        botao_ok.callback = ao_confirmar  # type: ignore[method-assign]
+        linha.add_item(botao_ok)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    f"# Confirmar alinhamento — <@{discord_id}>\n"
+                    "Isto **não altera o saldo** atual.\n\n"
+                    "• Quebra créditos em lote (≥5) em linhas **+1**\n"
+                    "• Limpa blocos completos de `segundos_acumulados`\n"
+                    "• Zera cobrança possível por lote no painel\n"
+                    "• Registra no extrato: caso conferido / resolvido\n\n"
+                    "Use quando o pagamento de pendência e a conferência "
+                    "com o membro já foram feitos."
+                ),
+                linha,
+                discord.ui.TextDisplay(
+                    "-# Irreversível no sentido de reescrever o extrato legado"
+                ),
+            )
+        )
+
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
+        return await _checar_dono_painel(interacao, self.administrador_id)
 
 
 class PainelMembroFinanceiro(LoggingViewMixin, discord.ui.LayoutView):
@@ -1254,6 +1337,7 @@ class PainelMembroFinanceiro(LoggingViewMixin, discord.ui.LayoutView):
         linha1.add_item(BotaoAjustarSaldo(discord_id, saldo))
         linha1.add_item(BotaoRecalcular(discord_id))
         linha1.add_item(BotaoLimparAcumulado(discord_id))
+        linha1.add_item(BotaoCorrigirExtrato(discord_id))
 
         linha2 = discord.ui.ActionRow()
         linha2.add_item(BotaoBaixarYaml(discord_id))
@@ -1279,9 +1363,7 @@ class PainelMembroFinanceiro(LoggingViewMixin, discord.ui.LayoutView):
             )
         )
 
-    async def interaction_check(
-        self, interacao: discord.Interaction
-    ) -> bool:
+    async def interaction_check(self, interacao: discord.Interaction) -> bool:
         return await _checar_dono_painel(interacao, self.administrador_id)
 
 

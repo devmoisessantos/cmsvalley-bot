@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from src.config import VALOR_MOEDA_INGAME
 from src.database.conexao import async_session
-from src.database.models import EstadoPlantao
+from src.database.models import EstadoPlantao, MovimentacaoMoeda
 from src.plantao.financeiro.carteira.carteira_service import (
     cotacao_moeda_do_membro,
     creditar_lotes,
@@ -117,18 +117,14 @@ async def ajustar_saldo_com_motivo(
             if not ok_debito:
                 await zerar_lotes(sessao, discord_id)
                 if saldo_depois > 0:
-                    await creditar_lotes(
-                        sessao, discord_id, saldo_depois, cotacao_usar
-                    )
+                    await creditar_lotes(sessao, discord_id, saldo_depois, cotacao_usar)
         elif saldo_depois == 0:
             await zerar_lotes(sessao, discord_id)
 
         estado.saldo_moedas = saldo_depois
         await sessao.commit()
 
-    referencia = (
-        f"ajuste staff por {executor.id}: {motivo_limpo}"
-    )[:200]
+    referencia = (f"ajuste staff por {executor.id}: {motivo_limpo}")[:200]
 
     try:
         if delta != 0:
@@ -144,8 +140,7 @@ async def ajustar_saldo_com_motivo(
         await capturar_erro_e_logar(
             erro_extrato,
             contexto=(
-                f"extrato do ajuste de saldo do membro {discord_id} "
-                f"por {executor.id}"
+                f"extrato do ajuste de saldo do membro {discord_id} por {executor.id}"
             ),
         )
 
@@ -192,9 +187,7 @@ async def simular_recalculo_por_logs(discord_id: int) -> ResultadoRecalculo:
     # Sugestão conservadora: não apaga outras movimentações (transferências etc.)
     # saldo_sugerido = saldo_atual - moedas_plantao_extrato + esperadas_brutas
     # (limitado a não ficar negativo)
-    delta = (
-        analise.moedas_esperadas_brutas - analise.moedas_ganhas_plantao_extrato
-    )
+    delta = analise.moedas_esperadas_brutas - analise.moedas_ganhas_plantao_extrato
     saldo_sugerido = max(0, analise.saldo_atual + delta)
 
     avisos = list(analise.avisos)
@@ -270,10 +263,7 @@ async def zerar_segundos_acumulados_excesso(
 
         antes = int(estado.segundos_acumulados or 0)
         if antes < limite:
-            return True, (
-                f"Nada a limpar: acumulado `{antes}s` "
-                f"(abaixo de {limite}s)."
-            )
+            return True, (f"Nada a limpar: acumulado `{antes}s` (abaixo de {limite}s).")
 
         depois = antes % limite
         estado.segundos_acumulados = depois
@@ -300,7 +290,6 @@ async def zerar_segundos_acumulados_excesso(
         f"Acumulado de <@{discord_id}>: `{antes}s` → `{depois}s` "
         f"(blocos ≥ {limite}s removidos)."
     )
-
 
 
 async def corrigir_todos_acumulados_excesso(
@@ -340,3 +329,157 @@ async def corrigir_todos_acumulados_excesso(
             falha_count += 1
             linhas.append(f"FALHA · {msg}")
     return ok_count, falha_count, linhas
+
+
+async def corrigir_extrato_lotes_membro(
+    discord_id: int,
+    executor: discord.Member,
+) -> tuple[bool, str]:
+    """
+    Alinha o extrato do membro ao padrão +1 e limpa resíduos do bug.
+
+    O que faz (não muda o saldo atual):
+    1. Cada GANHO_PLANTAO com valor ≥ 5 vira N linhas de +1
+       (mesma cotação, cargo, referência e janela de tempo).
+    2. Remove blocos completos de segundos_acumulados (só o resto).
+    3. Registra no extrato uma linha de alinhamento (AJUSTE_STAFF 0)
+       e auditoria visual.
+
+    Depois disso a cobrança possível por lote some e o membro
+    deixa de aparecer como irregular por crédito em lote.
+    Caso = resolvido / conferido / pendência tratada.
+    """
+    from datetime import timedelta, timezone
+
+    from src.plantao.financeiro.financeiro_service import (
+        extrair_cotacao_da_referencia,
+    )
+    from src.plantao.financeiro.moeda_helper import LOTE_MINIMO_SUSPEITO
+
+    limite_lote = int(LOTE_MINIMO_SUSPEITO)
+    linhas_criadas = 0
+    lotes_quebrados = 0
+
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(MovimentacaoMoeda)
+            .where(MovimentacaoMoeda.discord_id == discord_id)
+            .order_by(MovimentacaoMoeda.criado_em.asc(), MovimentacaoMoeda.id.asc())
+        )
+        movimentacoes = list(resultado.scalars().all())
+
+        for mov in list(movimentacoes):
+            tipo = (mov.tipo or "").upper()
+            ref = mov.referencia or ""
+            ref_lower = ref.lower()
+            e_plantao = (
+                tipo == "GANHO_PLANTAO"
+                or "plantão" in ref_lower
+                or "plantao" in ref_lower
+            )
+            quantidade = int(mov.valor or 0)
+            if not e_plantao or quantidade < limite_lote:
+                continue
+
+            cotacao = getattr(mov, "cotacao", None)
+            if cotacao is None or int(cotacao or 0) <= 0:
+                cotacao = extrair_cotacao_da_referencia(ref)
+            cargo = getattr(mov, "cargo_no_credito", None)
+            criado = mov.criado_em
+            if criado is not None and criado.tzinfo is None:
+                criado = criado.replace(tzinfo=timezone.utc)
+
+            saldo_final_lote = int(mov.saldo_apos or 0)
+            saldo_antes_lote = saldo_final_lote - quantidade
+            # Remove a linha em lote
+            await sessao.delete(mov)
+            lotes_quebrados += 1
+
+            for indice in range(quantidade):
+                momento = criado
+                if momento is not None:
+                    # Espalha 1s entre linhas para ordem estável no extrato
+                    momento = momento + timedelta(seconds=indice)
+                sessao.add(
+                    MovimentacaoMoeda(
+                        discord_id=discord_id,
+                        tipo="GANHO_PLANTAO",
+                        valor=1,
+                        saldo_apos=saldo_antes_lote + indice + 1,
+                        referencia=(
+                            f"+1 plantão (alinhamento extrato) · "
+                            f"lote #{mov.id or 0} corrigido"
+                        )[:200],
+                        cotacao=int(cotacao) if cotacao and int(cotacao) > 0 else None,
+                        cargo_no_credito=(str(cargo)[:80] if cargo else None),
+                        criado_em=momento,
+                    )
+                )
+                linhas_criadas += 1
+
+        # Limpa acumulado excessivo no mesmo commit
+        limite = segundos_para_moeda()
+        resultado_estado = await sessao.execute(
+            select(EstadoPlantao).where(EstadoPlantao.discord_id == discord_id)
+        )
+        estado = resultado_estado.scalar_one_or_none()
+        acumulado_antes = 0
+        acumulado_depois = 0
+        if estado is not None:
+            acumulado_antes = int(estado.segundos_acumulados or 0)
+            if acumulado_antes >= limite:
+                acumulado_depois = acumulado_antes % limite
+                estado.segundos_acumulados = acumulado_depois
+            else:
+                acumulado_depois = acumulado_antes
+
+        # Marca caso resolvido no extrato (saldo inalterado)
+        saldo_atual = int(estado.saldo_moedas or 0) if estado else 0
+        sessao.add(
+            MovimentacaoMoeda(
+                discord_id=discord_id,
+                tipo="AJUSTE_STAFF",
+                valor=0,
+                saldo_apos=saldo_atual,
+                referencia=(
+                    f"Alinhamento financeiro · extrato normalizado (+1) · "
+                    f"{lotes_quebrados} lote(s) · por {executor.id}"
+                )[:200],
+            )
+        )
+
+        await sessao.commit()
+
+    if executor.guild is not None:
+        try:
+            from src.plantao.auditoria_service import registrar_auditoria_admin
+
+            await registrar_auditoria_admin(
+                executor.guild,
+                executor=executor,
+                alvo=executor.guild.get_member(discord_id),
+                acao="ALINHAMENTO_EXTRATO_PLANTAO",
+                detalhes=(
+                    f"lotes_quebrados={lotes_quebrados} "
+                    f"linhas_+1={linhas_criadas} "
+                    f"acumulado {acumulado_antes}s→{acumulado_depois}s"
+                ),
+            )
+        except Exception as erro_auditoria:
+            await capturar_erro_e_logar(
+                erro_auditoria,
+                contexto="auditoria alinhamento extrato plantão",
+            )
+
+    if lotes_quebrados == 0 and acumulado_antes < segundos_para_moeda():
+        return True, (
+            f"<@{discord_id}>: extrato já estava no padrão (+1) e "
+            f"acumulado sem bloco completo. Nada a corrigir."
+        )
+
+    return True, (
+        f"Alinhamento de <@{discord_id}> concluído: "
+        f"`{lotes_quebrados}` lote(s) → `{linhas_criadas}` linha(s) +1 · "
+        f"acumulado `{acumulado_antes}s` → `{acumulado_depois}s` · "
+        f"saldo **não** alterado · cobrança por lote zerada no painel."
+    )
