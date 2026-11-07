@@ -28,10 +28,12 @@ from src.plantao.financeiro.financeiro_admin_service import (
 )
 from src.plantao.financeiro.financeiro_service import (
     AnaliseCompletaMembro,
+    EstimativaCobrancaLotes,
     ResumoCarteiraMembro,
     analisar_membro_completo,
     buscar_discord_id_por_fivem,
     buscar_estado_e_carteira,
+    estimar_cobranca_creditos_em_lote,
     filtrar_irregulares_da_hierarquia,
     gerar_yaml_completo_membro,
     listar_alertas_acumulado_travado,
@@ -95,16 +97,76 @@ async def _checar_dono_painel(
     return False
 
 
-class BotaoBuscarMembro(discord.ui.Button):
+class BotaoBuscarPorIdDiscord(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
-            label="Buscar membro",
-            style=discord.ButtonStyle.primary,
-            custom_id="fin:buscar",
+            label="ID Discord",
+            style=discord.ButtonStyle.secondary,
+            custom_id="fin:buscar_discord",
         )
 
     async def callback(self, interacao: discord.Interaction) -> None:
-        await interacao.response.send_modal(ModalBuscarMembroFinanceiro())
+        await interacao.response.send_modal(
+            ModalBuscarPorCampo(
+                titulo="Buscar por ID Discord",
+                rotulo="ID Discord",
+                placeholder="123456789012345678",
+                modo="discord",
+            )
+        )
+
+
+class BotaoBuscarPorIdFivem(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="ID FiveM",
+            style=discord.ButtonStyle.secondary,
+            custom_id="fin:buscar_fivem",
+        )
+
+    async def callback(self, interacao: discord.Interaction) -> None:
+        await interacao.response.send_modal(
+            ModalBuscarPorCampo(
+                titulo="Buscar por ID FiveM",
+                rotulo="ID FiveM",
+                placeholder="33560",
+                modo="fivem",
+            )
+        )
+
+
+class SeletorMembroFinanceiro(discord.ui.UserSelect):
+    def __init__(self) -> None:
+        super().__init__(
+            placeholder="Selecionar membro do servidor…",
+            min_values=1,
+            max_values=1,
+            custom_id="fin:select_membro",
+        )
+
+    async def callback(self, interacao: discord.Interaction) -> None:
+        await interacao.response.defer(ephemeral=True)
+        if not self.values:
+            await responder_erro(
+                interacao,
+                titulo="Seleção vazia",
+                linhas=["Escolha um membro na lista."],
+            )
+            return
+        membro = self.values[0]
+        try:
+            view = await montar_painel_membro(interacao, membro.id)
+            await interacao.followup.send(view=view, ephemeral=True)
+        except Exception as erro_ao_abrir:
+            registrador.exception(
+                "Falha ao abrir painel do membro %s: %s",
+                membro.id,
+                erro_ao_abrir,
+            )
+            await interacao.followup.send(
+                content="Não consegui montar o painel deste membro agora.",
+                ephemeral=True,
+            )
 
 
 class BotaoVerRegras(discord.ui.Button):
@@ -339,8 +401,14 @@ class PainelFinanceiroHub(LoggingViewMixin, discord.ui.LayoutView):
         super().__init__(timeout=420)
         self.administrador_id = administrador.id
 
+        linha_select = discord.ui.ActionRow()
+        linha_select.add_item(SeletorMembroFinanceiro())
+
+        linha_ids = discord.ui.ActionRow()
+        linha_ids.add_item(BotaoBuscarPorIdDiscord())
+        linha_ids.add_item(BotaoBuscarPorIdFivem())
+
         linha1 = discord.ui.ActionRow()
-        linha1.add_item(BotaoBuscarMembro())
         linha1.add_item(BotaoVerRegras())
         linha1.add_item(BotaoConfigurarRegras())
         linha1.add_item(BotaoCotacoes())
@@ -357,13 +425,16 @@ class PainelFinanceiroHub(LoggingViewMixin, discord.ui.LayoutView):
                     "Prova de falhas: regras, auditoria, correção e extrato.\n\n"
                     "**Regra vigente**\n"
                     f"{_texto_regras()}\n\n"
+                    "**Buscar membro**\n"
+                    "• SelectUser — escolhe no servidor\n"
+                    "• ID Discord / ID FiveM — modal\n\n"
                     "**Ações**\n"
-                    "• Buscar membro — carteira, análise, ajuste, YAML\n"
-                    "• Configurar regras — segundos/moeda e tetos\n"
+                    "• Configurar regras · cotações\n"
                     "• Membros irregulares — LEVE / GRAVE / CRITICO\n"
-                    "• Alertas acumulado — blocos travados no estado\n"
-                    "• Fila dump 14 — créditos em lote no extrato"
+                    "• Alertas acumulado · Fila dump 14"
                 ),
+                linha_select,
+                linha_ids,
                 linha1,
                 linha2,
                 discord.ui.TextDisplay(
@@ -528,24 +599,48 @@ class PainelListaAlertas(LoggingViewMixin, discord.ui.LayoutView):
         return await _checar_dono_painel(interacao, self.administrador_id)
 
 
-class ModalBuscarMembroFinanceiro(discord.ui.Modal, title="Buscar membro"):
-    campo_busca = discord.ui.TextInput(
-        label="Menção, ID Discord ou ID FiveM",
-        placeholder="@membro · 123456789012345678 · 42",
-        required=True,
-        max_length=80,
-    )
+class ModalBuscarPorCampo(discord.ui.Modal):
+    """Modal focado: só ID Discord ou só ID FiveM."""
+
+    def __init__(
+        self,
+        *,
+        titulo: str,
+        rotulo: str,
+        placeholder: str,
+        modo: str,
+    ) -> None:
+        super().__init__(title=titulo[:45])
+        self.modo = modo
+        self.campo = discord.ui.TextInput(
+            label=rotulo[:45],
+            placeholder=placeholder[:100],
+            required=True,
+            max_length=32,
+        )
+        self.add_item(self.campo)
 
     async def on_submit(self, interacao: discord.Interaction) -> None:
-        bruto = (self.campo_busca.value or "").strip()
-        discord_id = await _resolver_discord_id(interacao, bruto)
+        bruto = (self.campo.value or "").strip()
+        discord_id: int | None = None
+        if self.modo == "discord":
+            so_digitos = "".join(ch for ch in bruto if ch.isdigit())
+            if so_digitos.isdigit() and len(so_digitos) >= 15:
+                discord_id = int(so_digitos)
+            else:
+                discord_id = await _resolver_discord_id(interacao, bruto)
+        else:
+            discord_id = await buscar_discord_id_por_fivem(bruto)
+            if discord_id is None:
+                discord_id = await _resolver_discord_id(interacao, bruto)
+
         if discord_id is None:
             await responder_erro(
                 interacao,
                 titulo="Membro não encontrado",
                 linhas=[
                     "Não encontrei membro com esse valor.",
-                    "Use menção, ID Discord numérico ou ID FiveM cadastrado.",
+                    "Confira o ID e tente de novo.",
                 ],
             )
             return
@@ -837,15 +932,23 @@ def _linhas_analise(analise: AnaliseCompletaMembro) -> str:
         f"`{formatar_hms(analise.segundos_afk_registrados)}`\n"
         f"> **Úteis estimados:** "
         f"`{formatar_hms(analise.segundos_uteis_estimados)}`\n"
-        f"> **Moedas esperadas (bruto):** "
+        f"> **Moedas esperadas (bruto, SEM teto):** "
         f"`{analise.moedas_esperadas_brutas}`\n"
         f"> **Moedas de plantão no extrato:** "
         f"`{analise.moedas_ganhas_plantao_extrato}`\n"
-        f"> **Outras movimentações (líquido):** "
+        f"> **Outras mov. (trocas/ajustes, líquido):** "
         f"`{analise.moedas_outras_movimentacoes}`\n"
         f"> **Saldo atual:** `{analise.saldo_atual}`\n"
-        f"> **Diferença (esperado − extrato):** "
-        f"`{analise.diferenca_esperada_vs_extrato}`\n\n"
+        f"> **Bruto − extrato:** "
+        f"`{analise.diferenca_esperada_vs_extrato}` "
+        f"(**não é valor a devolver**)\n\n"
+        f"**Leitura**\n"
+        f"> O bruto ignora teto diário/semanal e domingo. "
+        f"Com teto, o extrato costuma ser **menor** que o bruto.\n"
+        f"> Crédito em lote no aviso = padrão do bug (revisar na "
+        f"Fila dump), **não** cobrança automática.\n"
+        f"> Saldo 0 + trocas no extrato = o que foi pago já saiu "
+        f"da carteira.\n\n"
         f"**Avisos**\n{avisos}"
     )
 
@@ -1067,6 +1170,60 @@ class PainelConfirmacaoRecalculo(LoggingViewMixin, discord.ui.LayoutView):
         return await _checar_dono_painel(interacao, self.administrador_id)
 
 
+def _linhas_cobranca_lotes(estimativa: EstimativaCobrancaLotes) -> str:
+    """Texto de cobrança possível a partir dos créditos em lote no extrato."""
+    if estimativa.total_moedas_lote <= 0:
+        return (
+            "> Nenhum crédito em lote (≥5) no extrato.\n"
+            "> Nada a estimar por esse critério."
+        )
+
+    linhas_itens: list[str] = []
+    for item in estimativa.itens[:15]:
+        cargo_txt = item.cargo_resolvido or "—"
+        fonte_txt = item.fonte_cotacao or "—"
+        if item.cotacao and item.valor_reais is not None:
+            linhas_itens.append(
+                f"> `{item.criado_em}` · +{item.quantidade} × "
+                f"{formatar_dinheiro(item.cotacao)} = "
+                f"**{formatar_dinheiro(item.valor_reais)}**\n"
+                f"> · cargo `{cargo_txt}` · fonte `{fonte_txt}`"
+            )
+        else:
+            linhas_itens.append(
+                f"> `{item.criado_em}` · +{item.quantidade} · "
+                f"sem cotação · cargo `{cargo_txt}` · fonte `{fonte_txt}`"
+            )
+
+    extra = ""
+    if len(estimativa.itens) > 15:
+        extra = f"\n> … e mais {len(estimativa.itens) - 15} linha(s)."
+
+    sem_cotacao = ""
+    if estimativa.qtd_itens_sem_cotacao > 0:
+        sem_cotacao = (
+            f"\n> ⚠️ {estimativa.qtd_itens_sem_cotacao} linha(s) / "
+            f"{estimativa.moedas_sem_cotacao} moeda(s) **sem cotação** "
+            f"na referência — use o YAML e a cotação do cargo na data."
+        )
+
+    promos = getattr(estimativa, "promocoes_consultadas", 0)
+    return (
+        f"> **Moedas em lote (bug):** `{estimativa.total_moedas_lote}`\n"
+        f"> **Valor conhecido (qtd × cotação):** "
+        f"**{formatar_dinheiro(estimativa.valor_total_conhecido)}**\n"
+        f"> Promoções no banco consultadas: `{promos}`\n"
+        f"> Ordem: coluna extrato → texto referência → "
+        f"`historico_promocoes` + `VALOR_MOEDA_POR_CARGO`\n"
+        f"> Saldo 0 não zera a conta: $ já saiu nas trocas; "
+        f"isto é a **base** se a diretoria cobrar o irregular.\n"
+        f"> **Detalhe por crédito:**\n"
+        + "\n".join(linhas_itens)
+        + extra
+        + sem_cotacao
+    )
+
+
 class PainelMembroFinanceiro(LoggingViewMixin, discord.ui.LayoutView):
     def __init__(
         self,
@@ -1074,6 +1231,7 @@ class PainelMembroFinanceiro(LoggingViewMixin, discord.ui.LayoutView):
         discord_id: int,
         resumo: ResumoCarteiraMembro | None,
         analise: AnaliseCompletaMembro,
+        estimativa_cobranca: EstimativaCobrancaLotes | None = None,
     ):
         super().__init__(timeout=600)
         self.administrador_id = administrador.id
@@ -1085,6 +1243,11 @@ class PainelMembroFinanceiro(LoggingViewMixin, discord.ui.LayoutView):
             else "> Sem linha em `estado_plantao`."
         )
         corpo_analise = _linhas_analise(analise)
+        corpo_cobranca = (
+            _linhas_cobranca_lotes(estimativa_cobranca)
+            if estimativa_cobranca is not None
+            else "> Estimativa de cobrança indisponível."
+        )
         saldo = resumo.saldo_moedas if resumo is not None else analise.saldo_atual
 
         linha1 = discord.ui.ActionRow()
@@ -1100,14 +1263,18 @@ class PainelMembroFinanceiro(LoggingViewMixin, discord.ui.LayoutView):
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    f"# 🧾 Membro <@{discord_id}>\n"
+                    f"# Membro <@{discord_id}>\n"
                     f"**Carteira e estado**\n{corpo_carteira}\n\n"
-                    f"**Análise completa (histórico inteiro)**\n{corpo_analise}"
+                    f"**Análise completa (histórico inteiro)**\n"
+                    f"{corpo_analise}\n\n"
+                    f"**Cobrança possível (só créditos em lote)**\n"
+                    f"{corpo_cobranca}"
                 ),
                 linha1,
                 linha2,
                 discord.ui.TextDisplay(
-                    "-# Ajuste e recálculo exigem motivo · YAML tem logs + extrato"
+                    "-# Cobrança não é automática · diretoria decide · "
+                    "YAML tem extrato completo"
                 ),
             )
         )
@@ -1126,11 +1293,13 @@ async def montar_painel_membro(
         raise TypeError("interacao.user precisa ser Member")
     resumo = await buscar_estado_e_carteira(discord_id)
     analise = await analisar_membro_completo(discord_id)
+    estimativa = await estimar_cobranca_creditos_em_lote(discord_id)
     return PainelMembroFinanceiro(
         administrador=interacao.user,
         discord_id=discord_id,
         resumo=resumo,
         analise=analise,
+        estimativa_cobranca=estimativa,
     )
 
 

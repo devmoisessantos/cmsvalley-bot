@@ -372,6 +372,19 @@ VALUES (1, 1800, 14, 84, 12)
 ON CONFLICT (id) DO NOTHING;
 """,
     ),
+    Migracao(
+        numero=22,
+        descricao=(
+            "Extrato de moedas: colunas cotacao e cargo_no_credito "
+            "para gravar a cotação do cargo no momento do crédito."
+        ),
+        comando_sql="""
+ALTER TABLE movimentacoes_moedas
+    ADD COLUMN IF NOT EXISTS cotacao INTEGER;
+ALTER TABLE movimentacoes_moedas
+    ADD COLUMN IF NOT EXISTS cargo_no_credito VARCHAR(80);
+""",
+    ),
 ]
 
 

@@ -602,16 +602,17 @@ async def registrar_ganhos_plantao_no_extrato(
     quantidade: int,
     saldo_apos: int,
     referencia: str | None = None,
+    cotacao: int | None = None,
+    cargo_no_credito: str | None = None,
 ) -> None:
     """
     Grava no extrato uma linha por moeda ganha no plantão.
 
     Cada linha é ``+1 moeda · Plantão (30 min)``. O horário de cada linha
-    marca o momento em que aquele bloco de 30 min fechou:
+    marca o momento em que aquele bloco de 30 min fechou.
 
-    - 1 moeda no ciclo normal → ``criado_em = agora``
-    - várias de uma vez (atraso/saída) → horários espaçados de 30 em 30 min
-      para trás a partir de agora (ex.: 07:18, 07:48, 08:18)
+    ``cotacao`` e ``cargo_no_credito`` ficam nas colunas do extrato para
+    auditoria futura (sem depender só do texto da referência).
     """
     quantidade_inteira = int(quantidade)
     if quantidade_inteira <= 0:
@@ -620,6 +621,8 @@ async def registrar_ganhos_plantao_no_extrato(
     saldo_final = int(saldo_apos)
     saldo_antes = saldo_final - quantidade_inteira
     texto_referencia = (referencia or "")[:200] or None
+    cotacao_gravar = int(cotacao) if cotacao and cotacao > 0 else None
+    cargo_gravar = (cargo_no_credito or "")[:80] or None
     agora = datetime.now(timezone.utc)
     intervalo_segundos = int(SEGUNDOS_PARA_MOEDA)
 
@@ -640,6 +643,8 @@ async def registrar_ganhos_plantao_no_extrato(
                     valor=1,
                     saldo_apos=saldo_desta_linha,
                     referencia=texto_referencia,
+                    cotacao=cotacao_gravar,
+                    cargo_no_credito=cargo_gravar,
                     criado_em=momento_do_credito,
                 )
             )

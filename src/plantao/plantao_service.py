@@ -384,14 +384,10 @@ async def desligar_servico(membro: discord.Member) -> str:
 
     try:
         valor_lotes = await obter_valor_total_lotes(membro.id)
-        saldo_txt = (
-            f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
-        )
+        saldo_txt = f"{saldo_final} moedas ({formatar_dinheiro(valor_lotes)})"
     except Exception:
         cotacao = cotacao_moeda_do_membro(membro)
-        saldo_txt = (
-            f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
-        )
+        saldo_txt = f"{saldo_final} moedas ({formatar_dinheiro(int(saldo_final or 0) * cotacao)})"
     await registrar_evento_plantao(
         membro.guild,
         membro.id,
@@ -496,18 +492,24 @@ async def _finalizar_periodo_em_call(
             },
         )
         try:
+            # Uma linha por moeda: o extrato mostra +1, nunca +14 de uma vez.
             from src.plantao.financeiro.carteira.carteira_service import (
+                cargo_principal_hierarquia,
                 registrar_ganhos_plantao_no_extrato,
             )
 
-            # Uma linha por moeda: o extrato mostra +1, nunca +14 de uma vez.
+            cargo_credito = (
+                cargo_principal_hierarquia(membro) if membro is not None else None
+            )
             await registrar_ganhos_plantao_no_extrato(
                 discord_id=discord_id,
                 quantidade=moedas_ganhas,
                 saldo_apos=int(estado.saldo_moedas),
-                referencia=(
-                    f"+1 plantão · {formatar_dinheiro(cotacao_ganho)}/moeda"
-                )[:200],
+                referencia=(f"+1 plantão · {formatar_dinheiro(cotacao_ganho)}/moeda")[
+                    :200
+                ],
+                cotacao=cotacao_ganho,
+                cargo_no_credito=cargo_credito if cargo_credito != "—" else None,
             )
         except Exception as erro_ao_registrar_ganho:
             # ATENCAO: aqui as moedas JA foram creditadas ao membro. Se o
@@ -578,6 +580,9 @@ async def fechar_segmento_parcial_do_ciclo(
             return 0, 0
         if not estado.toggle_ligado:
             return 0, 0
+        # Fora de call válida = tempo de moeda pausado (igual AFK).
+        if not estado.em_call_valida:
+            return 0, 0
         if estado.segmento_iniciado_em is None:
             return 0, 0
 
@@ -624,6 +629,8 @@ async def fechar_segmento_parcial_do_ciclo(
                     f"+1 plantão (ciclo minuto) · "
                     f"{formatar_dinheiro(cotacao_usar)}/moeda"
                 )[:200],
+                cotacao=cotacao_usar,
+                cargo_no_credito=None,
             )
         except Exception as erro_extrato:
             await capturar_erro_e_logar(
@@ -794,7 +801,9 @@ async def admin_definir_moedas(
         await session.refresh(estado)
 
     try:
-        from src.plantao.financeiro.carteira.carteira_service import registrar_movimentacao
+        from src.plantao.financeiro.carteira.carteira_service import (
+            registrar_movimentacao,
+        )
 
         if delta != 0:
             await registrar_movimentacao(
@@ -858,7 +867,9 @@ async def solicitar_troca_moedas(
         id_fivem = estado.id_fivem
 
     try:
-        from src.plantao.financeiro.carteira.carteira_service import registrar_movimentacao
+        from src.plantao.financeiro.carteira.carteira_service import (
+            registrar_movimentacao,
+        )
 
         await registrar_movimentacao(
             discord_id=membro.id,

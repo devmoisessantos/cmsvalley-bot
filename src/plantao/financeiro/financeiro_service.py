@@ -8,6 +8,8 @@ com movimentacoes_moedas. Serve ao painel admin /plantao painel-financeiro.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import (
     dataclass,
     field,
@@ -26,6 +28,7 @@ from src.database.models import (
     EstadoPlantao,
     LogPlantao,
     LoteMoeda,
+    HistoricoPromocao,
     MovimentacaoMoeda,
 )
 from src.plantao.eventos_plantao import (
@@ -804,3 +807,208 @@ def filtrar_irregulares_da_hierarquia(
         for item in irregulares
         if int(item.discord_id) in ids_na_hierarquia
     ]
+
+
+
+def extrair_cotacao_da_referencia(referencia: str | None) -> int | None:
+    """
+    Lê R$ da referência do extrato, ex.: "· R$60.000/moeda".
+    Devolve inteiro em reais (60000) ou None se não achar.
+    """
+    if not referencia:
+        return None
+    encontrado = re.search(r"R\$\s*([\d.]+)", referencia)
+    if not encontrado:
+        return None
+    numeros = encontrado.group(1).replace(".", "").replace(",", "")
+    if not numeros.isdigit():
+        return None
+    return int(numeros)
+
+
+@dataclass
+class ItemCobrancaLote:
+    """Uma linha de crédito em lote com cotação e valor em R$."""
+
+    movimento_id: int
+    quantidade: int
+    cotacao: int | None
+    valor_reais: int | None
+    referencia: str | None
+    criado_em: str | None
+    cargo_resolvido: str | None = None
+    fonte_cotacao: str | None = None
+
+
+@dataclass
+class EstimativaCobrancaLotes:
+    """
+    Quanto cobrar se a diretoria decidir estornar só os créditos em lote.
+
+    Ordem da cotação por linha:
+    1. coluna ``movimentacoes_moedas.cotacao``
+    2. texto da ``referencia`` (R$…)
+    3. cargo em ``historico_promocoes`` na data + ``VALOR_MOEDA_POR_CARGO``
+    """
+
+    discord_id: int
+    itens: list[ItemCobrancaLote]
+    total_moedas_lote: int
+    valor_total_conhecido: int
+    moedas_sem_cotacao: int
+    qtd_itens_sem_cotacao: int
+    promocoes_consultadas: int = 0
+
+
+async def _listar_historico_promocoes_membro(
+    discord_id: int,
+) -> list[HistoricoPromocao]:
+    """Linha do tempo de promoções/rebaixamentos do membro (banco)."""
+    async with async_session() as sessao:
+        resultado = await sessao.execute(
+            select(HistoricoPromocao)
+            .where(HistoricoPromocao.discord_id == discord_id)
+            .order_by(HistoricoPromocao.criado_em.asc())
+        )
+        return list(resultado.scalars().all())
+
+
+def _cargo_no_momento_pelo_historico(
+    promocoes: list[HistoricoPromocao],
+    momento: datetime | None,
+) -> str | None:
+    """
+    Último cargo_para com criado_em <= momento.
+
+    Só usa o que está em historico_promocoes — não inventa cargo.
+    """
+    if momento is None or not promocoes:
+        return None
+    momento_aware = momento
+    if momento_aware.tzinfo is None:
+        momento_aware = momento_aware.replace(tzinfo=timezone.utc)
+
+    cargo_atual: str | None = None
+    for promo in promocoes:
+        criado = promo.criado_em
+        if criado is None:
+            continue
+        if criado.tzinfo is None:
+            criado = criado.replace(tzinfo=timezone.utc)
+        if criado > momento_aware:
+            break
+        # cargo depois do evento
+        if promo.cargo_para:
+            cargo_atual = str(promo.cargo_para)
+        elif promo.cargo_de and cargo_atual is None:
+            cargo_atual = str(promo.cargo_de)
+    return cargo_atual
+
+
+def _cotacao_pelo_cargo_config(nome_cargo: str | None) -> int | None:
+    """Consulta VALOR_MOEDA_POR_CARGO; None se o nome não estiver na tabela."""
+    from src.config import VALOR_MOEDA_POR_CARGO
+
+    if not nome_cargo:
+        return None
+    if nome_cargo in VALOR_MOEDA_POR_CARGO:
+        return int(VALOR_MOEDA_POR_CARGO[nome_cargo])
+    # Match por igualdade ignorando espaços extras
+    nome_limpo = " ".join(nome_cargo.split())
+    for chave, valor in VALOR_MOEDA_POR_CARGO.items():
+        if " ".join(str(chave).split()) == nome_limpo:
+            return int(valor)
+    return None
+
+
+async def estimar_cobranca_creditos_em_lote(
+    discord_id: int,
+) -> EstimativaCobrancaLotes:
+    """
+    Soma quantidade × cotação de cada GANHO_PLANTAO com valor ≥ 5.
+
+    Cotação: coluna do extrato → referência → histórico de promoção + config.
+    """
+    movs = await listar_movimentacoes_membro(discord_id)
+    promocoes = await _listar_historico_promocoes_membro(discord_id)
+
+    itens: list[ItemCobrancaLote] = []
+    total_moedas = 0
+    valor_total = 0
+    moedas_sem = 0
+    qtd_sem = 0
+
+    for mov in movs:
+        tipo = (mov.tipo or "").upper()
+        ref = mov.referencia or ""
+        ref_lower = ref.lower()
+        e_plantao = (
+            tipo == "GANHO_PLANTAO"
+            or "plantão" in ref_lower
+            or "plantao" in ref_lower
+        )
+        if not e_plantao:
+            continue
+        quantidade = int(mov.valor or 0)
+        if quantidade < 5:
+            continue
+
+        cotacao: int | None = None
+        fonte: str | None = None
+        cargo_resolvido: str | None = getattr(mov, "cargo_no_credito", None)
+
+        # 1) Coluna do extrato (créditos novos)
+        if getattr(mov, "cotacao", None) and int(mov.cotacao) > 0:
+            cotacao = int(mov.cotacao)
+            fonte = "coluna_extrato"
+
+        # 2) Texto da referência
+        if cotacao is None:
+            cotacao_ref = extrair_cotacao_da_referencia(ref)
+            if cotacao_ref is not None and cotacao_ref > 0:
+                cotacao = cotacao_ref
+                fonte = "referencia_texto"
+
+        # 3) Histórico de promoção na data + VALOR_MOEDA_POR_CARGO
+        if cotacao is None:
+            cargo_hist = _cargo_no_momento_pelo_historico(
+                promocoes, mov.criado_em
+            )
+            if cargo_hist:
+                cargo_resolvido = cargo_hist
+                cotacao_cfg = _cotacao_pelo_cargo_config(cargo_hist)
+                if cotacao_cfg is not None:
+                    cotacao = cotacao_cfg
+                    fonte = "historico_promocao+config"
+
+        valor_reais = None
+        if cotacao is not None and cotacao > 0:
+            valor_reais = quantidade * cotacao
+            valor_total += valor_reais
+        else:
+            moedas_sem += quantidade
+            qtd_sem += 1
+
+        total_moedas += quantidade
+        itens.append(
+            ItemCobrancaLote(
+                movimento_id=int(mov.id) if mov.id else 0,
+                quantidade=quantidade,
+                cotacao=cotacao,
+                valor_reais=valor_reais,
+                referencia=ref,
+                criado_em=formatar_data_hora_local(mov.criado_em),
+                cargo_resolvido=cargo_resolvido,
+                fonte_cotacao=fonte,
+            )
+        )
+
+    return EstimativaCobrancaLotes(
+        discord_id=int(discord_id),
+        itens=itens,
+        total_moedas_lote=total_moedas,
+        valor_total_conhecido=valor_total,
+        moedas_sem_cotacao=moedas_sem,
+        qtd_itens_sem_cotacao=qtd_sem,
+        promocoes_consultadas=len(promocoes),
+    )

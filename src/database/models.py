@@ -848,6 +848,11 @@ class MovimentacaoMoeda(Base):
     saldo_apos: Mapped[int] = mapped_column(Integer, default=0)
     outro_discord_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     referencia: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Cotação unitária no momento do crédito (fonte da verdade no extrato).
+    # Preenchida em GANHO_PLANTAO novos; legados podem ficar nulos.
+    cotacao: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Nome do cargo usado para achar a cotação (tabela VALOR_MOEDA_POR_CARGO).
+    cargo_no_credito: Mapped[str | None] = mapped_column(String(80), nullable=True)
     criado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=agora, index=True
     )
