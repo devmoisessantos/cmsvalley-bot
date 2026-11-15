@@ -221,6 +221,7 @@ CAMINHOS_DOS_COGS = [
     "src.booster.booster_tasks",
     "src.dashboard.dashboard_cogs",
     "src.dashboard.dashboard_tasks",
+    "src.dashboard.dashboard_listener",
 ]
 
 

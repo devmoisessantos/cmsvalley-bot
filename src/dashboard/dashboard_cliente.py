@@ -146,6 +146,20 @@ class ClienteDashboard:
             return []
         return dados
 
+    async def buscar_estatisticas(self, dia: str) -> dict:
+        """Contagem de mensagens já gravada no dia (para semear o contador)."""
+        bruto = await self.get(f"/internal/estatisticas?dia={dia}")
+        if not bruto or not isinstance(bruto, dict):
+            return {}
+        dados = bruto.get("data")
+        if not isinstance(dados, dict):
+            return {}
+        return dados
+
+    async def enviar_estatisticas(self, itens: list[dict]) -> dict | None:
+        """Envia os totais de mensagens por canal/dia."""
+        return await self.post("/internal/status", {"itens": itens})
+
 
 _CLIENTE_COMPARTILHADO: ClienteDashboard | None = None
 

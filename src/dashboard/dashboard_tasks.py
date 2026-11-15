@@ -13,6 +13,12 @@ from discord.ext import commands, tasks
 
 from src.dashboard import dashboard_repositorio as repositorio
 from src.dashboard.dashboard_cliente import obter_cliente
+from src.dashboard.dashboard_contador import (
+    dia_de_hoje,
+    limpar_antigos,
+    montar_itens,
+    semear,
+)
 from src.dashboard.dashboard_logger import log_sinal_do_bot_falhou
 from src.dashboard.dashboard_service import (
     executar_comando_da_fila,
@@ -43,8 +49,14 @@ class DashboardTasks(commands.Cog):
                 registrador.info(
                     "Metas por cargo carregadas do banco (%s cargos).", carregados
                 )
+
+        # Continua a contagem de mensagens de onde o banco parou hoje.
+        contagens = await self.cliente.buscar_estatisticas(dia_de_hoje())
+        semear(contagens)
+
         self.tarefa_sinal_do_bot.start()
         self.tarefa_fila.start()
+        self.tarefa_estatisticas.start()
         registrador.info("Tasks do dashboard iniciadas.")
 
     async def cog_unload(self) -> None:
@@ -52,6 +64,15 @@ class DashboardTasks(commands.Cog):
             self.tarefa_sinal_do_bot.cancel()
         if self.tarefa_fila.is_running():
             self.tarefa_fila.cancel()
+        if self.tarefa_estatisticas.is_running():
+            self.tarefa_estatisticas.cancel()
+        # Última tentativa de mandar o que foi contado desde o último envio.
+        try:
+            await self._enviar_estatisticas()
+        except Exception as falha:  # noqa: BLE001
+            registrador.warning(
+                "Não consegui enviar as estatísticas ao desligar: %s", falha
+            )
         await self.cliente.fechar()
 
     # ------------------------------------------------------------------
@@ -91,6 +112,32 @@ class DashboardTasks(commands.Cog):
 
     @tarefa_fila.before_loop
     async def _esperar_pronto_fila(self) -> None:
+        await self.bot.wait_until_ready()
+
+    # ------------------------------------------------------------------
+    # Estatísticas de mensagens por canal
+    # ------------------------------------------------------------------
+
+    async def _enviar_estatisticas(self) -> None:
+        """Manda os totais de mensagens por canal/dia para a API."""
+        itens = montar_itens(self.bot)
+        if not itens:
+            return
+        resultado = await self.cliente.enviar_estatisticas(itens)
+        if resultado is None:
+            registrador.warning(
+                "Envio de estatísticas de canal falhou (será repetido em 10 min)."
+            )
+            return
+        limpar_antigos()
+
+    @tasks.loop(minutes=10)
+    async def tarefa_estatisticas(self) -> None:
+        """Envia de 10 em 10 minutos as mensagens contadas por canal."""
+        await self._enviar_estatisticas()
+
+    @tarefa_estatisticas.before_loop
+    async def _esperar_pronto_estatisticas(self) -> None:
         await self.bot.wait_until_ready()
 
 
