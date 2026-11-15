@@ -84,6 +84,8 @@ def montar_snapshot_da_guild(
                 "mentionable": bool(cargo.mentionable),
                 "managed": bool(cargo.managed),
                 "memberCount": len(cargo.members),
+                # Bitfield: o dashboard usa para detectar ADMINISTRADOR.
+                "permissions": str(cargo.permissions.value),
             }
         )
 
