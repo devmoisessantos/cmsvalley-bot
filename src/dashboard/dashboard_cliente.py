@@ -20,19 +20,29 @@ registrador = logging.getLogger(__name__)
 
 
 class ClienteDashboard:
-    """Sessão HTTP reutilizável para falar com a API do dashboard."""
+    """Sessão HTTP reutilizável para falar com a API do dashboard.
+
+    Pode ser compartilhado por mais de um cog: `abrir()` conta quantos usam e
+    `fechar()` só encerra a sessão quando o último solta. Assim os comandos
+    `/dashboard` e as tarefas periódicas usam UMA conexão, não duas.
+    """
 
     def __init__(self) -> None:
         self._sessao: aiohttp.ClientSession | None = None
         self.ativo = bool(DASHBOARD_API_URL and DASHBOARD_API_TOKEN)
+        self._usos = 0
+        self._avisou = False
 
     async def abrir(self) -> None:
         """Cria a sessão HTTP se a integração estiver configurada."""
+        self._usos += 1
         if not self.ativo:
-            registrador.warning(
-                "DASHBOARD_API_URL/DASHBOARD_API_TOKEN ausentes: "
-                "integração com o dashboard desativada."
-            )
+            if not self._avisou:
+                registrador.warning(
+                    "DASHBOARD_API_URL/DASHBOARD_API_TOKEN ausentes: "
+                    "integração com o dashboard desativada."
+                )
+                self._avisou = True
             return
         if self._sessao and not self._sessao.closed:
             return
@@ -43,7 +53,10 @@ class ClienteDashboard:
         registrador.info("Cliente do dashboard aberto → %s", DASHBOARD_API_URL)
 
     async def fechar(self) -> None:
-        """Fecha a sessão HTTP com segurança."""
+        """Fecha a sessão HTTP quando o último usuário solta o cliente."""
+        self._usos = max(0, self._usos - 1)
+        if self._usos > 0:
+            return
         if self._sessao and not self._sessao.closed:
             await self._sessao.close()
         self._sessao = None
@@ -132,3 +145,19 @@ class ClienteDashboard:
         if not isinstance(dados, list):
             return []
         return dados
+
+
+_CLIENTE_COMPARTILHADO: ClienteDashboard | None = None
+
+
+def obter_cliente() -> ClienteDashboard:
+    """
+    Cliente único do domínio dashboard.
+
+    Os dois cogs (comandos e tarefas) pedem por aqui: uma sessão aiohttp, um
+    timeout, um ponto de falha. Antes cada cog criava o seu.
+    """
+    global _CLIENTE_COMPARTILHADO
+    if _CLIENTE_COMPARTILHADO is None:
+        _CLIENTE_COMPARTILHADO = ClienteDashboard()
+    return _CLIENTE_COMPARTILHADO

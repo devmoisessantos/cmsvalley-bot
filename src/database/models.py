@@ -190,6 +190,44 @@ class PainelPostado(Base):
     message_id: Mapped[int] = mapped_column(BigInteger)
 
 
+class MetaPorCargo(Base):
+    """
+    Metas de produção por cargo, editadas no dashboard web.
+
+    A tabela é criada pela migração do cmsvalley-api; o modelo existe aqui para
+    o bot conseguir LER as metas direto do banco quando a API está fora. Sem
+    isso, um restart com a API indisponível voltava para o src/config.py.
+    """
+
+    __tablename__ = "metas_por_cargo"
+
+    cargo_nome: Mapped[str] = mapped_column(String(120), primary_key=True)
+    segundos_minimos_plantao: Mapped[int] = mapped_column(Integer, default=0)
+    meta_laudos: Mapped[int] = mapped_column(Integer, default=0)
+    meta_recrutamentos: Mapped[int] = mapped_column(Integer, default=0)
+    meta_chamadas: Mapped[int] = mapped_column(Integer, default=0)
+    meta_cursos_aplicados: Mapped[int] = mapped_column(Integer, default=0)
+    meta_tickets: Mapped[int] = mapped_column(Integer, default=0)
+    exige_avaliacao_hp: Mapped[bool] = mapped_column(Boolean, default=False)
+    atualizada_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    atualizada_por: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    def como_dicionario(self) -> dict:
+        """Formato que o sincronizador de metas entende (igual ao da API)."""
+        return {
+            "cargo_nome": self.cargo_nome,
+            "segundos_minimos_plantao": int(self.segundos_minimos_plantao or 0),
+            "meta_laudos": int(self.meta_laudos or 0),
+            "meta_recrutamentos": int(self.meta_recrutamentos or 0),
+            "meta_chamadas": int(self.meta_chamadas or 0),
+            "meta_cursos_aplicados": int(self.meta_cursos_aplicados or 0),
+            "meta_tickets": int(self.meta_tickets or 0),
+            "exige_avaliacao_hp": bool(self.exige_avaliacao_hp),
+        }
+
+
 class MensagemHierarquia(Base):
     """Mensagem publicada da hierarquia (pode haver várias páginas por cargo)."""
 

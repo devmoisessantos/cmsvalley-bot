@@ -11,7 +11,8 @@ import logging
 
 from discord.ext import commands, tasks
 
-from src.dashboard.dashboard_cliente import ClienteDashboard
+from src.dashboard import dashboard_repositorio as repositorio
+from src.dashboard.dashboard_cliente import obter_cliente
 from src.dashboard.dashboard_logger import log_sinal_do_bot_falhou
 from src.dashboard.dashboard_service import (
     executar_comando_da_fila,
@@ -27,13 +28,21 @@ class DashboardTasks(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.cliente = ClienteDashboard()
+        self.cliente = obter_cliente()
 
     async def cog_load(self) -> None:
         await self.cliente.abrir()
         if not self.cliente.ativo:
             return
-        await sincronizar_metas_por_cargo_do_dashboard(self.cliente)
+        carregados = await sincronizar_metas_por_cargo_do_dashboard(self.cliente)
+        if carregados == 0:
+            # API fora do ar na subida: tenta a tabela do banco antes de
+            # desistir e ficar com o src/config.py.
+            carregados = await repositorio.sincronizar_metas_do_banco()
+            if carregados:
+                registrador.info(
+                    "Metas por cargo carregadas do banco (%s cargos).", carregados
+                )
         self.tarefa_sinal_do_bot.start()
         self.tarefa_fila.start()
         registrador.info("Tasks do dashboard iniciadas.")

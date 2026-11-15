@@ -11,7 +11,7 @@ import logging
 
 import discord
 
-from src.config import CANAIS
+from src.config import CANAIS, DASHBOARD_CANAL_LOGS
 from src.utils.log_container import LogContainerView
 from src.utils.mensagens import COR_AVISO, COR_ERRO, COR_SUCESSO
 
@@ -19,8 +19,18 @@ registrador = logging.getLogger(__name__)
 
 
 def _canal_de_log(guilda: discord.Guild) -> discord.abc.Messageable | None:
-    """Resolve o canal de log do dashboard (ou None se não configurado)."""
-    canal_id = int(CANAIS.get("CANAL_DASHBOARD") or 0)
+    """
+    Resolve o canal de log do dashboard.
+
+    Prefere DASHBOARD_CANAL_LOGS (ou CANAIS["CANAL_DASHBOARD_LOGS"]) e, quando
+    não há canal próprio, cai no canal do painel — assim instalação antiga
+    continua funcionando, mas a métrica pode ficar limpa com uma variável.
+    """
+    canal_id = int(
+        DASHBOARD_CANAL_LOGS or CANAIS.get("CANAL_DASHBOARD_LOGS") or 0
+    )
+    if not canal_id:
+        canal_id = int(CANAIS.get("CANAL_DASHBOARD") or 0)
     if not canal_id:
         return None
     canal = guilda.get_channel(canal_id)

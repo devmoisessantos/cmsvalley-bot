@@ -20,7 +20,7 @@ from src.dashboard.dashboard_catalogo import (
     METAS_CATALOGO,
     montar_catalogo_para_api,
 )
-from src.dashboard.dashboard_cliente import ClienteDashboard
+from src.dashboard.dashboard_cliente import obter_cliente
 from src.dashboard.dashboard_panel import montar_painel_de_status
 from src.dashboard.dashboard_service import (
     VERSAO_BOT,
@@ -46,7 +46,7 @@ class DashboardCogs(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.cliente = ClienteDashboard()
+        self.cliente = obter_cliente()
 
     async def cog_load(self) -> None:
         await self.cliente.abrir()

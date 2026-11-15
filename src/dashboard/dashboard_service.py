@@ -17,6 +17,7 @@ import discord
 from sqlalchemy import select
 
 from src.config import CANAIS, DASHBOARD_CANAL_PADRAO
+from src.dashboard import dashboard_repositorio as repositorio
 from src.dashboard.dashboard_catalogo import montar_catalogo_para_api
 from src.dashboard.dashboard_cliente import ClienteDashboard
 from src.dashboard.dashboard_logger import (
@@ -353,98 +354,20 @@ async def executar_comando_da_fila(
         )
 
 
-
 async def sincronizar_metas_por_cargo_do_dashboard(
     cliente: ClienteDashboard,
 ) -> int:
     """
     Puxa metas_por_cargo da API e aplica em METAS_POR_CARGO + TRILHAS_PROMOCAO.
 
-    Fallback: se a API não responder, o bot continua com config.py.
-    Retorna quantos cargos foram atualizados.
+    A aplicação em memória fica no dashboard_repositorio — a mesma rotina usada
+    quando as metas vêm direto do banco. Sem resposta da API, devolve 0 e o bot
+    segue com o src/config.py.
     """
-    from src.config import (
-        CARGO_DOUTOR,
-        CARGO_INSTRUTOR,
-        CARGO_PSICOLOGO,
-        CARGO_RECRUTADOR,
-        METAS_POR_CARGO,
-        TRILHAS_PROMOCAO,
-    )
-
     linhas = await cliente.buscar_metas_por_cargo()
     if not linhas:
         registrador.warning(
             "Metas por cargo vazias ou API indisponível — mantendo config.py."
         )
         return 0
-
-    chaves_producao = (
-        "meta_laudos",
-        "meta_recrutamentos",
-        "meta_chamadas",
-        "meta_cursos_aplicados",
-        "meta_tickets",
-    )
-    atualizados = 0
-    for linha in linhas:
-        nome = linha.get("cargo_nome")
-        if not nome:
-            continue
-        if nome not in METAS_POR_CARGO:
-            METAS_POR_CARGO[nome] = {
-                "segundos_minimos_plantao": 0,
-                "meta_laudos": 0,
-                "meta_recrutamentos": 0,
-                "meta_chamadas": 0,
-                "meta_cursos_aplicados": 0,
-                "meta_tickets": 0,
-                "exige_avaliacao_hp": False,
-            }
-        METAS_POR_CARGO[nome]["segundos_minimos_plantao"] = int(
-            linha.get("segundos_minimos_plantao") or 0
-        )
-        for chave in chaves_producao:
-            METAS_POR_CARGO[nome][chave] = int(linha.get(chave) or 0)
-        METAS_POR_CARGO[nome]["exige_avaliacao_hp"] = bool(
-            linha.get("exige_avaliacao_hp") or False
-        )
-        atualizados += 1
-
-    # Atualiza trilhas que cobram produção (não zera área→área / primeira área)
-    for trilha in TRILHAS_PROMOCAO:
-        if trilha.get("primeira_area"):
-            continue
-        observacao = (trilha.get("observacao") or "").lower()
-        if "entre áreas" in observacao or "área → área" in observacao:
-            continue
-        if trilha.get("exige_todas_as_areas"):
-            # Supervisor: soma das quatro especialidades
-            trilha["meta_laudos"] = int(
-                METAS_POR_CARGO.get(CARGO_PSICOLOGO, {}).get("meta_laudos") or 0
-            )
-            trilha["meta_recrutamentos"] = int(
-                METAS_POR_CARGO.get(CARGO_RECRUTADOR, {}).get("meta_recrutamentos")
-                or 0
-            )
-            trilha["meta_chamadas"] = int(
-                METAS_POR_CARGO.get(CARGO_DOUTOR, {}).get("meta_chamadas") or 0
-            )
-            trilha["meta_cursos_aplicados"] = int(
-                METAS_POR_CARGO.get(CARGO_INSTRUTOR, {}).get("meta_cursos_aplicados")
-                or 0
-            )
-            continue
-        destino = trilha.get("para_cargo")
-        if not destino or destino not in METAS_POR_CARGO:
-            continue
-        base = METAS_POR_CARGO[destino]
-        for chave in chaves_producao:
-            trilha[chave] = int(base.get(chave) or 0)
-        trilha["exige_avaliacao_hp"] = bool(base.get("exige_avaliacao_hp") or False)
-
-    registrador.info(
-        "Metas por cargo sincronizadas do dashboard (%s cargos).",
-        atualizados,
-    )
-    return atualizados
+    return repositorio.aplicar_metas_por_cargo(linhas)

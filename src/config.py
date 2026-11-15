@@ -111,12 +111,16 @@ if not DATABASE_URL:
 # Dashboard web (cmsvalley-api) — heartbeat + fila de comandos
 #
 # DASHBOARD_API_URL  = URL pública da API (ex.: https://ems-ocr-api.onrender.com)
-# DASHBOARD_API_TOKEN = o MESMO valor do JWT_SECRET da API do dashboard
+# DASHBOARD_API_TOKEN = o token do bot na API (DASHBOARD_BOT_TOKEN). Em
+#                       instalação antiga, a API usa o JWT_SECRET no lugar.
 # DASHBOARD_CANAL_PADRAO = ID do canal onde embeds/metas do dashboard são postados
+# DASHBOARD_CANAL_LOGS   = ID do canal dos logs visuais. Vazio = usa o mesmo
+#                          canal do painel (comportamento antigo).
 # ---------------------------------------------------------------------------
 DASHBOARD_API_URL = _ler_texto_do_ambiente("DASHBOARD_API_URL").rstrip("/")
 DASHBOARD_API_TOKEN = _ler_texto_do_ambiente("DASHBOARD_API_TOKEN")
 DASHBOARD_CANAL_PADRAO = _ler_numero_do_ambiente("DASHBOARD_CANAL_PADRAO", 0)
+DASHBOARD_CANAL_LOGS = _ler_numero_do_ambiente("DASHBOARD_CANAL_LOGS", 0)
 
 # Canal onde o painel de recrutamento fica fixado.
 # Continua com um padrao para nao quebrar o deploy atual, mas agora pode ser
@@ -606,6 +610,9 @@ CANAIS = {
     "CANAL_PAINEL_SCREENSHARE": 1543655341110067200,
     # Canal padrão para embeds/metas do dashboard web (sobrescrito por DASHBOARD_CANAL_PADRAO)
     "CANAL_DASHBOARD": 1567747672415281202,
+    # Canal dos logs visuais do dashboard. 0 = usa o canal acima (Painel).
+    # Separá-los evita métrica poluída por mensagem de auditoria.
+    "CANAL_DASHBOARD_LOGS": 0,
     "CANAL_TICKETS_BAU": 1486369093769760843,  # ← canal/categoria de tickets (link DM)
     "CANAL_TICKET_VALLEY": 1077995758785138758,
     "CANAL_FINANCAS": 1486369137021161472,
