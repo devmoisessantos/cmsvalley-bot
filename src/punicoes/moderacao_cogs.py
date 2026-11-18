@@ -22,6 +22,7 @@ from src.membros.apelidos_service import (
     ResultadoDaVarredura,
     corrigir_apelidos_da_guilda,
 )
+from src.membros.sincronizar_usuarios_service import salvar_nickname_atual
 from src.utils.mensagens import (
     COR_AVISO,
     COR_ERRO,
@@ -48,6 +49,7 @@ def _linhas_do_resultado(
         f"Já estavam certos: **{resultado.ja_certos}**",
         "Sem cargo de hierarquia (não alterados): "
         f"**{resultado.sem_cargo_de_hierarquia}**",
+        f"Exonerados (fora da hierarquia): **{resultado.exonerados}**",
         f"Cargo sem tag cadastrada (não alterados): **{resultado.sem_tag_cadastrada}**",
         f"Falhas de permissão ou erro: **{resultado.falhas}**",
     ]
@@ -179,6 +181,7 @@ class ModeracaoCog(commands.Cog):
                 nick=apelido_final,
                 reason=f"Alterado por {interacao.user} via /moderacao apelido",
             )
+            await salvar_nickname_atual(membro.id, apelido_final)
         except discord.Forbidden:
             await enviar_card(
                 interacao,

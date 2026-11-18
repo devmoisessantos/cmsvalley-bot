@@ -6,6 +6,7 @@ O comando `/moderacao corrigir-apelidos` usa este serviço. A regra é a mesma
 que o bot já aplica quando muda o cargo de alguém:
 
 - só entra quem tem cargo de `CARGOS_HIERARQUIA` ou `HIERARQUIA_GATE`;
+- quem tem o cargo de Exonerado fica fora, mesmo com cargo antigo no Discord;
 - a tag vem do cargo mais alto **que tem prefixo cadastrado**;
 - o `| ID` que já está no apelido é preservado;
 - Visitante, quem não tem cargo e quem só tem cargo base não é alterado.
@@ -29,12 +30,18 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.config import (
     ATRASO_CORRECAO_APELIDOS_SEGUNDOS,
+    CARGO_EXONERADO,
     CARGOS_HIERARQUIA,
     HIERARQUIA_GATE,
 )
 from src.database.conexao import async_session
 from src.database.models import Usuario
-from src.utils.nickname import aplicar_prefixo, escolher_cargo_do_prefixo
+from src.membros.sincronizar_usuarios_service import salvar_nickname_atual
+from src.utils.nickname import (
+    aplicar_prefixo,
+    aplicar_prefixo_por_cargos,
+    escolher_cargo_do_prefixo,
+)
 
 registrador = logging.getLogger(__name__)
 
@@ -52,21 +59,38 @@ class ResultadoDaVarredura:
     total_analisados: int = 0
     corrigidos: int = 0
     ja_certos: int = 0
+    exonerados: int = 0
     sem_cargo_de_hierarquia: int = 0
     sem_tag_cadastrada: int = 0
     falhas: int = 0
     exemplos: list[str] = field(default_factory=list)
 
 
-def cargos_de_hierarquia_do_membro(membro: discord.Member) -> list[str]:
-    """Nomes dos cargos do membro que estão na hierarquia hospitalar ou GATE."""
-    nomes_de_cargos: list[str] = []
+def membro_esta_exonerado(membro: discord.Member) -> bool:
+    """True se o membro tem o cargo de Exonerado (fora da hierarquia)."""
     for cargo in membro.roles:
-        if cargo.name in CARGOS_HIERARQUIA:
-            nomes_de_cargos.append(cargo.name)
-        elif cargo.name in HIERARQUIA_GATE:
-            nomes_de_cargos.append(cargo.name)
-    return nomes_de_cargos
+        if cargo.name == CARGO_EXONERADO:
+            return True
+    return False
+
+
+def cargos_de_hierarquia_do_membro(membro: discord.Member) -> list[str]:
+    """Nomes dos cargos do membro que estão na hierarquia hospitalar ou GATE.
+
+    Quem tem o cargo de Exonerado fica fora: exonerado não faz parte da
+    hierarquia, mesmo que ainda tenha um cargo antigo no servidor.
+    """
+    nomes_de_cargos = [cargo.name for cargo in membro.roles]
+    if CARGO_EXONERADO in nomes_de_cargos:
+        return []
+
+    cargos_da_hierarquia: list[str] = []
+    for nome_do_cargo in nomes_de_cargos:
+        if nome_do_cargo in CARGOS_HIERARQUIA:
+            cargos_da_hierarquia.append(nome_do_cargo)
+        elif nome_do_cargo in HIERARQUIA_GATE:
+            cargos_da_hierarquia.append(nome_do_cargo)
+    return cargos_da_hierarquia
 
 
 def apelido_corrigido_do_membro(
@@ -124,29 +148,15 @@ def _guardar_exemplo(
     resultado.exemplos.append(f"`{apelido_antigo}` → `{apelido_novo}`")
 
 
-async def _corrigir_um_membro(
+async def _aplicar_mudanca(
     membro: discord.Member,
+    apelido_atual: str,
+    apelido_novo: str,
     motivo: str,
     simular: bool,
     resultado: ResultadoDaVarredura,
-    id_fivem: str | None,
 ) -> None:
-    """Aplica a regra em um membro e atualiza a contagem do resultado."""
-    nomes_de_cargos = cargos_de_hierarquia_do_membro(membro)
-    if not nomes_de_cargos:
-        resultado.sem_cargo_de_hierarquia += 1
-        return
-
-    apelido_novo = apelido_corrigido_do_membro(membro, id_fivem)
-    if apelido_novo is None:
-        resultado.sem_tag_cadastrada += 1
-        return
-
-    apelido_atual = membro.nick or membro.display_name or membro.name
-    if apelido_novo == apelido_atual:
-        resultado.ja_certos += 1
-        return
-
+    """Edita o apelido (ou só conta, na simulação) e atualiza o resultado."""
     if simular:
         resultado.corrigidos += 1
         _guardar_exemplo(resultado, apelido_atual, apelido_novo)
@@ -154,6 +164,7 @@ async def _corrigir_um_membro(
 
     try:
         await membro.edit(nick=apelido_novo, reason=motivo)
+        await salvar_nickname_atual(membro.id, apelido_novo)
         resultado.corrigidos += 1
         _guardar_exemplo(resultado, apelido_atual, apelido_novo)
     except discord.Forbidden:
@@ -172,6 +183,56 @@ async def _corrigir_um_membro(
         )
 
     await asyncio.sleep(ATRASO_CORRECAO_APELIDOS_SEGUNDOS)
+
+
+async def _corrigir_um_membro(
+    membro: discord.Member,
+    motivo: str,
+    simular: bool,
+    resultado: ResultadoDaVarredura,
+    id_fivem: str | None,
+) -> None:
+    """Aplica a regra em um membro e atualiza a contagem do resultado."""
+    apelido_atual = membro.nick or membro.display_name or membro.name
+
+    if membro_esta_exonerado(membro):
+        # Exonerado não tem tag de cargo. Se uma tag conhecida ficou para trás
+        # (de antes da exoneração), ela sai; tag personalizada é preservada.
+        resultado.exonerados += 1
+        apelido_limpo = aplicar_prefixo_por_cargos(apelido_atual, [])
+        if apelido_limpo != apelido_atual:
+            await _aplicar_mudanca(
+                membro,
+                apelido_atual,
+                apelido_limpo,
+                motivo,
+                simular,
+                resultado,
+            )
+        return
+
+    nomes_de_cargos = cargos_de_hierarquia_do_membro(membro)
+    if not nomes_de_cargos:
+        resultado.sem_cargo_de_hierarquia += 1
+        return
+
+    apelido_novo = apelido_corrigido_do_membro(membro, id_fivem)
+    if apelido_novo is None:
+        resultado.sem_tag_cadastrada += 1
+        return
+
+    if apelido_novo == apelido_atual:
+        resultado.ja_certos += 1
+        return
+
+    await _aplicar_mudanca(
+        membro,
+        apelido_atual,
+        apelido_novo,
+        motivo,
+        simular,
+        resultado,
+    )
 
 
 async def corrigir_apelidos_da_guilda(

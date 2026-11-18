@@ -42,6 +42,7 @@ from src.utils.mensagens import (
     responder_info,
     responder_sucesso,
 )
+from src.membros.sincronizar_usuarios_service import salvar_nickname_atual
 from src.utils.nickname import aplicar_prefixo_por_cargos
 from src.utils.permissions import apenas_administrador
 
@@ -415,6 +416,7 @@ class RecrutamentoCog(commands.Cog):
         novo_nickname = aplicar_prefixo_por_cargos(membro.display_name, nomes_de_cargos)
         try:
             await membro.edit(nick=novo_nickname)
+            await salvar_nickname_atual(membro.id, novo_nickname)
         except (discord.Forbidden, discord.HTTPException):
             pass
 

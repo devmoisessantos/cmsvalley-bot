@@ -35,6 +35,7 @@ from src.database.models import (
     Usuario,
     agora,
 )
+from src.membros.sincronizar_usuarios_service import salvar_nickname_atual
 from src.utils.nickname import aplicar_prefixo_por_cargos
 
 registrador = logging.getLogger(__name__)
@@ -371,6 +372,7 @@ async def aplicar_rebaixamento(
         novo_nick = aplicar_prefixo_por_cargos(nick_atual, nomes_de_cargos)
         if novo_nick and novo_nick != alvo.nick:
             await alvo.edit(nick=novo_nick[:32], reason=motivo_discord)
+            await salvar_nickname_atual(alvo.id, novo_nick[:32])
     except discord.Forbidden:
         registrador.warning(
             "Rebaixamento OK mas sem permissão de nick para %s", alvo.id
@@ -606,6 +608,7 @@ async def revogar_rebaixamento(
             novo_nick = aplicar_prefixo_por_cargos(nick_atual, nomes_de_cargos)
             if novo_nick and novo_nick != alvo.nick:
                 await alvo.edit(nick=novo_nick[:32], reason=motivo_discord)
+                await salvar_nickname_atual(alvo.id, novo_nick[:32])
         except (discord.Forbidden, discord.HTTPException) as erro:
             registrador.warning(
                 "Revogação OK mas falha no nick de %s: %s", alvo.id, erro

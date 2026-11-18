@@ -25,14 +25,15 @@ Regras de cuidado
 
 from __future__ import annotations
 
+import logging
 from dataclasses import (
     dataclass,
     field,
 )
 
 import discord
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from src.config import (
     CARGOS,
@@ -45,6 +46,8 @@ from src.database.models import (
     Usuario,
 )
 from src.plantao.chamada.ocr.leitura_de_membros_service import extrair_id_do_apelido
+
+registrador = logging.getLogger(__name__)
 
 # ── Inferência de status a partir dos cargos ──────────────────────────────
 
@@ -308,6 +311,30 @@ async def _sincronizar_um_membro(
     if era_novo:
         return None
     return alterou
+
+
+async def salvar_nickname_atual(discord_id: int, apelido: str | None) -> None:
+    """Mantém `usuarios.nickname_atual` igual ao apelido do Discord.
+
+    Chamado por quem edita o nick (cargo, recrutamento, rebaixamento, varredura
+    e /moderacao apelido). Sem isso, o dashboard lia um apelido antigo sempre
+    que precisava do banco em vez da REST do Discord.
+    """
+    novo_apelido = (apelido or "")[:100]
+    try:
+        async with async_session() as sessao:
+            await sessao.execute(
+                update(Usuario)
+                .where(Usuario.discord_id == int(discord_id))
+                .values(nickname_atual=novo_apelido)
+            )
+            await sessao.commit()
+    except (SQLAlchemyError, OSError) as erro:
+        registrador.warning(
+            "Não consegui salvar o apelido de %s no banco: %s",
+            discord_id,
+            erro,
+        )
 
 
 async def garantir_usuario_basico(membro: discord.Member) -> Usuario:

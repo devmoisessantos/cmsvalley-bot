@@ -40,6 +40,7 @@ from src.utils.logger import (
     log_decisao,
     log_mudanca_cargo,
 )
+from src.membros.sincronizar_usuarios_service import salvar_nickname_atual
 from src.utils.mensagens import (
     responder_erro,
     responder_sucesso,
@@ -453,6 +454,7 @@ class EscolherCargoView(LoggingViewMixin, discord.ui.LayoutView):
         )
         try:
             await candidato.edit(nick=novo_nickname)
+            await salvar_nickname_atual(candidato.id, novo_nickname)
         except discord.Forbidden as erro_em_escolher:
             # Enfeite que falhou: avisar o candidato por mensagem direta.
             # A acao principal ja tinha dado certo, entao so registro.

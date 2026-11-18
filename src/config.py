@@ -396,12 +396,15 @@ CARGOS_EXCLUIR_HIERARQUIA = [
     "🛡️・【 GATE 】CMS  ·  Valley",
 ]
 
+# Cargo que tira o membro da hierarquia: exonerado não recebe tag de cargo.
+CARGO_EXONERADO = "🚫┇Exonerado"
+
 CARGOS_PUNICOES = {
     "⛔┇ADV VERBAL ": 1486368789917466765,
     "🚫┇Adv 01": 1486368786646044683,
     "🚫┇Adv 02": 1486368785786077236,
     "🚫┇Adv 03": 1486368784804483252,
-    "🚫┇Exonerado": 1486368788956971139,
+    CARGO_EXONERADO: 1486368788956971139,
 }
 
 # Blacklist após exoneração (dias de afastamento + valor para retorno pago).

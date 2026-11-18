@@ -23,6 +23,7 @@ from src.config import (
 )
 from src.database.conexao import async_session
 from src.database.models import Usuario
+from src.membros.sincronizar_usuarios_service import salvar_nickname_atual
 from src.utils.log_container import LogContainerView
 from src.utils.logger import log_mudanca_cargo
 from src.utils.mensagens import (
@@ -214,6 +215,7 @@ async def _sincronizar_prefixo_do_apelido(
             nick=novo_nick,
             reason="Prefixo automático pelo cargo mais alto",
         )
+        await salvar_nickname_atual(candidato.id, novo_nick)
         return novo_nick
     except discord.Forbidden:
         return None

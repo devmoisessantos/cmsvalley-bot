@@ -161,13 +161,15 @@ def _prioridade_do_cargo_para_prefixo(nome_cargo: str) -> tuple[int, int]:
     """
     Quanto menor o número, mais alto o cargo para efeito de tag.
 
-    GATE vem antes do hospital: quem está na GATE usa a tag GATE,
-    não a tag hospitalar (ex.: [ PAR ] vira 【G · GATE】 no ingresso).
+    A ordem é a mesma do painel: a hierarquia hospitalar vem inteira antes da
+    GATE, e dentro de cada uma o menor índice é o cargo mais alto. Assim a tag
+    sempre combina com o cargo exibido — Responsável HP continua com a tag
+    RESP · HP mesmo tendo também um cargo da GATE.
     """
-    if nome_cargo in HIERARQUIA_GATE:
-        return (0, HIERARQUIA_GATE.index(nome_cargo))
     if nome_cargo in CARGOS_HIERARQUIA:
-        return (1, CARGOS_HIERARQUIA.index(nome_cargo))
+        return (0, CARGOS_HIERARQUIA.index(nome_cargo))
+    if nome_cargo in HIERARQUIA_GATE:
+        return (1, HIERARQUIA_GATE.index(nome_cargo))
     return (2, 9999)
 
 
