@@ -42,7 +42,7 @@ from src.utils.mensagens import (
     responder_info,
     responder_sucesso,
 )
-from src.utils.nickname import aplicar_prefixo
+from src.utils.nickname import aplicar_prefixo_por_cargos
 from src.utils.permissions import apenas_administrador
 
 # mapeia o value do Choice pro nome real da chave em CARGOS
@@ -408,7 +408,11 @@ class RecrutamentoCog(commands.Cog):
             cargos_adicionados=[c.mention for c in cargos_adicionar],
         )
 
-        novo_nickname = aplicar_prefixo(membro.display_name, chave_cargo)
+        # Tag do cargo mais alto entre os que o membro já tem e o novo.
+        nomes_de_cargos = [cargo.name for cargo in membro.roles]
+        if chave_cargo not in nomes_de_cargos:
+            nomes_de_cargos.append(chave_cargo)
+        novo_nickname = aplicar_prefixo_por_cargos(membro.display_name, nomes_de_cargos)
         try:
             await membro.edit(nick=novo_nickname)
         except (discord.Forbidden, discord.HTTPException):

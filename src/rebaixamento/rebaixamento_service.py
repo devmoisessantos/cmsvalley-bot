@@ -14,7 +14,7 @@ from datetime import (
 )
 
 import discord
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from src.config import (
     CARGOS,
@@ -35,7 +35,7 @@ from src.database.models import (
     Usuario,
     agora,
 )
-from src.utils.nickname import aplicar_prefixo
+from src.utils.nickname import aplicar_prefixo_por_cargos
 
 registrador = logging.getLogger(__name__)
 
@@ -362,10 +362,13 @@ async def aplicar_rebaixamento(
     except discord.HTTPException as erro:
         return False, f"Erro Discord ao alterar cargos: {erro}"
 
-    # Tag do nick = cargo de destino
+    # Tag do nick = cargo mais alto depois da mudança (GATE continua na frente).
     try:
+        nomes_de_cargos = [cargo.name for cargo in alvo.roles]
+        if cargo_para not in nomes_de_cargos:
+            nomes_de_cargos.append(cargo_para)
         nick_atual = alvo.nick or alvo.display_name or alvo.name
-        novo_nick = aplicar_prefixo(nick_atual, cargo_para)
+        novo_nick = aplicar_prefixo_por_cargos(nick_atual, nomes_de_cargos)
         if novo_nick and novo_nick != alvo.nick:
             await alvo.edit(nick=novo_nick[:32], reason=motivo_discord)
     except discord.Forbidden:
@@ -596,8 +599,11 @@ async def revogar_rebaixamento(
             return False, f"Erro Discord ao restaurar cargos: {erro}", None
 
         try:
+            nomes_de_cargos = [cargo.name for cargo in alvo.roles]
+            if cargo_de not in nomes_de_cargos:
+                nomes_de_cargos.append(cargo_de)
             nick_atual = alvo.nick or alvo.display_name or alvo.name
-            novo_nick = aplicar_prefixo(nick_atual, cargo_de)
+            novo_nick = aplicar_prefixo_por_cargos(nick_atual, nomes_de_cargos)
             if novo_nick and novo_nick != alvo.nick:
                 await alvo.edit(nick=novo_nick[:32], reason=motivo_discord)
         except (discord.Forbidden, discord.HTTPException) as erro:

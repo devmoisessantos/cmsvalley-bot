@@ -340,6 +340,9 @@ IDS_PRESERVADOS_NO_WIPE = [
 # Segundos de espera entre kicks / create_role / create_channel (rate limit).
 ATRASO_WIPE_SEGUNDOS = 1.2
 
+# Segundos de espera entre edições de apelido na varredura /moderacao.
+ATRASO_CORRECAO_APELIDOS_SEGUNDOS = 1.0
+
 # Quem vê e interage nos tickets comuns (canal + botões).
 # Apenas as 4 equipes dedicadas — autor e bot entram por overwrite
 # individual; @everyone fica oculto (padrão Discord no create).
@@ -848,6 +851,7 @@ WHITELIST_GALLERY: list[str] = [
 ]
 
 PREFIXOS_NICKNAME = {
+    "Responsavel HP": "⟦RESP · HP⟧",
     "🔰・Enfermeiro (a)": "[ ENF ]",
     "🚑・Paramédico": "[ PAR ]",
     "🥼・Doutor": "[ DR ]",

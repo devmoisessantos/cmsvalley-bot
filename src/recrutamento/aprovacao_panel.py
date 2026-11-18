@@ -45,7 +45,7 @@ from src.utils.mensagens import (
     responder_sucesso,
     responder_view,
 )
-from src.utils.nickname import aplicar_prefixo
+from src.utils.nickname import aplicar_prefixo_por_cargos
 
 registrador = logging.getLogger(__name__)
 
@@ -443,7 +443,14 @@ class EscolherCargoView(LoggingViewMixin, discord.ui.LayoutView):
             cargos_adicionados=[cargo.mention for cargo in cargos_adicionar],
         )
 
-        novo_nickname = aplicar_prefixo(candidato.display_name, cargo_escolhido)
+        # Tag do cargo mais alto — o candidato pode já ter cargo acima do
+        # inicial escolhido (ex.: alguém reintegrado). Nunca rebaixa a tag.
+        nomes_de_cargos = [cargo.name for cargo in candidato.roles]
+        if cargo_escolhido not in nomes_de_cargos:
+            nomes_de_cargos.append(cargo_escolhido)
+        novo_nickname = aplicar_prefixo_por_cargos(
+            candidato.display_name, nomes_de_cargos
+        )
         try:
             await candidato.edit(nick=novo_nickname)
         except discord.Forbidden as erro_em_escolher:

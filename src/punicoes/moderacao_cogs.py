@@ -4,6 +4,7 @@ Grupo /moderacao — ferramentas rápidas de moderação.
 
   /moderacao limpar
   /moderacao apelido
+  /moderacao corrigir-apelidos
 
 Não substitui o sistema de punições do domínio punicoes/.
 O wipe fica só no painel persistente (domínio wipe/).
@@ -17,16 +18,69 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from src.membros.apelidos_service import (
+    ResultadoDaVarredura,
+    corrigir_apelidos_da_guilda,
+)
 from src.utils.mensagens import (
     COR_AVISO,
     COR_ERRO,
+    COR_INFO,
     COR_SUCESSO,
+    editar_mensagem_original,
     enviar_card,
     responder_erro,
 )
 from src.utils.permissions import apenas_administrador
 
 registrador = logging.getLogger(__name__)
+
+
+def _linhas_do_resultado(
+    resultado: ResultadoDaVarredura,
+    simular: bool,
+) -> list[str]:
+    """Resumo do card final da varredura de apelidos."""
+    rotulo = "Apelidos que mudariam" if simular else "Apelidos corrigidos"
+    linhas = [
+        f"Membros analisados: **{resultado.total_analisados}**",
+        f"{rotulo}: **{resultado.corrigidos}**",
+        f"Já estavam certos: **{resultado.ja_certos}**",
+        "Sem cargo de hierarquia (não alterados): "
+        f"**{resultado.sem_cargo_de_hierarquia}**",
+        f"Cargo sem tag cadastrada (não alterados): **{resultado.sem_tag_cadastrada}**",
+        f"Falhas de permissão ou erro: **{resultado.falhas}**",
+    ]
+    if resultado.exemplos:
+        linhas.append("**Exemplos:**")
+        linhas.extend(resultado.exemplos)
+    return linhas
+
+
+async def _atualizar_progresso(
+    interacao: discord.Interaction,
+    analisados: int,
+    total: int,
+    resultado: ResultadoDaVarredura,
+) -> None:
+    """Mantém o card vivo enquanto a varredura percorre o servidor."""
+    try:
+        await editar_mensagem_original(
+            interacao,
+            titulo="Corrigindo apelidos...",
+            linhas=[
+                f"Analisados: **{analisados}/{total}**",
+                f"Já estavam certos: **{resultado.ja_certos}**",
+                f"Corrigidos: **{resultado.corrigidos}**",
+                f"Falhas: **{resultado.falhas}**",
+            ],
+            cor=COR_INFO,
+        )
+    except discord.HTTPException as erro:
+        registrador.warning(
+            "Progresso da varredura de apelidos não atualizou: %s",
+            erro,
+        )
 
 
 class ModeracaoCog(commands.Cog):
@@ -156,6 +210,74 @@ class ModeracaoCog(commands.Cog):
             linhas=[texto_resultado],
             cor=COR_SUCESSO,
             delay=12,
+        )
+
+    @grupo_moderacao.command(
+        name="corrigir-apelidos",
+        description=(
+            "Espelha o cargo mais alto no apelido de todo mundo ([TAG] NOME | ID)"
+        ),
+    )
+    @app_commands.describe(
+        simular="Mostra o que mudaria, sem alterar nenhum apelido",
+    )
+    @apenas_administrador()
+    async def corrigir_apelidos(
+        self,
+        interacao: discord.Interaction,
+        simular: bool = False,
+    ):
+        """Deixa o apelido de quem tem cargo de hierarquia no padrão do bot.
+
+        Visitante e quem não tem cargo de hierarquia não é alterado: não há
+        tag para espelhar. A varredura também não inventa tag para cargo que
+        não está em PREFIXOS_NICKNAME.
+        """
+        guilda = interacao.guild
+        if guilda is None:
+            await responder_erro(
+                interacao,
+                titulo="Servidor indisponível",
+                linhas=["Use este comando dentro do servidor."],
+            )
+            return
+
+        await interacao.response.defer(ephemeral=True)
+        await editar_mensagem_original(
+            interacao,
+            titulo="Varredura de apelidos",
+            linhas=["Lendo membros e IDs do banco..."],
+            cor=COR_INFO,
+        )
+
+        async def mostrar_progresso(
+            analisados: int,
+            total: int,
+            resultado: ResultadoDaVarredura,
+        ) -> None:
+            """Repassa o progresso da varredura para o card da interação."""
+            await _atualizar_progresso(
+                interacao,
+                analisados,
+                total,
+                resultado,
+            )
+
+        resultado = await corrigir_apelidos_da_guilda(
+            guilda,
+            motivo=(
+                "Correção em massa de apelido via /moderacao "
+                f"corrigir-apelidos por {interacao.user}"
+            ),
+            simular=simular,
+            ao_progredir=mostrar_progresso,
+        )
+
+        await editar_mensagem_original(
+            interacao,
+            titulo="Simulação de apelidos" if simular else "Apelidos corrigidos",
+            linhas=_linhas_do_resultado(resultado, simular),
+            cor=COR_SUCESSO if resultado.falhas == 0 else COR_AVISO,
         )
 
 

@@ -31,7 +31,10 @@ from src.utils.mensagens import (
     responder_info,
     responder_sucesso,
 )
-from src.utils.nickname import aplicar_prefixo
+from src.utils.nickname import (
+    aplicar_prefixo_por_cargos,
+    nomes_de_cargos_com_prefixo_do_membro,
+)
 from src.utils.rate_limiter import registrar_remocao
 
 # Cargos que só existem depois do recrutamento formal.
@@ -185,16 +188,23 @@ async def candidato_elegivel_para_receber_cargo(
     )
 
 
-async def _aplicar_prefixo_no_apelido(
+async def _sincronizar_prefixo_do_apelido(
     candidato: discord.Member,
-    nome_cargo: str,
+    cargo_extra: str | None = None,
 ) -> str | None:
-    """Atualiza o nick com PREFIXOS_NICKNAME do cargo. Retorna o novo nick ou None."""
-    if nome_cargo not in PREFIXOS_NICKNAME:
-        return None
+    """
+    Atualiza o nick com a tag do cargo mais alto do membro.
+
+    `cargo_extra` entra na conta quando o cargo acabou de ser adicionado e o
+    cache de `candidato.roles` ainda não reflete a mudança. Retorna o novo nick
+    ou None quando nada mudou.
+    """
+    nomes_de_cargos = nomes_de_cargos_com_prefixo_do_membro(candidato)
+    if cargo_extra and cargo_extra in PREFIXOS_NICKNAME:
+        nomes_de_cargos.append(cargo_extra)
 
     nome_atual = candidato.nick or candidato.display_name or candidato.name
-    novo_nick = aplicar_prefixo(nome_atual, nome_cargo)
+    novo_nick = aplicar_prefixo_por_cargos(nome_atual, nomes_de_cargos)
 
     if novo_nick == nome_atual:
         return None
@@ -202,7 +212,7 @@ async def _aplicar_prefixo_no_apelido(
     try:
         await candidato.edit(
             nick=novo_nick,
-            reason=f"Prefixo automático ao receber cargo {nome_cargo}",
+            reason="Prefixo automático pelo cargo mais alto",
         )
         return novo_nick
     except discord.Forbidden:
@@ -289,8 +299,8 @@ async def adicionar_cargo(
         cargos_adicionados=[cargo.mention],
     )
 
-    # Prefixo no apelido (se o cargo tiver mapeamento)
-    novo_nick = await _aplicar_prefixo_no_apelido(candidato, nome_cargo)
+    # Prefixo no apelido: usa o cargo mais alto do membro, não só o novo.
+    novo_nick = await _sincronizar_prefixo_do_apelido(candidato, nome_cargo)
     extra_nick = f"\n📝 Apelido atualizado para: `{novo_nick}`" if novo_nick else ""
 
     await responder_sucesso(
@@ -369,6 +379,9 @@ async def remover_cargo(
 
     if remocoes_recentes is not None:
         await _reverter_remocoes_suspeitas(guild, executor, remocoes_recentes)
+        # Os cargos voltaram; a tag também precisa voltar.
+        membro_atualizado = guild.get_member(candidato.id) or candidato
+        await _sincronizar_prefixo_do_apelido(membro_atualizado)
         await responder_aviso(
             interaction,
             titulo="Muitas ações em pouco tempo",
@@ -379,11 +392,15 @@ async def remover_cargo(
         )
         return
 
+    # O cargo removido pode ser o que ditava a tag: recalcula pelo que sobrou.
+    novo_nick = await _sincronizar_prefixo_do_apelido(candidato)
+    extra_nick = f"\n📝 Apelido atualizado para: `{novo_nick}`" if novo_nick else ""
+
     await responder_sucesso(
         interaction,
         titulo="Cargo removido",
         linhas=[
-            f"Cargo {cargo.mention} removido de {candidato.mention}.",
+            f"Cargo {cargo.mention} removido de {candidato.mention}.{extra_nick}",
         ],
     )
 
