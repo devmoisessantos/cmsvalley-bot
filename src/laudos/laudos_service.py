@@ -299,6 +299,20 @@ async def cancelar_consulta_aberta(discord_id_psicologo: int) -> tuple[bool, str
         return False, f"Falha ao cancelar no banco: `{type(erro).__name__}`."
 
 
+def _finalidade_do_tipo(tipo_laudo: str | None) -> tuple[str, str]:
+    """Título curto e texto de finalidade conforme a modalidade."""
+    tipo = (tipo_laudo or "PORTE").strip().upper()
+    if tipo == "LAUDO_ADOCAO":
+        return (
+            "LAUDO TÉCNICO PARA ADOÇÃO",
+            "Avaliação técnica de prontidão para adoção.",
+        )
+    return (
+        "LAUDO PSICOLÓGICO",
+        "Avaliação para porte de arma de fogo.",
+    )
+
+
 def montar_texto_laudo(
     *,
     discord_id_paciente: int,
@@ -308,6 +322,7 @@ def montar_texto_laudo(
     registro_profissional: str,
     parecer: str,
     motivo: str,
+    tipo_laudo: str | None = "PORTE",
 ) -> str:
     """Monta o texto completo do laudo para publicação no Discord.
 
@@ -338,15 +353,17 @@ def montar_yaml_para_copiar(
     registro_profissional: str,
     parecer: str,
     motivo: str,
+    tipo_laudo: str | None = "PORTE",
 ) -> str:
     """
     Texto para o responsável copiar e colar no servidor Valley Roleplay.
     Só vai na ephemeral — o canal de laudos continua com o card formatado.
     """
     emoji_parecer = "✅ **APROVADO**" if parecer == "APROVADO" else "❌ **REPROVADO**"
+    titulo, finalidade = _finalidade_do_tipo(tipo_laudo)
     corpo = (
-        "# 📋 CMS Valley — LAUDO PSICOLÓGICO\n"
-        "> 📌 **Finalidade:** Avaliação para porte de arma de fogo."
+        f"# 📋 CMS Valley — {titulo}\n"
+        f"> 📌 **Finalidade:** {finalidade}"
         "\n\n"
         "👤 **Identificação do Avaliado**"
         "\n"
@@ -415,6 +432,7 @@ async def gerar_laudo(
     primeiros_cinco_discord = str(psicologo.id)[:5]
     registro_profissional = f"CRP-{ano}/{primeiros_cinco_discord}"
 
+    tipo_consulta = getattr(consulta, "tipo_laudo", None) or "PORTE"
     dados_texto = dict(
         discord_id_paciente=consulta.discord_id_paciente,
         id_fivem_paciente=consulta.id_fivem_paciente or "—",
@@ -423,6 +441,7 @@ async def gerar_laudo(
         registro_profissional=registro_profissional,
         parecer=parecer_normalizado,
         motivo=motivo_limpo,
+        tipo_laudo=tipo_consulta,
     )
     texto_laudo = montar_texto_laudo(**dados_texto)
     texto_yaml = montar_yaml_para_copiar(**dados_texto)

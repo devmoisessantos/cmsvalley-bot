@@ -36,8 +36,10 @@ RODAPE_PADRAO = (
 # Caminhos relativos a este arquivo
 _PASTA_LAUDOS = Path(__file__).resolve().parent
 _CAMINHO_TEMPLATE = _PASTA_LAUDOS / "template_adocao.html"
-# logo.png do servidor (assets na raiz do projeto)
-_CAMINHO_LOGO = _PASTA_LAUDOS.parent.parent / "assets" / "logo.png"
+# Logo oficial do servidor (assets/logo_cmsvalley.png)
+_CAMINHO_LOGO = (
+    _PASTA_LAUDOS.parent.parent / "assets" / "logo_cmsvalley.png"
+)
 
 _cache_logo_data_uri: str | None = None
 _cache_template: str | None = None
@@ -148,6 +150,7 @@ def montar_html_laudo(
         "{{PACIENTE_DISCORD}}": escape(str(discord_id_paciente)),
         "{{PSICOLOGO_NOME}}": escape(psicologo_exibicao),
         "{{PSICOLOGO_PASSAPORTE}}": escape(id_fivem_psicologo or "—"),
+        "{{PSICOLOGO_DISCORD}}": escape(str(discord_id_psicologo)),
         "{{REGISTRO_PROFISSIONAL}}": escape(registro_profissional or "—"),
         "{{CLASSE_PARECER}}": escape(classe),
         "{{PARECER}}": escape((parecer or "—").strip().upper()),

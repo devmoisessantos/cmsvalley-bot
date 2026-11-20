@@ -47,10 +47,22 @@ async def publicar_laudo_nos_canais(
             f"-# **{guild.name}** · Registro `#{laudo.id}` · Consulta "
             f"`#{laudo.consulta_id}`"
         )
+        tipo = getattr(laudo, "tipo_laudo", None) or "PORTE"
+        if tipo == "LAUDO_ADOCAO":
+            titulo_card = "# 📋 CMS Valley — LAUDO TÉCNICO PARA ADOÇÃO"
+            finalidade = (
+                "> 📌 **Finalidade:** Avaliação técnica de prontidão "
+                "para adoção."
+            )
+        else:
+            titulo_card = "# 📋 CMS Valley — LAUDO PSICOLÓGICO"
+            finalidade = (
+                "> 📌 **Finalidade:** Avaliação para porte de arma de fogo."
+            )
         # Section aceita *strings/TextDisplay*, NÃO tuple — isso gerava TypeError
         cabecalho = discord.ui.Section(
-            "# 📋 CMS Valley — LAUDO PSICOLÓGICO",
-            ("> 📌 **Finalidade:** Avaliação para porte de arma de fogo."),
+            titulo_card,
+            finalidade,
             accessory=discord.ui.Thumbnail(url_thumbnail),
         )
 

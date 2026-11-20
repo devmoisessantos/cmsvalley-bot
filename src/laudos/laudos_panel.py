@@ -259,6 +259,7 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
                     paciente_id=consulta.discord_id_paciente,
                     parecer_sugerido=parecer_sugerido,
                     aviso_prova=aviso_prova,
+                    tipo_laudo=getattr(consulta, "tipo_laudo", None) or "PORTE",
                 )
             )
         except discord.NotFound:
@@ -784,6 +785,13 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
         max_length=1500,
     )
 
+    MOTIVO_PADRAO_ADOCAO = (
+        "O requerente demonstrou compreensão adequada das responsabilidades "
+        "envolvidas no processo de adoção, rede de apoio estável e expectativas "
+        "realistas quanto ao vínculo e à adaptação na cidade. Recomenda-se "
+        "seguimento com a equipe técnica conforme protocolo do hospital."
+    )
+
     def __init__(
         self,
         *,
@@ -791,13 +799,17 @@ class ModalGerarLaudo(LoggingModalMixin, discord.ui.Modal, title="📋 Gerar Lau
         paciente_id: int,
         parecer_sugerido: str | None = None,
         aviso_prova: str | None = None,
+        tipo_laudo: str = "PORTE",
     ):
         super().__init__()
         self.consulta_id = consulta_id
         self.paciente_id = paciente_id
         self.aviso_prova = aviso_prova
+        self.tipo_laudo = tipo_laudo or "PORTE"
         if parecer_sugerido in ("APROVADO", "REPROVADO"):
             self.parecer_input.default = parecer_sugerido
+        if self.tipo_laudo == "LAUDO_ADOCAO":
+            self.motivo_input.default = self.MOTIVO_PADRAO_ADOCAO
 
     async def on_submit(self, interacao: discord.Interaction):
         """Gera o laudo, publica, envia DM ao paciente e pede o comprovante."""
@@ -945,10 +957,23 @@ def montar_texto_documento_laudo(
     else:
         emoji_parecer = "❌ **REPROVADO**"
 
-    titulo_final = titulo or "# 📋 CMS Valley — LAUDO PSICOLÓGICO"
+    tipo = getattr(laudo, "tipo_laudo", None) or "PORTE"
+    if tipo == "LAUDO_ADOCAO":
+        titulo_padrao = "# 📋 CMS Valley — LAUDO TÉCNICO PARA ADOÇÃO"
+        finalidade = (
+            "> 📌 **Finalidade:** Avaliação técnica de prontidão "
+            "para adoção."
+        )
+    else:
+        titulo_padrao = "# 📋 CMS Valley — LAUDO PSICOLÓGICO"
+        finalidade = (
+            "> 📌 **Finalidade:** Avaliação para porte de arma de fogo."
+        )
+
+    titulo_final = titulo or titulo_padrao
     linhas = [
         titulo_final,
-        "> 📌 **Finalidade:** Avaliação para porte de arma de fogo.",
+        finalidade,
         "",
         "👤 **Identificação do Avaliado**",
         (
@@ -1189,7 +1214,6 @@ async def _enviar_laudo_na_dm_do_paciente(
     texto_card1 = montar_texto_documento_laudo(
         laudo=laudo,
         valor_pagamento=valor_pagamento,
-        titulo="# 📋 CMS Valley — LAUDO PSICOLÓGICO",
     )
     cor = discord.Color.green() if laudo.parecer == "APROVADO" else discord.Color.red()
 
@@ -1467,12 +1491,21 @@ async def _solicitar_comprovante_repasse_laudo(
         texto_parecer = "❌ **REPROVADO**"
 
     nl = chr(10)
+    tipo_comp = getattr(laudo, "tipo_laudo", None) or "PORTE"
+    if tipo_comp == "LAUDO_ADOCAO":
+        titulo_modalidade = "LAUDO TÉCNICO PARA ADOÇÃO"
+        finalidade_comp = (
+            "Avaliação técnica de prontidão para adoção."
+        )
+    else:
+        titulo_modalidade = "LAUDO PSICOLÓGICO"
+        finalidade_comp = "Avaliação para porte de arma de fogo."
     titulo_comprovante = (
         "# 📋 Comprovante de repasse"
         + nl
-        + "### — LAUDO PSICOLÓGICO —"
+        + f"### — {titulo_modalidade} —"
         + nl
-        + "> 📌 **Finalidade:** Avaliação para porte de arma."
+        + f"> 📌 **Finalidade:** {finalidade_comp}"
     )
     corpo_comprovante = (
         "`👤` **Identificação do Avaliado**"

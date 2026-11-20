@@ -16,8 +16,23 @@
       color: #1a1a1a;
       line-height: 1.5;
       padding: 32px 16px;
+      position: relative;
+      min-height: 100vh;
+    }
+    #particles-js {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+    }
+    #particles-js canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
     }
     .folha {
+      position: relative;
+      z-index: 1;
       max-width: 720px;
       margin: 0 auto;
       background: #ffffff;
@@ -152,6 +167,9 @@
         background: #fff;
         padding: 0;
       }
+      #particles-js {
+        display: none;
+      }
       .folha {
         box-shadow: none;
         border: none;
@@ -162,6 +180,8 @@
   </style>
 </head>
 <body>
+  <div id="particles-js" aria-hidden="true"></div>
+
   <article class="folha">
     <header class="cabecalho">
       <img class="logo" src="{{LOGO_SRC}}" alt="Logo do servidor" />
@@ -204,6 +224,10 @@
         <span class="valor">{{PSICOLOGO_PASSAPORTE}}</span>
       </div>
       <div class="linha">
+        <span class="rotulo">Discord ID</span>
+        <span class="valor">{{PSICOLOGO_DISCORD}}</span>
+      </div>
+      <div class="linha">
         <span class="rotulo">Registro</span>
         <span class="valor">{{REGISTRO_PROFISSIONAL}}</span>
       </div>
@@ -227,5 +251,42 @@
       {{RODAPE}}
     </footer>
   </article>
+
+  <script src="https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js"></script>
+  <script>
+    (function () {
+      if (typeof particlesJS === "function") {
+        particlesJS("particles-js", {
+          particles: {
+            number: { value: 45, density: { enable: true, value_area: 900 } },
+            color: { value: "#00f2ff" },
+            shape: { type: "circle" },
+            opacity: { value: 0.3, random: true },
+            size: { value: 2.1, random: true },
+            line_linked: {
+              enable: true,
+              distance: 140,
+              color: "#00f2ff",
+              opacity: 0.14,
+              width: 1
+            },
+            move: { enable: true, speed: 0.95, out_mode: "out" }
+          },
+          interactivity: {
+            detect_on: "canvas",
+            events: {
+              onhover: { enable: true, mode: "grab" },
+              onclick: { enable: false },
+              resize: true
+            },
+            modes: {
+              grab: { distance: 110, line_linked: { opacity: 0.3 } }
+            }
+          },
+          retina_detect: true
+        });
+      }
+    })();
+  </script>
 </body>
 </html>

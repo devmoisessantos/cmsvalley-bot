@@ -6,6 +6,8 @@ e precisam ser versionados junto com o restante do domínio laudos.
 
 As perguntas usam linguagem de roleplay (cidade, hospital, cidadão)
 mantendo a essência de avaliação de prontidão para adoção.
+
+O gabarito mistura A, B e C — não fica sempre na mesma letra.
 """
 
 from __future__ import annotations
@@ -40,17 +42,17 @@ PERGUNTAS_ADOCAO: tuple[PerguntaAdocao, ...] = (
             "adoção e guarda provisória?"
         ),
         opcao_a=(
-            "As duas são definitivas e transferem a filiação de uma vez."
-        ),
-        opcao_b=(
             "A adoção cria vínculo definitivo; a guarda é temporária e "
             "pode ser revista pela equipe técnica."
+        ),
+        opcao_b=(
+            "As duas são definitivas e transferem a filiação de uma vez."
         ),
         opcao_c=(
             "Não existe diferença; os dois nomes servem para o mesmo "
             "procedimento no sistema da cidade."
         ),
-        resposta_correta="B",
+        resposta_correta="A",
         feedback_acerto=(
             "Correto. A adoção fecha o vínculo de forma definitiva. "
             "A guarda é uma etapa de acompanhamento e pode ser ajustada."
@@ -99,21 +101,21 @@ PERGUNTAS_ADOCAO: tuple[PerguntaAdocao, ...] = (
             "mexer em ferida."
         ),
         opcao_b=(
-            "Respeitar a história e, no momento certo, ajudar a pessoa "
-            "a conhecer e integrar esse passado de forma saudável."
-        ),
-        opcao_c=(
             "Inventar uma versão mais leve da história para “proteger” "
             "a pessoa."
         ),
-        resposta_correta="B",
+        opcao_c=(
+            "Respeitar a história e, no momento certo, ajudar a pessoa "
+            "a conhecer e integrar esse passado de forma saudável."
+        ),
+        resposta_correta="C",
         feedback_acerto=(
             "Perfeito. Esconder ou inventar história costuma gerar "
             "problema depois. Respeito e verdade no tempo certo é o caminho."
         ),
         feedback_erro=(
             "Esconder ou inventar o passado costuma voltar como problema. "
-            "A postura correta é respeito e acompañamento no tempo certo."
+            "A postura correta é respeito e acompanhamento no tempo certo."
         ),
     ),
     PerguntaAdocao(
@@ -123,18 +125,18 @@ PERGUNTAS_ADOCAO: tuple[PerguntaAdocao, ...] = (
             "adoção dentro da cidade?"
         ),
         opcao_a=(
-            "Esperar que a pessoa se adapte rápido e agradeça a "
-            "oportunidade."
-        ),
-        opcao_b=(
             "Estar disposto a lidar com rejeição, testes de limite e "
             "períodos difíceis de adaptação na rotina da cidade."
+        ),
+        opcao_b=(
+            "Esperar que a pessoa se adapte rápido e agradeça a "
+            "oportunidade."
         ),
         opcao_c=(
             "Usar só presentes e dinheiro para “compensar” o passado "
             "da pessoa."
         ),
-        resposta_correta="B",
+        resposta_correta="A",
         feedback_acerto=(
             "Isso. Adaptação leva tempo. Quem espera gratidão imediata "
             "costuma se frustrar e prejudicar o vínculo."
@@ -156,14 +158,14 @@ PERGUNTAS_ADOCAO: tuple[PerguntaAdocao, ...] = (
             "interferência de ninguém."
         ),
         opcao_b=(
-            "Cuidar de alguém exige suporte emocional e prático, "
-            "principalmente nos primeiros tempos na cidade."
-        ),
-        opcao_c=(
             "Só é necessária se a pessoa tiver problema de saúde "
             "ou deficiência."
         ),
-        resposta_correta="B",
+        opcao_c=(
+            "Cuidar de alguém exige suporte emocional e prático, "
+            "principalmente nos primeiros tempos na cidade."
+        ),
+        resposta_correta="C",
         feedback_acerto=(
             "Correto. Ninguém sustenta sozinho uma mudança tão grande. "
             "Rede de apoio é parte do preparo."
@@ -208,18 +210,18 @@ PERGUNTAS_ADOCAO: tuple[PerguntaAdocao, ...] = (
             "para quem quer adotar:"
         ),
         opcao_a=(
-            "Basta ter o mínimo; o resto se resolve depois que a "
-            "adoção for liberada."
-        ),
-        opcao_b=(
             "É preciso condições mínimas de estabilidade para oferecer "
             "segurança e continuidade na cidade."
+        ),
+        opcao_b=(
+            "Basta ter o mínimo; o resto se resolve depois que a "
+            "adoção for liberada."
         ),
         opcao_c=(
             "A condição financeira não deve ser olhada, pois isso "
             "seria discriminação."
         ),
-        resposta_correta="B",
+        resposta_correta="A",
         feedback_acerto=(
             "Isso. Segurança básica de moradia e rotina faz parte do "
             "cuidado com a pessoa que está sendo acolhida."
@@ -241,14 +243,14 @@ PERGUNTAS_ADOCAO: tuple[PerguntaAdocao, ...] = (
             "rápido."
         ),
         opcao_b=(
-            "Tentar entender a origem do comportamento e, se precisar, "
-            "pedir apoio da equipe do hospital."
-        ),
-        opcao_c=(
             "Devolver a pessoa à instituição, pois isso mostra que "
             "não deu certo."
         ),
-        resposta_correta="B",
+        opcao_c=(
+            "Tentar entender a origem do comportamento e, se precisar, "
+            "pedir apoio da equipe do hospital."
+        ),
+        resposta_correta="C",
         feedback_acerto=(
             "Correto. Comportamento difícil costuma ter história. "
             "Pedir ajuda técnica é sinal de responsabilidade, não de "
@@ -293,18 +295,18 @@ PERGUNTAS_ADOCAO: tuple[PerguntaAdocao, ...] = (
             "processo de adoção no hospital:"
         ),
         opcao_a=(
-            "O laudo é só uma formalidade para liberar o papel na "
-            "prefeitura."
-        ),
-        opcao_b=(
             "O laudo e o acompanhamento servem para proteger a "
             "pessoa e orientar quem está adotando."
+        ),
+        opcao_b=(
+            "O laudo é só uma formalidade para liberar o papel na "
+            "prefeitura."
         ),
         opcao_c=(
             "O psicólogo deve só aprovar quem tem boa intenção, "
             "sem olhar condições reais de vida na cidade."
         ),
-        resposta_correta="B",
+        resposta_correta="A",
         feedback_acerto=(
             "Perfeito. O trabalho técnico existe para proteger quem "
             "está sendo adotado e preparar quem está adotando."
