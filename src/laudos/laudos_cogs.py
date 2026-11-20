@@ -33,7 +33,10 @@ from src.laudos.laudos_service import (
     contar_laudos_psicologo,
     membro_e_psicologo,
 )
-from src.laudos.perguntas_porte import TOTAL_PERGUNTAS_PORTE
+from src.laudos.perguntas_laudo import (
+    rotulo_tipo,
+    total_perguntas,
+)
 from src.laudos.prova_service import liberar_prova_da_consulta
 from src.manutencao.manutencao_paineis import recriar_painel
 from src.utils.formatacao import formatar_data_hora_local
@@ -87,23 +90,25 @@ class LaudosCog(commands.Cog):
             )
             return
 
+        total = total_perguntas(getattr(consulta, "tipo_laudo", None))
         linhas = [
             f"**Paciente:** <@{consulta.discord_id_paciente}>",
             f"**Passaporte paciente:** `{consulta.id_fivem_paciente or '—'}`",
             f"**Seu passaporte:** `{consulta.id_fivem_psicologo or '—'}`",
+            f"**Modalidade:** `{rotulo_tipo(getattr(consulta, 'tipo_laudo', None))}`",
             f"**Início:** `{formatar_data_hora_local(consulta.iniciada_em)}`",
             f"**Status da prova:** `{consulta.status_prova}`",
         ]
         if consulta.status_prova == "FINALIZADA":
             linhas.append(
                 f"**Acertos:** `{consulta.acertos_prova or 0}/"
-                f"{TOTAL_PERGUNTAS_PORTE}` · "
+                f"{total}` · "
                 f"**Parecer sugerido:** `{consulta.parecer_sugerido or '—'}`"
             )
         elif consulta.pergunta_atual:
             linhas.append(
                 f"**Pergunta atual:** `{consulta.pergunta_atual}/"
-                f"{TOTAL_PERGUNTAS_PORTE}`"
+                f"{total}`"
             )
 
         await responder_info(
@@ -215,15 +220,16 @@ class LaudosCog(commands.Cog):
                 f"**Finalizada em:** "
                 f"`{formatar_data_hora_local(consulta.prova_finalizada_em)}`"
             )
+        total = total_perguntas(getattr(consulta, "tipo_laudo", None))
         if consulta.status_prova == "EM_ANDAMENTO":
             linhas.append(
                 f"**Pergunta atual:** `{consulta.pergunta_atual}/"
-                f"{TOTAL_PERGUNTAS_PORTE}`"
+                f"{total}`"
             )
         if consulta.status_prova == "FINALIZADA":
             linhas.append(
                 f"**Acertos:** `{consulta.acertos_prova or 0}/"
-                f"{TOTAL_PERGUNTAS_PORTE}`"
+                f"{total}`"
             )
             linhas.append(
                 f"**Parecer sugerido:** `{consulta.parecer_sugerido or '—'}`"
@@ -394,9 +400,10 @@ class LaudosCog(commands.Cog):
                 f"`{formatar_data_hora_local(consulta.finalizada_em)}`"
             )
         if consulta.acertos_prova is not None:
+            total = total_perguntas(getattr(consulta, "tipo_laudo", None))
             linhas.append(
                 f"**Acertos:** `{consulta.acertos_prova}/"
-                f"{TOTAL_PERGUNTAS_PORTE}` · "
+                f"{total}` · "
                 f"**Parecer sugerido:** `{consulta.parecer_sugerido or '—'}`"
             )
 

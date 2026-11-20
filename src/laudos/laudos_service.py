@@ -168,6 +168,7 @@ async def iniciar_consulta(
     psicologo: discord.Member,
     paciente: discord.Member,
     id_fivem_paciente_manual: str | None = None,
+    tipo_laudo: str = "PORTE",
 ) -> tuple[bool, str, ConsultaLaudo | None]:
     """
     Abre uma consulta ABERTA para o psicólogo.
@@ -175,7 +176,14 @@ async def iniciar_consulta(
 
     id_fivem_paciente_manual: passaporte digitado pelo psicólogo quando
     o paciente (visitante) ainda não tem ID no banco/apelido.
+
+    tipo_laudo: PORTE ou LAUDO_ADOCAO (padrão PORTE).
     """
+    from src.laudos.perguntas_laudo import (
+        normalizar_tipo_laudo,
+        rotulo_tipo,
+    )
+
     if not membro_e_psicologo(psicologo):
         return (
             False,
@@ -201,6 +209,8 @@ async def iniciar_consulta(
             ),
             consulta_existente,
         )
+
+    tipo_ok = normalizar_tipo_laudo(tipo_laudo)
 
     id_fivem_psicologo = await resolver_e_persistir_id_fivem(psicologo)
     id_fivem_paciente = await resolver_e_persistir_id_fivem(paciente)
@@ -240,6 +250,7 @@ async def iniciar_consulta(
                 discord_id_paciente=paciente.id,
                 id_fivem_psicologo=id_fivem_psicologo,
                 id_fivem_paciente=id_fivem_paciente,
+                tipo_laudo=tipo_ok,
                 status="ABERTA",
                 iniciada_em=datetime.now(timezone.utc),
             )
@@ -251,6 +262,7 @@ async def iniciar_consulta(
                 (
                     f"Consulta **#{nova_consulta.id}** iniciada com "
                     f"{paciente.mention}.\n"
+                    f"Modalidade: **{rotulo_tipo(tipo_ok)}**.\n"
                     f"Passaporte do paciente: `{id_fivem_paciente}`.\n"
                     "Agora você pode clicar em **Gerar Laudo**."
                 ),
@@ -428,12 +440,16 @@ async def gerar_laudo(
                     None,
                 )
 
+            tipo_da_consulta = getattr(
+                registro_consulta, "tipo_laudo", None
+            ) or "PORTE"
             novo_laudo = Laudo(
                 consulta_id=registro_consulta.id,
                 discord_id_psicologo=registro_consulta.discord_id_psicologo,
                 discord_id_paciente=registro_consulta.discord_id_paciente,
                 id_fivem_psicologo=registro_consulta.id_fivem_psicologo,
                 id_fivem_paciente=registro_consulta.id_fivem_paciente,
+                tipo_laudo=tipo_da_consulta,
                 parecer=parecer_normalizado,
                 motivo=motivo_limpo[:1500],
                 registro_profissional=registro_profissional,

@@ -1,9 +1,9 @@
 """
-Regras da prova teórica de porte de arma (domínio laudos).
+Regras da prova teórica de laudos (porte e adoção).
 
 Fluxo:
   1. Psicólogo libera a prova na consulta aberta.
-  2. Paciente inicia uma única vez e responde as 10 questões.
+  2. Paciente inicia uma única vez e responde as questões do tipo.
   3. Resultado vai ao canal da equipe; o laudo continua manual.
 """
 
@@ -26,11 +26,11 @@ from src.database.models import (
     ConsultaLaudo,
     RespostaProvaLaudo,
 )
-from src.laudos.perguntas_porte import (
-    NOTA_MINIMA_PORTE,
-    TOTAL_PERGUNTAS_PORTE,
+from src.laudos.perguntas_laudo import (
+    nota_minima,
     obter_pergunta,
     texto_da_opcao,
+    total_perguntas,
 )
 
 registrador = logging.getLogger(__name__)
@@ -126,12 +126,13 @@ async def liberar_prova_da_consulta(
             )
 
         if consulta.status_prova == "FINALIZADA":
+            total = total_perguntas(getattr(consulta, "tipo_laudo", None))
             return (
                 False,
                 (
                     f"A prova da consulta **#{consulta.id}** já foi "
                     f"**finalizada** ({consulta.acertos_prova or 0}/"
-                    f"{TOTAL_PERGUNTAS_PORTE})."
+                    f"{total})."
                 ),
                 consulta,
             )
@@ -221,12 +222,6 @@ async def gravar_resposta_prova(
     if letra not in ("A", "B", "C"):
         return False, "Alternativa inválida.", False
 
-    pergunta = obter_pergunta(numero_pergunta)
-    if pergunta is None:
-        return False, "Pergunta inválida.", False
-
-    correta = letra == pergunta.resposta_correta
-
     async with async_session() as sessao:
         consulta = await sessao.get(ConsultaLaudo, consulta_id)
         if consulta is None:
@@ -245,6 +240,13 @@ async def gravar_resposta_prova(
                 "Responda as perguntas na ordem.",
                 False,
             )
+
+        tipo = getattr(consulta, "tipo_laudo", None) or "PORTE"
+        pergunta = obter_pergunta(tipo, numero_pergunta)
+        if pergunta is None:
+            return False, "Pergunta inválida.", False
+
+        correta = letra == pergunta.resposta_correta
 
         sessao.add(
             RespostaProvaLaudo(
@@ -277,7 +279,12 @@ async def finalizar_prova_paciente(
             return False, "Esta prova não é sua.", 0, "REPROVADO"
         if consulta.status_prova != "EM_ANDAMENTO":
             return False, "A prova não está em andamento.", 0, "REPROVADO"
-        if consulta.pergunta_atual < TOTAL_PERGUNTAS_PORTE:
+
+        tipo = getattr(consulta, "tipo_laudo", None) or "PORTE"
+        total = total_perguntas(tipo)
+        minima = nota_minima(tipo)
+
+        if consulta.pergunta_atual < total:
             return (
                 False,
                 "Ainda faltam perguntas para concluir.",
@@ -292,7 +299,7 @@ async def finalizar_prova_paciente(
         )
         respostas = list(resultado.scalars().all())
         acertos = sum(1 for resposta in respostas if resposta.correta)
-        parecer = "APROVADO" if acertos >= NOTA_MINIMA_PORTE else "REPROVADO"
+        parecer = "APROVADO" if acertos >= minima else "REPROVADO"
 
         consulta.acertos_prova = acertos
         consulta.parecer_sugerido = parecer
@@ -301,7 +308,7 @@ async def finalizar_prova_paciente(
         await sessao.commit()
         return (
             True,
-            f"Prova finalizada: {acertos}/{TOTAL_PERGUNTAS_PORTE}.",
+            f"Prova finalizada: {acertos}/{total}.",
             acertos,
             parecer,
         )
@@ -447,7 +454,9 @@ async def publicar_resultado_prova(
     mapa = {r.numero_pergunta: r for r in respostas}
     numeros_errados = [r.numero_pergunta for r in respostas if not r.correta]
 
-    percentual = round((acertos / TOTAL_PERGUNTAS_PORTE) * 100, 1)
+    tipo = getattr(consulta, "tipo_laudo", None) or "PORTE"
+    total = total_perguntas(tipo)
+    percentual = round((acertos / total) * 100, 1) if total else 0.0
     apto = parecer_sugerido == "APROVADO"
     status_emoji = (
         "✅ Apto na prova teórica" if apto else "❌ Não apto na prova teórica"
@@ -470,7 +479,7 @@ async def publicar_resultado_prova(
         + nl
         + f"- **Consulta:** `#{consulta.id}`"
         + nl
-        + f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
+        + f"- **Acertos:** {acertos}/{total} "
         f"(`{percentual}%`)"
         + nl
         + f"- **Perguntas erradas:** {texto_erros_cabecalho}"
@@ -484,8 +493,8 @@ async def publicar_resultado_prova(
     rodape = f"-# {guild.name} • <t:{agora}:f>"
 
     blocos_erradas: list[str] = []
-    for numero in range(1, TOTAL_PERGUNTAS_PORTE + 1):
-        pergunta = obter_pergunta(numero)
+    for numero in range(1, total + 1):
+        pergunta = obter_pergunta(tipo, numero)
         resposta = mapa.get(numero)
         if pergunta is None or resposta is None:
             continue
@@ -495,10 +504,10 @@ async def publicar_resultado_prova(
             f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )"
             + nl
             + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
-            + texto_da_opcao(pergunta, resposta.resposta_escolhida)
+            + texto_da_opcao(tipo, pergunta, resposta.resposta_escolhida)
             + nl
             + f"✔ **Correta:** `{pergunta.resposta_correta}`: "
-            + texto_da_opcao(pergunta, pergunta.resposta_correta)
+            + texto_da_opcao(tipo, pergunta, pergunta.resposta_correta)
             + nl
             + nl
             + f"**Feedback errada:** {pergunta.feedback_erro}"
@@ -551,12 +560,15 @@ def montar_texto_dm_resultado_prova(
     status_prova: str,
     parecer_laudo: str,
     motivo: str,
+    tipo_laudo: str | None = "PORTE",
 ) -> str:
     """Texto enviado na DM do paciente junto com o laudo."""
+    total = total_perguntas(tipo_laudo)
+    minima = nota_minima(tipo_laudo)
     if status_prova == "FINALIZADA" and acertos is not None:
         bloco_prova = (
-            f"**Prova teórica:** `{acertos}/{TOTAL_PERGUNTAS_PORTE}` "
-            f"(mínimo `{NOTA_MINIMA_PORTE}`)\n"
+            f"**Prova teórica:** `{acertos}/{total}` "
+            f"(mínimo `{minima}`)\n"
             f"**Parecer da prova:** `{parecer_sugerido or '—'}`"
         )
     elif status_prova == "NAO_LIBERADA":

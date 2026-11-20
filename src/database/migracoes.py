@@ -385,6 +385,24 @@ ALTER TABLE movimentacoes_moedas
     ADD COLUMN IF NOT EXISTS cargo_no_credito VARCHAR(80);
 """,
     ),
+    Migracao(
+        numero=23,
+        descricao=(
+            "Tipo de laudo na consulta e no laudo emitido "
+            "(PORTE ou LAUDO_ADOCAO). Padrão PORTE para não "
+            "quebrar registros antigos."
+        ),
+        comando_sql="""
+ALTER TABLE consultas_laudo
+    ADD COLUMN IF NOT EXISTS tipo_laudo VARCHAR(20) NOT NULL DEFAULT 'PORTE';
+CREATE INDEX IF NOT EXISTS ix_consultas_laudo_tipo_laudo
+    ON consultas_laudo (tipo_laudo);
+ALTER TABLE laudos
+    ADD COLUMN IF NOT EXISTS tipo_laudo VARCHAR(20) NOT NULL DEFAULT 'PORTE';
+CREATE INDEX IF NOT EXISTS ix_laudos_tipo_laudo
+    ON laudos (tipo_laudo);
+""",
+    ),
 ]
 
 

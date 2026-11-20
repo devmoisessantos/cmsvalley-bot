@@ -17,6 +17,8 @@ from src.config import (
     CARGOS,
     CARGOS_HIERARQUIA,
 )
+from src.database.conexao import async_session
+from src.database.models import ConsultaLaudo
 from src.laudos.laudos_logger import publicar_laudo_nos_canais
 from src.laudos.laudos_service import (
     buscar_consulta_aberta,
@@ -25,10 +27,11 @@ from src.laudos.laudos_service import (
     iniciar_consulta,
     membro_e_psicologo,
 )
-from src.laudos.perguntas_porte import (
-    TOTAL_PERGUNTAS_PORTE,
+from src.laudos.perguntas_laudo import (
+    nota_minima,
     obter_pergunta,
     texto_da_opcao,
+    total_perguntas,
 )
 from src.laudos.prova_service import (
     liberar_prova_da_consulta,
@@ -242,10 +245,9 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
                     f"(status `{status_prova}`). O laudo foi permitido mesmo assim."
                 )
             elif acertos is not None:
-                from src.laudos.perguntas_porte import TOTAL_PERGUNTAS_PORTE
-
+                total = total_perguntas(getattr(consulta, "tipo_laudo", None))
                 aviso_prova = (
-                    f"📊 Prova: `{acertos}/{TOTAL_PERGUNTAS_PORTE}` · "
+                    f"📊 Prova: `{acertos}/{total}` · "
                     f"parecer sugerido: `{parecer_sugerido or '—'}`"
                 )
 
@@ -311,11 +313,12 @@ class PainelLaudosLayout(LoggingViewMixin, discord.ui.LayoutView):
 
 
 class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
-    """Select efêmero para escolher o paciente da consulta."""
+    """Select efêmero: paciente + modalidade + busca por ID + fechar."""
 
     def __init__(self, id_do_psicologo: int):
         super().__init__(timeout=180)
         self.id_do_psicologo = id_do_psicologo
+        self.tipo_laudo = "PORTE"
 
         seletor = discord.ui.UserSelect(
             placeholder="Selecione o paciente avaliado…",
@@ -327,6 +330,29 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
         linha_select = discord.ui.ActionRow()
         linha_select.add_item(seletor)
 
+        seletor_tipo = discord.ui.Select(
+            placeholder="Modalidade do laudo…",
+            min_values=1,
+            max_values=1,
+            custom_id="laudos:select_tipo",
+            options=[
+                discord.SelectOption(
+                    label="Laudo (porte)",
+                    value="PORTE",
+                    description="Avaliação para porte de arma de fogo",
+                    default=True,
+                ),
+                discord.SelectOption(
+                    label="Laudo técnico (adoção)",
+                    value="LAUDO_ADOCAO",
+                    description="Avaliação técnica para adoção",
+                ),
+            ],
+        )
+        seletor_tipo.callback = self._ao_escolher_tipo
+        linha_tipo = discord.ui.ActionRow()
+        linha_tipo.add_item(seletor_tipo)
+
         botao_por_id = discord.ui.Button(
             label="Buscar por Discord ID",
             style=discord.ButtonStyle.secondary,
@@ -334,20 +360,47 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
             custom_id="laudos:buscar_discord_id",
         )
         botao_por_id.callback = self._ao_buscar_por_discord_id
-        linha_botao = discord.ui.ActionRow()
-        linha_botao.add_item(botao_por_id)
+
+        botao_fechar = discord.ui.Button(
+            label="Fechar",
+            style=discord.ButtonStyle.danger,
+            custom_id="laudos:fechar_iniciar",
+        )
+        botao_fechar.callback = self._ao_fechar
+
+        linha_botoes = discord.ui.ActionRow()
+        linha_botoes.add_item(botao_por_id)
+        linha_botoes.add_item(botao_fechar)
 
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# 🩺 Iniciar consulta\n"
-                    "Escolha o **membro** no select **ou** busque pelo Discord ID."
+                    "1. Escolha a **modalidade**\n"
+                    "2. Selecione o **membro** **ou** busque pelo Discord ID"
                 ),
+                linha_tipo,
                 linha_select,
-                linha_botao,
+                linha_botoes,
                 accent_color=discord.Color.blurple(),
             )
         )
+
+    async def _ao_escolher_tipo(self, interacao: discord.Interaction):
+        if interacao.user.id != self.id_do_psicologo:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Este seletor não é seu."],
+            )
+            return
+        valores = interacao.data.get("values") if interacao.data else None
+        if valores:
+            self.tipo_laudo = str(valores[0]).strip().upper() or "PORTE"
+        try:
+            await interacao.response.defer()
+        except (discord.NotFound, discord.HTTPException):
+            return
 
     async def _ao_buscar_por_discord_id(self, interacao: discord.Interaction):
         if interacao.user.id != self.id_do_psicologo:
@@ -359,12 +412,34 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
             return
         try:
             await interacao.response.send_modal(
-                ModalBuscarPacientePorDiscordId(id_do_psicologo=self.id_do_psicologo)
+                ModalBuscarPacientePorDiscordId(
+                    id_do_psicologo=self.id_do_psicologo,
+                    tipo_laudo=self.tipo_laudo,
+                )
             )
         except discord.NotFound:
             return
         except discord.HTTPException as erro_http:
             registrador.warning(f"⚠️ [laudos] modal buscar ID HTTP: {erro_http}")
+
+    async def _ao_fechar(self, interacao: discord.Interaction):
+        if interacao.user.id != self.id_do_psicologo:
+            await responder_erro(
+                interacao,
+                titulo="Sem permissão",
+                linhas=["Este botão não é seu."],
+            )
+            return
+        try:
+            await interacao.response.defer()
+        except (discord.NotFound, discord.HTTPException):
+            pass
+        mensagem = interacao.message
+        if mensagem is not None:
+            try:
+                await mensagem.delete()
+            except (discord.NotFound, discord.HTTPException):
+                return
 
     async def _ao_escolher_paciente(self, interacao: discord.Interaction):
         if interacao.user.id != self.id_do_psicologo:
@@ -388,6 +463,7 @@ class ViewSelecionarPaciente(LoggingViewMixin, discord.ui.LayoutView):
             interacao,
             id_do_psicologo=self.id_do_psicologo,
             id_paciente=int(valores[0]),
+            tipo_laudo=self.tipo_laudo,
         )
 
 
@@ -413,6 +489,7 @@ async def _finalizar_inicio_consulta_com_id(
     *,
     id_do_psicologo: int,
     id_paciente: int,
+    tipo_laudo: str = "PORTE",
 ) -> None:
     """Resolve o membro e chama iniciar_consulta (select ou modal de Discord ID)."""
     if interacao.user.id != id_do_psicologo:
@@ -467,6 +544,7 @@ async def _finalizar_inicio_consulta_com_id(
     ok, mensagem, _consulta = await iniciar_consulta(
         psicologo=interacao.user,
         paciente=paciente,
+        tipo_laudo=tipo_laudo,
     )
     if ok:
         await responder_sucesso(
@@ -492,6 +570,7 @@ async def _finalizar_inicio_consulta_com_id(
                 id_do_psicologo=id_do_psicologo,
                 id_paciente=paciente.id,
                 texto_erro=mensagem,
+                tipo_laudo=tipo_laudo,
             ),
             ephemeral=True,
         )
@@ -515,9 +594,10 @@ class ModalBuscarPacientePorDiscordId(
         max_length=20,
     )
 
-    def __init__(self, *, id_do_psicologo: int):
+    def __init__(self, *, id_do_psicologo: int, tipo_laudo: str = "PORTE"):
         super().__init__()
         self.id_do_psicologo = id_do_psicologo
+        self.tipo_laudo = tipo_laudo or "PORTE"
 
     async def on_submit(self, interacao: discord.Interaction):
         """Valida o Discord ID digitado e inicia a busca do paciente escolhido."""
@@ -534,6 +614,7 @@ class ModalBuscarPacientePorDiscordId(
             interacao,
             id_do_psicologo=self.id_do_psicologo,
             id_paciente=int(texto),
+            tipo_laudo=self.tipo_laudo,
         )
 
 
@@ -546,10 +627,12 @@ class ViewInformarPassaporte(LoggingViewMixin, discord.ui.LayoutView):
         id_do_psicologo: int,
         id_paciente: int,
         texto_erro: str,
+        tipo_laudo: str = "PORTE",
     ):
         super().__init__(timeout=180)
         self.id_do_psicologo = id_do_psicologo
         self.id_paciente = id_paciente
+        self.tipo_laudo = tipo_laudo or "PORTE"
 
         linha = discord.ui.ActionRow()
         botao = discord.ui.Button(
@@ -586,6 +669,7 @@ class ViewInformarPassaporte(LoggingViewMixin, discord.ui.LayoutView):
             ModalInformarPassaportePaciente(
                 id_do_psicologo=self.id_do_psicologo,
                 id_paciente=self.id_paciente,
+                tipo_laudo=self.tipo_laudo,
             )
         )
 
@@ -601,10 +685,17 @@ class ModalInformarPassaportePaciente(
         max_length=7,
     )
 
-    def __init__(self, *, id_do_psicologo: int, id_paciente: int):
+    def __init__(
+        self,
+        *,
+        id_do_psicologo: int,
+        id_paciente: int,
+        tipo_laudo: str = "PORTE",
+    ):
         super().__init__()
         self.id_do_psicologo = id_do_psicologo
         self.id_paciente = id_paciente
+        self.tipo_laudo = tipo_laudo or "PORTE"
 
     async def on_submit(self, interacao: discord.Interaction):
         """Registra um passaporte informado manualmente e inicia a consulta.
@@ -660,6 +751,7 @@ class ModalInformarPassaportePaciente(
             psicologo=interacao.user,
             paciente=paciente,
             id_fivem_paciente_manual=texto,
+            tipo_laudo=self.tipo_laudo,
         )
         if ok:
             await responder_sucesso(
@@ -889,9 +981,14 @@ async def montar_partes_resultado_prova_dm(
 
     Retorna (texto_resumo, blocos_corretas, blocos_erradas).
     """
-    from src.laudos.perguntas_porte import NOTA_MINIMA_PORTE
-
     nl = chr(10)
+
+    tipo = "PORTE"
+    async with async_session() as sessao:
+        consulta = await sessao.get(ConsultaLaudo, consulta_id)
+        if consulta is not None:
+            tipo = getattr(consulta, "tipo_laudo", None) or "PORTE"
+
     respostas = await listar_respostas_da_consulta(consulta_id)
     if not respostas:
         resumo = (
@@ -901,11 +998,13 @@ async def montar_partes_resultado_prova_dm(
         )
         return resumo, [], []
 
+    total = total_perguntas(tipo)
+    minima = nota_minima(tipo)
     mapa = {r.numero_pergunta: r for r in respostas}
     acertos = sum(1 for r in respostas if r.correta)
-    percentual = round((acertos / TOTAL_PERGUNTAS_PORTE) * 100, 1)
+    percentual = round((acertos / total) * 100, 1) if total else 0.0
     numeros_errados = [r.numero_pergunta for r in respostas if not r.correta]
-    apto = acertos >= NOTA_MINIMA_PORTE
+    apto = acertos >= minima
     parecer = "APROVADO" if apto else "REPROVADO"
     status = "✅ Apto na prova teórica" if apto else "❌ Não apto na prova teórica"
     texto_erros = str(numeros_errados) if numeros_errados else "Nenhuma"
@@ -913,7 +1012,7 @@ async def montar_partes_resultado_prova_dm(
     resumo = (
         "# 📋 Resultado da Avaliação — Laudo Psicológico"
         + nl
-        + f"- **Acertos:** {acertos}/{TOTAL_PERGUNTAS_PORTE} "
+        + f"- **Acertos:** {acertos}/{total} "
         f"(`{percentual}%`)"
         + nl
         + f"- **Perguntas erradas:** {texto_erros}"
@@ -925,8 +1024,8 @@ async def montar_partes_resultado_prova_dm(
 
     blocos_corretas: list[str] = []
     blocos_erradas: list[str] = []
-    for numero in range(1, TOTAL_PERGUNTAS_PORTE + 1):
-        pergunta = obter_pergunta(numero)
+    for numero in range(1, total + 1):
+        pergunta = obter_pergunta(tipo, numero)
         resposta = mapa.get(numero)
         if pergunta is None or resposta is None:
             continue
@@ -935,7 +1034,7 @@ async def montar_partes_resultado_prova_dm(
                 f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )"
                 + nl
                 + f"✔ — **Sua escolha** `{resposta.resposta_escolhida}`: "
-                + texto_da_opcao(pergunta, resposta.resposta_escolhida)
+                + texto_da_opcao(tipo, pergunta, resposta.resposta_escolhida)
                 + nl
                 + nl
                 + f"**Feedback correta:** {pergunta.feedback_acerto}"
@@ -945,10 +1044,10 @@ async def montar_partes_resultado_prova_dm(
                 f"> ### **Pergunta {numero}** ( {pergunta.enunciado} )"
                 + nl
                 + f"✖ — **Sua escolha** `{resposta.resposta_escolhida}`: "
-                + texto_da_opcao(pergunta, resposta.resposta_escolhida)
+                + texto_da_opcao(tipo, pergunta, resposta.resposta_escolhida)
                 + nl
                 + f"✔ **Correta:** `{pergunta.resposta_correta}`: "
-                + texto_da_opcao(pergunta, pergunta.resposta_correta)
+                + texto_da_opcao(tipo, pergunta, pergunta.resposta_correta)
                 + nl
                 + nl
                 + f"**Feedback errada:** {pergunta.feedback_erro}"
@@ -986,6 +1085,80 @@ def _empilhar_blocos_dm(titulo: str, blocos: list[str]) -> list[str]:
     return cards
 
 
+async def _enviar_html_laudo_na_dm(
+    *,
+    paciente: discord.Member,
+    laudo,
+    guilda: discord.Guild | None,
+    interacao: discord.Interaction,
+) -> None:
+    """
+    Gera o HTML do laudo e envia como arquivo na DM do requerente.
+
+    Falha no HTML não interrompe o restante da DM (cards do Discord).
+    """
+    from src.laudos.laudo_html import (
+        montar_html_laudo,
+        nome_arquivo_laudo,
+    )
+
+    try:
+        nome_paciente = paciente.display_name
+        nome_psicologo = None
+        if guilda is not None:
+            membro_psico = guilda.get_member(laudo.discord_id_psicologo)
+            if membro_psico is None:
+                try:
+                    membro_psico = await guilda.fetch_member(
+                        laudo.discord_id_psicologo
+                    )
+                except discord.HTTPException:
+                    membro_psico = None
+            if membro_psico is not None:
+                nome_psicologo = membro_psico.display_name
+        if nome_psicologo is None and isinstance(interacao.user, discord.Member):
+            if interacao.user.id == laudo.discord_id_psicologo:
+                nome_psicologo = interacao.user.display_name
+
+        html = montar_html_laudo(
+            laudo_id=laudo.id,
+            consulta_id=laudo.consulta_id,
+            tipo_laudo=getattr(laudo, "tipo_laudo", None) or "PORTE",
+            parecer=laudo.parecer,
+            motivo=laudo.motivo,
+            registro_profissional=laudo.registro_profissional,
+            id_fivem_paciente=laudo.id_fivem_paciente,
+            id_fivem_psicologo=laudo.id_fivem_psicologo,
+            discord_id_paciente=laudo.discord_id_paciente,
+            discord_id_psicologo=laudo.discord_id_psicologo,
+            nome_paciente=nome_paciente,
+            nome_psicologo=nome_psicologo,
+            criado_em=getattr(laudo, "criado_em", None),
+        )
+        nome_arquivo = nome_arquivo_laudo(
+            laudo.id,
+            getattr(laudo, "tipo_laudo", None),
+        )
+        arquivo = discord.File(
+            fp=io.BytesIO(html.encode("utf-8")),
+            filename=nome_arquivo,
+        )
+        await paciente.send(
+            content=(
+                "Documento oficial do laudo em HTML. "
+                "Baixe o arquivo e abra no navegador para visualizar "
+                "ou imprimir."
+            ),
+            file=arquivo,
+        )
+    except Exception as erro_html:
+        registrador.exception(
+            "[laudos] falha ao enviar HTML do laudo #%s: %s",
+            laudo.id,
+            erro_html,
+        )
+
+
 async def _enviar_laudo_na_dm_do_paciente(
     *,
     interacao: discord.Interaction,
@@ -997,7 +1170,8 @@ async def _enviar_laudo_na_dm_do_paciente(
     Envia na DM do paciente:
 
     1) Documento do laudo (ícone do servidor + identificação + parecer)
-    2+) Resultado da avaliação: resumo, corretas (verde) e erradas (vermelho)
+    2) Arquivo HTML profissional (folha formatada)
+    3+) Resultado da avaliação: resumo, corretas (verde) e erradas (vermelho)
     """
     if paciente is None:
         registrador.warning(
@@ -1038,6 +1212,14 @@ async def _enviar_laudo_na_dm_do_paciente(
             )
         )
         await paciente.send(view=layout1)
+
+        # HTML profissional do laudo (adoção e porte)
+        await _enviar_html_laudo_na_dm(
+            paciente=paciente,
+            laudo=laudo,
+            guilda=guilda,
+            interacao=interacao,
+        )
 
         (
             resumo,

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{TITULO}} — {{NOME_HOSPITAL}}</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: #e8ecf0;
+      color: #1a1a1a;
+      line-height: 1.5;
+      padding: 32px 16px;
+    }
+    .folha {
+      max-width: 720px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid #d0d5dd;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+      padding: 48px 56px;
+    }
+    .cabecalho {
+      text-align: center;
+      border-bottom: 2px solid #1e3a5f;
+      padding-bottom: 20px;
+      margin-bottom: 28px;
+    }
+    .logo {
+      display: block;
+      width: 96px;
+      height: 96px;
+      object-fit: contain;
+      margin: 0 auto 12px auto;
+    }
+    .hospital {
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #1e3a5f;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .titulo {
+      font-size: 22px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 4px;
+    }
+    .subtitulo {
+      font-size: 14px;
+      color: #475569;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 24px;
+      font-size: 13px;
+      color: #64748b;
+      margin-bottom: 28px;
+    }
+    .meta span strong {
+      color: #334155;
+    }
+    .secao {
+      margin-bottom: 24px;
+    }
+    .secao h2 {
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #1e3a5f;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 6px;
+      margin-bottom: 12px;
+    }
+    .linha {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      margin-bottom: 6px;
+      font-size: 14px;
+    }
+    .linha .rotulo {
+      color: #64748b;
+      min-width: 120px;
+    }
+    .linha .valor {
+      color: #0f172a;
+      font-weight: 500;
+    }
+    .parecer-box {
+      border-radius: 6px;
+      padding: 16px 20px;
+      margin-top: 8px;
+    }
+    .parecer-box.aprovado {
+      background: #ecfdf5;
+      border: 1px solid #6ee7b7;
+    }
+    .parecer-box.reprovado {
+      background: #fef2f2;
+      border: 1px solid #fca5a5;
+    }
+    .parecer-box .selo {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .parecer-box.aprovado .selo {
+      color: #047857;
+    }
+    .parecer-box.reprovado .selo {
+      color: #b91c1c;
+    }
+    .parecer-box .motivo {
+      font-size: 14px;
+      color: #334155;
+      white-space: pre-wrap;
+    }
+    .assinatura {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #e2e8f0;
+      text-align: center;
+    }
+    .assinatura .nome {
+      font-size: 15px;
+      font-weight: 600;
+      color: #0f172a;
+      margin-bottom: 2px;
+    }
+    .assinatura .crp {
+      font-size: 13px;
+      color: #64748b;
+    }
+    .rodape {
+      margin-top: 36px;
+      padding-top: 16px;
+      border-top: 1px solid #e2e8f0;
+      font-size: 11px;
+      color: #94a3b8;
+      text-align: center;
+    }
+    @media print {
+      body {
+        background: #fff;
+        padding: 0;
+      }
+      .folha {
+        box-shadow: none;
+        border: none;
+        max-width: none;
+        padding: 24px 32px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <article class="folha">
+    <header class="cabecalho">
+      <img class="logo" src="{{LOGO_SRC}}" alt="Logo do servidor" />
+      <div class="hospital">{{NOME_HOSPITAL}}</div>
+      <h1 class="titulo">{{TITULO}}</h1>
+      <p class="subtitulo">{{SUBTITULO}}</p>
+    </header>
+
+    <div class="meta">
+      <span><strong>Registro:</strong> #{{LAUDO_ID}}</span>
+      <span><strong>Consulta:</strong> #{{CONSULTA_ID}}</span>
+      <span><strong>Modalidade:</strong> {{MODALIDADE}}</span>
+      <span><strong>Emitido em:</strong> {{DATA_HORA}}</span>
+    </div>
+
+    <section class="secao">
+      <h2>Requerente / Paciente</h2>
+      <div class="linha">
+        <span class="rotulo">Nome</span>
+        <span class="valor">{{PACIENTE_NOME}}</span>
+      </div>
+      <div class="linha">
+        <span class="rotulo">Passaporte</span>
+        <span class="valor">{{PACIENTE_PASSAPORTE}}</span>
+      </div>
+      <div class="linha">
+        <span class="rotulo">Discord ID</span>
+        <span class="valor">{{PACIENTE_DISCORD}}</span>
+      </div>
+    </section>
+
+    <section class="secao">
+      <h2>Psicólogo responsável</h2>
+      <div class="linha">
+        <span class="rotulo">Nome</span>
+        <span class="valor">{{PSICOLOGO_NOME}}</span>
+      </div>
+      <div class="linha">
+        <span class="rotulo">Passaporte</span>
+        <span class="valor">{{PSICOLOGO_PASSAPORTE}}</span>
+      </div>
+      <div class="linha">
+        <span class="rotulo">Registro</span>
+        <span class="valor">{{REGISTRO_PROFISSIONAL}}</span>
+      </div>
+    </section>
+
+    <section class="secao">
+      <h2>Resultado da avaliação</h2>
+      <div class="parecer-box {{CLASSE_PARECER}}">
+        <div class="selo">Parecer: {{PARECER}}</div>
+        <div class="motivo">{{MOTIVO}}</div>
+      </div>
+    </section>
+
+    <div class="assinatura">
+      <div class="nome">{{PSICOLOGO_NOME}}</div>
+      <div class="crp">{{REGISTRO_PROFISSIONAL}}</div>
+      <div class="crp">{{NOME_HOSPITAL}} — Psicologia</div>
+    </div>
+
+    <footer class="rodape">
+      {{RODAPE}}
+    </footer>
+  </article>
+</body>
+</html>

@@ -1,11 +1,14 @@
 """
-Painel do paciente e cards empilhados da prova de porte.
+Painel do paciente e cards empilhados da prova de laudo.
 
 Card 1 (questões 1–5): a cada resposta, a pergunta fica travada no card e
 a próxima é acrescentada embaixo — nada é apagado.
 
 Card 2 (questões 6–10): só abre quando o bloco 1 termina, em mensagem nova
 logo abaixo (empilhada).
+
+O banco de perguntas depende do tipo_laudo da consulta
+(PORTE ou LAUDO_ADOCAO).
 """
 
 from __future__ import annotations
@@ -16,10 +19,10 @@ import discord
 
 from src.database.conexao import async_session
 from src.database.models import ConsultaLaudo
-from src.laudos.perguntas_porte import (
-    TAMANHO_BLOCO_PORTE,
-    TOTAL_PERGUNTAS_PORTE,
+from src.laudos.perguntas_laudo import (
     obter_pergunta,
+    tamanho_bloco,
+    total_perguntas,
 )
 from src.laudos.prova_service import (
     barra_progresso_porte,
@@ -51,8 +54,8 @@ class PainelProvaLaudoLayout(LoggingViewMixin, discord.ui.LayoutView):
 
         componentes: list = []
         texto_cabecalho = (
-            "# 🧠 Avaliação Psicológica — Prova de Porte\n"
-            "### Prova teórica obrigatória para laudo de porte de arma\n"
+            "# 🧠 Avaliação Psicológica — Prova Teórica\n"
+            "### Prova obrigatória para laudo (porte ou adoção)\n"
             "-# Só quem tem consulta **liberada** pelo psicólogo pode iniciar."
         )
         if url_icone:
@@ -71,12 +74,13 @@ class PainelProvaLaudoLayout(LoggingViewMixin, discord.ui.LayoutView):
         componentes.append(
             discord.ui.TextDisplay(
                 "## Regras\n"
-                f"- **{TOTAL_PERGUNTAS_PORTE} questões** de múltipla escolha "
-                f"(2 blocos de {TAMANHO_BLOCO_PORTE})\n"
+                "- **10 questões** de múltipla escolha (2 blocos de 5)\n"
+                "- O conteúdo depende da modalidade da consulta "
+                "(porte ou adoção)\n"
                 "- **Uma única tentativa** por consulta\n"
                 "- As perguntas ficam **empilhadas** no mesmo card\n"
                 "- Feedback e gabarito **somente para a equipe** no final\n"
-                f"- Critério: **7/{TOTAL_PERGUNTAS_PORTE}** acertos na prova "
+                "- Critério: **7/10** acertos na prova "
                 "(o laudo final continua a cargo do psicólogo)"
             )
         )
@@ -116,11 +120,13 @@ class PainelProvaLaudoLayout(LoggingViewMixin, discord.ui.LayoutView):
                 )
                 return
 
+            tipo = getattr(consulta, "tipo_laudo", None) or "PORTE"
             view_bloco = BlocoProvaLayoutView(
                 consulta_id=consulta.id,
                 numero_atual=1,
                 respostas={},
                 guild=interacao.guild,
+                tipo_laudo=tipo,
             )
             await responder_view(
                 interacao,
@@ -140,15 +146,18 @@ class PainelProvaLaudoLayout(LoggingViewMixin, discord.ui.LayoutView):
             )
 
 
-def _intervalo_do_bloco(numero: int) -> tuple[int, int]:
+def _intervalo_do_bloco(numero: int, tipo: str | None = "PORTE") -> tuple[int, int]:
     """Retorna (primeira, última) pergunta do bloco que contém `numero`."""
-    if numero <= TAMANHO_BLOCO_PORTE:
-        return 1, TAMANHO_BLOCO_PORTE
-    return TAMANHO_BLOCO_PORTE + 1, TOTAL_PERGUNTAS_PORTE
+    bloco = tamanho_bloco(tipo)
+    total = total_perguntas(tipo)
+    if numero <= bloco:
+        return 1, bloco
+    return bloco + 1, total
 
 
-def _numero_do_bloco(numero: int) -> int:
-    return 1 if numero <= TAMANHO_BLOCO_PORTE else 2
+def _numero_do_bloco(numero: int, tipo: str | None = "PORTE") -> int:
+    bloco = tamanho_bloco(tipo)
+    return 1 if numero <= bloco else 2
 
 
 class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
@@ -170,6 +179,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
         guild: discord.Guild | None,
         bloco_concluido: bool = False,
         aguardando_envio: bool = False,
+        tipo_laudo: str = "PORTE",
     ):
         super().__init__(timeout=None)
         self.consulta_id = consulta_id
@@ -178,15 +188,17 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
         self.guild = guild
         self.bloco_concluido = bloco_concluido
         self.aguardando_envio = aguardando_envio
+        self.tipo_laudo = tipo_laudo or "PORTE"
 
-        primeira, ultima = _intervalo_do_bloco(numero_atual)
-        numero_bloco = _numero_do_bloco(numero_atual)
+        primeira, ultima = _intervalo_do_bloco(numero_atual, self.tipo_laudo)
+        numero_bloco = _numero_do_bloco(numero_atual, self.tipo_laudo)
         progresso = ultima if (bloco_concluido or aguardando_envio) else numero_atual
+        total = total_perguntas(self.tipo_laudo)
 
         componentes: list = [
             discord.ui.TextDisplay(
-                f"# 📝 Prova de Porte — Bloco {numero_bloco}\n"
-                f"-# {barra_progresso_porte(progresso, TOTAL_PERGUNTAS_PORTE)}"
+                f"# 📝 Prova teórica — Bloco {numero_bloco}\n"
+                f"-# {barra_progresso_porte(progresso, total)}"
             ),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.small),
         ]
@@ -254,6 +266,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             interacao,
             view=ViewProvaEnviadaLayout(
                 respostas=self.respostas,
+                tipo_laudo=self.tipo_laudo,
             ),
         )
         await self._concluir_prova(interacao)
@@ -268,10 +281,11 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
         - Errou: escolhida em vermelho (danger) e a correta em verde.
         - Demais: cinza (secondary).
         """
-        pergunta = obter_pergunta(numero)
+        pergunta = obter_pergunta(self.tipo_laudo, numero)
         if pergunta is None:
             return []
 
+        total = total_perguntas(self.tipo_laudo)
         letra_correta = (pergunta.resposta_correta or "").upper()
         letra_escolhida = (letra_escolhida or "").upper()
         acertou = letra_escolhida == letra_correta
@@ -303,7 +317,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             linha.add_item(botao)
 
         enunciado = (
-            f"### Questão {numero}/{TOTAL_PERGUNTAS_PORTE}\n"
+            f"### Questão {numero}/{total}\n"
             f"{pergunta.enunciado}\n"
             f"**A)** {pergunta.opcao_a}\n"
             f"**B)** {pergunta.opcao_b}\n"
@@ -318,10 +332,11 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
 
     def _componentes_pergunta_ativa(self, numero: int) -> list:
         """Pergunta corrente com botões A/B/C clicáveis."""
-        pergunta = obter_pergunta(numero)
+        pergunta = obter_pergunta(self.tipo_laudo, numero)
         if pergunta is None:
             return [discord.ui.TextDisplay("Pergunta não encontrada.")]
 
+        total = total_perguntas(self.tipo_laudo)
         linha = discord.ui.ActionRow()
         for letra in ("A", "B", "C"):
             botao = discord.ui.Button(
@@ -335,7 +350,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             linha.add_item(botao)
 
         enunciado = (
-            f"### Questão {numero}/{TOTAL_PERGUNTAS_PORTE}\n"
+            f"### Questão {numero}/{total}\n"
             f"{pergunta.enunciado}\n"
             f"**A)** {pergunta.opcao_a}\n"
             f"**B)** {pergunta.opcao_b}\n"
@@ -374,16 +389,21 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
 
         novas_respostas = dict(self.respostas)
         novas_respostas[self.numero_atual] = letra.upper()
-        primeira, ultima = _intervalo_do_bloco(self.numero_atual)
+        primeira, ultima = _intervalo_do_bloco(
+            self.numero_atual, self.tipo_laudo
+        )
+        bloco = tamanho_bloco(self.tipo_laudo)
+        total = total_perguntas(self.tipo_laudo)
 
         # Fim do bloco 1 → trava card 1 e abre card 2 embaixo
-        if self.numero_atual == TAMANHO_BLOCO_PORTE:
+        if self.numero_atual == bloco:
             view_bloco1 = BlocoProvaLayoutView(
                 consulta_id=self.consulta_id,
                 numero_atual=self.numero_atual,
                 respostas=novas_respostas,
                 guild=interacao.guild,
                 bloco_concluido=True,
+                tipo_laudo=self.tipo_laudo,
             )
             await editar_mensagem_original(interacao, view=view_bloco1)
 
@@ -392,6 +412,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
                 numero_atual=self.numero_atual + 1,
                 respostas={},
                 guild=interacao.guild,
+                tipo_laudo=self.tipo_laudo,
             )
             await interacao.followup.send(
                 view=view_bloco2,
@@ -399,14 +420,15 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
-        # Fim da prova (questão 10) → card com botão Enviar avaliação
-        if self.numero_atual >= TOTAL_PERGUNTAS_PORTE:
+        # Fim da prova → card com botão Enviar avaliação
+        if self.numero_atual >= total:
             view_final = BlocoProvaLayoutView(
                 consulta_id=self.consulta_id,
                 numero_atual=self.numero_atual,
                 respostas=novas_respostas,
                 guild=interacao.guild,
                 aguardando_envio=True,
+                tipo_laudo=self.tipo_laudo,
             )
             await editar_mensagem_original(interacao, view=view_final)
             return
@@ -417,6 +439,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             numero_atual=self.numero_atual + 1,
             respostas=novas_respostas,
             guild=interacao.guild,
+            tipo_laudo=self.tipo_laudo,
         )
         await editar_mensagem_original(interacao, view=view_proxima)
 
@@ -434,6 +457,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             )
             return
 
+        total = total_perguntas(self.tipo_laudo)
         guilda = interacao.guild
         if guilda is not None:
             async with async_session() as sessao:
@@ -456,7 +480,7 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
             await interacao.followup.send(
                 content=(
                     f"Avaliação enviada. Você acertou "
-                    f"**{acertos}/{TOTAL_PERGUNTAS_PORTE}**. "
+                    f"**{acertos}/{total}**. "
                     "O detalhamento foi para a equipe de Psicologia."
                 ),
                 ephemeral=True,
@@ -468,13 +492,14 @@ class BlocoProvaLayoutView(LoggingViewMixin, discord.ui.LayoutView):
 class ViewProvaEnviadaLayout(LoggingViewMixin, discord.ui.LayoutView):
     """Card final do bloco 2 após o paciente enviar a avaliação."""
 
-    def __init__(self, *, respostas: dict[int, str]):
+    def __init__(self, *, respostas: dict[int, str], tipo_laudo: str = "PORTE"):
         super().__init__(timeout=None)
+        total = total_perguntas(tipo_laudo)
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "# ✅ Avaliação enviada\n"
-                    f"-# {barra_progresso_porte(TOTAL_PERGUNTAS_PORTE, TOTAL_PERGUNTAS_PORTE)}\n"
+                    f"-# {barra_progresso_porte(total, total)}\n"
                     "Suas respostas foram registradas. "
                     "A equipe de Psicologia recebeu o resultado."
                 ),

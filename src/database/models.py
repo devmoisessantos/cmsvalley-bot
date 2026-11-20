@@ -614,6 +614,10 @@ class ConsultaLaudo(Base):
     discord_id_paciente: Mapped[int] = mapped_column(BigInteger, index=True)
     id_fivem_psicologo: Mapped[str | None] = mapped_column(String(20), nullable=True)
     id_fivem_paciente: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # PORTE | LAUDO_ADOCAO
+    tipo_laudo: Mapped[str] = mapped_column(
+        String(20), default="PORTE", index=True
+    )
     # ABERTA | FINALIZADA | CANCELADA
     status: Mapped[str] = mapped_column(String(20), default="ABERTA", index=True)
     iniciada_em: Mapped[datetime] = mapped_column(
@@ -622,7 +626,7 @@ class ConsultaLaudo(Base):
     finalizada_em: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Prova teórica de porte: NAO_LIBERADA | LIBERADA | EM_ANDAMENTO | FINALIZADA
+    # Prova teórica: NAO_LIBERADA | LIBERADA | EM_ANDAMENTO | FINALIZADA
     status_prova: Mapped[str] = mapped_column(
         String(20), default="NAO_LIBERADA", index=True
     )
@@ -667,6 +671,10 @@ class Laudo(Base):
     discord_id_paciente: Mapped[int] = mapped_column(BigInteger, index=True)
     id_fivem_psicologo: Mapped[str | None] = mapped_column(String(20), nullable=True)
     id_fivem_paciente: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # PORTE | LAUDO_ADOCAO
+    tipo_laudo: Mapped[str] = mapped_column(
+        String(20), default="PORTE", index=True
+    )
     # APROVADO | REPROVADO
     parecer: Mapped[str] = mapped_column(String(20))
     motivo: Mapped[str] = mapped_column(String(1500))
